@@ -1,0 +1,355 @@
+{
+  "chapter": "p2c02",
+  "items": [
+    {
+      "id": "p2c02-q01", "level": 1, "type": "mcq", "tag": "retries",
+      "q": "A payment request times out. From the client's side, what is knowable about what happened?",
+      "options": [
+        {"t": "Nothing — lost request, failed work, and lost response all look identical", "correct": true,
+         "why": "Right, and 'identical' is the key word. Silence carries zero bits of information about which of the three cases occurred. Every correct design starts from this admission."},
+        {"t": "The request was probably lost, since that's the common case", "correct": false,
+         "why": "Dangerous guess. 'Response lost after success' happens constantly on mobile networks — and it's exactly the case where a naive retry double-charges."},
+        {"t": "The work definitely didn't complete, or a response would have arrived", "correct": false,
+         "why": "This is the assumption that causes double charges. The server may have committed the charge and the 200 OK died on the way back. Timeout does not mean failure."},
+        {"t": "It's knowable if the client waits longer before deciding", "correct": false,
+         "why": "Waiting shrinks nothing. A response that was lost stays lost forever — no timeout length converts silence into an answer."}
+      ]
+    },
+    {
+      "id": "p2c02-q02", "level": 1, "type": "mcq", "tag": "exactly-once",
+      "q": "What does 'idempotent' mean?",
+      "options": [
+        {"t": "Doing an operation N times leaves the same state as doing it once", "correct": true,
+         "why": "Exactly. Press the elevator button five times, one elevator comes. 'Set status to CANCELLED' is idempotent; 'add ₹499 to balance' is not — run it twice and the world differs."},
+        {"t": "An operation that can never fail", "correct": false,
+         "why": "Idempotency says nothing about failure — an idempotent operation can still error. It only promises that repeats don't change the outcome beyond the first success."},
+        {"t": "An operation that runs atomically in a transaction", "correct": false,
+         "why": "Atomicity (all-or-nothing) is a different property. We use transactions to IMPLEMENT idempotent handling, but the definitions are separate ideas."},
+        {"t": "An operation that can safely run in parallel across many threads or servers without any locking", "correct": false,
+         "why": "That's thread-safety/concurrency-safety. An idempotent operation can still race badly — that's why the unique constraint on the key exists."}
+      ]
+    },
+    {
+      "id": "p2c02-q03", "level": 1, "type": "mcq", "tag": "exactly-once",
+      "q": "What is the honest engineering meaning behind any 'exactly-once' claim?",
+      "options": [
+        {"t": "At-least-once delivery plus idempotent processing, giving exactly-once effect", "correct": true,
+         "why": "Yes — this sentence IS the chapter. Duplicates still arrive freely; the receiver recognizes and absorbs them, so the effect happens once. Even Kafka's 'exactly-once semantics' is this under the hood."},
+        {"t": "A retry protocol with enough rounds of acknowledgments that both sides can be certain of single delivery", "correct": false,
+         "why": "Two Generals says no such protocol exists — the last acknowledgment is always itself unacknowledged. Piling on acks moves the uncertainty; it never removes it."},
+        {"t": "At-most-once delivery with very reliable networks", "correct": false,
+         "why": "At-most-once means sometimes zero times — dropped payments, lost orders. No network is reliable enough to make 'sometimes never' acceptable for money."},
+        {"t": "TCP already provides it at the transport layer", "correct": false,
+         "why": "TCP retransmits within one connection, but the connection itself can die after the server processed the request and before the client heard back. The application layer inherits the same three-way uncertainty."}
+      ]
+    },
+    {
+      "id": "p2c02-q04", "level": 1, "type": "mcq", "tag": "idempotency-key",
+      "q": "Who generates the idempotency key, and at what granularity?",
+      "options": [
+        {"t": "The client, one key per logical operation, reused across all retries of it", "correct": true,
+         "why": "Right. Only the client knows attempt 2 is a retry of attempt 1 — it experienced the timeout. The key names the intent (this tap of Pay), so every retry carries the same key."},
+        {"t": "The server, when the request first arrives", "correct": false,
+         "why": "Then each retry arrives keyless, gets a fresh key, and looks brand new — the dedup machinery exists but never fires. The key must be born where the intent is born: the client."},
+        {"t": "The client, a fresh key per HTTP attempt", "correct": false,
+         "why": "A fresh key per attempt defeats the whole mechanism — attempt 2 no longer matches attempt 1's record. Per-attempt keys are the most common way this gets implemented wrong."},
+        {"t": "The payment processor generates it and returns it in the first response, for the client to reuse on retries", "correct": false,
+         "why": "If the key rides in the response, then the exact failure we're defending against — a lost response — takes the key with it, and the retry has nothing to present."}
+      ]
+    },
+    {
+      "id": "p2c02-q05", "level": 1, "type": "mcq", "tag": "idempotency-key",
+      "q": "The server's record of an idempotency key must be written…",
+      "options": [
+        {"t": "In the same ACID transaction as the business record", "correct": true,
+         "why": "The crux of the chapter. One commit holds both, so a crash leaves either both or neither — the retry then behaves correctly in every crash window. Separate writes re-create the original two-generals gap inside your own backend."},
+        {"t": "Before the business record, in a fast store like Redis", "correct": false,
+         "why": "Crash after the Redis write, before the DB commit: the charge never happened but retries get blocked forever. Redis eviction gives the mirror-image double charge. Two systems can't share one transaction."},
+        {"t": "After the business record commits, so you never block a real payment", "correct": false,
+         "why": "Crash in the gap between the two commits and the charge exists with no key record — the retry re-executes and double-charges. The gap is small; at payment volume, small gaps happen daily."},
+        {"t": "Anywhere durable — the location doesn't matter, only that it survives restarts", "correct": false,
+         "why": "Durability alone isn't enough; atomicity with the business write is the load-bearing property. A durable record that can disagree with the charge table is a durable lie."}
+      ]
+    },
+    {
+      "id": "p2c02-q06", "level": 1, "type": "mcq", "tag": "ledger",
+      "q": "In a double-entry ledger, what is the per-transaction invariant?",
+      "options": [
+        {"t": "Total debits equal total credits", "correct": true,
+         "why": "Yes. Money only moves; it never appears or vanishes. Every transaction's legs sum to zero, which makes corruption loudly visible — an unbalanced transaction is proof of a bug."},
+        {"t": "Each transaction touches exactly one account", "correct": false,
+         "why": "Backwards — a transaction touches at least two accounts (source and destination), and fee splits touch three or more. One-account entries are exactly what double-entry forbids."},
+        {"t": "The account balance never goes negative", "correct": false,
+         "why": "That's a business rule some accounts have (wallets) and others don't (clearing accounts routinely swing negative). It's policy, not the ledger's structural invariant."},
+        {"t": "Every entry has a timestamp and a memo", "correct": false,
+         "why": "Good hygiene, but hygiene isn't the invariant. The mathematical property that makes double-entry self-checking is debits = credits within each transaction."}
+      ]
+    },
+    {
+      "id": "p2c02-q07", "level": 1, "type": "mcq", "tag": "minor-units",
+      "q": "How should a payment system store the amount ₹499.50?",
+      "options": [
+        {"t": "The integer 49950 (paise)", "correct": true,
+         "why": "Integer minor units, always. Integers add exactly; floats don't — 0.1 + 0.2 is 0.30000000000000004 in IEEE floating point, and that drift multiplied by millions of transactions breaks reconciliation."},
+        {"t": "The float 499.50", "correct": false,
+         "why": "Floats can't represent most decimal fractions exactly. Tiny per-transaction errors accumulate into books that disagree with the bank by an unexplainable amount — the classic money-storage bug."},
+        {"t": "The string \"499.50\" to preserve exact digits", "correct": false,
+         "why": "Exact, but you can't sum strings — every computation parses back to a number, and whoever parses to float reintroduces the bug. Decimal types exist, but the interview-standard answer is integer minor units."},
+        {"t": "Float is fine if you round to 2 decimals after every operation", "correct": false,
+         "why": "Round-after-every-op is playing whack-a-mole with representation error, and one forgotten rounding site loses the game. Storing integers makes the bug impossible instead of merely managed."}
+      ]
+    },
+    {
+      "id": "p2c02-q08", "level": 1, "type": "mcq", "tag": "ledger",
+      "q": "You discover a ledger entry was booked with the wrong amount. The correct fix is:",
+      "options": [
+        {"t": "Append a reversing entry, then book the correct one", "correct": true,
+         "why": "Right — pen, not pencil. The wrong entry stays visible forever, followed by its correction. History remains truthful and auditable: anyone re-deriving balances gets the right answer AND can see what happened."},
+        {"t": "UPDATE the row to the correct amount", "correct": false,
+         "why": "The ledger is append-only — updating a row destroys the audit trail and silently invalidates any balance, report, or reconciliation that already read the old value."},
+        {"t": "DELETE the row and insert a corrected one", "correct": false,
+         "why": "Deletion is the same sin with worse forensics: now there's no evidence the mistake ever existed, which auditors (and debugging engineers) treat as an alarm, not a fix."},
+        {"t": "Adjust the cached balance directly and note it in a comment", "correct": false,
+         "why": "Now the cache and the ledger permanently disagree, and the reconciliation job will flag it forever — or worse, someone 'fixes' recon to ignore it. The ledger is the truth; corrections happen there."}
+      ]
+    },
+    {
+      "id": "p2c02-q09", "level": 1, "type": "mcq", "tag": "webhooks",
+      "q": "What delivery behavior must a webhook consumer assume from a payment processor?",
+      "options": [
+        {"t": "At-least-once: duplicated, possibly delayed for days, possibly out of order", "correct": true,
+         "why": "All three, simultaneously. Processors retry until acknowledged (duplicates), keep retrying while your endpoint is down (delay), and retries of old events land after newer ones (reordering). The consumer must survive all of it."},
+        {"t": "Exactly-once, since processors are payment-grade infrastructure", "correct": false,
+         "why": "No sender can promise exactly-once over a network, payment-grade or not — the moment your 200 OK gets lost, they must retry, and you receive a duplicate."},
+        {"t": "In-order delivery, since events are emitted in sequence", "correct": false,
+         "why": "Emitted in order, yes — delivered in order, no. One failed delivery plus retries means 'captured' can arrive before 'authorized'. Arrival order carries no information."},
+        {"t": "At-most-once: an event may occasionally be missed outright, but it will never be delivered more than once", "correct": false,
+         "why": "The opposite contract. Processors deliberately choose repeats over gaps — though gaps still happen when retries exhaust, which is why reconciliation exists behind the webhooks."}
+      ]
+    },
+    {
+      "id": "p2c02-q10", "level": 2, "type": "mcq", "tag": "idempotency-key",
+      "q": "A request arrives with a known idempotency key but a request body whose hash differs from the stored one. The server should:",
+      "options": [
+        {"t": "Reject with an error — no replay, no execution", "correct": true,
+         "why": "Right. Same key + different body isn't a retry, it's a client bug (often a key accidentally reused for a new purchase). Replaying would return a response for the wrong request; executing would break the key's guarantee. Fail loudly — 422-style — so the bug gets found."},
+        {"t": "Replay the stored response, since the key matches", "correct": false,
+         "why": "The client asked to pay for order B and would receive the recorded response for order A — a silent, confusing lie. The hash check exists precisely to catch this."},
+        {"t": "Execute the new request and overwrite the stored record", "correct": false,
+         "why": "This turns the key into a mutable slot and reopens the duplicate window: the ORIGINAL request's retry now finds a record for a different operation. Keys must be immutable once used."},
+        {"t": "Execute the new request under a server-assigned fresh key", "correct": false,
+         "why": "Helpful-seeming, but it silently forgives a client bug that will bite elsewhere — and the client doesn't know the new key, so ITS retries of this request now duplicate. Reject and make the client fix it."}
+      ]
+    },
+    {
+      "id": "p2c02-q11", "level": 2, "type": "mcq", "tag": "idempotency-key",
+      "q": "Attempt 1 is still executing when the client's retry with the same key arrives at another app server. What actually prevents a double charge?",
+      "options": [
+        {"t": "The database: the retry's insert of the key row hits a unique constraint, so it either waits on the winner's lock or gets a 409", "correct": true,
+         "why": "Correct — the race is settled where atomicity lives. Insert-key-first-then-work means the loser collides in the DB, then policy decides: block until the winner commits and replay its response, or fail fast like Stripe's 409. Either way, one execution."},
+        {"t": "The load balancer hashes the key so all retries land on the same app server, which serializes them with an in-memory lock per key", "correct": false,
+         "why": "In-memory locks die with the process, and sticky routing breaks the moment a server restarts or the pool scales. Multi-server correctness can't hang off single-server memory — Part 1's replication chapters made this scar tissue."},
+        {"t": "Nothing needs to — the second request will find the stored response", "correct": false,
+         "why": "Only if attempt 1 already committed. The dangerous window is BEFORE the commit: no stored response exists yet, and without the constraint both requests execute. Concurrency is exactly the case the lookup-then-execute pattern misses."},
+        {"t": "A distributed lock service like ZooKeeper held per key", "correct": false,
+         "why": "Works, but it's a second system, a second failure mode, and a lock that isn't atomic with the DB commit — all to reproduce what a unique constraint gives for free. This is the over-engineered answer interviewers dock."}
+      ]
+    },
+    {
+      "id": "p2c02-q12", "level": 2, "type": "mcq", "tag": "ledger",
+      "q": "SUM over the ledger is too slow for balance reads at your scale. The senior design is:",
+      "options": [
+        {"t": "Cached balance serves reads; the ledger stays the source of truth; reconciliation continuously re-derives and compares", "correct": true,
+         "why": "Yes — cache the derivation, never invert the relationship. The materialized balance is an opinion the ledger can veto. When they disagree, the ledger wins and the drift gets root-caused."},
+        {"t": "Store the balance as the truth and keep the ledger as a best-effort log", "correct": false,
+         "why": "Inverted. A stored balance can be corrupted by any bug with no way to know what it should have been. The append-only history must be the thing you trust, or you've rebuilt the naive balance column with extra steps."},
+        {"t": "Serve reads from a balance column updated synchronously, and append the ledger entries asynchronously in the background for speed", "correct": false,
+         "why": "Now the derived value leads and the truth trails behind: a crash in the async gap leaves a balance no ledger entry can explain, permanently. The ledger commits first or in the same transaction — caches may lag, truth may not."},
+        {"t": "Shard the SUM across workers so derivation stays fast enough", "correct": false,
+         "why": "Heroic engineering to avoid a cache that every bank happily uses. Millions of entries per hot account will outrun any live-SUM scheme eventually — materialize, and spend the cleverness on reconciliation instead."}
+      ]
+    },
+    {
+      "id": "p2c02-q13", "level": 2, "type": "mcq", "tag": "webhooks",
+      "q": "The same payment.captured webhook (same event ID) arrives twice, an hour apart. Your consumer should:",
+      "options": [
+        {"t": "Recognize the stored event ID and no-op the second delivery", "correct": true,
+         "why": "Right — the consumer's own idempotency table, same trick as the API side: record processed event IDs atomically with their effects, and redelivery becomes a harmless no-op that still returns 200 so retries stop."},
+        {"t": "Process it again — capturing twice is safe since the state is already captured", "correct": false,
+         "why": "The state transition might no-op, but the side effects won't: ledger entries booked twice, two confirmation emails, double-counted revenue metrics. 'Processing' is more than the state field."},
+        {"t": "Return 500 so the processor knows it sent a duplicate", "correct": false,
+         "why": "A 500 tells the processor delivery FAILED — so it retries, delivering the duplicate again and again. Duplicates are normal at-least-once behavior, not an error to report; absorb and 200."},
+        {"t": "Compare payload contents to decide whether it's really the same event", "correct": false,
+         "why": "Fragile — payloads can differ across redeliveries (snapshots at different times) while being the same event. The event ID exists precisely so you don't have to guess from contents."}
+      ]
+    },
+    {
+      "id": "p2c02-q14", "level": 2, "type": "mcq", "tag": "state-machine",
+      "q": "Your payment is in state 'captured'. A payment.authorized webhook now arrives (a delayed retry of an old event). Correct handling:",
+      "options": [
+        {"t": "The state machine rejects captured→authorized as illegal; drop it as stale, return 200", "correct": true,
+         "why": "Exactly how 'tolerate reordering' works mechanically: events propose transitions, the state machine only permits legal moves, and a late old event fails the legality check and is recognized as stale. The 200 stops pointless retries."},
+        {"t": "Apply it — the processor's events are authoritative, so state becomes authorized", "correct": false,
+         "why": "Trusting arrival order rewinds the payment: a captured charge now looks merely authorized, and downstream logic may try to capture again. Arrival order is noise; the state machine is the order."},
+        {"t": "Buffer all events and periodically sort by timestamp before applying", "correct": false,
+         "why": "Adds latency and a new failure mode (how long do you buffer?) to solve what a legality check solves instantly. Cross-machine timestamps are also shaky ground — Part 1's clock lessons apply."},
+        {"t": "Return 500 so the processor redelivers events in the right order", "correct": false,
+         "why": "Processors don't re-sequence on failure — they just retry THIS event later. You'd be requesting an infinite loop of the same stale delivery."}
+      ]
+    },
+    {
+      "id": "p2c02-q15", "level": 2, "type": "mcq", "tag": "idempotency-key",
+      "q": "A teammate proposes: 'Dedup via SETNX in Redis, then write the payment to Postgres.' The strongest objection is:",
+      "options": [
+        {"t": "Redis and Postgres can't commit atomically, so every crash or eviction between them either blocks real payments or allows double charges", "correct": true,
+         "why": "The disease, named precisely. Crash after SETNX, before commit: retries blocked for a charge that never happened. Eviction or Redis restart after commit: retry re-executes. Two systems, one pretend-transaction."},
+        {"t": "Redis is too slow for the payment path", "correct": false,
+         "why": "Redis is famously fast — sub-millisecond. Speed is the one thing this design has; the objection is correctness, and leading with a wrong performance claim spends your credibility."},
+        {"t": "SETNX is deprecated in favor of SET with NX", "correct": false,
+         "why": "True as API trivia, changes nothing about the architecture. Naming syntax nits while the atomicity hole stays open is the code-review equivalent of straightening pictures in a burning house."},
+        {"t": "It works in principle, but only after Redis runs as a clustered, highly available deployment so the dedup store can't go down", "correct": false,
+         "why": "HA makes the wrong design more available, not more correct — eviction and the crash-between-writes window survive clustering fully intact. Availability and atomicity are different axes."}
+      ]
+    },
+    {
+      "id": "p2c02-q16", "level": 2, "type": "mcq", "tag": "idempotency-key",
+      "q": "To save storage, someone sets the idempotency key TTL to 10 minutes. What real failure does this invite?",
+      "options": [
+        {"t": "A late retry from an offline client or a queued job lands after key expiry and executes as a fresh double charge", "correct": true,
+         "why": "Right. The TTL must exceed the longest realistic retry window across ALL retry sources, not just snappy in-app ones. This is why 24 hours became the industry default — and the storage math (tens of GB) says the saving was never worth anything."},
+        {"t": "The key table grows without bound", "correct": false,
+         "why": "Backwards — a shorter TTL shrinks the table. The cost of short TTLs isn't storage, it's correctness at the tail of the retry distribution."},
+        {"t": "Nothing — real clients give up within 30 seconds, so a 10-minute window still leaves a twenty-fold safety margin", "correct": false,
+         "why": "In-app timeouts are the head of the distribution. The tail is offline-queued syncs, background job retries with backoff, and webhook redelivery — hours to days. The tail is where money incidents live."},
+        {"t": "Replayed responses go stale and confuse clients", "correct": false,
+         "why": "A replayed response is supposed to be the original outcome — that's the contract, not staleness. The TTL risk is duplicates escaping detection, not replays being old."}
+      ]
+    },
+    {
+      "id": "p2c02-q17", "level": 2, "type": "mcq", "tag": "reconciliation",
+      "q": "Your webhook endpoint was down for four days; the processor's retries gave up on day three. What catches the payments you never heard about?",
+      "options": [
+        {"t": "The daily reconciliation job against the processor's settlement file", "correct": true,
+         "why": "This is the moment recon exists for: 'in their file, not in your ledger' is precisely the missed-webhook bucket — ingest, book the entries, alert. Webhooks are the fast path; reconciliation is the truth path."},
+        {"t": "Nothing — the payments are lost and must be refunded", "correct": false,
+         "why": "The money moved and the processor has the authoritative record of it; nothing is lost except your copy. Systems that can't recover their copy from the settlement file are missing their safety net, not their money."},
+        {"t": "The processor will resume retries once the endpoint is healthy", "correct": false,
+         "why": "Retry schedules are finite — after exhaustion, delivery is abandoned (some processors let you manually re-send from a dashboard, but that's an ops action, not a guarantee). Design for gaps, don't hope against them."},
+        {"t": "Customers will report missing orders and support can replay them", "correct": false,
+         "why": "Customers-as-monitoring is the most expensive alerting system ever built, and it misses every case where the customer doesn't notice. The settlement file reports 100% of settled transactions, silently and daily."}
+      ]
+    },
+    {
+      "id": "p2c02-q18", "level": 2, "type": "mcq", "tag": "minor-units",
+      "q": "A wallet service stores balances as floats. Symptoms appear at scale. Which is the telltale one?",
+      "options": [
+        {"t": "Reconciliation finds tiny, unexplainable paise-level mismatches that accumulate over time", "correct": true,
+         "why": "The classic signature: each transaction contributes a representation error around the 15th significant digit; millions of transactions later, books drift from the bank's by amounts no single transaction explains. Integer minor units make this bug unrepresentable."},
+        {"t": "Balance reads become slower as values grow", "correct": false,
+         "why": "Float arithmetic speed doesn't depend on the value. The float problem is precision, not performance — mixing those up in an interview suggests pattern-matching over understanding."},
+        {"t": "Balances overflow at large amounts", "correct": false,
+         "why": "Floats famously don't overflow at money-scale magnitudes (they lose precision instead — which is worse, because it's silent). Overflow is an integer concern, solved by 64-bit types."},
+        {"t": "Negative balances start appearing on wallet accounts where business rules say negatives are impossible", "correct": false,
+         "why": "Negative balances come from race conditions or missing checks, float or not. Real float damage is subtler: values that are almost-but-not-exactly right, failing equality checks and recon by a whisker."}
+      ]
+    },
+    {
+      "id": "p2c02-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Our payment processor guarantees exactly-once webhook delivery, so we can skip consumer-side dedup.' Your response?",
+      "options": [
+        {"t": "\"That guarantee is impossible over a network — once our 200 OK is lost, they must retry or drop. I'll build the idempotent consumer anyway; it costs one table.\"", "correct": true,
+         "why": "Committed, grounded in the impossibility argument, and priced: the defense is nearly free, the failure it prevents is a money incident. Politely refusing to outsource correctness to a vendor's marketing page is the senior stance."},
+        {"t": "\"Great — that simplifies the consumer significantly.\"", "correct": false,
+         "why": "Accepting an impossible claim at face value fails the round's central test. Whatever the SLA says, the ack from your endpoint can be lost, and then the sender faces retry-or-drop like everyone else."},
+        {"t": "\"I'd ask the processor for documentation on how they achieve it.\"", "correct": false,
+         "why": "Sounds diligent, but you already know what the documentation can say: at-least-once plus dedup on their side, which does nothing for the leg between them and you. Deferring to homework here is the waiting-to-be-led pattern."},
+        {"t": "\"Let's skip the dedup table for now, but add dashboards and alerts so we catch any double-processing quickly, and revisit if the guarantee ever fails in practice.\"", "correct": false,
+         "why": "Detecting double-charges after they hit customers is choosing cleanup over prevention when prevention costs one table and a unique constraint. Monitoring complements dedup; it can't replace it."}
+      ]
+    },
+    {
+      "id": "p2c02-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A teammate proposes active-active multi-region writes with async replication for the ledger, 'so payments stay fast and available everywhere.' The senior position:",
+      "options": [
+        {"t": "\"No eventual consistency on the ledger. One ACID primary per account shard; cross-region users pay the latency. Replicas serve analytics only.\"", "correct": true,
+         "why": "A committed stance with a scaling story attached. Async multi-master means two regions can both accept entries against the same account with neither seeing the other — double-spends and unbalanced money in the gap. For likes, acceptable; for the ledger, disqualifying. Latency is the honest price."},
+        {"t": "\"Reasonable — genuine concurrent writes to the same account will be rare, and the occasional conflict can be resolved automatically with last-write-wins\"", "correct": false,
+         "why": "Last-write-wins on a ledger means the losing write — someone's money movement — is silently discarded. 'Rare' multiplied by payment volume is 'weekly incident'. Conflict resolution strategies from Part 1 exist for shopping carts, not ledgers."},
+        {"t": "\"Use CRDTs so concurrent ledger writes merge automatically\"", "correct": false,
+         "why": "CRDTs guarantee convergence, not invariants. Both regions' entries survive the merge — including two withdrawals that together overdraw the account. The ledger's constraint (balanced, ordered, admission-controlled) is exactly what CRDTs can't enforce."},
+        {"t": "\"Agreed, but add a nightly job to detect and repair inconsistencies\"", "correct": false,
+         "why": "Repair implies un-moving money that customers already saw move — refunds, reversals, apology emails. Reconciliation is for catching what external parties missed, not for laundering a knowingly unsound write path."}
+      ]
+    },
+    {
+      "id": "p2c02-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Design review: 'Instead of idempotency keys, let's make every operation naturally idempotent — model payments as set-state commands.' Your call?",
+      "options": [
+        {"t": "Keys stay. Set-style commands lose concurrent updates and erase intent, and 'charge the card' has no set-form at all", "correct": true,
+         "why": "Right. 'Set balance to X' silently swallows any payment that landed in between (the lost-update problem), and 'charge the card' has no set-form at all — the acquirer moves real money exactly once or twice. Natural idempotency is a nice property where it's free; keys are the general mechanism."},
+        {"t": "Agreed — less machinery, and set operations are provably idempotent", "correct": false,
+         "why": "Provably idempotent AND provably lossy under concurrency: two intents, one surviving state, no record of the eaten one. An append-only, key-deduped design preserves every intent; a set-based one aggregates them away."},
+        {"t": "Split the difference: sets for wallet updates, keys only for card charges", "correct": false,
+         "why": "Wallet updates are the WORST place for sets — wallets see the most concurrent activity, so lost updates land there first. The split keeps the machinery while reintroducing the bug in the hottest path."},
+        {"t": "Neither — run the payments database at serializable isolation so concurrent duplicate operations are forced to conflict, and one of them aborts", "correct": false,
+         "why": "Isolation levels order concurrent transactions; they cannot know that two well-formed, non-overlapping-in-time requests are semantically the same tap of a button. A retry an hour later conflicts with nothing. Duplicate identity needs a name — the key."}
+      ]
+    },
+    {
+      "id": "p2c02-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "45-minute 'design checkout' interview. High-level design is done with 20 minutes left. Where does the L5 candidate steer the deep dive?",
+      "options": [
+        {"t": "\"The crux is duplicate absorption — keys through the ledger write. I'll walk that transaction, then webhooks and recon if time allows.\"", "correct": true,
+         "why": "Finds the fire and walks toward it. Payment questions are constructed to probe exactly this transaction; naming it as the crux and spending the time there — LB and autoscaling dismissed in a sentence — is the pattern that gets graded senior."},
+        {"t": "Load balancing and autoscaling for checkout traffic spikes", "correct": false,
+         "why": "Part 1 material, and every candidate has it. Payment traffic is modest by web standards (even huge processors run thousands, not millions, of payments per second) — scale is not what this question was invented to probe. Correctness is."},
+        {"t": "A/B testing infrastructure and checkout conversion analytics", "correct": false,
+         "why": "Legitimate product engineering, invisible on this rubric. Spending the deep-dive window here reads as not recognizing which room is on fire."},
+        {"t": "Split the remaining time evenly — a few minutes each on caching, queues, the payment flow, monitoring, and deployment — to demonstrate breadth", "correct": false,
+         "why": "Breadth-first at deep-dive time is the mid-level tell from the very first chapter — touring every room with equal enthusiasm. Depth on the crux beats coverage of the routine."}
+      ]
+    },
+    {
+      "id": "p2c02-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: '100x volume. What breaks first in your ledger?' Strongest answer:",
+      "options": [
+        {"t": "\"Hot accounts — the fee account is in nearly every transaction, so its row serializes commits. Split it into N sub-accounts and sum for reporting.\"", "correct": true,
+         "why": "Names the specific first bottleneck (contention on one row, not throughput in general) and commits to the standard fix with its cost — reads now aggregate N rows. Knowing WHERE it breaks is the signal; the bucket-split is the well-worn cure."},
+        {"t": "\"A single relational primary won't absorb 100x write volume — plan the ledger's migration to a horizontally scalable store like Cassandra now\"", "correct": false,
+         "why": "Trades the actual bottleneck (one hot row — which follows you to any database) for the loss of ACID multi-row transactions, the property the entire design stands on. Wrong diagnosis, and the prescription amputates the healthy limb."},
+        {"t": "\"Batch ledger writes and flush every few seconds to cut write load\"", "correct": false,
+         "why": "A window where committed payments have no ledger entries — acknowledged money that isn't in the book. That breaks the 'no eventual consistency on the ledger' stance for a throughput problem that sharding solves honestly."},
+        {"t": "\"Nothing — the ledger is append-only, and appends scale linearly\"", "correct": false,
+         "why": "Append-only storage scales; append-only CONTENTION doesn't. Every transaction touching the same fee account still serializes on that account's locks and its balance derivation. 'Nothing breaks' at 100x is never the senior answer."}
+      ]
+    },
+    {
+      "id": "p2c02-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Postmortem: rare double charges. Code inspection shows the key row is committed in a separate transaction immediately after the charge commits. The senior fix:",
+      "options": [
+        {"t": "Merge them: key row, charge, and stored response in one transaction — the crash window between commits IS the bug", "correct": true,
+         "why": "Root cause, not symptom. Any crash, deploy, or OOM-kill in the gap leaves a committed charge with no key record, and the retry re-executes. One commit makes the window not-exist, which beats making it smaller."},
+        {"t": "Add a catch block that retries the key insert until it succeeds", "correct": false,
+         "why": "Retrying the second write shrinks the window; a process kill still lands inside it. You cannot retry your way out of non-atomicity — the fix is making the two writes one."},
+        {"t": "Reorder: commit the key first, then the charge", "correct": false,
+         "why": "Swaps the failure mode: now a crash in the gap blocks every retry of a charge that never happened — customers who were never charged and can never pay. Both orders are wrong; only one transaction is right."},
+        {"t": "Keep the code as-is and extend the daily reconciliation job to detect double charges and refund them automatically within 24 hours", "correct": false,
+         "why": "Institutionalizes charging customers twice and apologizing within 24 hours, while the one-line-diff fix goes unshipped. Recon is the net under the net — not a license to keep the hole in the first net."}
+      ]
+    },
+    {
+      "id": "p2c02-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Recon flags a transaction: in the processor's settlement file, absent from your ledger, five days old. The senior playbook:",
+      "options": [
+        {"t": "Ingest it — book the entries from the file's data, alert, and root-cause why the webhook path missed it; if the misses trend up, page", "correct": true,
+         "why": "Recover the record AND treat the miss as a symptom. The file is authoritative for what settled, so booking from it is correct — but a missed webhook has a cause (endpoint bug? subscription config? processor incident?), and unexplained misses trend into incidents."},
+        {"t": "Ignore it — the money settled fine, so no customer is impacted", "correct": false,
+         "why": "Your books are wrong: revenue understated, the merchant's payout short, the balance-vs-ledger checks quietly off. 'The bank knows even if we don't' is how small gaps become audit findings."},
+        {"t": "Refund it via the processor, since your system never approved it", "correct": false,
+         "why": "It almost certainly WAS approved by your system — the record just never made it back. Refunding a legitimate purchase punishes the customer and the merchant for your ingestion gap. Investigate before reversing money."},
+        {"t": "Alert a human to review and hand-book each one — letting a recon job write ledger entries automatically is too risky to allow", "correct": false,
+         "why": "The file is the processor's authoritative settled record — ingesting from it is standard, safe, and exactly what recon is FOR. All-manual handling doesn't survive contact with volume: at thousands of daily entries, 'a human reviews each' means a backlog, not safety."}
+      ]
+    }
+  ]
+}

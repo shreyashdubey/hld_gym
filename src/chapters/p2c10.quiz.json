@@ -1,0 +1,355 @@
+{
+  "chapter": "p2c10",
+  "items": [
+    {
+      "id": "p2c10-q01", "level": 1, "type": "mcq", "tag": "bloom",
+      "q": "A Bloom filter can be wrong in exactly one way. Which?",
+      "options": [
+        {"t": "It can say \"present\" for an item never added", "correct": true,
+         "why": "Right — a false positive. Other items' bits can overlap yours by coincidence, so \"all bits set\" only means maybe. A 0 in any position is a hard guarantee of absence, because bits are never cleared."},
+        {"t": "It can say \"not present\" for an item that was added", "correct": false,
+         "why": "That's a false negative, and it's impossible. Adding an item sets its k bits, and nothing ever clears them — so a queried 0 proves the item was never added."},
+        {"t": "Either direction, about 1% of the time each", "correct": false,
+         "why": "The error is one-sided by construction. Symmetric ±1% error describes HyperLogLog's counting, not a Bloom filter's membership answers."},
+        {"t": "It can return a stale answer under concurrent writes", "correct": false,
+         "why": "Concurrency is an implementation concern, not the structure's error model. The defining property is the one-sided false positive."}
+      ]
+    },
+    {
+      "id": "p2c10-q02", "level": 1, "type": "mcq", "tag": "bloom",
+      "q": "Roughly how much memory does a Bloom filter need for 1 billion items at a 1% false-positive rate?",
+      "options": [
+        {"t": "About 1.2 GB", "correct": true,
+         "why": "Yes — the number to carry into interviews is ~10 bits per item at 1% FP (9.6 exactly, with ~7 hash functions). 10 billion bits ≈ 1.2GB, versus 25GB+ for a real exact hash set."},
+        {"t": "About 12 KB", "correct": false,
+         "why": "12KB is HyperLogLog's fixed size for distinct counting. Bloom filters grow with the number of items — they store per-item evidence, just very compressed."},
+        {"t": "About 8 GB", "correct": false,
+         "why": "8GB is what a billion raw 8-byte hashes cost before hash-set overhead — the exact answer's floor. The Bloom filter is the escape from that number."},
+        {"t": "It depends on item size — bigger items need more bits", "correct": false,
+         "why": "Item size is irrelevant: only the hash of the item touches the filter. A URL and a UUID cost the same bits. Sizing depends on item count and target FP rate, nothing else."}
+      ]
+    },
+    {
+      "id": "p2c10-q03", "level": 1, "type": "mcq", "tag": "hll",
+      "q": "What question does HyperLogLog answer, and at what cost?",
+      "options": [
+        {"t": "\"How many distinct items?\" in ~12KB with under 1% typical error", "correct": true,
+         "why": "Right. HLL sketches cardinality: ~12KB regardless of whether the true count is thousands or billions, with 0.81% standard error at Redis's 16,384 buckets. Duplicates change nothing — same hash, same buckets."},
+        {"t": "\"Have I seen this item?\" in ~1 bit per item", "correct": false,
+         "why": "Membership is the Bloom filter's question. HLL can't tell you whether a specific item was seen — it only estimates how many distinct ones were."},
+        {"t": "\"How often did this item occur?\" with overestimates only", "correct": false,
+         "why": "Frequency-per-key is the count-min sketch. HLL deliberately ignores repeat occurrences — that's what makes it a distinct counter."},
+        {"t": "Exact distinct counts, computed by replaying the full event stream on every query", "correct": false,
+         "why": "HLL is never exact — the entire trade is a bounded ~1% error for constant memory. Exact distinct counting requires remembering the IDs."}
+      ]
+    },
+    {
+      "id": "p2c10-q04", "level": 1, "type": "mcq", "tag": "cms",
+      "q": "Why does a count-min sketch only ever OVERestimate a key's count?",
+      "options": [
+        {"t": "Collisions add other keys' increments to your cells; nothing ever subtracts", "correct": true,
+         "why": "Exactly. Each cell holds your key's true count plus whatever colliding keys contributed. Taking the min across rows picks the least-contaminated cell — still ≥ the truth, never below it."},
+        {"t": "It rounds every count up to a power of two", "correct": false,
+         "why": "No rounding is involved — cells are ordinary counters. The inflation comes from hash collisions sharing cells, not from number formatting."},
+        {"t": "It doesn't — taking the minimum across all the rows cancels out the collisions and recovers the exact count", "correct": false,
+         "why": "The min reduces the overestimate but can't eliminate it: if every row's cell suffered some collision, even the best cell is inflated. Estimate ≥ truth, always."},
+        {"t": "Because it drops updates when the grid is full", "correct": false,
+         "why": "A CMS never fills up or drops updates — that's its charm. Fixed cells absorb unlimited keys; the price is collision inflation, which is the overestimate."}
+      ]
+    },
+    {
+      "id": "p2c10-q05", "level": 1, "type": "mcq", "tag": "merge",
+      "q": "How do you correctly combine two HyperLogLogs built on different shards?",
+      "options": [
+        {"t": "Take the per-bucket maximum", "correct": true,
+         "why": "Yes — and the result is exactly the HLL one machine would have built seeing all events. The longest zero-run per bucket across both shards is the union's longest run. No extra error from merging."},
+        {"t": "Add the two estimated counts", "correct": false,
+         "why": "Double-counts every user who appeared on both shards. Distinct counts don't sum across overlapping populations — this is the classic sharded-counting trap."},
+        {"t": "Average the two estimates", "correct": false,
+         "why": "Averaging is wrong in both directions — it neither handles overlap nor captures users unique to one shard. Merge the sketches, then read one estimate."},
+        {"t": "Bitwise OR the registers", "correct": false,
+         "why": "OR is the Bloom filter's merge (bits). HLL buckets hold small integers (max zero-run lengths), and the correct combine for maxima is max, not OR."}
+      ]
+    },
+    {
+      "id": "p2c10-q06", "level": 1, "type": "mcq", "tag": "gossip",
+      "q": "In a gossip protocol where each informed node tells one random peer per round, how many rounds until all N nodes know?",
+      "options": [
+        {"t": "About log2(N)", "correct": true,
+         "why": "Right — the informed set roughly doubles each round: 1, 2, 4, 8… A thousand nodes take ~10 rounds, a million ~20. That logarithm is why gossip scales where central checkers and N-squared heartbeats don't."},
+        {"t": "About N rounds", "correct": false,
+         "why": "That would be a chain — one node telling the next. Gossip's power is that every informed node spreads simultaneously, so the audience multiplies instead of incrementing."},
+        {"t": "About N/2 rounds", "correct": false,
+         "why": "Still linear thinking. Epidemic spread compounds: each round the number of spreaders itself has doubled, giving logarithmic, not linear, convergence."},
+        {"t": "One round — everyone is contacted directly", "correct": false,
+         "why": "One round of random gossip reaches one extra node per spreader. Contacting everyone directly in one round is the all-to-all pattern gossip exists to avoid (N² messages)."}
+      ]
+    },
+    {
+      "id": "p2c10-q07", "level": 1, "type": "mcq", "tag": "swim",
+      "q": "In SWIM, node A's ping to B times out. What does A do next?",
+      "options": [
+        {"t": "Asks k other members to ping B on its behalf", "correct": true,
+         "why": "Yes — the indirect probe. If C or D can reach B, the problem was A's own path or load, not B's health. Borrowing other nodes' network paths is SWIM's first defense against false alarms."},
+        {"t": "Declares B dead and gossips it", "correct": false,
+         "why": "That's the naive detector SWIM was designed to replace. One node's timeout proves nothing — B might be in a GC pause, or A's own NIC might be the problem."},
+        {"t": "Retries the ping with a longer timeout", "correct": false,
+         "why": "Retrying tests the same possibly-broken path again. SWIM's insight is to change the vantage point, not the patience — other members' paths carry independent evidence."},
+        {"t": "Removes B from its local membership list quietly", "correct": false,
+         "why": "Silent local removal would fragment the cluster's view — every node with a hiccup would see a different membership. SWIM moves through shared, gossiped states: alive, suspect, dead."}
+      ]
+    },
+    {
+      "id": "p2c10-q08", "level": 1, "type": "mcq", "tag": "anti-entropy",
+      "q": "What job does a Merkle tree do in Cassandra/Dynamo-style repair?",
+      "options": [
+        {"t": "Finds which key ranges differ between replicas by comparing hashes, so only divergent data is streamed", "correct": true,
+         "why": "Right. Equal root hashes prove terabytes match in one round trip; differing roots are chased down the tree to the exact divergent ranges. Logarithmically many hash comparisons instead of shipping the dataset."},
+        {"t": "Coordinates writes across replicas at commit time so their contents can never diverge in the first place", "correct": false,
+         "why": "Nothing in these systems prevents divergence — nodes go down and miss writes. Merkle trees are the cure (find the drift cheaply), not the prevention."},
+        {"t": "Compresses the data before it's streamed between replicas", "correct": false,
+         "why": "It's a comparison structure, not a compression one. The savings come from streaming only the ranges that differ, not from making the bytes smaller."},
+        {"t": "Elects which replica's data wins a conflict", "correct": false,
+         "why": "Conflict resolution (timestamps, vector clocks) is a separate mechanism. The Merkle tree only answers \"where do we differ?\" — cheaply."}
+      ]
+    },
+    {
+      "id": "p2c10-q09", "level": 1, "type": "mcq", "tag": "swim",
+      "q": "What is the purpose of incarnation numbers in SWIM?",
+      "options": [
+        {"t": "They let a suspected node override the rumor of its death with provably fresher news", "correct": true,
+         "why": "Yes. When \"B is suspect\" and \"B is alive\" both circulate, the higher incarnation number wins everywhere. Only B can bump B's number, so a live node can always out-version a stale suspicion."},
+        {"t": "They count how many times each node has crashed and restarted, so the cluster can favor stable nodes when placing replicas", "correct": false,
+         "why": "Close-sounding but wrong purpose — the number isn't a crash statistic, it's a version stamp that orders conflicting gossip about the same node."},
+        {"t": "They order writes across replicas", "correct": false,
+         "why": "That's the job of timestamps or vector clocks in the data path. Incarnation numbers live purely in the membership protocol."},
+        {"t": "They rank nodes for leader election", "correct": false,
+         "why": "Gossip deliberately provides no election — that needs consensus (Raft/Paxos, chapter p2c03). Incarnation numbers resolve alive-vs-suspect rumors, nothing more."}
+      ]
+    },
+    {
+      "id": "p2c10-q10", "level": 2, "type": "mcq", "tag": "bloom",
+      "q": "Attackers spray your API with lookups for random nonexistent user IDs. Every request misses the cache and hits the database. Best fix from this chapter?",
+      "options": [
+        {"t": "A Bloom filter over all existing user IDs, checked before the cache/DB path", "correct": true,
+         "why": "Right — cache penetration's standard cure. \"Definitely not present\" rejects the garbage instantly; a ~1% false positive just means one wasted DB read, and no real user can ever be wrongly rejected."},
+        {"t": "Cache the misses: store \"not found\" markers with a short TTL so repeat lookups for the same bad key stop reaching the database", "correct": false,
+         "why": "Negative caching is a real technique, but against RANDOM keys it fails — each attack key is new, so nothing is ever re-hit, and the miss entries flood your cache's memory."},
+        {"t": "Bigger cache cluster to absorb the load", "correct": false,
+         "why": "The misses don't populate anything cacheable — a bigger cache is a bigger decoration. The problem is requests for data that doesn't exist; capacity can't fix that."},
+        {"t": "An HLL of existing user IDs, checked before the DB", "correct": false,
+         "why": "Wrong question: HLL counts distinct items and cannot answer \"is THIS id present?\" — it has no per-item memory. Membership is the Bloom filter's seat."}
+      ]
+    },
+    {
+      "id": "p2c10-q11", "level": 2, "type": "mcq", "tag": "bloom",
+      "q": "A Cassandra point read consults the per-SSTable Bloom filters. One filter says \"maybe present\" but the key isn't in that file. What actually happens?",
+      "options": [
+        {"t": "One wasted disk read on that file; the answer is still correct", "correct": true,
+         "why": "Exactly — a false positive here costs latency, never correctness. The read checks the file, finds nothing, moves on. That's why blooms are safe in this seat: the expensive path double-checks every \"maybe\"."},
+        {"t": "The client can receive a wrong answer, because the filter's \"maybe\" is trusted without checking the actual file", "correct": false,
+         "why": "Never — the filter is only a hint to skip work. Every \"maybe\" is verified against the actual file. Wrong results would require a false negative causing a file to be skipped, which can't happen."},
+        {"t": "The SSTable is flagged for compaction", "correct": false,
+         "why": "Compaction is scheduled by size/tiering policy, not by filter misses. A false positive is routine and expected at the configured rate — it triggers nothing."},
+        {"t": "The filter is rebuilt to remove the error", "correct": false,
+         "why": "The FP rate is a design parameter, not a bug — rebuilding wouldn't eliminate overlap, and SSTables are immutable anyway. You tune bits-per-key at table creation instead."}
+      ]
+    },
+    {
+      "id": "p2c10-q12", "level": 2, "type": "mcq", "tag": "bloom",
+      "q": "Your crawler fronts its seen-set with a Bloom filter. What is the concrete consequence of its false positives?",
+      "options": [
+        {"t": "A small fraction of genuinely new URLs never get crawled", "correct": true,
+         "why": "Right — \"maybe seen\" on a new URL means it's skipped. At 1% FP you silently miss ~1 in 100 new pages (tunable; or confirm maybes against the exact store). The flip side: no false negatives means no duplicate crawls, ever."},
+        {"t": "A small share of already-crawled URLs get fetched a second time, wasting crawler bandwidth", "correct": false,
+         "why": "Duplicate crawls would require a false NEGATIVE — the filter forgetting a URL it saw — which is structurally impossible. The error only points the other way."},
+        {"t": "The crawl queue slowly corrupts", "correct": false,
+         "why": "Nothing corrupts — the filter's answers are probabilistic, not corrupt. The cost is a clean, quantifiable miss rate on new URLs, which you size the filter to control."},
+        {"t": "Crawl throughput drops as the filter slows down", "correct": false,
+         "why": "Bloom lookups stay O(k) nanosecond-fast regardless of load. Saturation raises the FP rate, not the latency — the failure mode is missed pages, not slowness."}
+      ]
+    },
+    {
+      "id": "p2c10-q13", "level": 2, "type": "mcq", "tag": "merge",
+      "q": "Unique daily visitors, with ingestion sharded across 8 consumers. Each shard reports COUNT(DISTINCT) locally: 2.1M, 1.8M, 2.4M… Someone proposes summing them. What do you say?",
+      "options": [
+        {"t": "Summing double-counts users seen by multiple shards — keep an HLL per shard and merge by bucket max instead", "correct": true,
+         "why": "Right. Unless users are partitioned BY user id (rarely true for event streams), the same user lands on many shards. Merged HLLs give the union's estimate for 12KB of network per shard — this merge story is exactly why sketches own distributed counting."},
+        {"t": "Sum them — it's close enough for a dashboard", "correct": false,
+         "why": "The error isn't small or bounded: a user active all day might hit all 8 shards and count 8 times. Overcounting by an unknown factor is worse than HLL's honest ±1%."},
+        {"t": "Have each shard ship its complete user-ID set to one aggregator overnight and compute the exact distinct count there", "correct": false,
+         "why": "Correct but priced wrong: that's shipping hundreds of gigabytes daily to compute one dashboard number. The 12KB merge exists precisely to avoid this."},
+        {"t": "Sum them, then divide by 8", "correct": false,
+         "why": "Assumes every user hit every shard, which is as wrong as assuming none did. There's no correction factor — overlap is unknowable from the counts alone. Merge sketches, not numbers."}
+      ]
+    },
+    {
+      "id": "p2c10-q14", "level": 2, "type": "mcq", "tag": "cms",
+      "q": "You're building \"top 10 trending hashtags\" over millions of distinct tags. Why does the count-min sketch need a min-heap beside it?",
+      "options": [
+        {"t": "A CMS only answers counts for keys you ask about — it can't list which keys are big", "correct": true,
+         "why": "Exactly. The sketch has no key inventory; hashes destroy the names. So as keys stream past, you query each one's estimate and keep the current best K in a small heap. Sketch sizes the counts, heap remembers the names."},
+        {"t": "The heap corrects the CMS's overestimates", "correct": false,
+         "why": "Nothing corrects the overestimate — it's inherent. The heap adds a different missing capability: remembering WHICH keys currently rank highest."},
+        {"t": "The CMS is too slow for reads; the heap caches hot answers", "correct": false,
+         "why": "CMS reads are a handful of array lookups — nanoseconds. Speed was never the gap; enumerability is."},
+        {"t": "The heap keeps exact ground-truth counters beside the sketch so its estimates can be validated before they're displayed", "correct": false,
+         "why": "The heap stores the sketch's own estimates for K keys, not ground truth. If you could keep exact counts for the interesting keys without the sketch, you wouldn't need the sketch."}
+      ]
+    },
+    {
+      "id": "p2c10-q15", "level": 2, "type": "mcq", "tag": "fit",
+      "q": "An internal dashboard needs request counts for 20,000 known API endpoints. A teammate proposes a count-min sketch \"for scalability.\" Your call?",
+      "options": [
+        {"t": "Plain hash map — 20K counters is under a megabyte, exact, and simpler", "correct": true,
+         "why": "Right, and this is the rule cutting the other way: size the exact answer FIRST. When it fits trivially, the sketch adds error and complexity for nothing. Using a sketch where exact fits reads as memorized-tool, not judgment."},
+        {"t": "Agree — a sketch keeps memory bounded no matter how many endpoints appear later, so it future-proofs the design", "correct": false,
+         "why": "Future-proofing against imaginary growth is the over-engineering pattern from chapter p0c01. 20K keys won't become 100M endpoints; and if they somehow did, swapping in a CMS later is a small change."},
+        {"t": "Use an HLL instead of a CMS", "correct": false,
+         "why": "Doubly wrong: still a sketch where exact fits, and the wrong sketch — HLL counts distinct items, not per-key frequencies."},
+        {"t": "CMS, but with a very wide grid to make the error tiny", "correct": false,
+         "why": "A CMS wide enough for near-zero error on 20K keys costs MORE memory than the exact map — you've re-invented the hash map, badly. The numbers were the answer all along."}
+      ]
+    },
+    {
+      "id": "p2c10-q16", "level": 2, "type": "mcq", "tag": "swim",
+      "q": "A node hits a 20-second GC pause. In a SWIM cluster with suspicion, what should happen end to end?",
+      "options": [
+        {"t": "It's marked suspect; when the pause ends it refutes with a higher incarnation number, and no rebalance ever starts", "correct": true,
+         "why": "Right — this is suspicion working as designed: a probation window sized so transient stalls expire quietly. The expensive machinery (marking dead, moving data) only engages when the grace period passes with no rebuttal."},
+        {"t": "It's declared dead on the first missed probe, its data starts rebalancing, and it rejoins as a brand-new member once the pause ends", "correct": false,
+         "why": "That's the naive detector — and its cost is the point: declaring dead triggers data movement measured in gigabytes, all wasted when the node wakes up 20 seconds later."},
+        {"t": "Nothing — SWIM ignores nodes that miss fewer than 10 probes", "correct": false,
+         "why": "There's no free-pass counter. Missed direct AND indirect probes always produce suspicion; what protects the node is the refutation window, not tolerance of silence."},
+        {"t": "The cluster pauses all failure detection until the node responds", "correct": false,
+         "why": "A cluster that stops detecting failures because one node is slow would miss real deaths. Detection continues; suspicion just separates \"quiet\" from \"gone\"."}
+      ]
+    },
+    {
+      "id": "p2c10-q17", "level": 2, "type": "mcq", "tag": "phi",
+      "q": "What makes a phi-accrual failure detector \"adaptive\" compared with a fixed timeout?",
+      "options": [
+        {"t": "It learns each peer's heartbeat-gap history and scores how improbable the current silence is for THAT peer", "correct": true,
+         "why": "Yes — suspicion becomes a continuous, per-node dial. A clockwork node gets suspected after a short quiet spell; a jittery one earns patience automatically. No hand-tuned constant can do both at once."},
+        {"t": "It shortens the timeout as the cluster grows", "correct": false,
+         "why": "Cluster size isn't the input. The adaptation is per-peer behavioral history, not global membership count."},
+        {"t": "It confirms silence over several independent network paths before raising suspicion, so single-path failures never cause false alarms", "correct": false,
+         "why": "Path diversity is SWIM's indirect probe — a different (complementary) mechanism. Phi-accrual adapts the TIME dimension: how long silence must last before it's suspicious."},
+        {"t": "It retries failed pings with exponential backoff", "correct": false,
+         "why": "Backoff schedules retries; it doesn't change the verdict threshold. Phi replaces the binary timeout itself with a probability-based score."}
+      ]
+    },
+    {
+      "id": "p2c10-q18", "level": 2, "type": "mcq", "tag": "gossip",
+      "q": "Why does a 5,000-node cluster use gossip for membership instead of a central health-check service?",
+      "options": [
+        {"t": "No single point of failure, constant per-node overhead, and seconds-level spread — at the cost of brief disagreement between nodes", "correct": true,
+         "why": "Right, including the cost — naming it is the senior part. Gossip trades a few seconds of inconsistent views for a design with no boss to lose and per-node load that doesn't grow with N."},
+        {"t": "Gossip guarantees every node has an identical, up-to-date view", "correct": false,
+         "why": "Backwards — gossip is eventually consistent by design. During the log(N) spread, views differ. It's chosen because membership TOLERATES those seconds, not because they don't exist."},
+        {"t": "A central checker physically can't ping 5,000 nodes often enough to detect failures within seconds, so detection lag grows with the cluster", "correct": false,
+         "why": "Raw ping volume is easy — 5K pings/sec is nothing. The real objections are the SPOF (checker dies → cluster is blind) and the watch/notification fanout on every change."},
+        {"t": "Gossip encrypts membership data better", "correct": false,
+         "why": "Security is orthogonal — both designs can encrypt. The trade is about failure domains and scaling behavior, not confidentiality."}
+      ]
+    },
+    {
+      "id": "p2c10-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: \"Unique viewers per video, 500M daily events, shown on every video page.\" Which answer reads most senior?",
+      "options": [
+        {"t": "\"HLL per video — 12KB each, ~1% error, merges across my ingestion shards. Fine for a displayed counter; if any product surface needs exact uniques, like advertiser billing, that path gets an exact batch count instead.\"", "correct": true,
+         "why": "The full package: structure, size, error, the merge story for the sharded design, AND the boundary where approximation stops being acceptable. Committing to the sketch while fencing off money is exactly the two-sided rule."},
+        {"t": "\"Redis sets per video, and shard them when memory gets tight.\"", "correct": false,
+         "why": "Sizing wasn't done: popular videos mean hundreds of MB per set, and 'shard when tight' defers the collision with arithmetic that's doable right now. The numbers already ruled this out."},
+        {"t": "\"HyperLogLog.\"", "correct": false,
+         "why": "Correct structure, no justification — the interviewer learns you've heard the name, not that you can size it, bound its error, or merge it. At L5 the three clauses are the answer."},
+        {"t": "\"We could use exact sets in Redis, HyperLogLog, sampling, or a nightly batch job — each has trade-offs around memory, accuracy, and freshness, so it really depends on the requirements, and we'd want to benchmark the options before committing to one.\"", "correct": false,
+         "why": "Option-listing with no commitment. The requirements were given (displayed counter, 500M events); they determine the answer, and hedging past them reads junior."}
+      ]
+    },
+    {
+      "id": "p2c10-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You propose a Bloom filter in front of the user-lookup DB. The interviewer waits. What must you volunteer next, unprompted?",
+      "options": [
+        {"t": "The error direction and its cost here, the rough size, and how the filter stays in sync as users register and delete", "correct": true,
+         "why": "These are the three follow-ups that separate recognition from working level: FPs cost one wasted read (harmless), FNs impossible (no wrong 404s), ~1.2GB per billion keys — and since blooms can't delete, a rebuild/generational plan for churn. Raising the lifecycle issue yourself is the senior tell."},
+        {"t": "A list of other systems that use Bloom filters", "correct": false,
+         "why": "Name-dropping Cassandra and Chrome adds breadth, not depth. The interviewer is waiting for the consequences of YOUR filter in THIS design."},
+        {"t": "The formula for optimal k given m and n", "correct": false,
+         "why": "Staff-only garnish, and not even the useful kind — deriving 9.6 bits burns deep-dive minutes that error-direction and lifecycle reasoning would score."},
+        {"t": "A fallback path that bypasses the filter and does exact lookups, in case its bits get corrupted or the hash functions misbehave", "correct": false,
+         "why": "Every \"maybe\" already falls through to the real lookup — that's the design, not a contingency. Offering it as a safety net suggests the mechanism isn't fully understood."}
+      ]
+    },
+    {
+      "id": "p2c10-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: \"Your crawler's Bloom filter was sized for 1B URLs; the crawl is heading to 10B. What happens?\" The strongest response:",
+      "options": [
+        {"t": "\"FP rate climbs toward 'yes to everything' as bits saturate, so we silently stop discovering new pages. I'd run generational filters per crawl epoch and alert on fill ratio before it degrades.\"", "correct": true,
+         "why": "Names the failure mechanism, the nasty property (silent, invisible in throughput metrics), a concrete fix, and the monitoring that catches it early. Failure modes plus instrumentation, unprompted — that's the graded behavior."},
+        {"t": "\"Bloom filters handle overload gracefully, so behavior degrades only slightly.\"", "correct": false,
+         "why": "False and confidently so. Saturation is steep, not graceful — near-full filters approach 100% FP. A wrong reassuring claim is worse than a gap."},
+        {"t": "\"I'd resize the filter in place to 10x the bits, rehashing the existing array so current entries carry over into the larger bit space.\"", "correct": false,
+         "why": "Blooms can't resize in place — bit positions don't map to a larger array, and the original items are gone. The realistic paths are rebuild-from-store, generational chains, or scalable-bloom designs."},
+        {"t": "\"Switch to an exact set — correctness first.\"", "correct": false,
+         "why": "The arithmetic already rejected exact at 10B URLs (hundreds of GB in RAM, or a disk store on every URL check). Retreating to a priced-out option under pressure reads as panic, not principle."}
+      ]
+    },
+    {
+      "id": "p2c10-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A candidate proposes a count-min sketch for per-advertiser click counts that drive monthly invoices. What's the senior objection?",
+      "options": [
+        {"t": "CMS strictly overestimates, so every invoice would be systematically inflated — billing needs exact, idempotent counting; sketches are for analytics", "correct": true,
+         "why": "The error direction isn't just nonzero — it points AT the customer's wallet, and replayed events inflate it further. Money paths get exact ledgers (chapter p2c02); the sketch/exact boundary runs exactly along 'does 1% wrong mean wrong money?'"},
+        {"t": "CMS is fine for billing if the grid is made wide and deep enough that the collision error becomes statistically negligible compared with monthly invoice totals", "correct": false,
+         "why": "'Negligible' has no defensible threshold on an invoice — auditors and contracts expect exact, and disputes make you reproduce numbers. Precision-tuning a sketch for money misses that the requirement is exactness, not smallness of error."},
+        {"t": "Wrong sketch — an HLL should be used for billing", "correct": false,
+         "why": "HLL counts distinct items with symmetric error — different structure, same disqualifier: it's approximate, and this seat requires exact."},
+        {"t": "No objection — Meta-scale click volumes force approximation", "correct": false,
+         "why": "Scale doesn't repeal correctness for money — real ad systems count billable clicks exactly (partitioned, idempotent pipelines) and use sketches for the analytics dashboards beside them."}
+      ]
+    },
+    {
+      "id": "p2c10-q23", "level": 3, "type": "mcq", "tag": "calibration",
+      "q": "Designing a 2,000-node storage cluster, the interviewer asks: \"How do nodes track membership and liveness?\" What's the right DEPTH of answer at L5?",
+      "options": [
+        {"t": "\"SWIM-style gossip like Consul's memberlist: periodic probe, indirect probes via peers, suspicion with incarnation numbers before anyone's declared dead\" — then return to the main design", "correct": true,
+         "why": "Recognition-level, delivered precisely — that's the calibrated L5 move. One sentence proves you know the mechanism and its failure-mode defenses; camping there steals minutes from deep dives that actually decide the level."},
+        {"t": "Derive the epidemic-spread convergence math on the whiteboard, then walk through SWIM's probe, ping-req, and suspicion message formats in detail", "correct": false,
+         "why": "Staff-only garnish in the wrong slot. Ten minutes of protocol internals on a supporting subsystem is depth spent where the rubric isn't looking."},
+        {"t": "\"ZooKeeper tracks membership; nodes register ephemeral sessions.\"", "correct": false,
+         "why": "Defensible at 50 nodes — but at 2,000, session churn and watch fanout make the coordination service the bottleneck and the SPOF. Not naming that scale limit is the gap."},
+        {"t": "\"A monitoring service pings everything and updates a shared config file.\"", "correct": false,
+         "why": "A central checker plus config propagation is the design gossip replaced: single point of failure, propagation lag, and no story for the checker's own death."}
+      ]
+    },
+    {
+      "id": "p2c10-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A Cassandra node was down 6 hours; hinted handoff expired, so its replicas have silently drifted. The interviewer asks how you reconcile. Strongest answer:",
+      "options": [
+        {"t": "\"Merkle-tree repair: compare hash trees, stream only the divergent ranges. But repair reads and hashes the disk, so I'd schedule it off-peak and stagger nodes — and monitor that it actually runs, because skipped repair is silent data loss risk.\"", "correct": true,
+         "why": "The mechanism plus its operational cost plus the monitoring — that's anti-entropy answered like someone who'd be on call for it. Repair being expensive-but-mandatory is exactly the unprompted failure-mode framing seniors are graded on."},
+        {"t": "\"Re-stream the node's entire dataset from a healthy replica — a full rebuild is the only way to be sure every missed write is recovered.\"", "correct": false,
+         "why": "Works, but ships terabytes to fix megabytes of drift — the exact waste Merkle comparison exists to avoid. Choosing it suggests the log-vs-linear trade wasn't priced."},
+        {"t": "\"Nothing needed — read repair fixes rows as they're read.\"", "correct": false,
+         "why": "Read repair only touches rows that GET read at consistency levels that compare replicas. Cold data stays wrong indefinitely — until a second node failure makes the drift unrecoverable. Passive repair alone is a quiet gamble."},
+        {"t": "\"Restore the node from last night's backup.\"", "correct": false,
+         "why": "A backup restores the node to an OLDER state — it can't contain the writes the node missed while down. The divergence is against its live peers, and only comparing against them closes it."}
+      ]
+    },
+    {
+      "id": "p2c10-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Mid-interview, you realize your feed design needs a \"have I already shown this post?\" check per user, ~2,000 posts per user, 100M users. A teammate-candidate reaches for per-user Bloom filters. What's the calibrated call?",
+      "options": [
+        {"t": "Exact per-user sets: 2,000 post IDs is ~16KB raw — comparable to a Bloom's size here, with zero risk of wrongly hiding a post the user never saw", "correct": true,
+         "why": "Size the exact answer first: at 2K items the sketch saves little memory, and its false positives BECOME a product bug (posts silently never shown). Sketches earn their place at billions of items, not thousands — declining one, with the arithmetic, is the strongest version of the senior rule."},
+        {"t": "Per-user Blooms — 100M of anything demands probabilistic structures", "correct": false,
+         "why": "100M users × small set ≠ big-data problem; each user's question is tiny and independent. Multiplying a reflex by user count instead of sizing one user's data is exactly how sketches get misapplied."},
+        {"t": "One global Bloom filter keyed on user+post pairs, sized generously so all 200 billion pairs fit at a low false-positive rate", "correct": false,
+         "why": "Now a false positive hides a post from a specific user with no way to audit or fix it — an unbounded-lifetime product bug affecting ~1% of impressions. Also unable to delete when a user's history resets."},
+        {"t": "An HLL per user to track posts seen", "correct": false,
+         "why": "Wrong question entirely — HLL would tell you HOW MANY distinct posts a user saw, never WHETHER they saw this one. Structure-to-question fit comes before any sizing."}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,302 @@
+<p>Priya and Arjun are editing the same design doc. The sentence on screen says <code>the cat</code>. At the same instant — same second, different laptops — Priya types <code>fat </code> before "cat", and Arjun deletes the word <code>the </code> at the front. Two tiny, innocent edits.</p>
+
+<p>Each laptop applies its own edit instantly (nobody will use an editor where your own keystrokes lag), then sends the edit to the other side. Priya's edit travels as an instruction: "insert <code>fat </code> at position 4." Arjun's travels as: "delete 4 characters starting at position 0." Now watch what happens when each laptop applies the other's instruction, exactly as written.</p>
+
+<p>Priya's laptop has <code>the fat cat</code>. It applies Arjun's delete — remove 4 characters from position 0 — and gets <code>fat cat</code>. Lovely. Arjun's laptop has <code>cat</code>. It applies Priya's insert — put <code>fat </code> at position 4 — but <code>cat</code> is only 3 characters long. Position 4 doesn't exist. Depending on the code, you get a crash, or the garbage string <code>catfat </code>. Two people made two reasonable edits, and now the "shared" document exists in two different versions, forever.</p>
+
+<p>This is the concurrent-editing problem, and it is the crux of Google Docs, Figma, Notion, multiplayer whiteboards, and every offline-sync app you've ever used. There are exactly two famous families of solutions — OT and CRDTs — and at the senior level you're expected to know both, pick one for the scenario in front of you, and defend the pick. This chapter gets you there.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Two replicas apply the same two edits in different orders and end up with different documents">
+  <rect class="dg-zone" x="10" y="10" width="340" height="310" rx="10"/>
+  <text class="dg-txt" x="26" y="36">Priya's laptop</text>
+  <rect class="dg-zone" x="370" y="10" width="340" height="310" rx="10"/>
+  <text class="dg-txt" x="386" y="36">Arjun's laptop</text>
+
+  <rect class="dg-node" x="100" y="52" width="160" height="34" rx="6"/>
+  <text class="dg-txt" x="145" y="74">"the cat"</text>
+  <line class="dg-edge" x1="180" y1="86" x2="180" y2="126" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="192" y="110">1. insert(4, "fat ")</text>
+  <rect class="dg-node" x="100" y="130" width="160" height="34" rx="6"/>
+  <text class="dg-txt" x="128" y="152">"the fat cat"</text>
+  <line class="dg-edge" x1="180" y1="164" x2="180" y2="204" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="192" y="188">2. delete(0, 4)</text>
+  <rect class="dg-good" x="100" y="208" width="160" height="34" rx="6"/>
+  <text class="dg-txt" x="140" y="230">"fat cat"</text>
+
+  <rect class="dg-node" x="460" y="52" width="160" height="34" rx="6"/>
+  <text class="dg-txt" x="505" y="74">"the cat"</text>
+  <line class="dg-edge" x1="540" y1="86" x2="540" y2="126" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="552" y="110">1. delete(0, 4)</text>
+  <rect class="dg-node" x="460" y="130" width="160" height="34" rx="6"/>
+  <text class="dg-txt" x="520" y="152">"cat"</text>
+  <line class="dg-edge" x1="540" y1="164" x2="540" y2="204" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="552" y="188">2. insert(4, "fat ")?!</text>
+  <rect class="dg-bad" x="460" y="208" width="160" height="34" rx="6"/>
+  <text class="dg-txt" x="497" y="230">"catfat "</text>
+
+  <text class="dg-txt-s" x="100" y="290">Same two edits, different order → different documents. The replicas never agree again.</text>
+</svg>
+<figcaption>The naive approach: apply every edit exactly as written. Positions are relative to a document that changed under you, so the replicas diverge.</figcaption>
+</figure>
+
+<h2>Why the obvious fixes fail</h2>
+
+<p>Before the two real solutions, kill the three "easy" ones, because interviewers love watching you kill them.</p>
+
+<p><strong>Lock the document.</strong> Old SharePoint and shared network drives did this: "This file is checked out by Bob." One writer at a time, zero merge problems, miserable product — collaboration was the feature, and a lock deletes the feature. Per-paragraph locks soften it, but two cursors in one sentence stays impossible.</p>
+
+<p><strong>Last write wins the whole document.</strong> Each save uploads the entire doc; latest upload replaces everything. Priya saves at 10:00:01, Arjun at 10:00:02 — every keystroke Priya made is silently gone. This is how naive file-sync tools eat homework. "Silently" is the killer word: nobody gets an error, the work just vanishes.</p>
+
+<p><strong>Timestamp every keystroke and apply them all in time order.</strong> Sounds rigorous. Two problems. First, clocks on different machines disagree (you saw clock skew in the replication chapter) — ordering by lying clocks is ordering by dice. Second, and deeper: even a <em>perfect</em> global order doesn't save you, because each operation's position was computed against the document <em>as its author saw it</em>. Arjun's "delete at position 0" was written against <code>the cat</code>. Replaying it against some other intermediate state changes what it deletes. Order was never the real problem — <strong>meaning</strong> is. An op's indexes are only valid in the context where it was born.</p>
+
+<p>So the real requirement has two halves. <strong>Convergence:</strong> after everyone's edits reach everyone, all replicas show the same document. <strong>Intention preservation:</strong> that document contains what each person meant to do — Priya's word inserted before "cat", Arjun's "the " gone. Both solution families are answers to this pair. They just put the cleverness in different places.</p>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Concurrent editing is hard because operations reference positions, and positions are relative to a document state that other people are changing at the same time. Every solution is a strategy for making an operation meaningful outside the context it was born in: OT <em>rewrites the operation</em> to fit the new context; CRDTs <em>redesign the data</em> so operations never needed rewriting in the first place.</p>
+</div>
+
+<h2>Path one: OT — rewrite the operation to fit</h2>
+
+<p><strong>Operational Transformation</strong> keeps the simple ops — insert-at-index, delete-at-index — and adds one crucial move: before applying a remote operation, <em>transform</em> it against the concurrent operations you've already applied, adjusting its positions so it still does what its author meant.</p>
+
+<p>Run the opening disaster again, with transformation. Arjun's laptop holds <code>cat</code> (his delete already applied). Priya's <code>insert(4, "fat ")</code> arrives. The transform function reasons: "Arjun deleted 4 characters, all of them <em>before</em> position 4. So Priya's intended spot has slid left by 4." It rewrites the op to <code>insert(0, "fat ")</code>, applies it to <code>cat</code>, and gets <code>fat cat</code>. Priya's side needed no rewrite: Arjun's delete covers positions 0 through 3, entirely before her insertion point at 4, so it applies as-is. Both replicas: <code>fat cat</code>. Converged, intentions intact.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 340" role="img" aria-label="OT transform square: two concurrent ops, each transformed against the other, converge to the same document">
+  <rect class="dg-node" x="290" y="20" width="140" height="34" rx="6"/>
+  <text class="dg-txt" x="325" y="42">"the cat"</text>
+
+  <rect class="dg-node" x="60" y="150" width="150" height="34" rx="6"/>
+  <text class="dg-txt" x="85" y="172">"the fat cat"</text>
+
+  <rect class="dg-node" x="510" y="150" width="150" height="34" rx="6"/>
+  <text class="dg-txt" x="562" y="172">"cat"</text>
+
+  <rect class="dg-good" x="290" y="286" width="140" height="34" rx="6"/>
+  <text class="dg-txt" x="326" y="308">"fat cat"</text>
+
+  <line class="dg-edge" x1="300" y1="56" x2="160" y2="146" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="80" y="100">Priya: insert(4, "fat ")</text>
+
+  <line class="dg-edge" x1="420" y1="56" x2="560" y2="146" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="500" y="100">Arjun: delete(0, 4)</text>
+
+  <line class="dg-edge" x1="160" y1="186" x2="300" y2="282" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="60" y="250">Arjun', unchanged:</text>
+  <text class="dg-txt-s" x="60" y="266">delete(0, 4)</text>
+
+  <line class="dg-edge" x1="560" y1="186" x2="420" y2="282" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="470" y="250">Priya', shifted left 4:</text>
+  <text class="dg-txt-s" x="470" y="266">insert(0, "fat ")</text>
+</svg>
+<figcaption>The transform square. Down the left: Priya applies hers, then Arjun's (no change needed). Down the right: Arjun applies his, then Priya's shifted by the transform. Both paths land on "fat cat".</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>OT is two proofreaders mailing correction slips for the same manuscript. A slip says "insert this word on line 12." If, before your slip arrives, the other proofreader deleted two lines above line 12, the editor's assistant adjusts your slip to "line 10" before applying it — because your <em>intent</em> was "before that particular sentence", not "line 12" as a magic number. The assistant who adjusts slips is the transform function. The analogy is honest about the hard part too: with many slips crossing in the mail, the assistant must adjust slips against slips against slips, and one wrong adjustment corrupts the manuscript for everyone.</p>
+</div>
+
+<h3>Why OT wants a central server</h3>
+
+<p>With two users, transformation is a tidy square. With N users all editing concurrently, every op might need transforming against every other concurrent op, in a web of combinations that must all agree. The classic escape — invented at Xerox PARC in the <strong>Jupiter</strong> system (1995), inherited by Google Wave, and living on in Google Docs — is a central server that puts all ops into one single sequence. Each client then only ever diverges from the server by its own unacknowledged keystrokes, so it only ever transforms along one axis: my pending ops versus the server's stream. The nightmarish N-way case never happens.</p>
+
+<p>That design choice explains OT's whole personality:</p>
+
+<ul>
+<li><strong>Needs the server.</strong> The server is the single source of order. No server, no order, no simple OT. Peer-to-peer OT exists in academia — it requires a stronger correctness property (called TP2) that turned out to be brutally hard; researchers later found convergence bugs in most published algorithms that claimed it.</li>
+<li><strong>Offline-fragile.</strong> Ten seconds of tunnel Wi-Fi is fine: your pending ops queue and transform on reconnect. A week offline means transforming thousands of your ops against thousands of everyone else's — possible, but the further histories drift, the more the transforms multiply and the less "intention" survives the algebra. OT was built for people editing <em>together</em>, not <em>apart</em>.</li>
+<li><strong>Cheap where it counts.</strong> Ops are a few bytes each ("insert 1 char at 512"). The document is just the text — no per-character bookkeeping. For a centralized realtime editor, this efficiency is why OT has powered Google Docs for over a decade.</li>
+<li><strong>Correctness is genuinely hard.</strong> The transform function must handle every op-pair — insert/insert at the same index (who goes first?), overlapping deletes, deletes inside deletes — and one missed case diverges replicas <em>silently</em>. There's no crash; two users just quietly stop seeing the same doc.</li>
+</ul>
+
+<div class="box story"><div class="box-tag">War story — Google Wave</div>
+<p>Google Wave (2009) was Google's bet that email, chat, and docs should be one realtime product, built on OT descended from the Jupiter paper. Joseph Gentle, an engineer who worked on Wave in Sydney, wrote the sentence OT is now famous for: "Unfortunately, implementing OT sucks. There's a million algorithms with different tradeoffs, mostly trapped in academic papers. The algorithms are really hard and time consuming to implement correctly… Wave took 2 years to write and if we rewrote it today, it would take almost as long to write a second time." Wave died in 2010 — a product failure more than an algorithm failure — but the lesson stuck: the transform machinery consumed elite engineers for years. Gentle spent years rebuilding the tech as the open-source library ShareJS so nobody would have to write it again — then in 2020 published a widely read essay titled "I was wrong. CRDTs are the future," arguing a decade of CRDT research had closed the performance gap. When one of OT's best implementers migrates camps, that's data.</p>
+</div>
+
+<p>So OT works, ships, and scales — Google Docs is the existence proof. But its two structural needs, <em>a central server</em> and <em>mostly-connected clients</em>, are exactly the assumptions the modern world keeps breaking: offline-first mobile apps, peer-to-peer tools, local-first software that treats the server as optional. For those, you want merges that need no referee at all.</p>
+
+<h2>Path two: CRDTs — redesign the data so merges can't conflict</h2>
+
+<p>A <strong>CRDT</strong> — Conflict-free Replicated Data Type — is a data structure built so that merging any two replicas <em>always</em> produces the same result, no matter what order the merges happen in, no matter how many times you repeat them. No transform functions, no referee, no coordination. Every replica edits locally, replicas swap states or ops whenever they happen to meet, and math — not a server — guarantees they converge.</p>
+
+<p>The trick is choosing merge rules with three properties you already know from arithmetic: the merge must be <strong>commutative</strong> (A merged with B = B merged with A), <strong>associative</strong> (grouping doesn't matter), and <strong>idempotent</strong> (merging the same thing twice changes nothing). <code>max()</code> has all three: max(3, 7) = max(7, 3), and max(7, 7) = 7. Build your structure out of operations like that, and replicas can gossip states in any order, with duplicates and delays, and still agree. That last property, idempotence, is quietly the most practical one: on a flaky network you <em>will</em> deliver the same update twice, and a CRDT simply doesn't care.</p>
+
+<h3>A tour of the useful types</h3>
+
+<p><strong>G-counter</strong> (grow-only counter). You'd think a distributed counter is trivial — it isn't, because "add 1" messages get lost and duplicated. The CRDT answer: each replica keeps its <em>own</em> slot in a map — <code>{a: 3, b: 1}</code> means replica-a incremented 3 times, replica-b once. You only ever increment your own slot. Merge = element-wise <code>max</code>. Total = sum of slots. Because each slot only grows and only one writer touches it, max is always safe. A <strong>PN-counter</strong> is two G-counters (one for increments, one for decrements); value = P minus N. This is how Riak shipped mergeable counters, and it's the right shape for likes, view counts, and metrics across regions.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Two G-counter replicas merge by element-wise max and reach the same value regardless of merge order">
+  <rect class="dg-node" x="40" y="40" width="200" height="60" rx="8"/>
+  <text class="dg-txt" x="60" y="66">Replica A</text>
+  <text class="dg-txt-s" x="60" y="86">{a: 3, b: 1}  → value 4</text>
+
+  <rect class="dg-node" x="40" y="150" width="200" height="60" rx="8"/>
+  <text class="dg-txt" x="60" y="176">Replica B</text>
+  <text class="dg-txt-s" x="60" y="196">{a: 2, b: 4}  → value 6</text>
+
+  <line class="dg-edge" x1="240" y1="70" x2="440" y2="115" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="240" y1="180" x2="440" y2="135" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="280" y="112">merge = element-wise max</text>
+
+  <rect class="dg-good" x="450" y="95" width="230" height="60" rx="8"/>
+  <text class="dg-txt" x="470" y="121">Merged (either order)</text>
+  <text class="dg-txt-s" x="470" y="141">{a: 3, b: 4}  → value 7</text>
+
+  <text class="dg-txt-s" x="40" y="238">merge(A,B) = merge(B,A) = merge(merge(A,B),B) — commutative, associative, idempotent.</text>
+</svg>
+<figcaption>The G-counter merge. Each replica owns one slot; max per slot can never lose an increment, and repeating the merge changes nothing.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Three teachers count students on a field trip. Bad plan: shout running totals at each other and try to add them up — totals crossing mid-air get double-counted. CRDT plan: each teacher counts <em>only her own group</em> on her own tally sheet. Whenever any two teachers meet, they photocopy sheets and each keeps, per teacher, the highest tally seen. Meet in any order, photocopy twice by accident — harmless. The grand total is always the sum of the per-teacher tallies, and everyone converges on it without a head teacher coordinating anything. The "one writer per slot" rule is what makes max safe — that's the part the analogy must keep.</p>
+</div>
+
+<p><strong>LWW-register</strong> (last-writer-wins register). A single value plus a timestamp; merge keeps the higher timestamp. It's the simplest possible CRDT and the most dangerous one, because its conflict "resolution" is <em>silent data loss by design</em>: when two people write concurrently, one write evaporates, no error, no trace. Add clock skew and it gets worse — a device with a fast clock stamps its writes "in the future" and beats edits that genuinely came later. Real sync systems have shipped this bug: a phone with a wrong clock whose stale settings kept overwriting fresh ones. LWW is a fine choice when losing one of two concurrent writes is acceptable (a mouse cursor position, a "who's online" flag, one property of one design object). It is an outrageous choice for anything a human typed and expects to keep.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 270" role="img" aria-label="LWW register: a device with a fast clock wins over a genuinely later edit, which is silently discarded">
+  <text class="dg-txt-s" x="20" y="30">real time →</text>
+  <line class="dg-edge" x1="130" y1="70" x2="700" y2="70"/>
+  <text class="dg-txt" x="20" y="75">Phone</text>
+  <text class="dg-txt-s" x="20" y="92">clock +5 min</text>
+  <line class="dg-edge" x1="130" y1="160" x2="700" y2="160"/>
+  <text class="dg-txt" x="20" y="165">Laptop</text>
+  <text class="dg-txt-s" x="20" y="182">clock correct</text>
+
+  <rect class="dg-node" x="180" y="45" width="180" height="40" rx="6"/>
+  <text class="dg-txt-s" x="192" y="62">10:00 real: theme="dark"</text>
+  <text class="dg-txt-s" x="192" y="78">stamped 10:05</text>
+
+  <rect class="dg-node" x="300" y="135" width="180" height="40" rx="6"/>
+  <text class="dg-txt-s" x="312" y="152">10:02 real: theme="light"</text>
+  <text class="dg-txt-s" x="312" y="168">stamped 10:02</text>
+
+  <line class="dg-edge" x1="470" y1="85" x2="560" y2="205" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="480" y1="175" x2="555" y2="210" marker-end="url(#arrow)"/>
+  <rect class="dg-bad" x="500" y="212" width="200" height="40" rx="6"/>
+  <text class="dg-txt-s" x="512" y="229">merge: 10:05 &gt; 10:02</text>
+  <text class="dg-txt-s" x="512" y="245">"dark" wins — "light" gone</text>
+
+  <text class="dg-txt-s" x="20" y="240">The user's most recent real edit</text>
+  <text class="dg-txt-s" x="20" y="256">lost with no error, no log, no trace.</text>
+</svg>
+<figcaption>LWW losing an edit. The phone's clock runs 5 minutes fast, so its older write carries a bigger timestamp and silently beats the genuinely newer one.</figcaption>
+</figure>
+
+<p><strong>OR-set</strong> (observed-remove set). Sets need a policy for the classic race: Priya removes "milk" from the shared list while Arjun, concurrently, re-adds it. The OR-set decides <em>adds win</em>, via a neat mechanism: every add gets an invisible unique tag, and a remove deletes only the tags it has <em>observed</em>. Arjun's concurrent add carries a fresh tag Priya's remove never saw, so it survives the merge. You could build a remove-wins set instead — the point a senior makes out loud is that "conflict-free" doesn't mean conflicts vanish; it means <em>you chose the winner in the data structure's design instead of at merge time</em>. Amazon's original Dynamo shopping cart got this wrong in the other direction, famously resurrecting deleted items when merging carts — the anomaly OR-sets were designed to fix.</p>
+
+<p><strong>Sequence CRDTs — text at last.</strong> Text is the boss level, because text is a sequence and sequences are all about positions — the very thing that broke in the cold open. The family of solutions (RGA, the "replicated growable array," is the classic algorithm; <strong>Yjs</strong> and <strong>Automerge</strong> are the production libraries) shares one core idea: <em>kill the index</em>. Every character gets a permanent unique ID at birth, and an insert says "I go after character #a17", not "I go at position 4". IDs never shift when other text changes, so concurrent inserts don't tread on each other; tie-break rules order simultaneous inserts at the same spot consistently everywhere. You don't need the internals — you need the idea (position by identity, not by index) and the two costs it buys them:</p>
+
+<ul>
+<li><strong>Metadata growth.</strong> Every character carries an ID plus ordering info. Early implementations spent tens to hundreds of bytes of bookkeeping per one-byte character — documents ballooning to 10–100x their text size. Modern Yjs and Automerge compress this down to a small multiple of the raw text, which is precisely why CRDT text editing became practical around 2019–2021 and not before.</li>
+<li><strong>Tombstones.</strong> Deleted characters can't be fully erased — some replica that's been offline may hold an insert anchored "after" one of them, so the dead character's ID must stay resolvable. Deletions leave markers called tombstones, and a long-lived document accumulates its own graveyard: a doc whose visible text is 20&nbsp;KB can quietly carry megabytes of history. Cleaning tombstones up (garbage collection) is safe only once you <em>know</em> every replica has seen the deletion — and "every replica" includes the laptop in a drawer that syncs next month. That's why tombstone GC needs causal-ordering machinery, and why it's a staff-level rabbit hole we'll flag but not enter.</li>
+</ul>
+
+<h2>Choosing: who wins where</h2>
+
+<table>
+<thead><tr><th>Dimension</th><th>OT</th><th>CRDT</th></tr></thead>
+<tbody>
+<tr><td>Central server</td><td>Required — it defines the op order</td><td>Optional — any topology, P2P included</td></tr>
+<tr><td>Offline editing</td><td>Minutes are fine; long divergence is painful</td><td>Native — merge whenever, however late</td></tr>
+<tr><td>Realtime text</td><td>Battle-tested for 15+ years (Docs)</td><td>Practical now via Yjs/Automerge; costs metadata</td></tr>
+<tr><td>Doc/memory overhead</td><td>Near zero — the doc is just the text</td><td>IDs + tombstones; small multiple of text with modern libs</td></tr>
+<tr><td>Correctness burden</td><td>In the transform functions (hard to write, silent when wrong)</td><td>In the data-type design (hard to invent, but you use a library)</td></tr>
+<tr><td>Non-text state (counters, sets, presence)</td><td>Awkward fit</td><td>Natural fit — this is home turf</td></tr>
+<tr><td>Global invariants ("seat sold once", "balance ≥ 0")</td><td colspan="2">Neither. Invariants need coordination — locks, transactions, consensus. Merging freely and enforcing a global rule are opposites.</td></tr>
+</tbody>
+</table>
+
+<p>The last row is a favorite senior trap. CRDTs guarantee <em>convergence</em>, not <em>correctness of business rules</em>. Two replicas can each sell the last concert seat while partitioned, and the merge will converge beautifully on a state where the seat sold twice. If the requirement is an invariant that must hold globally, the answer is coordination (Chapter 2.3), not a cleverer merge.</p>
+
+<p>The honest decision rule, committed and justified: <strong>realtime collaborative text with a server you control → OT or a server-based sequence CRDT, both defensible; say why you picked yours. Offline-first, peer-to-peer, or multi-leader sync → CRDT, no contest. Non-text shared state — counters, sets, presence, settings → small CRDTs, they're practically free. Global invariants → neither; coordinate.</strong> And there's a third path the next story earns: if you have a central server <em>and</em> your data isn't text, you may not need either algorithm at full strength.</p>
+
+<div class="box story"><div class="box-tag">War story — Figma's multiplayer</div>
+<p>When Figma built multiplayer editing (shipped 2016; detailed in Evan Wallace's 2019 post "How Figma's multiplayer technology works"), they studied OT first — it's what Google Docs uses — and rejected it as more complexity than a design tool needed. But they didn't adopt full CRDTs either. A Figma document is a tree of objects, each a bag of properties, and their protocol is CRDT-<em>inspired</em>: concurrent changes to <em>different</em> properties of one object both survive; concurrent changes to the <em>same</em> property resolve last-writer-wins, with the central server — which every edit flows through — deciding "last" by arrival order, so no clock-skew roulette. That's the LWW register's data loss, accepted with eyes open: if two designers set the same rectangle's fill in the same instant, one fill wins, and the loser sees it happen and can re-apply in a click. The same trade on prose would eat sentences. Because the server is authoritative, they skipped the machinery decentralized CRDTs need; child ordering uses fractional indexing — positions as fractions between neighbors — rather than sequence-CRDT lists. The lesson interviewers want you to extract: Figma scoped the problem — design objects, central server, property granularity is enough — then bought exactly as much merge machinery as that problem required, not a bit more.</p>
+</div>
+
+<h2>The machinery around the algorithm</h2>
+
+<p>Whichever family you pick, the surrounding system is the same, and mentioning it is cheap senior signal because it shows you've thought past the algorithm to the service:</p>
+
+<ul>
+<li><strong>Op log.</strong> Edits are events in an append-only log per document (Part 1's queue instincts apply). The log <em>is</em> the document's history; the current text is just the result of replaying it.</li>
+<li><strong>Snapshots.</strong> Nobody replays 400,000 keystrokes to open a doc. Periodically save the fully assembled document plus the log position it reflects; a client loads the latest snapshot and replays only the tail. Snapshots also cap the reconnect story: "you're at op 40,210; here's 40,211 onward."</li>
+<li><strong>Idempotent replay.</strong> Reconnects and retries mean ops <em>will</em> arrive twice. Every op carries a stable ID (client&nbsp;ID + sequence number), and applying a seen ID is a no-op. State-based CRDTs get this free from idempotent merge; OT and op-based CRDTs must deduplicate explicitly. This is Chapter 2.2's idempotency habit, back again — it is always back again.</li>
+<li><strong>Failure modes, volunteered.</strong> What breaks first at 10x? Not CPU — <em>fan-out</em>: every op broadcast to every connected editor of that doc, so a 500-person all-hands doc is 500 outbound messages per keystroke. Then reconnect storms after a deploy, each client demanding its tail at once. Then unbounded doc history — the log and tombstones grow forever unless snapshotting and compaction are deliberate. Say these before being asked.</li>
+</ul>
+
+<h2>How deep interviews actually go</h2>
+
+<p>Calibration matters here more than in most chapters, because this topic has a bottomless academic end and candidates regularly drown in it. Nobody — nobody — expects you to derive a CRDT or write a transform function at a whiteboard. Here's the actual L5 bar:</p>
+
+<p><strong>You must volunteer, unprompted:</strong></p>
+<ul>
+<li>Both families exist, one sentence each: OT transforms operations and leans on a central server; CRDTs make merges order-independent and don't need one.</li>
+<li>A committed pick for <em>this</em> scenario with the reason attached: "Offline-first field notes → CRDT, because clients merge peer-to-peer after days apart, which is exactly what OT is worst at."</li>
+<li>One concrete concurrent-edit merge, walked on the board — the <code>the cat</code> square from this chapter is enough. This is the single highest-value minute in the whole topic: it proves you understand the problem, not just the vocabulary.</li>
+<li>The LWW caveat, the moment anyone (including you) proposes timestamps: silent loss, clock skew, fine for cursors, never for typed content.</li>
+<li>The service skeleton: op log, snapshots, idempotent replay, and the fan-out/reconnect failure modes.</li>
+</ul>
+
+<p><strong>Staff-only garnish</strong> — name-drop honestly if it fits, never pretend depth: tombstone GC and the causal-stability condition that makes it safe; version vectors and causal ordering internals; OT's TP2 property and why P2P OT died of it; sequence-CRDT interleaving anomalies; byzantine (malicious-peer) settings. A perfect senior sentence: "Tombstone GC needs to know every replica has seen the delete — that's causal-ordering machinery I'd pull a library for, not build."</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This topic appears two ways: headline ("Design Google Docs / a collaborative whiteboard") or ambush (you're designing something else, and the interviewer adds "now two users edit the same item offline"). A passing senior answer names both families in under a minute, commits with a scenario-tied reason, walks one merge example concretely, and volunteers where the design loses data or grows without bound. Probes you should expect verbatim:</p>
+<ul>
+<li>"Two users edit the same sentence offline for an hour, then both reconnect. Walk me through exactly what happens, message by message."</li>
+<li>"Why not just timestamp every edit and apply them in order?" — they're fishing for clock skew AND the deeper point that a total order still doesn't preserve intent.</li>
+<li>"Your OT editor works great. Product wants offline mode for two-week field trips. What breaks?"</li>
+<li>"Where does your CRDT document's memory go over a year of edits, and what's your compaction story?"</li>
+<li>"Would you use a CRDT for the seat-booking state?" — the trap from the table; the answer is no, invariants need coordination.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c04-f1">
+<p class="fey-prompt">Explain to a junior, in five sentences, why Google Docs doesn't corrupt the document when two people type in the same sentence — and why their approach struggles offline.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Every keystroke becomes a tiny operation like "insert 'x' at position 12," and the problem is that your position 12 was computed before my simultaneous edit moved everything. Google Docs solves it with operational transformation: a central server puts all operations in one agreed order, and each incoming operation is rewritten — its positions shifted — to account for the concurrent edits already applied, so everyone converges on the same text with both people's intent preserved. That rewriting only stays simple because the server provides one official sequence to transform against. If you go offline for a week, you come back with thousands of operations that must be transformed against thousands of everyone else's, and the scheme gets fragile — OT is built for editing together, not apart. That's why offline-first tools use CRDTs instead, where every character carries a permanent ID so positions never shift and replicas can merge in any order without a referee.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Transform drill. Document: <code>hello</code>. Concurrently, A does <code>insert(5, "!")</code> and B does <code>delete(0, 1)</code> (removing the <code>h</code>). Show each replica's final string with correct transformation, and name which op needed rewriting and why.</p></div>
+<details><summary>Answer</summary><p>Intent: A wants <code>!</code> after the last letter; B wants the <code>h</code> gone. Converged answer: <code>ello!</code>. A's replica: <code>hello!</code>, then B's delete applies unchanged (its range [0,1) is entirely before the insert) → <code>ello!</code>. B's replica: <code>ello</code>, then A's insert must be rewritten: B deleted 1 character before position 5, so shift left by 1 → <code>insert(4, "!")</code> → <code>ello!</code>. Only A's op needed transforming, because only its position sat after the region B changed. If you applied A's op raw at position 5 on the 4-character <code>ello</code>, you'd be writing past the end — the cold-open bug again.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Commit-and-justify: (a) a note-taking app for field geologists who sync laptop-to-laptop by local Wi-Fi after two weeks off-grid; (b) a browser-based pair-programming editor your company hosts; (c) a global "total downloads" counter shown on your homepage, incremented from five regions. Pick OT or CRDT (or neither) for each, one sentence of justification.</p></div>
+<details><summary>Answer</summary><p>(a) Sequence CRDT (Yjs/Automerge): peer-to-peer merge after long divergence is CRDT home turf and OT's worst case — there may not even be a server. (b) Either is defensible with a server you control; a committed answer: "OT-style with server ordering — clients are online while editing, ops stay tiny, and the server I already run gives me the total order for free; I'd reach for Yjs instead if offline editing enters the roadmap." (c) PN-counter (or G-counter if it never decrements): counters aren't text, need no server coordination, and per-replica slots merged by max survive partitions and duplicate delivery. Bonus senior point on (c): if the product ever needs "exactly N," a counter CRDT gives convergence, not an invariant.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks: a mobile app syncs user settings as LWW-registers keyed by device wall-clock time. Describe the specific silent failure when a user's phone clock is 30 minutes fast, and two mitigations of different weights.</p></div>
+<details><summary>Answer</summary><p>The fast phone stamps every write 30 minutes in the future. The user changes a setting on the phone, then changes it again on their laptop ten minutes later — the laptop's genuinely newer write carries a smaller timestamp and loses every merge. Worse, it's sticky: until real time passes the phone's stamp, <em>no</em> other device can update that setting; edits keep silently reverting, and support can't reproduce it. Lightweight mitigation: stamp with a server-assigned time or hybrid logical clock on sync instead of raw device clocks (Figma's version: the server's arrival order defines "last"). Heavyweight: stop using LWW for user-visible data — keep per-field versions or a small CRDT and surface true conflicts. Detection tip worth saying aloud: log every LWW discard with both timestamps; a discard whose "loser" is newer in server time is your smoking gun.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>G-counter drill. Replicas: A = {a:5, b:2, c:0}, B = {a:4, b:6, c:1}, C = {a:5, b:6, c:3}. What's the merged value? Why is per-slot max safe here, and what single rule violation would make the counter wrong?</p></div>
+<details><summary>Answer</summary><p>Element-wise max = {a:5, b:6, c:3} → value 14. Max is safe because each slot has exactly one writer and only ever grows, so the largest value seen per slot is that replica's true count — duplicates and reordering can't inflate it (idempotent), and no increment can be lost (a bigger value always survives). The rule you must not break: incrementing someone else's slot. If replica A ever bumps slot b, two writers race on one slot and max starts silently discarding real increments. Same reason you can't merge by summing slots: merging twice would double-count.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Sketch the reconnect path for a collaborative whiteboard: a client returns after 3 hours offline with 200 local ops; the document advanced 5,000 server ops meanwhile. Name the pieces and the order of events, including how you avoid applying anything twice.</p></div>
+<details><summary>Answer</summary><p>Client state: last-seen server position (say op 41,000) + 200 pending ops, each carrying a stable ID (clientID, seq). Reconnect: (1) client sends its position; (2) server streams the missing tail — or, if the tail is huge, the latest snapshot plus ops since it; (3) client integrates the 5,000 remote ops — CRDT: just merge, IDs make positions unambiguous; OT: transform its 200 pending ops over the incoming stream as it applies them; (4) client submits its 200 ops; server appends any ID it hasn't logged and drops the rest — that dedupe is what makes a mid-upload disconnect and retry harmless; (5) server broadcasts the accepted ops; the origin client recognizes its own IDs and skips reapplying. Volunteer the failure mode: after a server deploy, thousands of clients hit step 2 at once — a reconnect storm — so tail-serving must be cheap (snapshots) and jittered.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Concurrent editing breaks naive systems because an operation's positions are only meaningful in the document state where it was born; even a perfect global order can't fix that, since replaying an op in a different context changes what it does.</li>
+<li>OT keeps index-based ops and rewrites each incoming op against concurrent ones; a central server providing a single op order (the Jupiter design behind Google Docs) is what keeps the transforms tractable.</li>
+<li>OT's costs: it needs that server, degrades as offline divergence grows, and its transform functions are notoriously hard to get right — Google Wave's engineers spent two years on it and its author now advocates CRDTs.</li>
+<li>CRDTs make merges commutative, associative, and idempotent, so replicas converge in any order with no referee — ideal for offline-first, P2P, and multi-leader sync.</li>
+<li>Know the small CRDTs cold: G/PN-counters (per-replica slots, merge by max), OR-sets (adds win via unseen tags), and LWW-registers — whose "resolution" is silent data loss, made worse by clock skew; never LWW anything a human typed.</li>
+<li>Sequence CRDTs (RGA; Yjs, Automerge) give characters permanent IDs so positions never shift; the price is per-character metadata and tombstones, so long-lived docs need snapshots and compaction — full tombstone GC is staff-level territory.</li>
+<li>CRDTs guarantee convergence, not business invariants: "never sell a seat twice" needs coordination, not a merge rule.</li>
+<li>The L5 bar: name both families, commit with a scenario-tied reason, walk one concrete merge (the transform square), volunteer LWW's caveat plus op log + snapshots + idempotent replay — nobody expects you to derive a CRDT.</li>
+</ul>
+</div>

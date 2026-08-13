@@ -1,0 +1,301 @@
+<p>It's 2:47am. Your phone goes off. The alert says: <em>"CPU above 80% on web-14."</em> You drag the laptop open, squint at a graph, and by the time it loads, CPU is back to 60%. Nothing else looks wrong. You go back to sleep, annoyed.</p>
+
+<p>At 9am you learn the truth: checkout had been failing for 40% of users since 9pm. A bad deploy to the payment service. Eleven hours. Nobody was paged, because there was no alert on "users can't pay." There was an alert on CPU. The company lost a night of revenue, and the on-call engineer — you — was woken up once, for the wrong thing, and told everything was fine.</p>
+
+<p>Every chapter so far taught you to build the machine: load balancers, caches, replicas, shards, queues. This chapter is the instrument panel. It's the least glamorous topic in the book and the one interviewers now use to separate people who have <em>operated</em> systems from people who have read about them. The rule is brutal and simple: you can't fix what you can't see — and worse, you can't even know it's broken.</p>
+
+<h2>Three pillars, three jobs</h2>
+
+<p>"Observability" gets thrown around as a buzzword. Strip it down and it's three kinds of telemetry — data your system emits about itself — and each kind has a distinct job. Senior candidates don't recite the three names; they know which one to reach for and why, because each sits at a different point on a cost-versus-detail trade-off.</p>
+
+<p><strong>Metrics</strong> are numbers over time, pre-aggregated: requests per second, error rate, p99 latency, queue depth. A metric doesn't remember individual requests — it remembers counts and distributions. That's what makes metrics <em>cheap</em>: a million requests per second collapses into a handful of numbers per second. Cheap means you can keep them for months and query them in milliseconds, which is why metrics are the fuel for dashboards and alerts. Their job: <strong>detect</strong> that something is wrong, fast.</p>
+
+<p><strong>Logs</strong> are the opposite trade. A log line is one event, in full detail: this request, this user, this error message, this stack trace. Detail makes logs <em>expensive</em> — at scale, log storage is often a top-three infrastructure bill — and slow to search. Their job: <strong>explain</strong> what happened, after metrics told you something did. You don't watch logs to find out you're down; you dig through logs to find out why.</p>
+
+<p><strong>Traces</strong> answer the question neither of the others can: what happened to <em>one request</em> as it crossed ten services? At the front door, the request gets a unique <strong>trace ID</strong>. Every service that touches the request passes the ID along in a header — this hand-off is called <strong>context propagation</strong> — and records a <strong>span</strong>: "I, the payment service, spent 1,840ms on this request, 1,790ms of it waiting for the fraud check." Stitch the spans together and you get a waterfall showing exactly where the time went. Their job: <strong>locate</strong> the slow or broken hop in a distributed system, where "the request was slow" has ten suspects.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Three pillars of observability: metrics, logs, traces, each with its job">
+  <text class="dg-txt" x="230" y="24">One incident, seen three ways</text>
+  <rect class="dg-zone" x="10" y="40" width="222" height="240" rx="8"/>
+  <text class="dg-txt" x="26" y="66">METRICS</text>
+  <line class="dg-edge" x1="30" y1="150" x2="30" y2="80"/>
+  <line class="dg-edge" x1="30" y1="150" x2="210" y2="150"/>
+  <polyline class="dg-good" fill="none" points="30,130 70,128 110,132 140,126"/>
+  <polyline class="dg-bad" fill="none" points="140,126 160,95 200,90"/>
+  <text class="dg-txt-s" x="120" y="110">error rate jumps</text>
+  <text class="dg-txt-s" x="26" y="180">numbers over time</text>
+  <text class="dg-txt-s" x="26" y="200">cheap · aggregated · kept long</text>
+  <text class="dg-txt-s" x="26" y="228">job: DETECT and alert</text>
+  <rect class="dg-zone" x="248" y="40" width="222" height="240" rx="8"/>
+  <text class="dg-txt" x="264" y="66">LOGS</text>
+  <text class="dg-txt-s" x="264" y="96">21:04 pay req 8f3a start</text>
+  <text class="dg-txt-s" x="264" y="116">21:04 fraud call timeout</text>
+  <text class="dg-txt-s" x="264" y="136">21:04 ERR card declined?</text>
+  <text class="dg-txt-s" x="264" y="156">21:04 retry 3/3 failed</text>
+  <text class="dg-txt-s" x="264" y="200">one line per event, full detail</text>
+  <text class="dg-txt-s" x="264" y="220">expensive · searched rarely</text>
+  <text class="dg-txt-s" x="264" y="248">job: EXPLAIN afterwards</text>
+  <rect class="dg-zone" x="486" y="40" width="224" height="240" rx="8"/>
+  <text class="dg-txt" x="502" y="66">TRACES</text>
+  <rect class="dg-node" x="502" y="84" width="180" height="16" rx="3"/>
+  <text class="dg-txt-s" x="506" y="97">api 2,000ms</text>
+  <rect class="dg-node" x="512" y="108" width="40" height="16" rx="3"/>
+  <text class="dg-txt-s" x="558" y="121">auth 40ms</text>
+  <rect class="dg-node-alt" x="556" y="132" width="126" height="16" rx="3"/>
+  <text class="dg-txt-s" x="502" y="145">pay</text>
+  <rect class="dg-bad" x="580" y="156" width="100" height="16" rx="3"/>
+  <text class="dg-txt-s" x="502" y="169">fraud 1,790ms</text>
+  <text class="dg-txt-s" x="502" y="204">one request's journey,</text>
+  <text class="dg-txt-s" x="502" y="222">stitched by a trace ID</text>
+  <text class="dg-txt-s" x="502" y="248">job: LOCATE the bad hop</text>
+</svg>
+<figcaption>The same outage in three instruments. Metrics ring the bell, traces point at the fraud-check hop, logs tell you the timeout was a bad TLS cert.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A hospital runs on the same three pillars. <strong>Metrics</strong> are the vitals monitors at the nurses' station — heart rate, oxygen, one glance covers forty patients, and an alarm sounds the moment a number crosses a line. <strong>Logs</strong> are the patient charts — every dose, every observation, written down in full; nobody reads charts all day, but when something goes wrong, the chart is where the answer lives. <strong>Traces</strong> are the wristband ID that follows one patient from admission to radiology to surgery — scan it anywhere and you can reconstruct that one patient's entire journey and see exactly where they waited three hours. The analogy is honest about cost, too: monitors are cheap to watch, charts are expensive to write and read, and the wristband only works if <em>every</em> department scans it — miss one hand-off and the journey has a hole. That's context propagation.</p>
+</div>
+
+<h3>The cardinality trap</h3>
+
+<p>Here's the mistake that takes down monitoring systems: treating cheap metrics like detailed logs. Metrics systems store one <strong>time series</strong> — one stream of numbers — per unique combination of labels. A metric labeled by <code>endpoint</code> (50 values), <code>status</code> (10), and <code>region</code> (5) creates 2,500 series. Fine. Now some well-meaning engineer adds a <code>user_id</code> label to "see which users get errors." Ten million users just turned 2,500 series into <em>25 billion</em>. This is a <strong>cardinality explosion</strong> — cardinality means the number of distinct label values — and it will eat your monitoring cluster's memory and either crash it or bankrupt you, whichever comes first.</p>
+
+<p>The rule: metrics get <em>bounded</em>, low-cardinality labels (status, region, endpoint template like <code>/users/{id}</code> — never the raw URL). Anything unbounded — user IDs, request IDs, email addresses — belongs in logs and traces, which store individual events anyway and are built for needle-in-haystack search. If you catch yourself wanting "a graph per user," you actually want a log query.</p>
+
+<h2>The default dashboard: four golden signals</h2>
+
+<p>Given infinite things you <em>could</em> measure, what goes on the one dashboard everyone looks at first? Google's SRE book gives the answer that has become industry default — the <strong>four golden signals</strong>, and if you can only measure four things about a user-facing service, measure these:</p>
+
+<table>
+<thead><tr><th>Signal</th><th>What it is</th><th>The question it answers</th></tr></thead>
+<tbody>
+<tr><td><strong>Latency</strong></td><td>How long requests take — tracked separately for successes and failures (fast errors pollute the numbers)</td><td>Is it slow?</td></tr>
+<tr><td><strong>Traffic</strong></td><td>Demand: requests/sec, messages/sec, streams open</td><td>How much is being asked of us? Did demand just double — or drop to zero?</td></tr>
+<tr><td><strong>Errors</strong></td><td>Rate of failed requests — explicit (500s), or implicit (wrong content, 200-OK-but-empty)</td><td>Is it broken?</td></tr>
+<tr><td><strong>Saturation</strong></td><td>How full the system is: memory, connection pools, queue depth, disk — the resource that runs out first</td><td>How close to the cliff are we?</td></tr>
+</tbody>
+</table>
+
+<p>Notice traffic dropping to zero is a signal too — an error rate of 0% is not comforting when requests/sec is also 0 because your load balancer is sending traffic into a wall. And saturation is the forward-looking one: latency, traffic, and errors tell you about now; the queue that's 85% full tells you about twenty minutes from now. That connects straight back to backpressure in p2c07 — saturation metrics are how you see the pressure building before it becomes load shedding.</p>
+
+<h2>Percentiles: averages lie to you</h2>
+
+<p>Every latency number in this book has come with a p-prefix — p50, p95, p99 — and this is the chapter that pays that debt. Take 100 requests: 99 finish in 100ms, one takes 10 seconds. The <em>average</em> is 199ms. Sounds healthy. But nobody experienced 199ms — 99 people had a fast experience and one had an awful one, and the average describes a user who doesn't exist. Averages smear the pain until it's invisible.</p>
+
+<p>Percentiles keep the shape of the truth. Sort all response times: <strong>p50</strong> (the median) is the time the middle request took — half were faster. <strong>p95</strong> — 95% were faster, 5% slower. <strong>p99</strong> — the threshold your slowest 1% cross. In our example, p50 is 100ms and p99 pierces into seconds, which is the real story. Interviewers expect senior candidates to talk in percentiles by reflex, and to know why the tail matters commercially: your heaviest users — the ones with the most photos, the biggest carts, the fullest inboxes — live disproportionately in the tail, because their requests touch the most data.</p>
+
+<p>Two traps inside percentiles, both interview favorites:</p>
+
+<p><strong>Trap one: you cannot average percentiles.</strong> Server A has a p99 of 100ms, server B has a p99 of 500ms. The fleet p99 is <em>not</em> 300ms — it depends entirely on how much traffic each got and the shape of each distribution; the true answer could be almost anywhere between 100 and 500. A p99 is a property of one specific pile of numbers, and you can't combine two piles by averaging their summaries — you have to merge the piles. Real systems ship <em>histograms</em> (counts in latency buckets) from every server and merge those, or use clever compressed summaries called sketches. How those sketches work is a genuinely fun problem — it's a core deep-dive in p3c18 when you build a metrics system yourself. For now, the senior-level sentence is: "I'd export histograms per server and compute percentiles after merging, because averaging p99s is meaningless."</p>
+
+<p><strong>Trap two: tail latency amplification.</strong> Your service is admirably fast: 99% of calls under 10ms. Then you build a feed page that fans out to 100 backend calls — one per followed user, say — and waits for all of them. What fraction of page loads hit at least one slow call? One minus 0.99 to the 100th power: about 63%. Read that again. Each backend is slow 1% of the time, and <em>most of your users</em> experience the slow path, because the page is only as fast as its slowest call. Fan-out promotes your p99 into everybody's median. This single piece of arithmetic is why big systems obsess over tails: at Meta or Google scale, one user action fans out to hundreds of services, and a 1-in-100 hiccup somewhere is a certainty everywhere.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Fan-out request waiting on 100 backends, one slow backend delays the whole response">
+  <rect class="dg-node" x="20" y="95" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="36" y="119">Feed page</text>
+  <text class="dg-txt-s" x="36" y="137">waits for ALL</text>
+  <rect class="dg-node" x="430" y="16" width="120" height="34" rx="8"/>
+  <text class="dg-txt-s" x="446" y="38">svc 1 · 8ms</text>
+  <rect class="dg-node" x="430" y="62" width="120" height="34" rx="8"/>
+  <text class="dg-txt-s" x="446" y="84">svc 2 · 6ms</text>
+  <rect class="dg-node" x="430" y="108" width="120" height="34" rx="8"/>
+  <text class="dg-txt-s" x="446" y="130">svc 3 · 9ms</text>
+  <rect class="dg-bad" x="430" y="154" width="150" height="34" rx="8"/>
+  <text class="dg-txt-s" x="446" y="176">svc 37 · 900ms</text>
+  <rect class="dg-node" x="430" y="200" width="120" height="34" rx="8"/>
+  <text class="dg-txt-s" x="446" y="222">… ×100</text>
+  <line class="dg-edge" x1="170" y1="110" x2="430" y2="33" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="170" y1="117" x2="430" y2="79" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="170" y1="124" x2="430" y2="125" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="170" y1="131" x2="430" y2="171" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="170" y1="138" x2="430" y2="217" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="130" y="240">page time = slowest of 100 = 900ms · slow 1% per leg → ~63% of pages hit a slow leg</text>
+</svg>
+<figcaption>Tail latency amplification: fan out wide enough and your p99 becomes nearly everyone's experience.</figcaption>
+</figure>
+
+<p>So you can see the system. Metrics detect, logs explain, traces locate, percentiles tell the truth. Now the harder question — the one that starts arguments between engineering and product: how good does the system have to <em>be</em>? "As reliable as possible" is not an answer. It's the absence of one.</p>
+
+<h2>SLI → SLO → SLA: putting a number on "good enough"</h2>
+
+<p>Three acronyms, one chain, and interviewers love asking candidates to untangle them because the difference is exactly the kind of precision the job requires.</p>
+
+<p>An <strong>SLI</strong> — Service Level Indicator — is a <em>measurement</em>: a carefully chosen ratio of good events to total events. "The fraction of checkout requests that succeed within 2 seconds, measured at the load balancer." Not CPU, not memory — those are causes, not experiences. A good SLI is the closest number you can compute to "was the user happy?"</p>
+
+<p>An <strong>SLO</strong> — Service Level Objective — is your <em>internal target</em> for that SLI: "99.9% of checkout requests succeed within 2 seconds, over a rolling 30 days." Do the math on what 99.9% actually permits, because the math is the whole point. A 30-day month has 43,200 minutes. The 0.1% you're allowed to fail is <strong>43 minutes of full outage per month</strong>. Every nine you add divides that by ten:</p>
+
+<table>
+<thead><tr><th>Target</th><th>Allowed downtime / 30 days</th><th>What it implies</th></tr></thead>
+<tbody>
+<tr><td>99%</td><td>~7.2 hours</td><td>Fix it during business hours</td></tr>
+<tr><td>99.9%</td><td>~43 minutes</td><td>On-call with a pager; solid single-region design</td></tr>
+<tr><td>99.99%</td><td>~4.3 minutes</td><td>Humans can't respond that fast — recovery must be automated; multi-zone at least</td></tr>
+<tr><td>99.999%</td><td>~26 seconds</td><td>Multi-region failover, no maintenance windows, everything automated, enormous cost</td></tr>
+</tbody>
+</table>
+
+<p>Stare at the 99.99% row. Four minutes is less time than it takes a human to wake up, open a laptop, and read the alert. Above three nines, you're no longer buying "more careful engineers" — you're buying automated failover, redundant everything, and progressively exotic architecture. <strong>Each extra nine multiplies cost roughly tenfold</strong>, and this is the trap interviewers set on purpose: ask a candidate what availability an internal analytics tool needs, and the junior answer is "five nines, reliability matters!" The senior answer is "99.5% — it's used by forty analysts on weekdays; a half-day outage is an inconvenience, and every nine past that is money stolen from features nobody voted to steal." Naming the <em>right</em> number, and defending why it isn't higher, is the strongest signal this chapter can teach you.</p>
+
+<p>An <strong>SLA</strong> — Service Level Agreement — is an <em>external contract</em>: the promise in the customer's terms of service, with penalties (usually service credits, sometimes real money) when you miss it. Because breaching it costs money and trust, your SLA is always <em>looser</em> than your SLO: promise 99.9% to customers, hold yourself to 99.95% internally, and your own alarms fire while there's still runway before the contract burns. SLO is the tripwire; SLA is the cliff.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Think of a food delivery promise. The SLI is the measurement: what fraction of orders arrived within 30 minutes this month. The SLO is the kitchen's internal bar: "we hit 30 minutes for 97% of orders, or managers start asking questions." The SLA is what's printed on the app: "late orders over 45 minutes get a voucher" — an external promise, deliberately softer than the internal bar, with a penalty attached. The kitchen aims at 30 so it never pays out at 45. If the only number you track is the printed promise, you find out you're failing at the exact moment it starts costing money.</p>
+</div>
+
+<h2>Error budgets: turning reliability into a currency</h2>
+
+<p>Here's the quiet genius hiding in an SLO. If your target is 99.9%, then 0.1% of failure is not just tolerated — it's <em>yours to spend</em>. That 0.1% is your <strong>error budget</strong>: 43 minutes a month of allowed badness. And the moment you treat it as a budget, it becomes a governance tool — a way to settle, with arithmetic, the oldest fight in software: developers want to ship fast (change causes outages), operators want stability (their pager rings). Both sides are right, and without a number they fight about it politically, forever.</p>
+
+<p>The error budget replaces the fight with a rule agreed in advance: <strong>budget remaining → ship features</strong>, take risks, deploy on Friday if you like. <strong>Budget exhausted → feature launches pause</strong>, and engineering effort shifts to reliability work — better tests, safer rollouts, fixing the flaky dependency — until the budget recovers. No villain, no negotiation-by-seniority. The number decides.</p>
+
+<div class="box story"><div class="box-tag">War story — Google, where error budgets come from</div>
+<p>Google created the Site Reliability Engineering role in 2003 under Ben Treynor Sloss, and inherited the classic war: product teams pushed launches, SRE teams — who carried the pagers — pushed back. Escalations were settled by whoever argued better, which scaled terribly. The fix, described in Google's 2016 SRE book, starts from an observation Treynor made famous: <em>100% is the wrong reliability target for basically everything.</em> A user on a phone network that drops 1% of packets cannot tell the difference between 99.99% and 100% — the last fraction of a nine vanishes into the noise of everything between you and them, so the enormous cost of chasing it buys nothing anyone can perceive. So each service got an SLO agreed by both sides, and 100% minus the SLO became a shared budget. Budget left: SRE stands aside and launches flow. Budget gone: launches pause automatically, and product engineers redirect to reliability — a consequence both sides signed up for before anyone was angry. The same book records the funniest corollary: Google's Chubby lock service was so reliably above its SLO that other teams started assuming it could never fail — so SRE began deliberately taking Chubby down to burn the excess budget and flush out the teams that had quietly built on a promise nobody had made.</p>
+</div>
+
+<h3>Burn-rate alerting: page on the trend, not the blip</h3>
+
+<p>The budget also fixes alerting. The naive alert — "page me if error rate exceeds 0.1%" — fires on every 30-second hiccup, wakes a human, and by the time they've logged in, the blip is gone. Do that nightly and you've manufactured <strong>alert fatigue</strong>: the on-call learns that pages are noise, starts sleeping through them, and then misses the real one. The senior alternative is to alert on <strong>burn rate</strong> — how fast you're spending budget relative to the month you have. Errors at exactly 0.1% is burn rate 1: you'd land the month precisely at budget, no alarm needed. A total outage burns at 1000x. The practical scheme: <strong>page</strong> a human when the burn is fast (say, a rate that would eat a meaningful chunk of the monthly budget within hours — that's a fire), and file a <strong>ticket</strong> when the burn is slow but sustained (a rate that would exhaust the budget in a week or two — that's rot, fixable at 10am). A 30-second blip at burn rate 2 moves neither needle, and nobody wakes up. Alert volume drops by an order of magnitude, and every remaining page means real, budget-threatening user pain.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Error budget remaining over a month, normal slow burn versus incident burning budget to zero">
+  <line class="dg-edge" x1="70" y1="30" x2="70" y2="250"/>
+  <line class="dg-edge" x1="70" y1="250" x2="690" y2="250"/>
+  <text class="dg-txt-s" x="8" y="45">100%</text>
+  <text class="dg-txt-s" x="8" y="145">budget</text>
+  <text class="dg-txt-s" x="8" y="163">left</text>
+  <text class="dg-txt-s" x="26" y="253">0%</text>
+  <text class="dg-txt-s" x="64" y="272">day 0</text>
+  <text class="dg-txt-s" x="350" y="272">day 15</text>
+  <text class="dg-txt-s" x="640" y="272">day 30</text>
+  <polyline class="dg-good" fill="none" points="70,42 250,60 450,78 690,100"/>
+  <text class="dg-txt-s" x="470" y="66">normal month: slow burn,</text>
+  <text class="dg-txt-s" x="470" y="84">keep shipping features</text>
+  <polyline class="dg-bad" fill="none" points="70,42 230,70 300,80 340,250"/>
+  <line class="dg-edge" x1="340" y1="250" x2="690" y2="250"/>
+  <text class="dg-txt-s" x="180" y="120">bad deploy: burn rate ~50x</text>
+  <text class="dg-txt-s" x="180" y="138">→ fast-burn PAGE fires here</text>
+  <line class="dg-edge" x1="300" y1="130" x2="305" y2="85" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="360" y="225">budget gone on day 12:</text>
+  <text class="dg-txt-s" x="360" y="243">launches pause, reliability work begins</text>
+</svg>
+<figcaption>Two versions of the same month. Alert on the slope, not on single dips — the slope is what threatens the budget.</figcaption>
+</figure>
+
+<h2>What deserves to wake a human</h2>
+
+<p>Alerting has a philosophy, and it fits in two lines. <strong>Page on symptoms, not causes.</strong> <strong>Every page must be actionable.</strong></p>
+
+<p>A symptom is user pain: checkout success rate dropping, feed p99 doubling, messages not delivering. A cause is machinery: CPU at 85%, one pod restarting, disk at 70%. The 2:47am story that opened this chapter is the philosophy violated in both directions at once — a cause-based page with no user impact and no action to take (CPU spiked, so what?), and real user pain with no page at all, because nobody had an alert on the symptom "users can't pay." Causes belong on dashboards, where you consult them <em>after</em> a symptom fires, to diagnose. Symptoms belong on pagers. The test for every alert you keep: when this fires at 3am, is there a specific action the on-call takes? If the honest answer is "look at it and go back to bed," delete the page or demote it to a ticket. An alert nobody acts on isn't an alert — it's a lullaby.</p>
+
+<div class="box story"><div class="box-tag">War story — Knight Capital's 97 unread alarms</div>
+<p>On August 1, 2012, Knight Capital — then handling a sizable share of all US stock trading — deployed new order-routing code to its eight SMARS trading servers. A technician missed one server. That eighth machine still ran a piece of code called Power Peg, dead since 2003, and the new deployment reused an old feature flag that switched the zombie code back on. When markets opened at 9:30am, the eighth server began firing millions of unintended orders into the market. It took 45 minutes to stop, moved prices across roughly 150 stocks, and left Knight with about $460 million in losses — the firm collapsed into a rescue acquisition within a year. The observability detail is the painful part, documented in the SEC's order: starting at 8:01am — <em>89 minutes before the market opened</em> — an internal system sent 97 automated emails to Knight staff flagging an error, "Power Peg disabled," on the exact server that was about to malfunction. Nobody acted, and the SEC noted why: the emails weren't designed as alerts, just informational messages nobody was assigned to read. Ninety-seven warnings, zero pages, no kill switch, and a 17-year-old company gone in 45 minutes. This is what "every alert must be actionable, and someone must own it" costs when it's violated: an unowned, unactionable alert is indistinguishable from silence.</p>
+</div>
+
+<p>One more habit separates operators from tourists: monitor from <em>outside</em>, too. Your own dashboards share fate with your infrastructure — during the big S3 outage of 2017, Amazon couldn't turn its own status dashboard red because the dashboard's icons were stored in S3. A trivial external probe that hits your public endpoint from somewhere else answers the only question that ultimately matters: can users, in the real world, reach you? If your telemetry pipeline dies with your service, your dashboards will report serenity all the way down.</p>
+
+<h2>Closing the loop: SLOs guard the rollout</h2>
+
+<p>Back in p0c01 you learned the thirty-second ops closing: say what you'd monitor and how you'd ship. This chapter gives that closing its machinery, because deploys cause most outages — the system was fine, then you changed it. So the last piece is wiring the SLO into the deployment path itself.</p>
+
+<p>A <strong>canary</strong> release sends the new version to a small slice first — 1% of traffic, or one region — while the old version serves everyone else, exactly like the miner's canary that met trouble before the miners did. Now the golden signals earn their keep: compare the canary's latency, error rate, and saturation against the baseline fleet, side by side, same time window. Clean after an hour? Promote to 25%, then 100%. Degraded? <strong>Automatic rollback</strong> — no human decision required, because the trigger was agreed in advance: the canary breached the SLO, so it dies. Pair this with <strong>feature flags</strong> — switches that turn features on per-user-slice without redeploying — and risky changes get two independent safety nets: flags decouple <em>releasing a feature</em> from <em>deploying code</em>, so rollback of a bad feature is flipping a flag in seconds, not shipping binaries. The loop closes neatly: SLIs measure, SLOs judge, and the rollout system acts on the judgment before your error budget — rather than your users' patience — takes the hit.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="Canary rollout gated by SLO comparison, with automatic rollback on breach">
+  <rect class="dg-node" x="16" y="40" width="130" height="52" rx="8"/>
+  <text class="dg-txt" x="32" y="62">New build</text>
+  <text class="dg-txt-s" x="32" y="80">behind flag</text>
+  <rect class="dg-node-alt" x="196" y="40" width="150" height="52" rx="8"/>
+  <text class="dg-txt" x="212" y="62">Canary</text>
+  <text class="dg-txt-s" x="212" y="80">1% of traffic, 1 hour</text>
+  <polygon class="dg-node" points="490,32 590,66 490,100 390,66"/>
+  <text class="dg-txt-s" x="440" y="62">golden signals</text>
+  <text class="dg-txt-s" x="436" y="80">vs baseline OK?</text>
+  <rect class="dg-good" x="630" y="14" width="80" height="44" rx="8"/>
+  <text class="dg-txt-s" x="642" y="34">25% →</text>
+  <text class="dg-txt-s" x="642" y="50">100%</text>
+  <rect class="dg-bad" x="440" y="180" width="200" height="52" rx="8"/>
+  <text class="dg-txt" x="456" y="202">AUTO-ROLLBACK</text>
+  <text class="dg-txt-s" x="456" y="220">no human in the loop</text>
+  <rect class="dg-node" x="120" y="180" width="200" height="52" rx="8"/>
+  <text class="dg-txt-s" x="136" y="202">old version keeps serving 99%</text>
+  <text class="dg-txt-s" x="136" y="220">blast radius stayed at 1%</text>
+  <line class="dg-edge" x1="146" y1="66" x2="196" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="346" y1="66" x2="390" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="590" y1="66" x2="630" y2="44" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="596" y="90">pass</text>
+  <line class="dg-edge" x1="490" y1="100" x2="530" y2="180" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="520" y="140">canary breaches SLO</text>
+  <line class="dg-edge" x1="440" y1="206" x2="320" y2="206" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="60" y="290">worst case: 1% of users saw one bad hour, budget spent ≈ 1% × 1h — the SLO caught it, not Twitter.</text>
+</svg>
+<figcaption>The rollout gate. The SLO isn't a report card filed at month's end — it's a tripwire wired directly into deployment.</figcaption>
+</figure>
+
+<h2>How deep interviews actually go here</h2>
+
+<p>Calibration matters, because this topic has a sharp line between senior table stakes and staff-level garnish. Here's the line.</p>
+
+<p><strong>L5 must volunteer, unprompted, for their own design:</strong> two or three named SLIs ("checkout success rate within 2s, measured at the LB; message delivery p99"), one concrete SLO with the downtime math said out loud ("99.9% — that's 43 minutes a month, which one on-call rotation can honestly defend"), what pages a human and why it's a symptom ("delivery success below target over 10 minutes pages; CPU never pages"), and a rollout answer ("canary 1%, compare golden signals, auto-rollback on SLO breach"). That's four sentences, maybe thirty seconds, and it's the difference between "mentions monitoring" and "has been on call." Saying the word "monitoring" without an object is a checkbox; naming the SLI is the signal. Equally senior: <em>refusing</em> nines — "this admin tool gets 99.5%, and here's why more would be waste."</p>
+
+<p><strong>Staff-only garnish (skip unless asked):</strong> the internals of percentile sketches (that's p3c18's problem to build), exact multi-window burn-rate thresholds, OpenTelemetry propagation formats, exemplars linking metrics to traces, tracing sampling strategies. Knowing these exists is fine; deep-diving them in an unrelated design burns minutes you owe to the crux. If the role is observability infrastructure itself, the calibration flips — but then you're in p3c18, designing the metrics system as the problem.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This topic is rarely its own question at L5 — it's an ambush inside every question. The interviewer waits for your design to settle and then probes whether you'd survive operating it:</p>
+<ul>
+<li>"You've shipped this. How do you know it's actually working for users right now?" — they want SLIs measured near the user, not "I'd check the logs."</li>
+<li>"What exactly pages someone at 3am, and what do they do when it fires?" — testing symptom-vs-cause and actionability; a list of ten cause alerts is a worse answer than two symptom alerts.</li>
+<li>"What SLO would you set, and why not 99.99%?" — the trap runs both directions; they're checking you know each nine multiplies cost tenfold and that 4 minutes/month exceeds human reaction time.</li>
+<li>"Your average latency is flat but users are complaining — what's going on?" — the percentile question in disguise: tail regression, check p99, suspect the fan-out.</li>
+<li>"How do you ship the next version of this without betting the company?" — canary + flags + automatic rollback on SLO breach, with the blast radius quantified.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c08-f1">
+<p class="fey-prompt">Explain SLOs and error budgets to a junior in five or six sentences — including why a team would ever <em>want</em> less than 100% reliability.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>An SLO is a target you set for a number that tracks user happiness — like "99.9% of checkouts succeed within 2 seconds this month." You deliberately don't pick 100%, because users can't perceive the last sliver of reliability through their own flaky wifi, yet each extra nine costs roughly ten times more to deliver — 99.9% allows 43 minutes of failure a month, while 99.99% allows four, which is less time than a human needs to wake up and respond. The gap between your target and perfection is your error budget: 43 minutes of allowed badness that belongs to the team. While budget remains, you ship features and take risks freely; when it's spent, launches pause and everyone works on reliability until it recovers — a rule both sides agreed to before anyone was upset, so the number settles the argument instead of the loudest person. The budget even fixes alerting: instead of paging on every blip, you page only when the budget is burning fast enough to threaten the month. Reliability stops being a vibe and becomes a currency you measure, spend, and defend.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your service has a 99.95% monthly SLO. This month it suffered: (a) a 5-minute full outage, (b) 40 minutes at 10% error rate, (c) 2 hours at 1% error rate. How much of the error budget is spent? Do the math.</p></div>
+<details><summary>Answer</summary><p>Budget: 0.05% of 43,200 minutes = 21.6 minutes of full-outage-equivalent. Spend, weighting each incident by the fraction of requests failing: (a) 5 min × 100% = 5 min. (b) 40 × 0.10 = 4 min. (c) 120 × 0.01 = 1.2 min. Total: 10.2 of 21.6 minutes — about 47% of the budget, so you're still shipping. But notice the shape of the reasoning: partial outages convert to full-outage-equivalents by multiplying duration by error fraction, and a "small" 10% degradation for 40 minutes cost almost as much budget as a total 5-minute outage. If it's day 10, you've burned half a month's budget in a third of a month — worth a ticket and a look at what's leaking, before it becomes a freeze.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Take the WhatsApp-style chat system you scoped in p0c01's exercise. Instrument it: name three SLIs, commit to one SLO with the math, and say exactly what pages a human.</p></div>
+<details><summary>Answer</summary><p>SLIs: (1) message delivery success rate — fraction of accepted messages delivered to online recipients within 5 seconds; (2) end-to-end delivery latency p99 for online-to-online sends; (3) connection success rate — fraction of clients that can establish and hold a session. SLO: 99.9% of accepted messages delivered within 5s over 30 days — that's a 43-minute-equivalent monthly budget, defensible by one on-call rotation without multi-region heroics. Pages: fast burn on the delivery SLI (budget going in hours = fire) and connection success collapsing (users locked out entirely). Explicitly not paging: CPU, memory, queue depth, one node down — those are dashboard diagnostics, and replication (p1c08) exists precisely so one dead node isn't user pain. If a dying node <em>does</em> hurt users, the delivery SLI pages within minutes anyway — symptoms catch what cause-lists miss.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Critique this paging list from a real on-call rotation: (1) CPU above 80% on any host, (2) disk above 70%, (3) any pod restart, (4) p99 latency of the checkout flow above 3s for 10 minutes, (5) nightly backup job failed. Which pages survive, and where does the rest go?</p></div>
+<details><summary>Answer</summary><p>Only (4) survives as a page — it's a symptom, sustained, and actionable. (1) and (3) are causes with no inherent user pain: a healthy autoscaled system runs hot and restarts pods routinely; both become dashboard panels consulted during a real incident. (2) is a cause but a <em>predictive</em> one — demote to a ticket sized by urgency: "disk full in ~4 days" is a morning task, though "full in 2 hours" earns a page because it's about to become a symptom. (5) becomes a next-morning ticket — nothing the on-call does at 3am improves a failed backup, but letting it rot invites GitLab's famous 2017 incident, where the outage revealed every backup mechanism had been failing quietly for ages. General rule: pages for user pain now, tickets for trouble on a schedule, dashboards for everything else.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your search page fans out to 200 shard servers and waits for all of them. Each shard answers within 20ms 99% of the time, but takes ~800ms 1% of the time. Estimate the fraction of searches that take ~800ms, and propose two mitigations.</p></div>
+<details><summary>Answer</summary><p>Probability all 200 shards are fast: 0.99²⁰⁰ ≈ 0.13. So about <strong>87% of searches</strong> run at roughly 800ms — the "rare" slow case is the common experience. Mitigations: (1) <em>hedged requests</em> — after waiting ~p95 (say 30ms), resend the straggler's query to a replica and take whichever answers first; this trims the tail dramatically for a couple of percent extra load. (2) Return best-effort partial results — answer with 198 of 200 shards at the deadline; for search, a 99%-complete result at 50ms beats a complete one at 800ms. (Also worth attacking the cause: why is 1% slow? GC pauses, cold caches, and a hot shard from p2c06 are the usual suspects.) The senior reflex on display: fan-out width times per-leg tail probability, before you build the page.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>An engineer proposes a request-count metric labeled with: HTTP status, region, endpoint route template, user_id, and request_id — "so we can debug everything from one metric." You have 20M users. Which labels stay, which go, and where do the evicted ones live?</p></div>
+<details><summary>Answer</summary><p>Stay: status (~10 values), region (~5), route template (~50 — the <em>template</em> like /users/{id}, never the raw path, which is unbounded). That's ~2,500 series: cheap forever. Go: user_id (20M values) and request_id (unbounded — one value per request, the worst possible label) — either one multiplies every existing series by its cardinality, so user_id alone takes 2,500 series to 50 <em>billion</em> and the monitoring cluster dies of memory long before the bill arrives. The evicted labels live where per-event detail belongs: request_id becomes the trace ID propagated through headers, user_id goes in structured log fields and trace attributes. Then debugging "user 4711 gets errors" is a log query, and "which region's error rate jumped" stays a millisecond metric lookup — each pillar doing its own job.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Metrics detect (cheap, aggregated, drive alerts), logs explain (expensive, per-event, post-hoc), traces locate (one request's journey across services via a propagated trace ID).</li>
+<li>Unbounded labels like user_id explode metric cardinality — high-cardinality detail belongs in logs and traces, not metrics.</li>
+<li>The default dashboard is the four golden signals — latency, traffic, errors, saturation — and saturation is the one that predicts the future.</li>
+<li>Averages hide the tail: speak in p50/p95/p99, never average percentiles (merge histograms instead), and remember fan-out turns your p99 into nearly everyone's experience.</li>
+<li>SLI is the measurement, SLO the internal target, SLA the external contract with penalties — and the SLO must be stricter than the SLA so you break your own tripwire first.</li>
+<li>99.9% means 43 minutes a month; each extra nine multiplies cost about tenfold — proposing five nines for an internal tool is the trap answer, and refusing nines with reasons is a senior signal.</li>
+<li>The error budget (100% minus SLO) is governance: budget left means ship, budget gone means reliability work — and you alert on burn rate, not blips, which is what kills alert fatigue.</li>
+<li>Page on symptoms (user pain), never causes; every page must have an action — Knight Capital's 97 unread emails are what unowned alerts cost.</li>
+<li>Close the loop: canary 1%, compare golden signals, automatic rollback on SLO breach, feature flags for instant retreat — say this unprompted at the end of every design.</li>
+</ul>
+</div>

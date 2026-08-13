@@ -1,0 +1,369 @@
+{
+  "chapter": "p2c05",
+  "items": [
+    {
+      "id": "p2c05-q01", "level": 1, "type": "mcq", "tag": "rpo-rto",
+      "q": "Your standby region's data runs 4 seconds behind the primary, and a full failover takes 12 minutes. What are your RPO and RTO?",
+      "options": [
+        {"t": "RPO ≈ 4 seconds, RTO ≈ 12 minutes", "correct": true,
+         "why": "Right. RPO = the recent writes you lose (the replication lag: 4 seconds of acknowledged writes die with the region). RTO = how long you're down (12 minutes until serving again)."},
+        {"t": "RPO ≈ 12 minutes, RTO ≈ 4 seconds", "correct": false,
+         "why": "Swapped. Remember it as Point vs Time: Recovery POINT = how far back in the data you land (lag), Recovery TIME = how long recovery takes (downtime)."},
+        {"t": "RPO is zero because a standby exists", "correct": false,
+         "why": "A standby doesn't make RPO zero — async replication does the opposite. The primary acknowledges writes before the standby has them, so the lag window is lost data by design."},
+        {"t": "Both are 12 minutes, since nothing works during failover", "correct": false,
+         "why": "Downtime and data loss are separate axes. You're down for 12 minutes (RTO), but you only lose the 4 seconds of writes that never crossed the wire (RPO)."}
+      ]
+    },
+    {
+      "id": "p2c05-q02", "level": 1, "type": "mcq", "tag": "rpo-rto",
+      "q": "Why does asynchronous cross-region replication guarantee a nonzero RPO?",
+      "options": [
+        {"t": "The primary acknowledges writes before the other region has a copy, so in-flight writes die with it", "correct": true,
+         "why": "Exactly. Async means 'confirm first, copy a moment later.' Whatever sits in that lag window when the region dies was acknowledged to users but exists nowhere else. That's the deal async signs."},
+        {"t": "Cross-region links are lossy, so some replicated writes get dropped in transit and never reach the standby at all", "correct": false,
+         "why": "Replication streams handle packet loss fine with retries. The loss isn't in the network — it's in the ordering: acknowledge first, replicate second."},
+        {"t": "Standby regions run cheaper, slower hardware", "correct": false,
+         "why": "Standby sizing affects RTO (can it take the load?), not RPO. Even an identical twin standby loses the lag window under async replication."},
+        {"t": "DNS caching delays the failover", "correct": false,
+         "why": "Stale DNS lengthens the traffic-shift part of RTO. RPO is decided earlier, by whether the write was copied before the region died."}
+      ]
+    },
+    {
+      "id": "p2c05-q03", "level": 1, "type": "mcq", "tag": "latency",
+      "q": "Best case, roughly what network round trip does a Sydney user pay to reach a server in Virginia?",
+      "options": [
+        {"t": "About 2 ms", "correct": false,
+         "why": "That's same-city territory. Physics won't allow it across an ocean — light in fiber covers only ~200 km per millisecond."},
+        {"t": "About 20 ms", "correct": false,
+         "why": "That's a regional hop, like two nearby countries. Sydney–Virginia is ~16,000 km each way; 20 ms can't cover it."},
+        {"t": "About 200 ms", "correct": true,
+         "why": "Right. ~16,000 km each way at ~200,000 km/s in fiber is ~160 ms of pure travel, and real routing pushes it to ~200 ms. A fresh HTTPS connection needs ~3 round trips — 600 ms before the first useful byte. Only moving servers closer fixes this."},
+        {"t": "About 2 seconds", "correct": false,
+         "why": "Too pessimistic by 10x. It matters both ways: overestimating latency leads to over-engineering just as surely as underestimating leads to slow apps. ~200 ms is the honest number."}
+      ]
+    },
+    {
+      "id": "p2c05-q04", "level": 1, "type": "mcq", "tag": "topologies",
+      "q": "What's the core difference between active-passive and active-active multi-region?",
+      "options": [
+        {"t": "Active-passive replicates data; active-active doesn't need to", "correct": false,
+         "why": "Both replicate constantly — active-active replicates even more (in both directions). Replication is how any second region has the data at all."},
+        {"t": "In active-passive one region serves traffic while the other stands by; in active-active all regions serve traffic and take writes", "correct": true,
+         "why": "Right. Active-passive keeps one worker and one understudy. Active-active puts every region to work — which buys latency and utilization, and buys you the write-conflict problem."},
+        {"t": "Active-active is only for read-only workloads", "correct": false,
+         "why": "Backwards — serving reads from many regions is easy (replicas do that in any topology). Active-active specifically means multiple regions accept writes."},
+        {"t": "Active-passive is a managed feature the cloud provider runs for you; active-active is an architecture you have to design and build yourself", "correct": false,
+         "why": "Both are architecture choices you design, whatever the provider. Clouds offer building blocks for each; neither comes free out of a box."}
+      ]
+    },
+    {
+      "id": "p2c05-q05", "level": 1, "type": "mcq", "tag": "conflicts",
+      "q": "Two regions accept concurrent writes to the same row. What does last-write-wins (LWW) do?",
+      "options": [
+        {"t": "Keeps the write with the later timestamp and silently discards the other", "correct": true,
+         "why": "Right — and 'silently' is the scary word. No error, no log line a user will see. Worse, 'later' depends on two servers' clocks agreeing, and clocks skew by tens of milliseconds even when healthy."},
+        {"t": "Merges both writes field by field", "correct": false,
+         "why": "That's an application-level merge strategy. LWW doesn't look inside the data at all — it just compares timestamps and picks one whole version."},
+        {"t": "Rejects both writes and asks the clients to retry", "correct": false,
+         "why": "LWW never rejects anything — that's its appeal and its danger. Both clients were told 'success'; one of them was lied to after the fact."},
+        {"t": "Blocks the later write until the earlier one has committed and replicated to every region, then applies it on top", "correct": false,
+         "why": "Blocking cross-region coordination is what active-active setups are trying to avoid (it costs a cross-region round trip per write). LWW resolves after the fact instead — by throwing one write away."}
+      ]
+    },
+    {
+      "id": "p2c05-q06", "level": 1, "type": "mcq", "tag": "routing",
+      "q": "What's the difference between geo-DNS and anycast for routing users to regions?",
+      "options": [
+        {"t": "Geo-DNS gives different IP answers by requester location; anycast announces one IP from many places and the network routes to the nearest", "correct": true,
+         "why": "Right. Geo-DNS decides at name-lookup time (and its answers get cached). Anycast decides packet by packet via BGP — which is why withdrawing an anycast announcement shifts traffic in seconds with no client cache to wait out."},
+        {"t": "They're two names for the same technique", "correct": false,
+         "why": "Different layers entirely: geo-DNS works at the naming layer (which IP do I tell you?), anycast at the routing layer (where does this packet physically go?). Big systems stack both."},
+        {"t": "Anycast is essentially geo-DNS with a very short TTL, so cached answers expire almost immediately and traffic moves quickly after a failover", "correct": false,
+         "why": "Anycast doesn't involve TTLs at all — that's its superpower. The same IP exists in many places; the internet's routing tables, not caches, pick the destination."},
+        {"t": "Geo-DNS is for failover; anycast is only for CDNs", "correct": false,
+         "why": "Both do failover and both serve CDNs. The real distinction is mechanism: cached name answers vs live packet routing."}
+      ]
+    },
+    {
+      "id": "p2c05-q07", "level": 1, "type": "mcq", "tag": "cells",
+      "q": "In cell-based architecture, what is a cell?",
+      "options": [
+        {"t": "A self-contained mini-stack — own LB, app servers, DB — serving a fixed subset of customers", "correct": true,
+         "why": "Right. Cells share (almost) nothing, so a bad deploy or poison customer takes down one cell's customers, not the fleet. Bulkheads for your architecture."},
+        {"t": "A single database shard", "correct": false,
+         "why": "A shard splits one layer (the data). A cell is a vertical slice of every layer — the whole stack in miniature. Sharding limits data hotspots; cells limit blast radius of anything."},
+        {"t": "An availability zone — a physically separate building within the region, with its own power and networking", "correct": false,
+         "why": "An AZ is the provider's physical failure boundary. A cell is your logical one — though you can align them, as Slack did with its AZ-scoped cells."},
+        {"t": "A Kubernetes namespace", "correct": false,
+         "why": "A namespace is a naming/permissions boundary inside shared infrastructure. Cells work precisely because they don't share the infrastructure underneath."}
+      ]
+    },
+    {
+      "id": "p2c05-q08", "level": 1, "type": "mcq", "tag": "shuffle-sharding",
+      "q": "What does shuffle sharding add on top of plain one-cell-per-customer assignment?",
+      "options": [
+        {"t": "Each customer gets a small random subset of cells, so almost no two customers share their entire set", "correct": true,
+         "why": "Right. With plain cells, a poison customer's cellmates are 100% down. With shuffled hands, each neighbor has a different other cell to retry into — full outage needs your whole hand down, which combinatorics makes vanishingly rare."},
+        {"t": "It continuously rebalances customers onto the least-loaded cells in real time, so no cell ever becomes a hotspot", "correct": false,
+         "why": "That's load balancing, and it's what shuffle sharding deliberately avoids — moving a poison customer around would let them serially poison every cell they visit."},
+        {"t": "It encrypts traffic between cells", "correct": false,
+         "why": "Nothing to do with security. Shuffle sharding is an isolation trick — it's about who shares fate with whom when something breaks."},
+        {"t": "It doubles capacity by running each cell twice", "correct": false,
+         "why": "Customers get multiple cells, but those cells are shared with different customers each — it's overlap arranged cleverly, not duplication. Capacity stays roughly the same; blast radius shrinks."}
+      ]
+    },
+    {
+      "id": "p2c05-q09", "level": 1, "type": "mcq", "tag": "residency",
+      "q": "Data residency requirements force multi-region design because they:",
+      "options": [
+        {"t": "Legally require certain users' data to be stored, and sometimes processed, in a specific geography", "correct": true,
+         "why": "Right — and note it also constrains replication: you can't copy the EU database to Virginia 'for safekeeping' if the law says it stays in the EU. Law can force regions even when latency and availability don't."},
+        {"t": "Require companies past a certain size to run in at least two regions so a single failure can't take user data offline", "correct": false,
+         "why": "No law mandates redundancy for its own sake. Residency is about where data may live, not how many copies exist."},
+        {"t": "Make cross-region bandwidth cheaper within a legal bloc", "correct": false,
+         "why": "Pricing is a cloud-provider matter, not a legal one. Residency is a compliance constraint on data location, and it often makes architectures more expensive, not less."},
+        {"t": "Only apply to government customers", "correct": false,
+         "why": "Consumer privacy law (GDPR and its cousins), payments regulation, and health data rules hit ordinary products constantly. If you have EU or Indian users, residency questions find you."}
+      ]
+    },
+    {
+      "id": "p2c05-q10", "level": 1, "type": "mcq", "tag": "fencing",
+      "q": "During a region failover, fencing exists to:",
+      "options": [
+        {"t": "Stop the old primary from accepting writes if it turns out to be alive", "correct": true,
+         "why": "Right. 'Unreachable' isn't 'dead' — the old region may still be serving the stale-DNS tail. Fencing (an epoch/token check downstream) makes its writes rejectable, preventing two diverging histories: split brain."},
+        {"t": "Encrypt replication traffic during the emergency", "correct": false,
+         "why": "Fencing is about authority, not privacy. The question it answers is 'who is allowed to be leader right now?'"},
+        {"t": "Rate-limit the surge of failover traffic into the newly promoted standby so it isn't overwhelmed", "correct": false,
+         "why": "That's load shedding — a real concern during failover, but a different tool. Fencing guards correctness (one writer), not capacity."},
+        {"t": "Block users in the failed region from logging in", "correct": false,
+         "why": "Users aren't the danger — the deposed primary is. Fencing fences the old leader's write authority, not the customers."}
+      ]
+    },
+    {
+      "id": "p2c05-q11", "level": 2, "type": "mcq", "tag": "reconciliation",
+      "q": "Your e-commerce site runs active-passive with 3 seconds of replication lag. The primary region dies; you promote the standby. What happened to orders placed in the final seconds, and what's the right follow-up?",
+      "options": [
+        {"t": "Customers saw 'order confirmed' but the new primary has no record — when the old region returns, diff its logs and reconcile each stranded order", "correct": true,
+         "why": "Right. The lag window holds acknowledged-but-uncopied writes. They aren't gone forever — they're stranded in the dead region's logs. Reconciliation (and honest customer comms for affected orders) is the follow-up. GitHub's 2018 incident was exactly this, at 43 seconds of divergence and 24+ hours of cleanup."},
+        {"t": "Nothing was lost — replication is transactional", "correct": false,
+         "why": "Only synchronous replication makes that promise, and this setup is async by stated fact. Async acknowledges before copying; the 3-second window is real lost-from-the-survivor data."},
+        {"t": "Nothing needs doing — when the old region comes back online, replication catches up and the missing orders re-appear in the new primary automatically", "correct": false,
+         "why": "Dangerously half-true. The data exists in the old region, but blindly replaying it into a primary that has since taken new writes creates conflicts (same order IDs, changed inventory). Reconciliation is a deliberate process, not an auto-sync."},
+        {"t": "The load balancer replays the requests to the new region", "correct": false,
+         "why": "Load balancers don't durably store request bodies for replay — once they've forwarded and the backend acked, they're done. Durable replay needs a queue or log designed for it, which wasn't in this write path."}
+      ]
+    },
+    {
+      "id": "p2c05-q12", "level": 2, "type": "mcq", "tag": "data-classes",
+      "q": "You're designing cross-region replication for a food-delivery platform. Which per-data-class assignment is right?",
+      "options": [
+        {"t": "Sessions and menus async; the payments ledger synchronous (or single-region-of-record with RPO zero)", "correct": true,
+         "why": "Right shape: cheap async with seconds of acceptable loss for data that's easily recreated or harmless when stale — and the expensive synchronous path only for money, where 'we lost 4 seconds of confirmed payments' is not an acceptable sentence."},
+        {"t": "Everything synchronous — no acknowledged write should ever exist in one region only, whatever the latency costs, because data loss is never acceptable", "correct": false,
+         "why": "Now every session write and menu edit pays a ~70+ ms cross-region round trip, for no business benefit. 'Never lose anything' sounds rigorous but is really refusing to make the per-class judgment the design needs."},
+        {"t": "Everything async — the lag is only a few seconds", "correct": false,
+         "why": "Fine until the region dies mid-afternoon and a few seconds of confirmed payments evaporate. For money, seconds of loss means manual reconciliation and apology emails. The ledger is the one class that justifies the sync tax."},
+        {"t": "Payments on LWW active-active so they're never blocked", "correct": false,
+         "why": "Multi-writer money with silent conflict resolution is the single most disqualifying answer in this space. LWW discards one of two concurrent writes — with a ledger, that's discarding a transaction."}
+      ]
+    },
+    {
+      "id": "p2c05-q13", "level": 2, "type": "mcq", "tag": "routing",
+      "q": "You failed over via DNS (TTL 60 s), but 20 minutes later ~15% of traffic still hits the dead region. Why, and what actually fixes it?",
+      "options": [
+        {"t": "Resolvers and long-running clients cache past TTL — fix with anycast at the edge and client-side retry against alternate endpoints", "correct": true,
+         "why": "Right. TTL is advisory; ISPs, corporate proxies, and app processes hold IPs for minutes to hours. Anycast shifts traffic at the routing layer (no caches involved), and clients that retry elsewhere survive whatever DNS staleness remains."},
+        {"t": "You should have set the TTL to 1 second before failing over, so every resolver in the world would refresh within a second of the change", "correct": false,
+         "why": "Lower TTL helps the well-behaved resolvers, but the offenders you're seeing are ignoring TTL already. Also, per-second TTLs multiply DNS query load massively for everyone, always — an expensive tax for a partial fix."},
+        {"t": "BGP convergence takes about 20 minutes", "correct": false,
+         "why": "BGP typically converges in seconds to a couple of minutes — and it isn't involved here anyway; this failover was DNS-based. The lingering traffic is cached name answers, not slow routing."},
+        {"t": "The dead region's load balancer is still advertising itself", "correct": false,
+         "why": "A dead region isn't advertising anything — that's the point. The stale traffic comes from clients who remember the old answer, not from anything the corpse is doing."}
+      ]
+    },
+    {
+      "id": "p2c05-q14", "level": 2, "type": "mcq", "tag": "read-local-write-home",
+      "q": "A social app uses read-local-write-home. Priya's home region is US-East; she's traveling in Berlin. What's her actual experience?",
+      "options": [
+        {"t": "Fast local reads from the EU replica; her posts and edits pay ~90 ms to the US; her own fresh writes need read-your-own-writes handling", "correct": true,
+         "why": "Exactly the trade. Reads stay local everywhere; writes travel home (single writer = no conflicts, ever); and since the EU replica lags her home primary by moments, the app briefly pins her reads to home after a write so she sees her own post."},
+        {"t": "Her writes conflict with her US writes and need merging", "correct": false,
+         "why": "The whole point of a home region is that all her writes — from Berlin, Tokyo, anywhere — land on the same single primary, in order. Conflicts are structurally impossible for one user, not just rare."},
+        {"t": "Reads and writes both route to the US, so everything is ~90 ms", "correct": false,
+         "why": "That would waste the pattern's main benefit. Reads come from the nearby async replica at local speed; only writes pay the trip home."},
+        {"t": "The app detects her new location and migrates her home region to the EU on arrival, making reads and writes both local for the whole trip", "correct": false,
+         "why": "Automatic home migration on travel would be constant, risky data movement (and a conflict window during each move). Homes move rarely and deliberately, if at all — a weekend trip just pays write latency."}
+      ]
+    },
+    {
+      "id": "p2c05-q15", "level": 2, "type": "mcq", "tag": "split-brain",
+      "q": "Your automated failover promoted the standby — but it was a false alarm, and the 'dead' primary is alive and still receiving some traffic. What's the danger, and which two guards should have existed?",
+      "options": [
+        {"t": "Split brain — two primaries diverging; guards: multi-vantage detection quorum before the trigger, and fencing so the deposed primary's writes are rejected", "correct": true,
+         "why": "Right. One flaky monitor should never declare a region dead (quorum of vantage points, sustained window), and even a wrong promotion is survivable if fencing means the old primary can no longer commit anything. Detection quorum prevents the mistake; fencing caps its damage."},
+        {"t": "Wasted money — you're paying for two active regions briefly", "correct": false,
+         "why": "Cost is trivia here. The real damage is two write histories diverging with every second — some of those conflicting writes (two sales of one last item) have no clean merge at all."},
+        {"t": "None — the standby held a complete copy at promotion time, so serving from it is harmless and the old primary can simply be shut down whenever it reconnects", "correct": false,
+         "why": "It's missing the lag window, and worse, it's now taking new writes while the old primary also takes writes from stale-DNS traffic. Harmless is the one thing this isn't."},
+        {"t": "Users get logged out; guard: replicate sessions faster", "correct": false,
+         "why": "Session hiccups are cosmetic. Optimizing session replication while two primaries fork your order history is rearranging deck chairs — the guard you need is on write authority, not session freshness."}
+      ]
+    },
+    {
+      "id": "p2c05-q16", "level": 2, "type": "mcq", "tag": "conflicts",
+      "q": "Your active-active app has two conflict-prone fields: a post's like-count, and a user's display name. Pick the per-field strategy.",
+      "options": [
+        {"t": "Like-count: CRDT counter merging per-region tallies; display name: LWW is acceptable", "correct": true,
+         "why": "Right, and the reasoning matters: counters have a perfect mathematical merge (sum the per-region increments), so use it. A display name has no merge — and losing one of two same-moment renames by the same user is genuinely harmless, so LWW's silent loss is acceptable there. Per-field judgment is the senior signal."},
+        {"t": "LWW for both — simplest wins", "correct": false,
+         "why": "LWW on a counter doesn't just risk loss, it guarantees it: two regions each counting likes overwrite each other's tallies wholesale. Mergeable data deserves its merge."},
+        {"t": "CRDTs for both — they solve conflicts properly", "correct": false,
+         "why": "CRDTs solve conflicts for data with a sensible merge. What's the 'merge' of two display names — concatenation? For an unmergeable field, a CRDT just dresses up an arbitrary choice; LWW is honest about it."},
+        {"t": "A global cross-region lock on each row, so only one region can write either field at any moment and conflicts never form at all", "correct": false,
+         "why": "A cross-region lock per write reintroduces the coordination cost active-active exists to avoid — every like now waits on a cross-continent round trip. You'd be better off just running single-writer."}
+      ]
+    },
+    {
+      "id": "p2c05-q17", "level": 2, "type": "mcq", "tag": "drills",
+      "q": "Your team's DR plan is a detailed runbook, last executed: never. The senior response is:",
+      "options": [
+        {"t": "Schedule recurring GameDay drills that actually execute the failover, and treat what breaks as the real findings", "correct": true,
+         "why": "Right. Untested failover is fiction — capacity gaps, missing permissions, and hardcoded regions only reveal themselves when you run it. Netflix built Chaos Kong to evacuate whole regions on a regular schedule for exactly this reason."},
+        {"t": "Review the runbook quarterly to keep it current", "correct": false,
+         "why": "A reviewed fiction is still fiction. Documents can't discover that the standby is under-provisioned or that one IAM role only exists in the primary — only execution finds those."},
+        {"t": "Wait for a real outage — that's the only realistic test", "correct": false,
+         "why": "Then your first test runs at 3 a.m., under pressure, with customers watching. A drill is the same test with coffee and a rollback plan. Choosing the outage as your test is choosing the worst possible conditions for it."},
+        {"t": "Run the failover once end to end in a staging environment, document everything that happened, and mark the plan validated", "correct": false,
+         "why": "Better than nothing, but staging never has production's data volume, traffic, permissions sprawl, or forgotten dependencies — the exact things that break. And 'once' decays: systems drift, so validation has a shelf life."}
+      ]
+    },
+    {
+      "id": "p2c05-q18", "level": 2, "type": "mcq", "tag": "cells",
+      "q": "One enormous enterprise customer's bursty traffic keeps degrading your shared multi-tenant fleet for everyone. The strongest structural fix:",
+      "options": [
+        {"t": "Cellularize the fleet; give the whale a dedicated cell and shuffle-shard the rest", "correct": true,
+         "why": "Right. Isolation is the structural answer: the whale's bursts now land on walls built for them, and everyone else's blast radius shrinks too. A dedicated cell for a customer that dwarfs all others is standard practice — cells make that a routine placement decision."},
+        {"t": "Autoscale harder during their bursts", "correct": false,
+         "why": "Autoscaling shares the new capacity with the same noisy neighbor — and scale-up lag means everyone still hurts for minutes each burst. You're buying more of the thing being poisoned."},
+        {"t": "Impose per-customer rate limits across the whole fleet so no single tenant's bursts can consume more than a fair share of capacity", "correct": false,
+         "why": "Punishing every tenant for one tenant's shape is backwards, and it caps your best customers' legitimate growth. Targeted limits on the whale might help short-term, but the structural fix is isolation."},
+        {"t": "Move everything to larger instances", "correct": false,
+         "why": "Vertical scaling raises the ceiling without adding any walls — the whale's bursts still hit shared infrastructure, just a bigger version of it. Same failure mode, higher bill."}
+      ]
+    },
+    {
+      "id": "p2c05-q19", "level": 2, "type": "mcq", "tag": "residency",
+      "q": "EU law requires your EU users' personal data to stay in the EU, but your product has global search that can surface any user's profile. What's the workable design?",
+      "options": [
+        {"t": "EU region is the region-of-record for EU users' personal data; global features hold non-personal references and fetch personal fields from the EU at display time", "correct": true,
+         "why": "Right shape: residency constrains where personal data rests, so keep it home and let global indexes store only IDs/tokens that point there. The cost — a cross-region fetch on some views — is the price of compliance, and naming that cost is the senior move."},
+        {"t": "Replicate everything everywhere as usual, but encrypt EU users' personal fields with keys that never leave an EU-based key service, so the data is unreadable abroad", "correct": false,
+         "why": "Encryption doesn't satisfy residency — the data, encrypted or not, is still stored outside the EU, and regulators treat stored ciphertext as stored data. Residency is about location, and ciphertext has one."},
+        {"t": "Keep all data in the US since the company is US-based", "correct": false,
+         "why": "Company headquarters doesn't exempt you — the law follows the users whose data it is. This is the answer that ends with regulators."},
+        {"t": "Drop global search for EU users", "correct": false,
+         "why": "Amputating the feature is giving up before designing. Residency restricts where personal data lives, not whether references to it can exist — the pointer-plus-fetch pattern keeps both the law and the product."}
+      ]
+    },
+    {
+      "id": "p2c05-q20", "level": 3, "type": "mcq", "tag": "region-death",
+      "q": "Deep-dive phase. Interviewer: 'Your primary region just went dark.' Which response earns the senior grade?",
+      "options": [
+        {"t": "\"Detection from external vantage points confirms in ~3 minutes; we shift traffic via anycast plus DNS, promote the standby, fence the old primary so a stale-traffic tail can't split-brain us, and reconcile its logs after. RTO ~15 minutes; RPO ~5 seconds — and I'll say exactly which writes are in that window.\"", "correct": true,
+         "why": "The full script — detect, shift, promote, fence, reconcile — with numbers attached and the loss window named. Delivered as a rehearsed sequence, it says 'I had this answer before you asked,' which is precisely the E5 signal this grenade exists to test."},
+        {"t": "\"We're deployed across three AZs, so we'd ride it out.\"", "correct": false,
+         "why": "AZs live inside the region — the question just took all of them. Confusing AZ redundancy with region redundancy is a common and instantly visible miss."},
+        {"t": "\"That's the cloud provider's outage; our SLA credits cover the downtime.\"", "correct": false,
+         "why": "SLA credits refund pennies per dollar of your actual loss, and your users don't care whose fault it was. Outsourcing the failure story reads as never having owned one."},
+        {"t": "\"Nothing happens — we run active-active across three regions with automatic traffic redistribution, so users get rerouted transparently and there is no failover event to manage at all.\"", "correct": false,
+         "why": "Claiming zero impact hand-waves the hard parts: the surviving regions' capacity math, in-flight requests, conflict handling, and the users homed in the dead region. 'Nothing happens' is a red flag; 'here's what degrades and by how much' is the credible version."}
+      ]
+    },
+    {
+      "id": "p2c05-q21", "level": 3, "type": "mcq", "tag": "topologies",
+      "q": "You're designing a global chat app (users on every continent, conversations mostly within a geography). Commit to a multi-region topology.",
+      "options": [
+        {"t": "Home-region per user/conversation: writes go home, reads replicate out async — plus an explicit failover story for when a home region dies", "correct": true,
+         "why": "Committed and fitted to the workload: chats are latency-sensitive and conversation-local, so homing each conversation keeps writes single-writer (no merge problem) and mostly near their users. Naming the home-region-death plan closes the loop — this option plus its failure story is the whole E5 package."},
+        {"t": "Full active-active: any region accepts any message, LWW on conflicts", "correct": false,
+         "why": "LWW on messages means silently dropping messages when replication streams cross — in a chat app, lost messages are the cardinal sin. Multi-writer needs a merge story, and 'coin flip' isn't one."},
+        {"t": "Synchronous quorum writes across all regions for every message, so every user on every continent always sees one identical, totally ordered history", "correct": false,
+         "why": "Every message now waits on cross-continent round trips — 150+ ms added to the hottest path in the product, to solve a conflict problem that homing solves for free. Global consensus per chat message is over-engineering with a stopwatch running."},
+        {"t": "One region plus a CDN for the rest of the world", "correct": false,
+         "why": "CDNs accelerate static content; chat is persistent connections and writes, which all still trek to the one region — Sydney users eat ~200 ms per message forever. This is the 'CDN as magic latency eraser' misconception."}
+      ]
+    },
+    {
+      "id": "p2c05-q22", "level": 3, "type": "mcq", "tag": "payments",
+      "q": "Multi-region design for a payments ledger. The senior commitment is:",
+      "options": [
+        {"t": "Single region-of-record with synchronous replication to a standby — RPO zero, writes pay the cross-region latency, and failover is rehearsed", "correct": true,
+         "why": "Money is the one data class where the sync tax is obviously worth it: no acknowledged payment can exist in only one region. Single-writer keeps the ledger ordered; the stated costs (slower writes, real RTO on failover) show you know what you bought."},
+        {"t": "Active-active with LWW so payments are never blocked by a slow region", "correct": false,
+         "why": "LWW discards one of two concurrent writes — in a ledger, that's discarding a transaction, silently. This is the single most disqualifying answer available in a payments interview."},
+        {"t": "Async replication with a ~5-second RPO — regional failure is rare enough that designing the whole write path around it costs more than it will ever save", "correct": false,
+         "why": "Rare times catastrophic is still catastrophic: 'we lost the last 5 seconds of confirmed payments' means hand-reconciling money and regulator conversations. Payments is precisely the class where 'rare' doesn't excuse the loss window."},
+        {"t": "CRDT counters for balances so regions merge automatically", "correct": false,
+         "why": "Balances aren't blind-mergeable — invariants like 'never below zero' and 'every change traces to an ordered ledger entry' break under concurrent merges. Counters merge; accounting doesn't."}
+      ]
+    },
+    {
+      "id": "p2c05-q23", "level": 3, "type": "mcq", "tag": "calibration",
+      "q": "A seed-stage startup: 5,000 users, all in India, three engineers. The candidate proposes active-active across Mumbai and Singapore 'for resilience.' The senior-calibrated alternative:",
+      "options": [
+        {"t": "One region, multi-AZ, automated cross-region backups with rehearsed restores — and a written trigger for when multi-region becomes worth buying", "correct": true,
+         "why": "Right-sized: multi-AZ already covers the likely failures; tested backups cap the disaster case with an honest RTO of hours; and the named trigger (scale, revenue, residency) shows the restraint is a decision, not ignorance. Unjustified multi-region reads exactly like unjustified Kafka."},
+        {"t": "The proposal is right — resilience should be built in from day one", "correct": false,
+         "why": "Active-active means conflict handling, dual deploys, and cross-region debugging — a heavy ongoing tax on three engineers, purchased against a risk multi-AZ mostly covers. Complexity without a driving number is the classic over-engineering tell."},
+        {"t": "Compromise: passive standby in Frankfurt", "correct": false,
+         "why": "Frankfurt adds ~100+ ms of replication distance for an India-only user base — the wrong geography even if a standby were justified. Splitting the difference on an over-engineered idea is still over-engineering, now with worse physics."},
+        {"t": "Go multi-cloud instead — two regions of one provider still share its control planes and its fate, so real resilience means a second provider entirely", "correct": false,
+         "why": "Multi-cloud doubles every operational surface (IAM, deploys, monitoring, expertise) for a failure mode — whole-provider collapse — far rarer than the region issues you haven't handled yet. It's the same over-engineering, escalated."}
+      ]
+    },
+    {
+      "id": "p2c05-q24", "level": 3, "type": "mcq", "tag": "capacity",
+      "q": "Your active-passive standby runs at 10% of production capacity to save money. The primary region dies at daily peak. What actually happens, and what's the senior fix?",
+      "options": [
+        {"t": "The standby browns out under 10x its capacity — fix: capacity-match or pre-planned load shedding by priority, validated by drills at production-scale traffic", "correct": true,
+         "why": "Right. Failover doesn't shrink your traffic; a 10% standby means the 'recovery' region immediately drowns. Either pay for real capacity or decide in advance what sheds first (analytics before checkout), and prove the plan in a drill — because the day of the outage, everyone else is also evacuating into that region and spare capacity is scarce."},
+        {"t": "Nothing serious — autoscaling detects the surge and grows the standby to full production capacity within a few minutes, which is exactly what it exists for", "correct": false,
+         "why": "Scale-up takes minutes-to-tens-of-minutes while users pile in immediately — and during a real regional outage, thousands of other companies are grabbing capacity in the same surviving region at the same moment. The spare machines you assumed may simply not exist that day."},
+        {"t": "The CDN absorbs most of the load", "correct": false,
+         "why": "The CDN keeps serving cached static content, sure — but logins, orders, and API calls all need the origin, and that's the part running at 10%. CDNs don't absorb the traffic that matters here."},
+        {"t": "Queue the excess requests until capacity catches up", "correct": false,
+         "why": "Queues buy time for async work, not for interactive requests — a user whose page load is 'queued' for four minutes is a user who left. Backpressure is real (next chapters), but it's a shedding strategy, not a substitute for capacity."}
+      ]
+    },
+    {
+      "id": "p2c05-q25", "level": 3, "type": "mcq", "tag": "cells",
+      "q": "You're introducing cells and must pick their size. The senior reasoning is:",
+      "options": [
+        {"t": "Cap cells at a scale you routinely test, sized so the largest customers fit (or get dedicated cells), and grow by adding cells — accepting the overhead of the router and per-cell ops", "correct": true,
+         "why": "This is the actual trade: small enough that losing one cell is tolerable and every cell runs at proven scale, big enough that whales fit and overhead doesn't drown you. Naming the costs you accepted — routing layer, N sets of dashboards and deploys — is what makes it a decision instead of a slogan."},
+        {"t": "As many tiny cells as possible — bounding blast radius is the entire point of cells, so a fleet of more, smaller cells always beats fewer, bigger ones", "correct": false,
+         "why": "Each cell is a full stack to deploy, monitor, and page on, and the customer-to-cell router grows more critical as cells multiply. Blast radius shrinks; operational surface and the shared router's criticality balloon. Minimizing one variable of a trade-off is how over-engineering sneaks in wearing safety clothing."},
+        {"t": "One big cell per region — regions are natural cells", "correct": false,
+         "why": "That's just... regions, renamed. Cells exist to bound failures that regions can't — bad deploys and poison customers replicate across regions happily. A cell the size of a region adds vocabulary, not walls."},
+        {"t": "Size doesn't matter once you add shuffle sharding", "correct": false,
+         "why": "Shuffle sharding changes who shares fate, not how much capacity a failure removes or what scale each cell must handle. The two techniques compose; neither excuses skipping the other's math."}
+      ]
+    },
+    {
+      "id": "p2c05-q26", "level": 3, "type": "mcq", "tag": "rpo-rto",
+      "q": "Your PM writes the DR requirements: 'zero downtime, zero data loss, fast writes everywhere in the world.' The senior response:",
+      "options": [
+        {"t": "Show the physics — RPO zero means writes wait on cross-region round trips — then negotiate per-data-class targets: sync for money, seconds of RPO for the rest, an RTO the business actually needs", "correct": true,
+         "why": "All three demands together violate physics: fast global writes and zero loss can't coexist because synchronous safety costs a round trip (CAP with a business hat on). The senior move is a numbers-first negotiation that gives each data class the guarantee it deserves — which is also the cheapest design that's honest."},
+        {"t": "Adopt a globally-distributed consensus database like Spanner — synchronous worldwide replication with strong consistency is exactly what they're built for", "correct": false,
+         "why": "Spanner-class systems are real and excellent, but they don't repeal latency — cross-region commits still wait on cross-region round trips, so 'fast writes everywhere' remains unsatisfied. Naming a product instead of confronting the requirement is buzzword architecture at the requirements stage."},
+        {"t": "Accept the requirements — the team will get as close as it can", "correct": false,
+         "why": "Signing up for impossible requirements guarantees a later, worse conversation — after the money is spent. Unpushed-back requirements are a senior engineer's failure even when the code is great."},
+        {"t": "Explain it's impossible and ask them to withdraw the request", "correct": false,
+         "why": "Directionally right, diplomatically and technically lazy. 'Impossible' without the per-class alternative leaves the PM with nothing to decide on. The job is translating the wish into trade-offs with numbers, not vetoing it."}
+      ]
+    }
+  ]
+}

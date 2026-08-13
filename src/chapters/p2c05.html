@@ -1,0 +1,313 @@
+<p>It's 6:47 on a Tuesday morning and your phone will not stop. Every alert you own fires at once — API error rate, database timeouts, dead queue workers, all screaming together. You open your cloud provider's status page and there it is, in careful corporate prose: <em>"We are investigating increased error rates in us-east-1."</em> Not a server. Not a rack. Not even an availability zone. The <strong>region</strong> — the entire geographic cluster of data centers where your company's software lives — is having a very bad morning.</p>
+
+<p>So here is the question this chapter exists to make you answer: <strong>what does your app do right now?</strong> Not what the architecture diagram implies. What actually happens. For most companies the honest answer is: nothing. It's down, and everyone waits for someone else's engineers to fix it. All those replicas from Part 1, the load balancers, the carefully sharded database — every copy lives in the same region. You built beautiful redundancy, then put all of it in one basket the size of Northern Virginia.</p>
+
+<p>Region-level failure is rare, but it is not hypothetical. In February 2017, a mistyped command during routine S3 debugging took S3 in us-east-1 down for about four hours — and a startling fraction of the internet with it. In December 2021, a us-east-1 network incident degraded services from Slack to Disney+ for the better part of a day. If your design review has never asked "what happens when the region dies?", the answer is being decided for you, and the answer is "we go down with it."</p>
+
+<p>This chapter covers the two big ideas that answer that question: <strong>multi-region architecture</strong> — copies of your system in different geographies — and <strong>cell-based architecture</strong> — walls inside each geography, so one failure can't take the whole fleet. They're the same idea at two different scales: control the blast radius.</p>
+
+<h2>Three reasons to leave one region</h2>
+
+<p>Multi-region is expensive and complicated, so be honest about why you'd do it. There are exactly three reasons, and each pushes you toward a different design.</p>
+
+<p><strong>1. Physics.</strong> Light in fiber travels at roughly 200,000 km per second — two-thirds of its speed in vacuum. That sounds fast until you do the math on a round trip. A request from Sydney to a server in Virginia covers about 16,000 km each way: 160 milliseconds of pure travel time, before a single line of your code runs. Real networks add routing overhead on top.</p>
+
+<table>
+<thead><tr><th>Path</th><th>Typical round trip</th></tr></thead>
+<tbody>
+<tr><td>Same city / same region</td><td>1–2 ms</td></tr>
+<tr><td>Virginia ↔ Oregon (cross-US)</td><td>~70 ms</td></tr>
+<tr><td>Virginia ↔ London</td><td>~80 ms</td></tr>
+<tr><td>Virginia ↔ Mumbai</td><td>~190 ms</td></tr>
+<tr><td>Virginia ↔ Sydney</td><td>~200 ms</td></tr>
+</tbody>
+</table>
+
+<p>And it compounds: setting up a fresh HTTPS connection takes roughly three round trips before the first real byte moves. For your Sydney user, that's ~600 ms of nothing. No code optimization fixes this — only moving servers closer to the user does. A CDN (Part 1) moves your <em>static</em> content closer. Multi-region moves your <em>servers and data</em> closer.</p>
+
+<p><strong>2. Availability.</strong> An availability zone is a separate building with separate power; a region is a cluster of them. Multi-AZ protects you from a building fire. But a region still shares things: the provider's regional network, its control planes, its deploy pipeline. When those break, every AZ breaks together. The only defense against "the provider is having a bad day <em>here</em>" is having a <em>there</em>.</p>
+
+<p><strong>3. Law.</strong> Data residency rules say certain data about certain people must be stored — sometimes processed — inside a specific country or bloc. European privacy law, India's rules for payment data, and many national variants all push this way. Residency forces region placement no matter what latency and availability say, and it <em>constrains replication</em>: you can't quietly copy the EU users' database to Virginia "for safekeeping" if the law says it stays in the EU.</p>
+
+<p>The cheapest version of multi-region is the one where only one region does the real work. Start there.</p>
+
+<h2>Active-passive: the understudy region</h2>
+
+<p>In an <strong>active-passive</strong> setup, one region (the active, or primary) serves all traffic. A second region (the passive, or standby) continuously receives a copy of the data — the async replication machinery from Part 1, stretched across a continent — and otherwise sits quiet. When the primary dies, you promote the standby and point traffic at it.</p>
+
+<p>Standbys come in degrees of readiness, and each degree costs more: <strong>backup-and-restore</strong> (just backups in another region; hours to rebuild), <strong>pilot light</strong> (data replicating live, but only a skeleton crew of servers running), <strong>warm standby</strong> (a full but scaled-down copy of the stack), and <strong>hot standby</strong> (full capacity, ready in minutes). You are buying down recovery time with money.</p>
+
+<p>Two acronyms carry this entire topic, and interviewers expect you to use them with numbers attached. <strong>RPO — Recovery Point Objective</strong> — is how much recently written data you accept losing, measured in time. <strong>RTO — Recovery Time Objective</strong> — is how long until you're serving traffic again. Concretely: your cross-region replication runs asynchronously with 2–5 seconds of lag, because making every write wait ~70+ ms for a cross-country confirmation would be brutal (that's the CAP trade-off from Part 1 wearing a business suit). So when the region dies, the last few seconds of writes — writes your users already saw succeed — existed only in the dead region. They are gone. Async replication means a nonzero RPO. That is not a bug in your setup; it is the deal you signed.</p>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>The senior question is never "what's our RPO?" — it's "<strong>which writes may we lose?</strong>" One number for the whole system is a junior smell, because the honest answer differs by data class. Losing five seconds of session tokens: nobody notices, they log in again. Five seconds of analytics events: shrug. Five seconds of shopping-cart edits: mildly annoying. Five seconds of <em>confirmed payments</em>: you are writing apology emails and reconciling money by hand. The E5 sentence is: "Everything rides async replication with an RPO of a few seconds, <em>except</em> the payments ledger, which is synchronously replicated — those writes pay the cross-region latency, and that's the right trade." Different data, different promises, stated unprompted.</p>
+</div>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A shopkeeper photocopies her ledger and sends the copies by courier to her sister's shop across town every few minutes. If her shop burns down, the pages written since the last courier run are ash — that's the RPO. The time it takes to unlock the sister shop, brief the staff, and open the doors — that's the RTO. Want zero pages lost? Then the courier must carry every page the moment it's written, and she can't serve the next customer until he's back — that's synchronous replication, and it makes every sale slower. Where the analogy breaks: real replication streams continuously, so the "courier gap" is seconds of lag, not minutes.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Active-passive failover timeline showing the RPO data-loss window before the failure and the RTO downtime window after it">
+  <line class="dg-edge" x1="30" y1="150" x2="700" y2="150" marker-end="url(#arrow)"/>
+  <rect class="dg-bad" x="145" y="138" width="55" height="24"/>
+  <line class="dg-edge" x1="200" y1="134" x2="200" y2="166"/>
+  <line class="dg-edge" x1="320" y1="138" x2="320" y2="162"/>
+  <line class="dg-edge" x1="430" y1="138" x2="430" y2="162"/>
+  <line class="dg-edge" x1="560" y1="138" x2="560" y2="162"/>
+  <line class="dg-edge" x1="655" y1="138" x2="655" y2="162"/>
+  <text class="dg-txt-s" x="178" y="60">T+0</text>
+  <text class="dg-txt" x="155" y="80">region dies</text>
+  <text class="dg-txt-s" x="285" y="98">T+3 min</text>
+  <text class="dg-txt-s" x="262" y="115">alarms confirmed</text>
+  <text class="dg-txt-s" x="400" y="60">T+6 min</text>
+  <text class="dg-txt-s" x="385" y="78">decision: go</text>
+  <text class="dg-txt-s" x="522" y="98">T+12 min</text>
+  <text class="dg-txt-s" x="498" y="115">DNS + promotion</text>
+  <text class="dg-txt-s" x="628" y="60">T+15 min</text>
+  <text class="dg-txt-s" x="632" y="78">serving</text>
+  <text class="dg-txt-s" x="30" y="188">last ~3 s of writes: lost (RPO)</text>
+  <line class="dg-edge" x1="150" y1="180" x2="168" y2="164"/>
+  <rect class="dg-zone" x="200" y="198" width="455" height="34" rx="6"/>
+  <text class="dg-txt-s" x="322" y="219">RTO = 15 minutes down</text>
+</svg>
+<figcaption>An active-passive failover, minute by minute. The red sliver before T+0 is the replication lag — writes acknowledged but never copied. The dashed span is your downtime. Both windows have names, and interviewers expect numbers in them.</figcaption>
+</figure>
+
+<p>Walk the numbers like an owner: replication lag ~3 s. Detection to confident alarm, 3 minutes — you must distinguish a blip from a death, and paging a human on every blip destroys trust. A human confirms and pulls the trigger at minute 6, because fully automatic region failover that fires on a false alarm creates worse problems (coming shortly). Traffic shift plus database promotion, 6 more minutes. Caches warm by minute 15. Result: RTO ≈ 15 minutes, RPO ≈ 3 seconds. Now the numbers drive decisions: if the business can't eat 15 minutes, you pay for a hot standby and rehearsed automation. If it can't eat 3 seconds of lost orders, you synchronously replicate the order table — just that table — and every checkout gets ~80 ms slower. Say the cost out loud when you commit.</p>
+
+<p>But notice what active-passive doesn't fix: your Sydney users still pay 200 ms on every request, and an entire region's worth of hardware sits idle. Which raises an obvious, dangerous idea — why not make both regions work?</p>
+
+<h2>Active-active: both regions take writes</h2>
+
+<p>In an <strong>active-active</strong> setup, every region serves traffic. Users hit the nearest one, writes happen everywhere, and regions replicate to each other in both directions. Latency: solved. Idle hardware: none. Failover: barely an event — the survivors just absorb the traffic. It sounds strictly better than active-passive, and it isn't, because of one word: <strong>conflicts</strong>.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 310" role="img" aria-label="Two regions accept conflicting writes to the same profile field and last-write-wins silently discards one of them">
+  <rect class="dg-zone" x="30" y="70" width="300" height="170" rx="10"/>
+  <text class="dg-txt" x="48" y="96">Region US-East</text>
+  <rect class="dg-zone" x="390" y="70" width="300" height="170" rx="10"/>
+  <text class="dg-txt" x="408" y="96">Region EU-West</text>
+  <rect class="dg-node" x="90" y="150" width="180" height="54" rx="8"/>
+  <text class="dg-txt" x="112" y="173">users DB</text>
+  <text class="dg-txt-s" x="112" y="191">name = "Priya K"</text>
+  <rect class="dg-node" x="450" y="150" width="180" height="54" rx="8"/>
+  <text class="dg-txt" x="472" y="173">users DB</text>
+  <text class="dg-txt-s" x="472" y="191">name = "Priya Kaur"</text>
+  <text class="dg-txt-s" x="66" y="30">phone app, 10:00:00.120</text>
+  <line class="dg-edge" x1="150" y1="38" x2="168" y2="146" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="428" y="30">laptop app, 10:00:00.150</text>
+  <line class="dg-edge" x1="516" y1="38" x2="532" y2="146" marker-end="url(#arrow)"/>
+  <path class="dg-edge" fill="none" d="M270 163 C 340 138, 380 138, 446 163" marker-end="url(#arrow)"/>
+  <path class="dg-edge" fill="none" d="M450 192 C 380 217, 340 217, 274 192" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="322" y="130">async copy</text>
+  <text class="dg-txt-s" x="322" y="234">async copy</text>
+  <rect class="dg-bad" x="30" y="264" width="14" height="14"/>
+  <text class="dg-txt-s" x="54" y="276">LWW keeps .150 — "Priya K" silently vanishes. And .150 is only "later" if both clocks agree.</text>
+</svg>
+<figcaption>The same user edits her name on two devices, hitting two regions, 30 ms apart. Each region accepts its write. When the copies cross, someone must decide who wins.</figcaption>
+</figure>
+
+<p>Both regions did their job. Both writes were acknowledged. Now the replication streams cross, and each region holds a different truth. You have three families of answers, in ascending order of effort:</p>
+
+<ul>
+<li><strong>Last-write-wins (LWW).</strong> Compare timestamps, keep the later one. Simple, fast — and it <em>silently destroys data</em>. Worse, "later" is a lie: server clocks drift, and even well-behaved NTP-synced clocks disagree by tens of milliseconds. Choosing LWW means saying "for this data, we accept losing whichever concurrent write loses the coin flip." That's fine for a user's online-status flag. It is disqualifying for anything like money.</li>
+<li><strong>CRDTs</strong> (the previous chapter). Data structures with a built-in, mathematically safe merge — counters that sum per-region contributions, sets that union. Perfect when your data <em>has</em> a sensible merge. Most business records don't.</li>
+<li><strong>Application-level merge.</strong> Keep both versions, let business logic decide: union the two shopping carts; show the user a "which one did you mean?" prompt; apply domain rules. Maximum control, maximum work — you write and maintain the merge for every data type.</li>
+</ul>
+
+<h3>Read-local-write-home: the pragmatic middle</h3>
+
+<p>There's a fourth answer, and it's the one that wins most real designs: refuse to have the fight at all. Assign every user a <strong>home region</strong> — usually the one nearest where they signed up. <em>All</em> writes for that user route to their home region, no matter where they are today. Reads are served everywhere, from local async replicas. One writer per user means write conflicts are structurally impossible — you didn't resolve the conflict, you made it unrepresentable.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Read-local-write-home: a Berlin user reads from the nearby EU region while her writes travel to her home region in the US">
+  <text class="dg-txt-s" x="20" y="40">one writer per user = no conflicts</text>
+  <rect class="dg-node-alt" x="20" y="100" width="130" height="54" rx="8"/>
+  <text class="dg-txt" x="36" y="123">Priya</text>
+  <text class="dg-txt-s" x="36" y="140">in Berlin</text>
+  <rect class="dg-zone" x="210" y="46" width="220" height="174" rx="10"/>
+  <text class="dg-txt" x="228" y="72">EU region</text>
+  <rect class="dg-node" x="240" y="120" width="160" height="54" rx="8"/>
+  <text class="dg-txt" x="258" y="150">read replica</text>
+  <rect class="dg-zone" x="470" y="46" width="230" height="174" rx="10"/>
+  <text class="dg-txt" x="488" y="72">US region (home)</text>
+  <rect class="dg-node" x="500" y="120" width="170" height="54" rx="8"/>
+  <text class="dg-txt" x="512" y="150">primary for Priya</text>
+  <line class="dg-edge" x1="150" y1="118" x2="236" y2="136" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="152" y="98">reads · 15 ms</text>
+  <path class="dg-edge" fill="none" d="M85 156 C 150 245, 480 245, 560 178" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="300" y="240">writes · 90 ms</text>
+  <path class="dg-edge" fill="none" d="M498 136 C 462 104, 440 104, 404 132" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="408" y="98">async copy</text>
+</svg>
+<figcaption>Reads stay local and fast everywhere in the world. Writes pay one cross-region trip to the user's home. Since only the home region ever writes Priya's data, there is nothing to merge.</figcaption>
+</figure>
+
+<p>The costs are honest and small: travelers pay write latency to their far-away home. Read-your-own-writes needs care — right after Priya saves, the EU replica may not have her edit yet, so you briefly pin her reads to her home region or to her session (the same replication-lag trick from Part 1). And a home region dying still needs the full active-passive failover story — for that slice of users. Early Facebook ran the global version of this for years: every write in the world flew to California's master databases; reads came from local replicas. It's not glamorous. It works.</p>
+
+<p>So commit with a ranking, not a shrug: active-passive when your users live in one geography; read-local-write-home when reads are global and writes are per-user; true multi-master active-active only for the narrow slices of data with a well-defined merge — counters, presence, carts. Naming which data gets which treatment is precisely the senior move.</p>
+
+<h2>How traffic finds the surviving region</h2>
+
+<p>Two mechanisms route users to regions, and they fail differently.</p>
+
+<p><strong>Geo-DNS</strong>: the DNS server gives different answers depending on where the question comes from — Sydney resolvers get the Sydney region's IP. Add health checks and it doubles as your failover switch: mark a region unhealthy, and DNS stops handing out its address. The weakness is that DNS answers are cached, and the TTL — the "expire after" sticker on each answer — is advisory. Resolvers, corporate proxies, and long-running app processes routinely hold IPs long past TTL. After a failover, a stubborn tail of traffic keeps arriving at the corpse for minutes to hours. Plan for the tail: clients should retry against an alternate endpoint, not just trust DNS.</p>
+
+<p><strong>Anycast</strong>: the same IP address is announced from many locations at once, and the internet's routing system (BGP) delivers each packet to the nearest one. There's nothing to cache stale — withdraw the announcement in the dead region and traffic reroutes in seconds. This is how big CDNs and DNS providers front their networks. The pragmatic stack: anycast at the edge for instant shifts, geo-DNS above it, health checks driving both.</p>
+
+<h2>The script: the night a region dies</h2>
+
+<p>At the whiteboard, "my region died" should trigger a rehearsed six-step script, delivered unprompted. Here it is; learn it as a sequence, because the order matters.</p>
+
+<ol>
+<li><strong>Detect.</strong> Health checks must run from <em>outside</em> the failing region — a monitor inside a dying region dies with it, cheerfully reporting nothing. Probe from multiple vantage points and alert on user-visible symptoms. The hardest case isn't dead, it's <em>sick</em>: a "gray failure" that drops 10% of packets fools naive checks. Hold that thought for the Slack story.</li>
+<li><strong>Decide.</strong> Pre-agreed criteria, plus either a human with authority or automation you've genuinely rehearsed. The nightmare isn't deciding slowly — it's deciding wrongly, twice: failing over on a false alarm, then flapping back.</li>
+<li><strong>Shift traffic.</strong> DNS flip, anycast withdrawal, or both. Expect the stale-DNS tail.</li>
+<li><strong>Promote.</strong> The standby's replicas become primaries — the leader-election machinery from the consensus chapter, now at region scale.</li>
+<li><strong>Fence the old primary.</strong> Here's the trap: "unreachable" is not "dead." Often the old region is alive but partitioned — and still accepting writes from that stale-DNS tail. Two primaries, two diverging histories: split brain. This is exactly what fencing from the consensus chapter is for — bump a configuration epoch, and every downstream system refuses writes stamped with the old leader's number. When the lost region reconnects, it must learn it was fired <em>before</em> serving a single request.</li>
+<li><strong>Reconcile.</strong> When the old region returns, the RPO window — those last seconds of writes — is sitting in its logs. Diff them against the new primary and merge or manually resolve. GitHub lived this on October 21, 2018: 43 seconds of degraded connectivity between its US East coast sites caused automated tooling to promote databases elsewhere, leaving a few seconds of writes stranded on each side. GitHub chose over 24 hours of deliberately degraded service to restore and reconcile both histories rather than discard either. RPO decisions get made calmly in advance, or they get made at 3 a.m. by whoever is holding the pager.</li>
+</ol>
+
+<h2>Untested failover is fiction</h2>
+
+<p>Ask any team with a disaster-recovery plan one question: when did you last actually fail over? If the answer is "never," they don't have a DR plan — they have a DR <em>document</em>. Real failovers surface the things no document predicts: the standby is sized for 10% of production traffic; an IAM permission exists only in the primary; a hostname is hardcoded; a critical cron job runs nowhere else. And the cruelest one — during a genuine regional outage, every other customer of your cloud provider is evacuating into the same neighboring region at the same time, and the spare capacity you assumed isn't there.</p>
+
+<p>The only fix is rehearsal. <strong>GameDays</strong> — scheduled drills where you deliberately break production-like systems, up to and including evacuating a region — turn failover from a heroic first-time event into a boring routine. If you're not willing to run the drill, you already know the failover doesn't work.</p>
+
+<div class="box story"><div class="box-tag">War story — Netflix</div>
+<p>On Christmas Eve 2012, an AWS maintenance process accidentally deleted production state data for Elastic Load Balancers in us-east-1. Netflix ran essentially everything in that one region — and streaming died on TVs across the Americas on one of the biggest movie nights of the year, for hours, over something Netflix's own engineers could not touch. The response reshaped the company: Netflix rebuilt its user-facing path to run active-active across multiple AWS regions, so any region can absorb another's users. Then the properly senior part: they built <strong>Chaos Kong</strong>, a tool that deliberately evacuates an <em>entire region</em> in production — on a regular schedule, not during emergencies — to prove the failover works. Because they'd rehearsed region evacuation many times before ever needing it in anger, shifting a real failing region's traffic became a practiced routine instead of a bet. That's the whole GameDay philosophy in one company: the outage you've rehearsed is an inconvenience; the one you haven't is an incident.</p>
+</div>
+
+<h2>Cells: walls inside the region</h2>
+
+<p>Now for an uncomfortable observation. Multi-region protects you from Virginia. It does not protect you from <em>yourself</em>. Most outages aren't geography — they're a bad deploy, a poison request that crashes whatever server touches it, one whale customer whose traffic tips over shared infrastructure. Multi-region does nothing for these, because your replication and your deploy pipeline lovingly deliver the same poison to every region you own.</p>
+
+<p>Enter <strong>cell-based architecture</strong>. A cell is a self-contained mini-stack — its own load balancer, its own app servers, its own database — serving a fixed subset of customers. Cells share almost nothing; a thin routing layer in front maps each customer to their cell and stays out of the way. Now a bad deploy or a poison customer takes down one cell: 5% of customers, not 100%. The fleet's blast radius shrinks to the size of the wall you built.</p>
+
+<p>Cells buy you two quieter superpowers too. Deploys roll cell by cell, so the first cell is a natural canary with a real, bounded user population. And cells have a fixed maximum size — you scale by stamping out <em>more</em> cells, not growing them — which means no cell ever operates at a scale you haven't already tested. Growth stops being a journey into the unknown.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Ships stopped sinking from single leaks when builders added bulkheads — watertight walls splitting the hull into compartments. Breach one compartment and it floods; the ship floats on. Cells are bulkheads for your fleet. And the analogy carries its own warning, courtesy of the Titanic: her bulkheads didn't reach full height, so water spilled over the top from one compartment into the next. Your version of water-over-the-top is any shared component spanning all cells — the cell router, a shared control plane, a global database. Whatever crosses the wall can sink every compartment, so keep that layer tiny, dumb, and boring.</p>
+</div>
+
+<p>One problem remains. With plain cells, each customer lives in exactly one cell — so the poison customer's innocent cellmates are 100% down while the rest of the fleet hums. Can we protect even <em>them</em>?</p>
+
+<h3>Shuffle sharding: cells for every customer, dealt like cards</h3>
+
+<p>Instead of assigning each customer one cell, deal each customer a small random <em>hand</em> of them — say 2 cells out of 8. Requests try either cell; clients retry against the other on failure. Now trace a poison customer: they hurt their two cells. But their cellmates each hold a <em>different</em> second cell, so every innocent customer retries onto healthy capacity. A customer is fully down only if their entire hand is down — and with 8 cells choose 2, there are 28 distinct hands, so barely anyone shares your exact fate. Scale the numbers up and "barely anyone" becomes "statistically no one."</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Four cells with customers shuffle-sharded across pairs of cells; one cell fails and no customer loses both cells of their pair">
+  <rect class="dg-node" x="40" y="40" width="140" height="100" rx="10"/>
+  <text class="dg-txt" x="62" y="70">Cell 1</text>
+  <text class="dg-txt-s" x="62" y="92">LB · app · DB</text>
+  <rect class="dg-bad" x="210" y="40" width="140" height="100" rx="10"/>
+  <text class="dg-txt" x="232" y="70">Cell 2</text>
+  <text class="dg-txt-s" x="232" y="92">LB · app · DB</text>
+  <text class="dg-txt-s" x="232" y="120">bad deploy — down</text>
+  <rect class="dg-node" x="380" y="40" width="140" height="100" rx="10"/>
+  <text class="dg-txt" x="402" y="70">Cell 3</text>
+  <text class="dg-txt-s" x="402" y="92">LB · app · DB</text>
+  <rect class="dg-node" x="550" y="40" width="140" height="100" rx="10"/>
+  <text class="dg-txt" x="572" y="70">Cell 4</text>
+  <text class="dg-txt-s" x="572" y="92">LB · app · DB</text>
+  <line class="dg-edge" x1="65" y1="252" x2="108" y2="142"/>
+  <line class="dg-edge" x1="70" y1="252" x2="446" y2="142"/>
+  <line class="dg-edge" x1="235" y1="252" x2="278" y2="142"/>
+  <line class="dg-edge" x1="240" y1="252" x2="452" y2="142"/>
+  <line class="dg-edge" x1="405" y1="252" x2="288" y2="142"/>
+  <line class="dg-edge" x1="410" y1="252" x2="616" y2="142"/>
+  <line class="dg-edge" x1="575" y1="252" x2="116" y2="142"/>
+  <line class="dg-edge" x1="580" y1="252" x2="624" y2="142"/>
+  <text class="dg-txt" x="58" y="272">A</text>
+  <text class="dg-txt-s" x="34" y="292">cells 1 + 3</text>
+  <text class="dg-txt" x="228" y="272">B</text>
+  <text class="dg-txt-s" x="204" y="292">cells 2 + 3</text>
+  <text class="dg-txt" x="398" y="272">C</text>
+  <text class="dg-txt-s" x="374" y="292">cells 2 + 4</text>
+  <text class="dg-txt" x="568" y="272">D</text>
+  <text class="dg-txt-s" x="544" y="292">cells 1 + 4</text>
+  <text class="dg-txt-s" x="40" y="320">Cell 2 dies → B and C retry into their other cell. A and D never notice. Nobody lost both cells.</text>
+</svg>
+<figcaption>Shuffle sharding with 4 cells and hands of 2. Cell 2's failure degrades B and C to half capacity — but their retries land on healthy cells, and no customer's whole hand is gone.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — AWS Route 53</div>
+<p>DNS is the internet's most attractive DDoS target: knock out a provider's name servers and every site they serve goes dark. Amazon's Route 53 answered with shuffle sharding, and the numbers are worth memorizing because they make the idea vivid. Route 53's capacity is divided into 2,048 <em>virtual</em> name servers. Every customer domain is dealt a hand of four of them — and with 2,048 choose 4, there are about 730 billion possible hands. AWS additionally guarantees no two customer domains ever share more than two of their four servers. So when an attacker floods some domain, that customer's four name servers take the beating — while essentially every other customer has a mostly-different hand, and DNS resolvers automatically retry across a domain's servers by design. An attack sized to destroy "the fleet" ends up isolating roughly one customer: the target. This pattern, spelled out by Amazon in its Builders' Library, is a core reason Route 53's query-answering data plane carries a 100% availability SLA — and why AWS now bakes cells and shuffle sharding into service designs across the company.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Slack</div>
+<p>On June 30, 2021, network hardware in one AWS availability zone started <em>intermittently</em> dropping traffic — a gray failure, sick rather than dead, the kind automated health checks are worst at catching. Slack's services were spread across AZs with cross-AZ calls everywhere, so one flaky zone degraded the whole product while dashboards mostly shrugged. The engineers' postmortem wish was disarmingly simple: a button that tells all systems "this AZ is bad; avoid it." So over roughly a year and a half, Slack rebuilt its critical user-facing services into a cellular architecture, described in detail on its engineering blog in 2023: each cell is aligned to one availability zone and keeps its traffic inside itself ("siloed"), so a sick zone's weirdness stops at the cell wall. The button exists now — it targets removing traffic from a sick zone within five minutes, and when the zone recovers, operators can send back as little as 1% of traffic to test it before trusting it again. Note what Slack's version teaches: cells don't have to be region-sized. The bulkhead pattern works at whatever scale your failures come in.</p>
+</div>
+
+<h2>How deep interviews actually go</h2>
+
+<p>Multi-region is a topic where candidates routinely miscalibrate in both directions — hand-waving "we'd go multi-region" like a magic phrase, or diving into BGP minutiae nobody asked for. Here's the honest line between what an L5/E5 answer must <em>volunteer</em> and what is staff-level garnish.</p>
+
+<table>
+<thead><tr><th>L5 must volunteer, unprompted</th><th>Staff-only garnish (fine to mention, never required)</th></tr></thead>
+<tbody>
+<tr><td>The region-death script — detection, shift, promotion, fencing, reconciliation — before being asked</td><td>Cell sizing math and cell-migration mechanics</td></tr>
+<tr><td>Concrete RPO/RTO numbers for <em>this</em> design, and which writes sit in the loss window</td><td>Cross-cell routing-layer and control-plane design</td></tr>
+<tr><td>Per-data-class choices: "sessions async, ledger sync" — with the latency cost stated</td><td>Cross-region egress cost modeling in dollars</td></tr>
+<tr><td>A committed topology for this system — active-passive, read-local-write-home, or active-active — with the reason</td><td>BGP/anycast internals beyond one sentence</td></tr>
+<tr><td>The conflict story, if you proposed multi-writer anything</td><td>CRDT merge semantics in depth (previous chapter's territory)</td></tr>
+<tr><td>"And we drill this" — one sentence on GameDays</td><td>Shuffle-sharding combinatorics beyond the idea</td></tr>
+</tbody>
+</table>
+
+<p>And the inverse is also senior signal: knowing when <em>not</em> to. A seed-stage product with users in one country needs one region, multi-AZ, tested backups, and a written restore-time estimate — proposing active-active for it reads as buzzword architecture, exactly the failure mode from chapter one. Multi-region is bought with real money and real complexity; the senior move is naming the trigger that would make you buy it.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Multi-region rarely arrives as its own question. It arrives as a grenade tossed into your finished design: "Looks good — now us-east-1 just went dark." A passing senior answer commits to a topology for this specific system, attaches RPO/RTO numbers per data class, walks the death script calmly, and mentions drills in one breath. Probes you should expect verbatim:</p>
+<ul>
+<li>"Your primary region just died. Walk me through the first fifteen minutes." — they want the script with numbers, not "DNS fails over."</li>
+<li>"Which writes are you willing to lose, and how many seconds' worth?" — they're checking you know async replication's RPO is nonzero, per data class.</li>
+<li>"Both regions accepted a write to the same row. Show me exactly what happens." — LWW's silent loss, or your conflict design.</li>
+<li>"Your failover has never been run. What breaks first when you try it?" — capacity, permissions, hardcoded regions; untested failover is fiction.</li>
+<li>"Why not just stay single-region and save the money?" — sometimes the correct answer is "for this system, we should."</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c05-f1">
+<p class="fey-prompt">Explain RPO and RTO to a junior engineer in 4–5 sentences, using an online store as the example — and make sure they understand why async replication means RPO can't be zero.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>RTO is how long the store is down after a disaster: if our region dies at noon and we're selling again at 12:15 from the backup region, RTO was 15 minutes. RPO is how much recent data the disaster erases: the backup region receives its copy of every order a few seconds after the primary confirms it, so the orders from those last few seconds die with the primary — customers saw "order confirmed," and we have no record. That gap exists because our replication is asynchronous: the primary tells the customer "success" first and copies to the other region a moment later, which keeps checkout fast. Making RPO truly zero means the primary can't say "success" until the far region also has the order — every checkout then waits for a cross-country round trip. So we choose per data type: a few seconds of lost sessions is fine, but for payments we pay the slow synchronous path, because losing money isn't a latency optimization.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your e-commerce stack: primary in Mumbai, warm standby in Singapore, async replication with p99 lag of 5 seconds, DNS TTL 60 s, and a manual failover runbook that takes about 20 minutes end to end. State the RPO and RTO. Then the business demands RTO under 5 minutes and zero lost payments. What exactly changes?</p></div>
+<details><summary>Answer</summary><p>Today: RPO ≈ 5 seconds of acknowledged writes (the replication lag — those orders exist only in Mumbai when it dies), RTO ≈ 20+ minutes (runbook time, plus a stale-DNS tail beyond the 60 s TTL still hitting Mumbai). For RTO &lt; 5 min: hot standby at full capacity, automated promotion behind well-tested detection, and traffic shifting that doesn't depend on DNS caches — anycast or client-side failover — plus regular drills, because untested automation is fiction with extra steps. For zero lost payments: synchronous replication for the payments ledger only — each payment write waits ~70–90 ms for Singapore's acknowledgment before confirming. Everything else stays async. Notice the shape of the answer: you didn't make the whole system RPO-zero; you named the one data class that needs it and paid the latency only there.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A food-delivery app runs read-local-write-home across three regions. Classify these data classes and commit to a replication treatment for each: (a) live order state ("driver is 2 minutes away"), (b) restaurant menus, (c) user sessions, (d) the payments ledger, (e) analytics click events.</p></div>
+<details><summary>Answer</summary><p>(a) Live order state: an order happens in one city — pin it to that region entirely; cross-region replication adds lag to the most latency-sensitive data for no benefit. If the region dies mid-delivery, accept that in-flight orders degrade; that's an explicit, stated loss. (b) Menus: write-rarely, read-everywhere — async replicate globally; seconds of staleness on a menu is harmless. (c) Sessions: async, RPO of seconds is fine — worst case a user logs in again. (d) Payments ledger: synchronous replication to a second region, RPO zero, and single-writer (no multi-master money, ever). (e) Analytics: fire-and-forget through a queue; losing seconds of events during failover is explicitly acceptable. The senior part isn't the choices — it's that each class got its own sentence with its own accepted loss.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your automated failover fires on a false alarm: the primary region was healthy, just briefly unreachable from the monitor. Walk through what goes wrong, then name the two guards that prevent it.</p></div>
+<details><summary>Answer</summary><p>The standby promotes and starts taking writes. Meanwhile the "dead" primary is alive, still receiving the stale-DNS tail of traffic, still accepting writes. Two primaries, two diverging histories — split brain. Every hour it persists makes reconciliation harder, and some conflicting writes (two sales of the same last item) have no clean merge. Guard one: detection quorum — declare a region dead only when multiple independent vantage points agree, for a sustained window, on user-visible symptoms; a single monitor's opinion never pulls the trigger. Guard two: fencing — promotion bumps a configuration epoch, and every downstream system rejects writes stamped by the old leader, so even a live-but-deposed primary can't commit anything. Then reconciliation still happens for the seconds before fencing took effect — which is why GitHub's 2018 incident cost 43 seconds of partition and over 24 hours of careful cleanup.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>You run 8 cells with customers shuffle-sharded onto hands of 2 cells each. A poison customer's requests crash any server that touches them. Compare the blast radius against plain one-cell-per-customer assignment. How many distinct hands exist, and what does a cellmate of the poison customer experience?</p></div>
+<details><summary>Answer</summary><p>Plain cells: the poison customer takes down their cell; every cellmate — about 1/8 of all customers — is 100% down. Shuffle sharding: the poison customer crashes both cells in their hand, so 2 of 8 cells are down (a real cost — shuffle sharding trades slightly wider partial damage for far less total damage). There are 8-choose-2 = 28 distinct hands. A customer sharing one cell with the poison hand still has their other cell healthy: their retries land there, so they run degraded, not down. Only a customer dealt the <em>exact same</em> two cells is fully out — 1 in 28 odds per customer, and at Route 53's scale (2,048 choose 4 ≈ 730 billion hands, max 2 shared) the chance of full overlap rounds to zero. The pattern's whole value is in that shift: from "some customers are completely down" to "almost everyone is merely a retry away from fine."</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>There are exactly three reasons to go multi-region — latency physics (~150–200 ms cross-continent round trips), region-level failure, and data-residency law — and each pushes the design differently.</li>
+<li>RPO is the data you lose, RTO is the time you're down; async replication makes RPO nonzero, so a senior answer names which writes sit in the loss window and accepts or fixes that per data class.</li>
+<li>Active-passive is the simple default: one region works, one rehearses; you buy down RTO with standby readiness, from backups to hot standby.</li>
+<li>Active-active means multi-writer conflicts: LWW silently destroys data on skewed clocks, CRDTs merge only mergeable data, app-level merge costs engineering — and read-local-write-home sidesteps all of it by giving each user a single writing region.</li>
+<li>Region death is a script — detect from outside, decide on quorum, shift traffic, promote, fence the old primary, reconcile the lost window — and fencing is what stands between you and split brain.</li>
+<li>Untested failover is fiction: capacity gaps, missing permissions, and hardcoded regions only surface in GameDay drills, which is why Netflix evacuates regions on purpose.</li>
+<li>Cells are bulkheads — self-contained mini-stacks that cap blast radius at one cell — and shuffle sharding deals each customer a random hand of cells so even a poison customer sinks almost nobody else.</li>
+<li>The L5 bar: commit to a topology for this system with RPO/RTO numbers and answer the region-death question unprompted; cell sizing, routing planes, and cost math are staff garnish.</li>
+</ul>
+</div>

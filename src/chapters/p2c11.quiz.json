@@ -1,0 +1,355 @@
+{
+  "chapter": "p2c11",
+  "items": [
+    {
+      "id": "p2c11-q01", "level": 1, "type": "mcq", "tag": "phases",
+      "q": "In the expand → migrate → verify → contract pattern, what does the EXPAND phase ship?",
+      "options": [
+        {"t": "The new store plus dual writes, while reads stay on the old store", "correct": true,
+         "why": "Right. Expand adds the new destination alongside the old and starts writing both. Nothing user-visible changes — reads still come from the old store, which stays the source of truth."},
+        {"t": "The backfill job that copies all historical rows into the new store in resumable batches", "correct": false,
+         "why": "That's MIGRATE. Backfill only makes sense after dual writes are on — otherwise rows changed during the copy would be missed."},
+        {"t": "The feature flag that flips reads to the new store", "correct": false,
+         "why": "That's CONTRACT, the last phase. Flipping reads before the new store is populated and verified would serve users empty or wrong data."},
+        {"t": "A maintenance window announcement", "correct": false,
+         "why": "The whole pattern exists to avoid the window. Global traffic and SLO error budgets killed the 'down for maintenance Sunday' approach."}
+      ]
+    },
+    {
+      "id": "p2c11-q02", "level": 1, "type": "mcq", "tag": "windows",
+      "q": "Your SLO is 99.95% monthly. Roughly how much downtime does that allow, and what does it say about a 4-hour maintenance window?",
+      "options": [
+        {"t": "About 22 minutes — the window spends roughly a year of error budget", "correct": true,
+         "why": "Correct. 0.05% of a month is ~22 minutes. A 240-minute planned outage is about 11 months of budget on one change — which is why SLO-run shops migrate live instead."},
+        {"t": "About 4 hours — the window exactly fits", "correct": false,
+         "why": "That would be roughly a 99.4% SLO. At 99.95% you get minutes per month, not hours — the arithmetic is the argument against windows."},
+        {"t": "About 22 minutes, but planned downtime doesn't count against SLOs", "correct": false,
+         "why": "Comforting and wrong as a default. Users experience planned downtime identically to an outage, and most SLO definitions count it. Exemptions exist but must be negotiated, not assumed."},
+        {"t": "SLOs only apply to unplanned incidents", "correct": false,
+         "why": "An SLO is a promise about user experience, not about your intentions. A user who can't check out doesn't care whether the outage was scheduled."}
+      ]
+    },
+    {
+      "id": "p2c11-q03", "level": 1, "type": "mcq", "tag": "dual-write",
+      "q": "During the migration, which store is the source of truth, and until when?",
+      "options": [
+        {"t": "The new store, as soon as dual writes begin", "correct": false,
+         "why": "Backwards — at that point the new store is an unverified shadow with no history. Treating it as truth means serving users from an incomplete copy."},
+        {"t": "The old store, until the cutover in the contract phase", "correct": true,
+         "why": "Yes. All reads come from the old store through expand, migrate, and verify. The new store is a shadow being warmed up — it can be wrong for a while and no user ever sees it."},
+        {"t": "Both equally — that's what dual write means", "correct": false,
+         "why": "Dual WRITE, single TRUTH. Two equal sources of truth is precisely the failure state this chapter warns about; one store must be authoritative at every instant."},
+        {"t": "Whichever store acknowledged the most recent write first, since it holds the freshest data", "correct": false,
+         "why": "That would make truth nondeterministic per request. The authority is a design decision made once and stated out loud, not a race."}
+      ]
+    },
+    {
+      "id": "p2c11-q04", "level": 1, "type": "multi", "tag": "backfill",
+      "q": "Select every property a production backfill job must have. (Choose all that apply.)",
+      "options": [
+        {"t": "Rate-limited, throttling on signals like replica lag", "correct": true,
+         "why": "Yes — a backfill that outruns replication takes the read path down as collateral damage. gh-ost made lag-based throttling a headline feature for exactly this reason."},
+        {"t": "Resumable from a durable checkpoint", "correct": true,
+         "why": "Yes — a multi-day job WILL die mid-run (deploy, OOM, reclaimed instance). 'Done through key X' recorded after each batch turns a disaster into a shrug."},
+        {"t": "Idempotent, with writes conditional on version so newer data survives", "correct": true,
+         "why": "Yes — batches get retried and race live dual writes. A blind upsert can overwrite tonight's data with last year's; comparing a version or updated_at prevents it."},
+        {"t": "Wrapped in a single transaction covering the whole table", "correct": false,
+         "why": "A transaction spanning billions of rows would hold locks for days and could never commit. Small independent batches are the entire point — the job is safe because each piece is tiny and repeatable."}
+      ]
+    },
+    {
+      "id": "p2c11-q05", "level": 1, "type": "mcq", "tag": "shadow-reads",
+      "q": "What is a shadow read?",
+      "options": [
+        {"t": "A read served from a replica instead of the primary", "correct": false,
+         "why": "That's just a replica read (Chapter 1.8). Shadow reads are about comparing two stores during a migration, not about which node serves."},
+        {"t": "A cached read that may be stale", "correct": false,
+         "why": "Staleness is a caching concern. A shadow read is a verification technique — the second read exists only to be compared, never to be served."},
+        {"t": "Reading both stores, serving the old answer, and counting disagreements", "correct": true,
+         "why": "Exactly. The user always gets the old store's answer, so nothing can regress; the comparison happens in the background and feeds a mismatch metric that gates the cutover."},
+        {"t": "A read performed by the backfill job to find rows it has not yet copied into the new store", "correct": false,
+         "why": "The backfill reads by key range to copy data. Shadow reads run on real production requests, which is what makes them representative of what users would actually see."}
+      ]
+    },
+    {
+      "id": "p2c11-q06", "level": 1, "type": "mcq", "tag": "schema-change",
+      "q": "Why is a plain ALTER TABLE on a 400M-row MySQL table risky even with modern 'online DDL'?",
+      "options": [
+        {"t": "Rebuilding a table that large silently corrupts its secondary indexes, forcing a restore from backup", "correct": false,
+         "why": "No — ALTER is correct, just disruptive. The danger is availability (locks, lag), not data corruption."},
+        {"t": "It can wedge on a metadata lock, queueing every query behind it, and lags replicas for the duration", "correct": true,
+         "why": "Right. One long-running query can block the ALTER's metadata lock, and everything behind it queues — the app just stops. Meanwhile replicas apply the ALTER serially and fall far behind."},
+        {"t": "MySQL forbids ALTER on tables over 100M rows", "correct": false,
+         "why": "There's no such limit. MySQL will happily run it — the pain is operational, which is why tools like gh-ost exist rather than error messages."},
+        {"t": "ALTER only works inside a maintenance window", "correct": false,
+         "why": "Nothing enforces a window; the risk is that a naive ALTER quietly CREATES one — a self-scheduled incident. The fix is a ghost-table migration, not a banner."}
+      ]
+    },
+    {
+      "id": "p2c11-q07", "level": 1, "type": "mcq", "tag": "gh-ost",
+      "q": "What is the key design difference between gh-ost and trigger-based tools like pt-online-schema-change?",
+      "options": [
+        {"t": "gh-ost tails the binary log instead of putting triggers on the live table", "correct": true,
+         "why": "Yes. Triggers run inside your production write transactions, adding latency and lock contention you can't pause. gh-ost reads the binlog — often from a replica — so the live write path is untouched and the migration can throttle, pause, and resume."},
+        {"t": "gh-ost is faster because it skips verification", "correct": false,
+         "why": "Neither faster-by-skipping nor true — gh-ost's advantage is control (throttle, pause, deferred cut-over), not cut corners."},
+        {"t": "gh-ost rewrites rows in place, so it never needs to build and swap a full copy of the table", "correct": false,
+         "why": "Both approaches build a ghost/shadow copy with the new schema and swap at the end. The difference is how live changes reach that copy: triggers versus binlog replay."},
+        {"t": "pt-online-schema-change only works on PostgreSQL", "correct": false,
+         "why": "Both tools are MySQL-family tools. Postgres has different mechanisms (instant nullable columns, concurrent index builds) and its own tooling."}
+      ]
+    },
+    {
+      "id": "p2c11-q08", "level": 1, "type": "mcq", "tag": "flags",
+      "q": "Why is the read cutover done with a feature flag rather than a code deploy?",
+      "options": [
+        {"t": "Flags are easier to code-review than deploys", "correct": false,
+         "why": "Review effort isn't the issue. The operational property that matters is reaction time when something goes wrong mid-cutover."},
+        {"t": "A flag flips in seconds without shipping code, and supports percentage rollout", "correct": true,
+         "why": "Right. Rollback becomes a runtime toggle measured in seconds, not a deploy measured in minutes — and you can expose 1% of users first, watch, and ramp. The flag IS the rollback plan."},
+        {"t": "Deploys are forbidden during migrations", "correct": false,
+         "why": "Deploys continue normally throughout a migration — each phase ships as one. The flag specifically decouples the risky flip from the deploy machinery."},
+        {"t": "Flags avoid having to verify the new store first", "correct": false,
+         "why": "Nothing skips verification — the flag flips only after the mismatch metric has sat at ~zero for days. The flag controls exposure; the metric grants permission."}
+      ]
+    },
+    {
+      "id": "p2c11-q09", "level": 1, "type": "mcq", "tag": "contract",
+      "q": "When is it safe to actually delete the old store or column?",
+      "options": [
+        {"t": "Immediately after reads hit 100% on the new store and the first hour of dashboards stays green", "correct": false,
+         "why": "That's the moment your rollback path still matters most — day-three silent corruption is a real pattern. Deleting now welds the exit shut."},
+        {"t": "As soon as the backfill completes", "correct": false,
+         "why": "At backfill completion the new store hasn't served a single production read. Verification and gradual cutover both stand between here and deletion."},
+        {"t": "Weeks after cutover, once everything has been stable and the old store is snapshotted", "correct": true,
+         "why": "Yes. The old path outlives the flip deliberately: burn-in time catches late-discovered problems, the snapshot is the final parachute, and only then does contract finish."},
+        {"t": "Never — keep it forever as a backup", "correct": false,
+         "why": "'Forever' is the dual-write trap wearing a safety costume: two schemas to maintain, drifting copies, doubled write cost. Contract has a date; backups are snapshots, not live parallel systems."}
+      ]
+    },
+    {
+      "id": "p2c11-q10", "level": 2, "type": "mcq", "tag": "dual-write",
+      "q": "During expand, your write to the NEW store fails for one request (old-store write succeeded). What should the code do?",
+      "options": [
+        {"t": "Fail the user's request so the stores stay consistent", "correct": false,
+         "why": "This couples production availability to an unproven shadow system — the warming-up copy can now take down checkout. The old store is the truth; its success means the request succeeded."},
+        {"t": "Retry synchronously until the new store accepts it", "correct": false,
+         "why": "Blocking a live user on an unlimited retry against a non-authoritative store turns a shadow's bad day into user-facing latency. Bound the work, then hand off."},
+        {"t": "Succeed the request; log the miss for repair and let verification catch drift", "correct": true,
+         "why": "Right. Old store first and authoritative; new store best-effort with failures recorded. The mismatch metric exists precisely because dual writes leak — the design absorbs it."},
+        {"t": "Roll back the old-store write to keep the copies identical", "correct": false,
+         "why": "Undoing a committed, user-visible write to protect a shadow copy inverts the hierarchy of truth — and introduces its own failure window. The copy serves the migration, never the other way around."}
+      ]
+    },
+    {
+      "id": "p2c11-q11", "level": 2, "type": "mcq", "tag": "backfill-race",
+      "q": "Verifier finds rows where the new store holds OLDER data than the old store. Backfill and dual writes both ran. Most likely cause?",
+      "options": [
+        {"t": "The backfill's stale copies landed last, blind-upserting over fresher dual-written rows", "correct": true,
+         "why": "The classic race. Read at T0, dual-write at T1, stale write at T2 — no errors anywhere, wrong data everywhere. The fix is conditional writes: apply only if the incoming version is newer than what's stored."},
+        {"t": "The new store is dropping writes randomly", "correct": false,
+         "why": "Random drops would show as MISSING rows, not systematically older ones. Older-data-present is the signature of a stale writer winning a race."},
+        {"t": "Replica lag on the old store is feeding the verifier stale values, so the comparison itself is wrong", "correct": false,
+         "why": "Lag would make a reader see slightly old data from the OLD store's replicas — it doesn't explain the new store holding superseded values after both pipelines wrote."},
+        {"t": "The verifier is comparing in the wrong direction", "correct": false,
+         "why": "Always worth a sanity check, but 'new is older than old' on specific recently-updated rows is too precise a pattern — it points at the backfill/dual-write interleave, the most common real-world bug in this pattern."}
+      ]
+    },
+    {
+      "id": "p2c11-q12", "level": 2, "type": "mcq", "tag": "verification",
+      "q": "Shadow reads show a steady 0.01% mismatch rate for a week — about 100K disagreements/day at your volume. The team wants to cut over; 99.99% agreement 'seems fine.' Call?",
+      "options": [
+        {"t": "Cut over — no migration is perfect", "correct": false,
+         "why": "A STEADY rate is never noise; it's a systematic bug (nulls, timezones, encoding) living in a slice of your data. Cutting over ships 100K wrong answers a day and calls it done."},
+        {"t": "Hold: sample the mismatches, find the bug class, fix, re-backfill that slice", "correct": true,
+         "why": "Right. Steady-state mismatches cluster by cause — a handful of logged samples usually reveals one bug. The gate is ~zero held for days because that's the only number that means 'the copy is actually equivalent.'"},
+        {"t": "Cut over but keep shadow reads running to monitor it", "correct": false,
+         "why": "Monitoring a known bug in the serving path isn't mitigation — users now RECEIVE the wrong answers you're gracefully counting. Verification's whole point is catching this while the old store still serves."},
+        {"t": "Keep serving from the old store and extend the verification window by another month to be safe", "correct": false,
+         "why": "More watching won't change a steady rate — the bug doesn't fix itself. This hedges instead of diagnosing; the senior move is to go read the mismatch samples today."}
+      ]
+    },
+    {
+      "id": "p2c11-q13", "level": 2, "type": "mcq", "tag": "resharding",
+      "q": "Resharding user_id % 4 → user_id % 16: where can rows from old shard 2 land, and why does it matter?",
+      "options": [
+        {"t": "Any of the 16 — modulo scatters uniformly", "correct": false,
+         "why": "Uniform overall, but constrained per row: x % 4 = 2 forces x % 16 into {2, 6, 10, 14}. Missing this means planning a 16-way shuffle when a clean 4-way split is available."},
+        {"t": "Only new shard 2 — matching remainders stay together", "correct": false,
+         "why": "Only user_ids with x % 16 = 2 stay; the rest of old shard 2 spreads to 6, 10, and 14. If nothing moved, the reshard wouldn't relieve anything."},
+        {"t": "New shards {2, 6, 10, 14} — each old shard splits into exactly four children", "correct": true,
+         "why": "Yes: x % 4 = 2 constrains x % 16 to that set. No row crosses between old shards, so backfill runs as four independent streams, verification pairs cleanly, and a bad row implicates exactly one stream. Multiplying the shard count is why the split is clean."},
+        {"t": "New shards {0, 4, 8, 12} — offsets shift by the old count", "correct": false,
+         "why": "Those are old shard 0's children. The remainder mod 4 is preserved inside the remainder mod 16, so shard 2's children all keep remainder 2 when reduced mod 4."}
+      ]
+    },
+    {
+      "id": "p2c11-q14", "level": 2, "type": "mcq", "tag": "backfill-ops",
+      "q": "Mid-backfill, replica lag climbs from 2s to 45s and read-path staleness alerts fire. First move?",
+      "options": [
+        {"t": "Throttle or pause the backfill and let replication drain", "correct": true,
+         "why": "The backfill is the new variable and the only discretionary load — it must yield to production. This is why lag-based throttling is built into serious tools; ideally the job slows itself before humans get paged."},
+        {"t": "Add more replicas to absorb the write volume", "correct": false,
+         "why": "Replicas don't absorb writes — each one must apply the same stream, so new replicas start behind and lag too. Capacity is a later conversation; the immediate fix is reducing the discretionary load."},
+        {"t": "Push through — the backfill finishes sooner if it keeps its rate", "correct": false,
+         "why": "Finishing 10% sooner while serving stale reads for hours inverts priorities. The system being migrated must stay healthy THROUGH the migration; the calendar is the flexible resource."},
+        {"t": "Fail over reads to the primary until the backfill completes", "correct": false,
+         "why": "Piling the replica read load onto the primary that's already hosting the backfill risks converting lag into a full outage. Contain the cause, don't rearrange the victims."}
+      ]
+    },
+    {
+      "id": "p2c11-q15", "level": 2, "type": "mcq", "tag": "cutover-order",
+      "q": "Why flip READS to the new store before flipping WRITES?",
+      "options": [
+        {"t": "Reads are more important to users than writes", "correct": false,
+         "why": "Importance isn't the logic — reversibility is. The ordering exists because of what stays true while both stores are written."},
+        {"t": "Both stores stay current under dual writes, so the read flag is reversible in both directions", "correct": true,
+         "why": "Exactly. Reads can move 1% → 100% and back with zero data consequences because both copies keep receiving every write. Flip writes first and the old store starts rotting immediately — read rollback then serves stale data."},
+        {"t": "Write flips require a maintenance window", "correct": false,
+         "why": "No window needed — the write flip is also flag-driven, ideally with a reverse dual-write keeping the old store current as the escape hatch. The ordering is about keeping doors two-way, not about windows."},
+        {"t": "The new store cannot safely accept authoritative writes until weeks of read traffic have proven it", "correct": false,
+         "why": "It's been accepting writes since expand — that's what dual writing is. What changes at the write flip is which store is authoritative, and you only promote a store that's already serving all reads cleanly."}
+      ]
+    },
+    {
+      "id": "p2c11-q16", "level": 2, "type": "mcq", "tag": "dual-write-trap",
+      "q": "Eight months after 'finishing' a migration, a team still dual-writes both stores; reads moved long ago. During incidents, the stores disagree. What's the actual state of this system?",
+      "options": [
+        {"t": "Safely migrated, with a generous backup", "correct": false,
+         "why": "A backup is a snapshot you restore from — not a live, load-bearing, drifting second write path. This 'backup' costs double writes and answers incident questions with contradictions."},
+        {"t": "Stuck mid-migration with two sources of truth — the contract phase never ran, and drift is compounding", "correct": true,
+         "why": "Right, and naming it this way is the senior read. Dual-write is a state you pass through, not operate in: every schema change now happens twice, the repair queue went unwatched, and 'which store is right?' has two answers. Contract needed a calendar date before expand shipped."},
+        {"t": "Fine — plenty of companies dual-write permanently as a redundancy layer, and incident-time disagreement is normal replication noise", "correct": false,
+         "why": "Real redundancy (replication, Chapter 1.8) has a consistency protocol and one truth. App-level dual writes to divergent schemas have neither — permanence here is entropy with a justification."},
+        {"t": "A verification problem — better mismatch metrics would fix it", "correct": false,
+         "why": "Metrics would MEASURE the drift, not resolve it. The defect is organizational: the migration lost its finish line. The fix is completing contract, then deleting the old path."}
+      ]
+    },
+    {
+      "id": "p2c11-q17", "level": 2, "type": "mcq", "tag": "cdc",
+      "q": "For migrating a payments ledger to a new store, why prefer CDC or outbox over app-level dual writes?",
+      "options": [
+        {"t": "CDC is faster than application writes", "correct": false,
+         "why": "Throughput isn't the argument — CDC adds a relay hop, if anything. The argument is about a gap that no amount of careful app code can fully close."},
+        {"t": "It removes the need for a backfill", "correct": false,
+         "why": "CDC captures changes from when you start tailing; history still needs the chunked backfill. The phases don't collapse — only the live-change capture gets more trustworthy."},
+        {"t": "The app can crash between its two writes and record nothing; CDC reads the database's own journal, so no committed change can be missed", "correct": true,
+         "why": "Right. Two non-atomic app writes always leave a crash window where the stores silently diverge. CDC (or outbox: event committed in the same transaction) anchors capture to the commit itself — for money, that's the difference between 'unlikely to drift' and 'cannot silently drift.'"},
+        {"t": "Dual writes are deprecated in modern architectures", "correct": false,
+         "why": "App-level dual writes remain a legitimate, fast-to-ship choice for tolerant data. The senior skill is matching the mechanism to the stakes, not declaring one pattern dead."}
+      ]
+    },
+    {
+      "id": "p2c11-q18", "level": 2, "type": "mcq", "tag": "rollback",
+      "q": "Writes flipped to the new store three days ago. A subtle corruption bug surfaces. Which earlier decision determines whether you can go back without data loss?",
+      "options": [
+        {"t": "Whether the old store's hardware was kept powered on and its final pre-flip snapshot was retained", "correct": false,
+         "why": "Powered-on but three days stale is a time machine, not a rollback — returning to it discards every write since the flip. Alive isn't the same as current."},
+        {"t": "Whether a reverse dual-write kept feeding the old store after the flip", "correct": true,
+         "why": "Yes. New-store-authoritative with the old store still updated best-effort keeps the old copy current, so rollback is a flag flip, not a data reconstruction. 'How do I get back' was decided before the flip — that's the chapter's discipline in one move."},
+        {"t": "Whether the backfill job was archived for re-running", "correct": false,
+         "why": "The backfill copies old → new; it can't resurrect three days of writes that only ever landed in the new store. Reverse flow needed a reverse pipe, built in advance."},
+        {"t": "Whether the corruption was caught by shadow reads", "correct": false,
+         "why": "Detection matters but was the previous phase's job; this question is about the escape route. A perfectly detected disaster with no path back is still a disaster."}
+      ]
+    },
+    {
+      "id": "p2c11-q19", "level": 3, "type": "mcq", "tag": "interview",
+      "q": "Interviewer: 'Change the shard key on the live users table, zero downtime — go.' Which opening reads senior?",
+      "options": [
+        {"t": "\"I'd use gh-ost — it's built for online migrations on MySQL.\"", "correct": false,
+         "why": "Wrong tool, confidently: gh-ost migrates ONE table's schema on one server; resharding moves rows between machines and changes routing. Reaching for a brand name before shaping the problem is the buzzword reflex."},
+        {"t": "\"There are several viable strategies here — application-level dual writes, CDC-based replication, or a full rebuild from a snapshot with catch-up replay — each with real trade-offs around consistency, operational effort, cutover risk, and rollback story, so I'd want to walk through the options together before committing to one.\"", "correct": false,
+         "why": "Option-listing without commitment. True, complete, and driverless — the interviewer asked you to GO, and this answer waits for them to pick."},
+        {"t": "\"Four phases. Expand: new layout live, CDC dual-writes it, old stays truth. Migrate: throttled, checkpointed, idempotent backfill. Verify: shadow reads, cut only at ~zero mismatches. Contract: flag-flip reads in percentages, then writes, delete weeks later. Every phase has a named rollback — want me to zoom into any?\"", "correct": true,
+         "why": "Commits to a plan, names all four phases with their disciplines, states the verification gate and per-phase rollback unprompted, and offers depth on demand. This is the calibration list delivered as one confident opening."},
+        {"t": "\"Honestly, I'd schedule a short window at the lowest-traffic hour — resharding is too risky to do live.\"", "correct": false,
+         "why": "The premise was zero downtime, and 'too risky to do live' concedes the exact competency being tested. The live pattern IS the risk-management answer: small reversible steps instead of one giant bet."}
+      ]
+    },
+    {
+      "id": "p2c11-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "The launch depends on your migration, and the PM asks you to skip the verification phase to save two weeks: 'the backfill ran clean, counts match.' Senior response?",
+      "options": [
+        {"t": "Agree — matching counts are strong evidence, and deadlines are real", "correct": false,
+         "why": "Counts confirm cardinality, not content — a million rows with a broken timezone conversion count perfectly. Cutting over unverified converts unknown bugs into served answers, silently."},
+        {"t": "Refuse and escalate — verification is non-negotiable engineering hygiene", "correct": false,
+         "why": "Right instinct, junior delivery. A flat refusal on hygiene grounds invites an authority contest; the senior version prices the risk and redesigns the schedule so the conflict dissolves."},
+        {"t": "Compromise: skip shadow reads but spot-check a thousand random rows manually", "correct": false,
+         "why": "A thousand hand-checked rows can't see a 0.1% systematic bug (that's ~1 expected hit), and manual checks don't run on real read traffic — the thing shadow reads uniquely cover. This trades away the instrument that works for one that feels diligent."},
+        {"t": "Reframe: \"Verification runs in parallel with life, not instead of it — flip 1% behind the flag while shadow reads accumulate, and ramp on the metric. Skipping it doesn't save two weeks; it moves discovery from a dashboard to production incidents.\"", "correct": true,
+         "why": "Names the real cost of skipping (bugs found by users instead of counters), then restructures so safety and schedule stop competing — percentage rollout means verification and launch overlap. Turning a refusal into a better plan is the senior move."}
+      ]
+    },
+    {
+      "id": "p2c11-q21", "level": 3, "type": "mcq", "tag": "calibration",
+      "q": "An internal admin tool's table — 40K rows, 12 daytime users, no SLO — needs restructuring. A teammate proposes full expand/migrate/contract with CDC and shadow reads. Your call?",
+      "options": [
+        {"t": "Support it — the four phases are the professional standard for migrations", "correct": false,
+         "why": "The pattern is the standard for systems that can't stop. Applying weeks of ceremony to 40K rows and 12 tolerant users is cargo-culting — process copied without the conditions that justify it."},
+        {"t": "Transaction, deploy, announce a 5-minute pause if needed — done this afternoon", "correct": true,
+         "why": "Right. 40K rows migrates in seconds; the blast radius is a dozen colleagues who can wait. Senior judgment scales ceremony DOWN as fluently as up — knowing when the heavyweight pattern is unjustified is the same skill as knowing when it's mandatory."},
+        {"t": "Do the four phases anyway as practice for the real thing", "correct": false,
+         "why": "Practicing on company time by quintupling a task's cost isn't judgment, and rehearsal value is low when nothing pushes back — no lag to throttle against, no mismatches to chase. Practice on a staging copy of the big table instead."},
+        {"t": "Ask the team to vote on the approach", "correct": false,
+         "why": "The numbers already voted: 40K rows, no SLO, tolerant users. Delegating a decision the data has made reads as discomfort with owning small calls — which predicts discomfort with big ones."}
+      ]
+    },
+    {
+      "id": "p2c11-q22", "level": 3, "type": "mcq", "tag": "incident",
+      "q": "Read cutover at 50%. p99 is fine, but mismatch alerts fire — confined to rows updated in the last few minutes. First action, and likely cause?",
+      "options": [
+        {"t": "Flip the read flag back to old, then investigate — likely lag in the pipeline feeding the new store", "correct": true,
+         "why": "Right on both. Recently-updated-rows-only is the signature of capture lag: the CDC/dual-write pipe is behind, so new-store reads serve slightly stale data. The flag exists for this exact moment — take the free rollback first, diagnose without users in the blast zone."},
+        {"t": "Push to 100% — partial cutovers cause transient inconsistencies that settle", "correct": false,
+         "why": "Percentage cutover doesn't create mismatches; it REVEALS them on a small audience, which is its job. Ramping into an active alert converts a contained signal into a full-population incident on a hunch."},
+        {"t": "Investigate thoroughly first — flapping the flag might mask the evidence", "correct": false,
+         "why": "The mismatch logs, metrics, and pipeline offsets all persist after the flip back; the evidence doesn't evaporate. Debugging while users receive stale answers spends real harm to preserve convenience."},
+        {"t": "Restart the backfill to repair the affected rows", "correct": false,
+         "why": "The backfill's job (history) is done — these rows are being updated NOW, and the live pipe is behind. Re-running a bulk copier into an active lag condition adds load and its own race risks; fix the pipe, not the history."}
+      ]
+    },
+    {
+      "id": "p2c11-q23", "level": 3, "type": "mcq", "tag": "capacity",
+      "q": "Your hottest shard hits 90% disk with unexplained growth accelerating; the 4→16 reshard was planned for next quarter. What does the Foursquare 2010 incident teach about sequencing the next two weeks?",
+      "options": [
+        {"t": "Start the full reshard immediately — it's the root-cause fix", "correct": false,
+         "why": "A multi-week migration racing a disk that fills in days is exactly the Foursquare shape: the fix arrives mid-collapse and executes under emergency conditions, where their chunk moves couldn't even free memory due to fragmentation. Root cause, wrong tempo."},
+        {"t": "Buy headroom first — bigger volume, archive cold data, shed load — then run the reshard as the planned project it was", "correct": true,
+         "why": "Right. Cheap reversible moves reset the clock so the migration runs with rehearsals and rollbacks intact. Foursquare's lesson is precisely this: the same operation is routine as a project and catastrophic as a rescue — eleven hours down proved it."},
+        {"t": "It teaches nothing current — that was MongoDB in 2010", "correct": false,
+         "why": "The tooling aged; the dynamics didn't. Skewed growth, a resource ceiling, and a live rebalance attempted past the safety margin is a timeless failure shape — Shopify built dedicated tooling (Ghostferry) to keep this exact operation boring."},
+        {"t": "Freeze all writes to the hot shard until the reshard completes", "correct": false,
+         "why": "A write freeze on a hot shard IS an outage for those users — self-inflicted, for weeks. You'd be spending certain downtime to avoid possible downtime, which inverts the entire premise of live migration."}
+      ]
+    },
+    {
+      "id": "p2c11-q24", "level": 3, "type": "mcq", "tag": "hidden-readers",
+      "q": "Shadow reads: zero mismatches for a week. Reads and writes flipped, all green. Before dropping the old table, what should still worry you?",
+      "options": [
+        {"t": "Nothing — the metrics have covered every angle", "correct": false,
+         "why": "The metrics covered every reader that goes through the app's read path. The dangerous readers are the ones that never did."},
+        {"t": "Readers that never went through the app: cron jobs, analytics pipelines, other services querying the table directly", "correct": true,
+         "why": "The classic last-step casualty. Shadow reads instrument YOUR code path; the nightly report, the ETL job, and that other team's direct SQL never appeared in any mismatch metric. Audit grants and query logs, migrate the stragglers, snapshot — then drop."},
+        {"t": "That the verification week was too short", "correct": false,
+         "why": "More of the same verification finds more of the same nothing — it watches the instrumented path, which is clean. The gap is coverage, not duration; unwatched paths don't improve with waiting."},
+        {"t": "Disk space freed by the drop may fragment", "correct": false,
+         "why": "Reclaiming space is a routine operation and roughly the least risky part of the endgame. The irreversible risk is severing a reader nobody instrumented — you learn about it from their outage."}
+      ]
+    },
+    {
+      "id": "p2c11-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Two candidates finish the reshard question. A: crisp four-phase walkthrough, rollback named per phase, backfill duration computed, dual-write trap flagged with a contract date. B: everything A said, plus gh-ost cut-over locking internals and a proposal to build a company-wide migration platform with pluggable verifiers — but ran out of time before naming any rollback. Who scores higher for SENIOR, and why?",
+      "options": [
+        {"t": "B — more depth and platform thinking signal a higher ceiling", "correct": false,
+         "why": "B skipped the load-bearing senior material (reversibility — the 'how do I get back' at every phase) to perform staff-level garnish. Depth stacked on a missing foundation grades as miscalibration, not ceiling."},
+        {"t": "A — complete execution of the senior list beats garnish missing its foundation", "correct": true,
+         "why": "Right. The senior bar is executing ONE migration safely: phases, numbers, verification gate, rollback per step, the trap named. A delivered all of it. B's platform talk is real staff material — but only on top of A's list, never instead of it."},
+        {"t": "Equal — both clearly know the pattern deeply", "correct": false,
+         "why": "Interviews grade the judgment displayed, not knowledge inferred. An answer with no rollback story fails the rubric's center regardless of what the candidate probably knows — unsaid safety doesn't score."},
+        {"t": "B, if the platform design was technically sound", "correct": false,
+         "why": "Soundness can't repair sequencing. Proposing machinery for fifty teams while your one migration has no escape hatch is the exact backwards calibration the chapter warns about — interviewers read it as reciting ambition over practicing safety."}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,336 @@
+<p>Your ads dashboard has one number at the top: <strong>unique viewers today</strong>. Not impressions — people. The PM wants it per campaign, live, refreshed every few seconds. You have 2 billion impression events a day across 4 million campaigns, and the obvious query — <code>SELECT COUNT(DISTINCT user_id)</code> — takes minutes on yesterday's data, never mind live.</p>
+
+<p>Fine, you think. Keep a hash set of user IDs per campaign, in memory, and report its size. Do the math before you build it. A big campaign reaches 20 million distinct users. That's 160MB of raw 8-byte IDs — and a real hash set costs 3–5x raw, so call it 600MB. For <em>one</em> campaign. Your top thousand campaigns alone blow past half a terabyte of RAM, and there are 3,999,000 more behind them. Exactness has a price, and the price is proportional to the data.</p>
+
+<p>Now the strange part. There is a data structure that answers "how many distinct users?" in <strong>12 kilobytes</strong> — twelve, not a typo — with an error under 1%, no matter whether the true answer is ten thousand or ten billion. Your top thousand campaigns: 12MB total instead of 500GB. And when the counting is split across 8 shards, the 8 little structures merge into one correct answer with a single cheap operation.</p>
+
+<p>The catch is in the fine print: the answer is <em>approximately</em> right, and you must know exactly which way it can be wrong. This chapter is about that trade — 99% right for 1% of the memory — and about a second, related trick: how a thousand machines agree on who's alive without any boss keeping a list. Both give up certainty, on purpose, in a direction they can defend.</p>
+
+<h2>The trade: bounded error for constant memory</h2>
+
+<p>Every exact structure you know — hash set, hash map, sorted index — remembers the items themselves. Memory grows with the data. That's fine until the data is a billion uniques, and then "have I seen this URL?" costs tens of gigabytes to answer honestly.</p>
+
+<p>Probabilistic structures (people say <em>sketches</em>) remember a small, fixed-size <em>fingerprint</em> of the data instead. The fingerprint can't reconstruct the items, but it can answer one specific question about them — "seen before?", "how many distinct?", "how often?" — approximately. The senior discipline is that "approximately" is never hand-waved. Every sketch has a known <strong>error direction</strong>: which way it lies, how much, and never the other way. You pick a sketch the way you pick a tolerance on a machined part: because you computed the slack is acceptable <em>here</em>. Three sketches cover 95% of interviews, one question each.</p>
+
+<h2>Bloom filter: a perfect "no", a fuzzy "maybe"</h2>
+
+<p>Start with the pain. In the caching chapter you learned the miss path: not in cache → hit the database. Now imagine requests for keys that <em>don't exist at all</em> — misspelled URLs, deleted users, or an attacker spraying random IDs. Every one is a guaranteed cache miss (there's nothing to cache — the DB returns nothing), so every one lands on the database. This is called <strong>cache penetration</strong>, and it turns your cache into a decoration. What you want is a cheap gatekeeper that answers: "does this key even exist?" — for a billion keys, in RAM, in nanoseconds.</p>
+
+<p>A Bloom filter is that gatekeeper. It's a long array of bits, all starting at 0, plus <em>k</em> hash functions (typically around 7). To <strong>add</strong> an item: hash it k ways, set those k bits to 1. To <strong>query</strong>: hash it the same k ways and look. If <em>any</em> of the k bits is 0 — the item was <strong>definitely never added</strong>, because adding it would have set that bit, and bits are never cleared. If all k bits are 1 — the item was <em>maybe</em> added. Maybe, because other items' bits can overlap yours by coincidence.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 270" role="img" aria-label="Bloom filter: two items set bits, a third item queries and gets a false positive">
+  <rect class="dg-node" x="90" y="14" width="110" height="34" rx="8"/>
+  <text class="dg-txt" x="113" y="36">cat.jpg</text>
+  <rect class="dg-node" x="430" y="14" width="110" height="34" rx="8"/>
+  <text class="dg-txt" x="452" y="36">dog.jpg</text>
+  <text class="dg-txt-s" x="40" y="104">16-bit array (real ones: billions of bits)</text>
+  <line class="dg-edge" x1="145" y1="48" x2="138" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="150" y1="48" x2="335" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="155" y1="48" x2="495" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="480" y1="48" x2="222" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="485" y1="48" x2="341" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="490" y1="48" x2="615" y2="110" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="40" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="80" y="112" width="36" height="34"/>
+  <rect class="dg-node-alt" x="120" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="160" y="112" width="36" height="34"/>
+  <rect class="dg-node-alt" x="200" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="240" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="280" y="112" width="36" height="34"/>
+  <rect class="dg-node-alt" x="320" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="360" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="400" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="440" y="112" width="36" height="34"/>
+  <rect class="dg-node-alt" x="480" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="520" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="560" y="112" width="36" height="34"/>
+  <rect class="dg-node-alt" x="600" y="112" width="36" height="34"/>
+  <rect class="dg-node" x="640" y="112" width="36" height="34"/>
+  <text class="dg-txt-s" x="53" y="134">0</text>
+  <text class="dg-txt-s" x="93" y="134">0</text>
+  <text class="dg-txt-s" x="133" y="134">1</text>
+  <text class="dg-txt-s" x="173" y="134">0</text>
+  <text class="dg-txt-s" x="213" y="134">1</text>
+  <text class="dg-txt-s" x="253" y="134">0</text>
+  <text class="dg-txt-s" x="293" y="134">0</text>
+  <text class="dg-txt-s" x="333" y="134">1</text>
+  <text class="dg-txt-s" x="373" y="134">0</text>
+  <text class="dg-txt-s" x="413" y="134">0</text>
+  <text class="dg-txt-s" x="453" y="134">0</text>
+  <text class="dg-txt-s" x="493" y="134">1</text>
+  <text class="dg-txt-s" x="533" y="134">0</text>
+  <text class="dg-txt-s" x="573" y="134">0</text>
+  <text class="dg-txt-s" x="613" y="134">1</text>
+  <text class="dg-txt-s" x="653" y="134">0</text>
+  <line class="dg-bad" x1="145" y1="214" x2="140" y2="150" marker-end="url(#arrow)"/>
+  <line class="dg-bad" x1="152" y1="214" x2="216" y2="150" marker-end="url(#arrow)"/>
+  <line class="dg-bad" x1="160" y1="214" x2="612" y2="150" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="90" y="216" width="110" height="34" rx="8"/>
+  <text class="dg-txt" x="108" y="238">bird.jpg?</text>
+  <text class="dg-txt" x="280" y="232">its 3 bits are all 1 → "maybe present"</text>
+  <text class="dg-txt-s" x="280" y="252">but bird.jpg was never added — a false positive</text>
+</svg>
+<figcaption>cat.jpg and dog.jpg each set 3 bits. bird.jpg happens to hash onto already-set bits, so the filter says "maybe" for an item it never saw. A 0 in any position would have been a certain "no".</figcaption>
+</figure>
+
+<p>Memorize the asymmetry, because interviews probe it directly: <strong>false positives yes, false negatives never</strong>. "Not present" is a guarantee. "Present" is a probability. And note the corollary: you can't delete from a Bloom filter — clearing a bit might erase someone else's evidence. (A "counting Bloom filter" swaps bits for small counters to allow deletes, at several times the memory. Name it and move on.)</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A Bloom filter is a club doorman with a strange memory: he <em>never forgets</em> a face he has actually seen, but sometimes a stranger "looks familiar." If he says "never seen you" — certainty, walk away. If he says "you look familiar" — probably a regular, occasionally a lookalike, so the club still checks the guest book (the database) to be sure. The analogy breaks in one spot: real familiarity fades with time. A Bloom filter's never does — it only accumulates, which is exactly why an over-full filter becomes the problem (more on that in the exercises).</p>
+</div>
+
+<h3>Sizing one in your head</h3>
+
+<p>The number to carry into the room: about <strong>10 bits per item for a 1% false-positive rate</strong> (the exact figure is 9.6 bits with 7 hash functions; nobody wants the derivation). Halve the error every time you add ~5 more bits per item: 0.1% costs ~14.4 bits.</p>
+
+<p>So: a billion URLs in a crawler's seen-set. Exact, as a hash set of even just 8-byte hashes: 8GB raw, 25–30GB as a real in-memory set. As a Bloom filter at 1% FP: 10 billion bits ≈ <strong>1.2GB</strong>. That's the whole pitch: 20x less memory, and the 1% of errors all point in one direction you chose because you can afford it.</p>
+
+<h3>Where it earns rent in real systems</h3>
+
+<ul>
+<li><strong>Cache-penetration guard.</strong> A Bloom filter over all existing keys sits in front of the database. "Definitely not present" → return 404 immediately, no DB touch. A false positive costs one wasted DB lookup — harmless. A false <em>negative</em> would 404 a real user — and can't happen. Notice the design move: the structure's error direction lines up with the error your system can tolerate. That sentence is the senior signal.</li>
+<li><strong>LSM storage engines (Cassandra, RocksDB, HBase).</strong> These databases write into many immutable sorted files on disk (SSTables). A key could be in any of dozens of files, and each check is a disk read — so every SSTable carries a Bloom filter of its keys in RAM. "Definitely not in this file" skips the read; a false positive means one pointless disk read — a latency tax, never a wrong answer.</li>
+<li><strong>Crawler seen-set front line.</strong> Before a URL enters the crawl queue, ask the filter. "Definitely new" → crawl. "Maybe seen" → skip, or confirm against the exact store on disk if misses matter. No false negatives means you <em>never</em> crawl the same URL twice by mistake; false positives mean skipping a small, tunable fraction of genuinely new pages.</li>
+</ul>
+
+<div class="box story"><div class="box-tag">War story — Akamai and the one-hit wonders</div>
+<p>Akamai's CDN servers cache web objects on disk. Their researchers measured something embarrassing: roughly <strong>three-quarters of all requested URLs were fetched exactly once and never again</strong> — "one-hit wonders." Every one was written to disk cache, never read, then evicted to make room for the next never-read object. The fix, published in Maggs and Sitaraman's paper on Akamai's algorithms, was a Bloom filter as a bouncer for the cache itself: record every requested URL in the filter, but only write an object to disk on its <em>second</em> request — when the filter says "seen before." One-hit wonders never touch the disk. Disk writes fell by nearly half, and the hit rate went <em>up</em>, because space wasted on single-use objects now held things people actually re-requested. A false positive just means some object gets cached on its first hit — zero harm. Billions of URLs, a few gigabytes of RAM, no correctness risk: a sketch in exactly the right seat.</p>
+</div>
+
+<h2>HyperLogLog: counting a crowd in 12KB</h2>
+
+<p>Back to the dashboard from the cold open. A Bloom filter can't help — it answers "seen before?", not "how many distinct?". Counting uniques exactly means remembering every ID you've seen, and we already priced that: hundreds of gigabytes.</p>
+
+<p>HyperLogLog (HLL) counts distinct items in a fixed ~12KB with a typical error under 1%. The intuition is a bar bet. Hash every user ID — a good hash makes the output look like random coin flips. Now watch for rare patterns: a hash starting with one zero bit happens half the time; starting with twenty zero bits happens once in a million. So if the <em>rarest</em> pattern you've ever observed is 20 leading zeros, you've probably seen around a million distinct values. Duplicates change nothing — the same ID gives the same hash — which is precisely why HLL counts <em>distinct</em> for free.</p>
+
+<p>One maximum is a fragile estimate (one freak hash wrecks it), so HLL runs thousands of these experiments at once: the first 14 bits of the hash pick one of 16,384 buckets, each bucket remembers the longest zero-run it has seen, and a clever average across buckets gives the estimate. 16,384 buckets × a few bits each ≈ 12KB, standard error 0.81%. That's the whole thing — in an interview you say "longest-run-of-zeros trick, thousands of buckets, averaged," and stop.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>You walk into a room and ask: "everyone who flipped coins today — what's the longest heads streak anyone got?" If the best streak in the room is 5, it's a small room. If someone got 22 heads in a row, thousands of people must have been flipping — a streak that rare doesn't show up in small crowds. You estimated the crowd without counting anyone. Where the analogy breaks: one lucky liar ruins a single-streak estimate, so HLL runs 16,384 separate rooms and blends them — the blend is what buys the 1% error.</p>
+</div>
+
+<p>In practice you rarely build one: Redis ships HLL as a native type. <code>PFADD campaign:123 user_9871</code> on every impression, <code>PFCOUNT campaign:123</code> for the dashboard, and — the part that matters for distributed systems — <code>PFMERGE</code> to combine counters. BigQuery, Snowflake, Spark, and Druid all expose an equivalent under names like <code>APPROX_COUNT_DISTINCT</code>.</p>
+
+<div class="box story"><div class="box-tag">War story — Redis ships HLL, Reddit counts views with it</div>
+<p>In April 2014, Salvatore Sanfilippo (antirez) added HyperLogLog to Redis 2.8.9 as a first-class data type. His design notes are a small masterclass in the trade: a dense HLL is exactly 12KB and counts to billions with 0.81% standard error, while small counters use a sparse encoding of a few dozen bytes, so a million mostly-small counters stay cheap. He named the commands <code>PFADD</code>, <code>PFCOUNT</code>, <code>PFMERGE</code> — the "PF" honors Philippe Flajolet, the French researcher who invented the algorithm and had died three years earlier. Reddit's engineering team later described rebuilding post view counts on exactly this: storing every viewer ID per post was off the table at their scale, so view events stream through Kafka into per-post HLLs in Redis, and the "N views" number on every Reddit post became a sub-1%-error estimate. Nobody can tell 1,024,590 views from 1,031,000 on a screen — but the memory bill can tell a set from a sketch.</p>
+</div>
+
+<h2>Count-min sketch: "how many times?" — never under, sometimes over</h2>
+
+<p>Third question: not "seen?", not "how many distinct?", but <strong>"how often did X occur?"</strong> — hashtag frequencies, hot keys, top requested URLs. An exact hash map of counters grows with the number of distinct keys: fine for thousands, painful for hundreds of millions of live keys per hour.</p>
+
+<p>A count-min sketch (CMS) is a small grid: <em>d</em> rows (say 4), each with its own hash function, and <em>w</em> counters per row (say 100,000). To record an event for key X: each row hashes X to one of its cells and increments it. To read X's count: look up its cell in each row and take the <strong>minimum</strong>. Why min? Because collisions can only <em>inflate</em> a cell — other keys land on it and add — never deflate it. Every row overestimates or is exact; the min is your least-contaminated view. So a CMS <strong>overestimates only, never underestimates</strong>. A 4×100K grid of 4-byte counters is 1.6MB — for any number of distinct keys, forever.</p>
+
+<p>One limitation matters: a CMS can't tell you <em>which</em> keys are big — you bring a key, it returns a count. To get "top K hashtags" you pair it with a small min-heap: for every incoming key, ask the CMS for its estimate; if it beats the smallest of your current top K, swap it in. Sketch answers "how big?", heap remembers "who". That pair is the standard heavy-hitters design, and it's the spine of the Top-K chapter (p3c12) — here you just need to recognize it.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 310" role="img" aria-label="Count-min sketch grid with one cell incremented per row, min read, feeding a top-K heap">
+  <rect class="dg-node" x="40" y="16" width="170" height="34" rx="8"/>
+  <text class="dg-txt-s" x="56" y="38">increment: #nifty50</text>
+  <line class="dg-edge" x1="180" y1="50" x2="198" y2="80" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="195" y1="42" x2="356" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="120" y1="50" x2="82" y2="144" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="190" y1="50" x2="276" y2="176" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="24" y="105">h1</text>
+  <text class="dg-txt-s" x="24" y="137">h2</text>
+  <text class="dg-txt-s" x="24" y="169">h3</text>
+  <text class="dg-txt-s" x="24" y="201">h4</text>
+  <rect class="dg-node" x="60" y="84" width="40" height="32"/><rect class="dg-node" x="100" y="84" width="40" height="32"/><rect class="dg-node" x="140" y="84" width="40" height="32"/><rect class="dg-node-alt" x="180" y="84" width="40" height="32"/><rect class="dg-node" x="220" y="84" width="40" height="32"/><rect class="dg-node" x="260" y="84" width="40" height="32"/><rect class="dg-node" x="300" y="84" width="40" height="32"/><rect class="dg-node" x="340" y="84" width="40" height="32"/><rect class="dg-node" x="380" y="84" width="40" height="32"/><rect class="dg-node" x="420" y="84" width="40" height="32"/>
+  <rect class="dg-node" x="60" y="116" width="40" height="32"/><rect class="dg-node" x="100" y="116" width="40" height="32"/><rect class="dg-node" x="140" y="116" width="40" height="32"/><rect class="dg-node" x="180" y="116" width="40" height="32"/><rect class="dg-node" x="220" y="116" width="40" height="32"/><rect class="dg-node" x="260" y="116" width="40" height="32"/><rect class="dg-node" x="300" y="116" width="40" height="32"/><rect class="dg-node-alt" x="340" y="116" width="40" height="32"/><rect class="dg-node" x="380" y="116" width="40" height="32"/><rect class="dg-node" x="420" y="116" width="40" height="32"/>
+  <rect class="dg-node-alt" x="60" y="148" width="40" height="32"/><rect class="dg-node" x="100" y="148" width="40" height="32"/><rect class="dg-node" x="140" y="148" width="40" height="32"/><rect class="dg-node" x="180" y="148" width="40" height="32"/><rect class="dg-node" x="220" y="148" width="40" height="32"/><rect class="dg-node" x="260" y="148" width="40" height="32"/><rect class="dg-node" x="300" y="148" width="40" height="32"/><rect class="dg-node" x="340" y="148" width="40" height="32"/><rect class="dg-node" x="380" y="148" width="40" height="32"/><rect class="dg-node" x="420" y="148" width="40" height="32"/>
+  <rect class="dg-node" x="60" y="180" width="40" height="32"/><rect class="dg-node" x="100" y="180" width="40" height="32"/><rect class="dg-node" x="140" y="180" width="40" height="32"/><rect class="dg-node" x="180" y="180" width="40" height="32"/><rect class="dg-node" x="220" y="180" width="40" height="32"/><rect class="dg-node-alt" x="260" y="180" width="40" height="32"/><rect class="dg-node" x="300" y="180" width="40" height="32"/><rect class="dg-node" x="340" y="180" width="40" height="32"/><rect class="dg-node" x="380" y="180" width="40" height="32"/><rect class="dg-node" x="420" y="180" width="40" height="32"/>
+  <text class="dg-txt-s" x="192" y="105">12</text>
+  <text class="dg-txt-s" x="355" y="137">9</text>
+  <text class="dg-txt-s" x="74" y="169">31</text>
+  <text class="dg-txt-s" x="274" y="201">9</text>
+  <text class="dg-txt" x="60" y="248">read = min(12, 9, 31, 9) = 9</text>
+  <text class="dg-txt-s" x="60" y="270">collisions only ever add → estimate is never below the truth</text>
+  <line class="dg-edge" x1="462" y1="160" x2="518" y2="160" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="60" y="292">a key enters the heap only when its estimated count beats the heap's current minimum</text>
+  <rect class="dg-node-alt" x="522" y="100" width="180" height="120" rx="8"/>
+  <text class="dg-txt" x="548" y="126">top-K min-heap</text>
+  <text class="dg-txt-s" x="548" y="150">#nifty50 · 9</text>
+  <text class="dg-txt-s" x="548" y="170">#cricket · 8</text>
+  <text class="dg-txt-s" x="548" y="190">#monsoon · 7</text>
+</svg>
+<figcaption>Each row hashes the key independently and increments one cell; a read takes the minimum across rows. The sketch sizes the counts; the heap remembers which keys are currently on top.</figcaption>
+</figure>
+
+<h2>The senior rule: name the structure, its error direction, and when a hash map wins</h2>
+
+<p>Here's how this topic actually gets graded. Anyone can say "use a Bloom filter." The L5 answer is three clauses in one breath: <em>the structure, the direction it lies, and why that lie is affordable in this seat.</em> "Bloom filter over existing keys — false positives cost one wasted DB read, false negatives can't happen, so no user ever gets a wrong 404. About 1.2GB for a billion keys at 1%."</p>
+
+<p>And the rule cuts both ways. If the data <em>fits exactly, use the exact structure</em>. Ten thousand product SKUs needing counts? A hash map — under a megabyte, zero error, done. Reaching for a count-min sketch there is a flagged red flag: it says you memorized a tool, not a trade-off. The decision procedure is just arithmetic: size the exact answer first, out loud. If it fits in RAM on one box with headroom, exact wins. Sketches enter when the exact number stops fitting — and never for anything where wrong-by-1% means wrong-money (billing, ledgers, inventory: exact, always, as chapter p2c02 hammered home).</p>
+
+<table>
+<thead><tr><th>Structure</th><th>Question it answers</th><th>Memory</th><th>Error direction</th><th>Merge across shards</th></tr></thead>
+<tbody>
+<tr><td>Bloom filter</td><td>Have I seen X?</td><td>~1.2GB per 1B items @ 1% FP</td><td>"Maybe yes" can be wrong; "no" never is</td><td>Bitwise OR</td></tr>
+<tr><td>HyperLogLog</td><td>How many distinct?</td><td>~12KB, any cardinality</td><td>±~1%, either side</td><td>Per-bucket max</td></tr>
+<tr><td>Count-min sketch</td><td>How often did X occur?</td><td>A few MB, any key count</td><td>Overestimates only</td><td>Cell-wise add</td></tr>
+<tr><td>Plain hash map/set</td><td>Anything, exactly</td><td>Grows with data</td><td>None</td><td>Ship all the data</td></tr>
+</tbody>
+</table>
+
+<h3>Mergeability: why sketches love sharded systems</h3>
+
+<p>Look at that last column — it's the quiet superpower. Your impressions are sharded across 8 Kafka partitions and 8 consumers (chapter p1c09 made sure of that). Each consumer counts distinct users locally. Now produce one global number. Sum the 8 counts? Wrong — the same user appears on multiple shards, and you double-count. Exact fix? Every shard ships its full ID set to one machine: you're back to hundreds of gigabytes moving over the network.</p>
+
+<p>Sketches merge <em>losslessly</em>. Two HLLs with the same bucket layout: take the per-bucket max, and the result is <em>exactly</em> the HLL one machine would have built seeing every event — merging costs 12KB of network, and the error doesn't compound. Blooms merge by OR-ing bits; CMS grids by adding cells. Merge is commutative and associative, so region rollups and hour-into-day rollups just work. One subtlety worth volunteering: replayed events (streams get replayed; chapter p2c09) are harmless to a Bloom or an HLL — same item, same bits, same buckets — but <em>inflate</em> a CMS, which counts occurrences. "HLL is replay-safe, CMS isn't" is a sentence that visibly separates levels.</p>
+
+<h2>Gossip: how a cluster knows who's alive without a boss</h2>
+
+<p>Switch problems. Same trade, different question. You run a 1,000-node Cassandra-style cluster. Every node needs to know which peers are up, which are down, and who owns which token ranges (the slices of the keyspace each node serves) — otherwise it can't route requests. Who keeps that list?</p>
+
+<p>A central health-checker is the obvious answer and the wrong one at this scale: it's a single point of failure (checker dies → the cluster is blind), and "who health-checks the health-checker" never ends. All-to-all heartbeats — everyone pings everyone every second — is 1,000 × 999 ≈ a million messages per second of pure overhead, growing with N². A consensus store like ZooKeeper works for tens of nodes, but a thousand watchers hammering one quorum on every membership change becomes its own outage.</p>
+
+<p>Gossip protocols do what rumors do. Every second, each node picks 1–3 <em>random</em> peers and exchanges what it knows — a compact membership list: node, status, and a version number per entry. Newer versions overwrite older. That's the whole protocol, and the math is the magic: information spreads like an epidemic, roughly doubling its audience every round, so it reaches all N nodes in about <strong>log₂(N) rounds</strong>. A thousand nodes: ~10 rounds, seconds. A million nodes: ~20 rounds. And each node's cost is constant — a few small messages per second — no matter how big the cluster gets.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Gossip spreading over four rounds, informed nodes doubling from one to eight">
+  <text class="dg-txt" x="60" y="22">round 0</text>
+  <rect class="dg-zone" x="20" y="30" width="148" height="140" rx="8" fill="none"/>
+  <circle class="dg-node-alt" cx="48" cy="70" r="11"/><circle class="dg-node" cx="80" cy="70" r="11"/><circle class="dg-node" cx="112" cy="70" r="11"/><circle class="dg-node" cx="144" cy="70" r="11"/>
+  <circle class="dg-node" cx="48" cy="120" r="11"/><circle class="dg-node" cx="80" cy="120" r="11"/><circle class="dg-node" cx="112" cy="120" r="11"/><circle class="dg-node" cx="144" cy="120" r="11"/>
+  <text class="dg-txt-s" x="52" y="192">informed: 1</text>
+  <text class="dg-txt" x="238" y="22">round 1</text>
+  <rect class="dg-zone" x="198" y="30" width="148" height="140" rx="8" fill="none"/>
+  <circle class="dg-node-alt" cx="226" cy="70" r="11"/><circle class="dg-node-alt" cx="258" cy="70" r="11"/><circle class="dg-node" cx="290" cy="70" r="11"/><circle class="dg-node" cx="322" cy="70" r="11"/>
+  <circle class="dg-node" cx="226" cy="120" r="11"/><circle class="dg-node" cx="258" cy="120" r="11"/><circle class="dg-node" cx="290" cy="120" r="11"/><circle class="dg-node" cx="322" cy="120" r="11"/>
+  <text class="dg-txt-s" x="230" y="192">informed: 2</text>
+  <text class="dg-txt" x="416" y="22">round 2</text>
+  <rect class="dg-zone" x="376" y="30" width="148" height="140" rx="8" fill="none"/>
+  <circle class="dg-node-alt" cx="404" cy="70" r="11"/><circle class="dg-node-alt" cx="436" cy="70" r="11"/><circle class="dg-node-alt" cx="468" cy="70" r="11"/><circle class="dg-node" cx="500" cy="70" r="11"/>
+  <circle class="dg-node-alt" cx="404" cy="120" r="11"/><circle class="dg-node" cx="436" cy="120" r="11"/><circle class="dg-node" cx="468" cy="120" r="11"/><circle class="dg-node" cx="500" cy="120" r="11"/>
+  <text class="dg-txt-s" x="408" y="192">informed: 4</text>
+  <text class="dg-txt" x="594" y="22">round 3</text>
+  <rect class="dg-zone" x="554" y="30" width="148" height="140" rx="8" fill="none"/>
+  <circle class="dg-node-alt" cx="582" cy="70" r="11"/><circle class="dg-node-alt" cx="614" cy="70" r="11"/><circle class="dg-node-alt" cx="646" cy="70" r="11"/><circle class="dg-node-alt" cx="678" cy="70" r="11"/>
+  <circle class="dg-node-alt" cx="582" cy="120" r="11"/><circle class="dg-node-alt" cx="614" cy="120" r="11"/><circle class="dg-node-alt" cx="646" cy="120" r="11"/><circle class="dg-node-alt" cx="678" cy="120" r="11"/>
+  <text class="dg-txt-s" x="586" y="192">informed: 8</text>
+  <text class="dg-txt-s" x="20" y="228">Informed nodes roughly double every round → about log2(N) rounds to reach all N.</text>
+</svg>
+<figcaption>Epidemic spread: 1 → 2 → 4 → 8. Ten rounds cover a thousand nodes; twenty cover a million. Per-node cost stays constant while the cluster grows.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Office gossip needs no all-hands meeting. One person hears the news at the coffee machine, mentions it to two colleagues, each mentions it to two more — by lunch, the whole floor knows, and nobody was "in charge" of announcing it. Where the analogy breaks, instructively: office rumors mutate as they spread. Gossip protocols prevent mutation by versioning every fact — each entry carries a counter, and everyone keeps only the highest version they've heard. The rumor can't distort; it can only get fresher.</p>
+</div>
+
+<p>One boundary to volunteer before the interviewer asks: gossip gives you <em>eventually consistent facts</em> — perfect for membership, load hints, schema versions, anything that tolerates a few seconds of disagreement. It does <strong>not</strong> give you agreement. Electing a leader or committing a transaction still needs real consensus (chapter p2c03). "Membership via gossip, coordination via Raft" — one sentence that shows you know which tool holds which weight.</p>
+
+<h3>Anti-entropy: Merkle trees find the drift</h3>
+
+<p>Gossip spreads small, fresh facts. But replicas also drift in <em>data</em>: a node was down for an hour, missed writes, and the hinted handoffs (chapter p1c08) that were supposed to catch it up got dropped. Now two replicas of the same partition silently disagree. Comparing them row by row means shipping the whole dataset over the network.</p>
+
+<p>A <strong>Merkle tree</strong> makes the comparison cheap. Each replica builds a tree of hashes over its key ranges: leaves hash small ranges of rows, parents hash their children, up to one root hash covering everything. The replicas exchange roots. Equal → the terabytes match, proven in one round trip. Different → recurse only into the children that differ, down to the handful of ranges that actually diverge — then stream just those rows. Logarithmically many hash comparisons instead of the data itself; this is exactly how Cassandra's repair and Dynamo's anti-entropy work. The honest cost, raised unprompted: building the tree reads and hashes the data on disk, so repair is an expensive scheduled operation, not a free background hum — ops teams run it off-peak and stagger it across nodes.</p>
+
+<h3>SWIM: never trust one opinion about who's dead</h3>
+
+<p>Membership has a second half: detecting failures. Naive version: A pings B; no answer → A declares B dead, gossips it, and the cluster starts rebalancing B's data. Count the ways that goes wrong: B was in a garbage-collection pause. The network path between A and B hiccupped. A's own machine was overloaded and never sent the ping. Each false alarm moves gigabytes of data — a false positive here isn't a wasted lookup, it's a self-inflicted outage.</p>
+
+<p>SWIM — the protocol under HashiCorp's Consul and Serf (via their memberlist library, with Lifeguard extensions) — layers three defenses:</p>
+
+<ul>
+<li><strong>Indirect probes.</strong> A pings B; timeout. Instead of judging, A asks k other members: "you try pinging B." If any reaches B, B is fine — the problem was the A↔B path.</li>
+<li><strong>Suspicion, not execution.</strong> If nobody reaches B, B is gossiped as <em>suspect</em> — probation, not dead. Only after a grace period with no rebuttal does suspicion harden into "dead."</li>
+<li><strong>Incarnation numbers.</strong> While suspect, B (and only B) can defend itself: it gossips "I'm alive" stamped with a <em>higher incarnation number</em> than the suspicion carried, and higher incarnation wins everywhere it spreads. The number answers an ordering question — when "B is suspect" and "B is fine" both circulate, which is newer? Without it, a stale suspicion could chase a live node around the cluster forever.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="SWIM failure detection: direct probe times out, indirect probes through peers, suspicion with refutation">
+  <rect class="dg-node" x="40" y="40" width="90" height="40" rx="8"/>
+  <text class="dg-txt" x="76" y="65">A</text>
+  <rect class="dg-node" x="580" y="40" width="90" height="40" rx="8"/>
+  <text class="dg-txt" x="600" y="65">B (slow)</text>
+  <line class="dg-bad" x1="130" y1="55" x2="576" y2="55" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="270" y="46">1. ping — no ack</text>
+  <rect class="dg-node" x="250" y="180" width="90" height="40" rx="8"/>
+  <text class="dg-txt" x="288" y="205">C</text>
+  <rect class="dg-node" x="420" y="180" width="90" height="40" rx="8"/>
+  <text class="dg-txt" x="458" y="205">D</text>
+  <line class="dg-edge" x1="100" y1="80" x2="270" y2="176" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="118" y1="80" x2="432" y2="176" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="36" y="120">2. ping-req(B)</text>
+  <line class="dg-edge" x1="344" y1="184" x2="588" y2="84" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="512" y1="188" x2="598" y2="84" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="600" y="150">3. C, D ping B</text>
+  <line class="dg-good" x1="612" y1="84" x2="348" y2="196" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="452" y="230">4. ack → relayed to A: "B lives"</text>
+  <text class="dg-txt-s" x="40" y="258">If nobody gets an ack: B is gossiped as SUSPECT, not dead — a probation window, not a verdict.</text>
+  <text class="dg-txt-s" x="40" y="278">B refutes by gossiping "alive" with a higher incarnation number; the higher number wins everywhere.</text>
+</svg>
+<figcaption>SWIM separates "I can't reach B" from "B is dead": borrow other nodes' network paths first, then suspect, and let the accused overrule the rumor with a fresher incarnation number.</figcaption>
+</figure>
+
+<h3>Phi-accrual: suspicion with a memory</h3>
+
+<p>One knob remains: how long is the timeout? A fixed number is wrong twice. Too tight, and every GC pause triggers a false alarm; too loose, and real failures take ages to detect. The <strong>phi-accrual failure detector</strong> (used by Cassandra and Akka) replaces the binary timeout with a dial: it records the history of heartbeat arrival gaps per peer and outputs a continuous suspicion score — "given how this node usually behaves, how improbable is this silence?" A node that always heartbeats like clockwork gets suspected after a short quiet spell; a node on a jittery link earns more patience. The detector <em>adapts per node, automatically</em>, which is exactly what a hand-tuned timeout can't do.</p>
+
+<div class="box story"><div class="box-tag">War story — Cassandra, the Dynamo ideas that walked to Facebook</div>
+<p>In 2007 Amazon published the Dynamo paper — the shopping-cart store built to survive anything, and the origin of half of Part 1's vocabulary: consistent hashing, quorums, hinted handoff, Merkle-tree anti-entropy, gossip membership. One of its authors, Avinash Lakshman, then joined Facebook, where inbox search needed a write-heavy store no single failure could stop. With Prashant Malik he built Cassandra: Dynamo's distribution layer under Bigtable's table-shaped data model, open-sourced in 2008. Look inside a Cassandra cluster today and you find this entire chapter in production: every node gossips its state once per second with up to three random peers; liveness comes from a phi-accrual detector, not fixed timeouts; replica drift is repaired by comparing Merkle trees; and every SSTable carries a Bloom filter so point reads skip files that definitely lack the key. No master node anywhere — which is why the design survived from Facebook's inbox to Netflix and Apple, who run some of the largest Cassandra fleets in the world today. One database, four ideas from this chapter, all still doing their original jobs.</p>
+</div>
+
+<h2>How deep interviews actually go here</h2>
+
+<p>Calibration matters, because this chapter's material splits cleanly into "must be fluent" and "must merely recognize" — and candidates routinely invert it, deriving HLL math while never mentioning what a false positive costs.</p>
+
+<p><strong>Working level — you volunteer this, unprompted:</strong> Choosing sketch vs exact <em>from the numbers</em>: size the exact answer first, and if it fits, say a hash map wins. The three-clause pattern: structure, error direction, cost of an error in this seat. The sizes: ~10 bits/item at 1% for Bloom, 12KB for HLL, megabytes for CMS. The merge story when the design is sharded — that's the moment sketches go from trivia to architecture. And the standard seats: penetration guard, SSTable skip check, crawler seen-set, unique counters, heavy hitters.</p>
+
+<p><strong>Recognition level — one good sentence and move on:</strong> "Membership and failure detection via SWIM-style gossip — probe, indirect probe, suspicion with incarnation numbers — like Consul's memberlist; replica repair via Merkle-tree anti-entropy like Cassandra; detection timeouts adaptive via phi-accrual." That sentence, delivered casually while designing something else, is a full senior signal. Nobody at L5 is asked to reproduce SWIM's message formats.</p>
+
+<p><strong>Staff-only garnish — skip unless asked:</strong> deriving the 9.6-bits formula, HLL's harmonic mean and small-range corrections, CMS width/depth error bounds, Lifeguard's self-awareness tweaks, phi's log-scale definition. Knowing these exists; reciting them costs you deep-dive minutes that score higher elsewhere.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This topic almost never arrives as its own question — it surfaces inside crawlers, feeds, analytics, and any sharded design. A passing senior answer names the structure, its error direction, and its size in one breath, then wires the error direction to the seat. Probes you should expect:</p>
+<ul>
+<li>"You put a Bloom filter in front of the database. A request comes back 'maybe'. Walk me through exactly what happens — and what did a false positive just cost us?"</li>
+<li>"Unique visitors per campaign, but ingestion runs on 8 shards. How do I get one global number without shipping user IDs around?"</li>
+<li>"Marketing says a hashtag's count from your top-K pipeline looks too high. Possible? Could it ever be too low?"</li>
+<li>"5,000 nodes, no master. How does node 4,999 find out node 12 died, how long does that take, and what happens if the report was wrong?"</li>
+<li>"Why not just use ZooKeeper for membership?" — they're checking you know gossip vs consensus is a scale-and-guarantees trade, not a fashion choice.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c10-f1">
+<p class="fey-prompt">Explain to a junior engineer, in four or five sentences, what a Bloom filter is, what it can and cannot promise, and one place you'd actually use it.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A Bloom filter is a big array of bits that answers "have I seen this item before?" using a fraction of the memory of a real set — about 1.2GB for a billion items instead of tens of gigabytes. Adding an item sets a few bits chosen by hash functions; checking an item looks at those same bits. If any bit is 0, the item was definitely never added — that's a hard guarantee, because bits are never cleared. If all bits are 1, the answer is only "probably yes," because other items' bits can overlap — around 1% of the time it says yes to something it never saw. So you use it where a false "yes" is cheap and a false "no" would be a bug: for example, in front of a database to instantly reject lookups for keys that don't exist, where a rare false positive just means one wasted database read.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Sizing drill: your crawler will see 10 billion URLs. Size the seen-set as (a) an exact store and (b) a Bloom filter at 0.1% false positives. Then state — in one sentence each — what a false positive and a false negative would mean for the crawler.</p></div>
+<details><summary>Answer</summary><p>(a) Even storing only an 8-byte hash per URL: 80GB raw, realistically 250GB+ as a live hash set — a disk-backed store, not RAM. (b) 0.1% FP needs ~14.4 bits per item → 144 billion bits ≈ <strong>18GB</strong> — fits in RAM on one large box. A false positive says "seen" for a brand-new URL, so you skip ~1 in 1,000 new pages (tunable; if that matters, confirm "maybe" answers against the exact disk store). A false negative would mean re-crawling duplicates forever — and it cannot happen. That error direction is why the Bloom filter is the front line and not the other way around.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Pick the structure, and justify with error direction: (a) "has this email ever registered?" checked before an expensive DB lookup; (b) daily active uniques, aggregated across 200 app servers; (c) the 10 most-requested API endpoints this hour, out of millions of distinct endpoints-with-parameters; (d) live counts for 20,000 feature flags.</p></div>
+<details><summary>Answer</summary><p>(a) Bloom filter of registered emails — a false positive costs one DB read; a false "not registered" would be a correctness bug and can't happen. (b) HLL per server, <code>PFMERGE</code>d centrally — per-bucket max gives exactly the union's sketch; summing 200 distinct-counts would double-count users who touched multiple servers. (c) Count-min sketch + min-heap — CMS bounds memory against millions of keys and only ever over-counts; the heap remembers who's on top. (d) Plain hash map — 20,000 counters is under a megabyte; any sketch here is the memorized-tool red flag. Numbers first, structure second.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks: you sized a Bloom filter for 1 billion items at 1% FP, but the crawl kept going and it has now absorbed 4 billion. What happens to its behavior, and what's the fix?</p></div>
+<details><summary>Answer</summary><p>The bit array saturates — at 4x design load most bits are 1, and the false-positive rate doesn't degrade gently, it climbs toward "says yes to everything." For a crawler that means silently skipping a huge fraction of genuinely new URLs: the system doesn't crash, it quietly stops discovering — the worst kind of failure. Fixes: rebuild bigger (blooms can't resize in place — bits don't map over), run <em>generational</em> filters (a fresh filter per time window, query recent ones, retire the oldest), or chain progressively larger filters (scalable Bloom). The senior move is naming the monitoring: track the fill ratio (fraction of set bits) and alert before saturation — this failure is invisible in every other metric.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Gossip judgment: in a 300-node cluster, one node with long GC pauses gets declared dead every few minutes, each time triggering a rebalance that moves gigabytes. Name the three mechanisms from this chapter that stop the flapping, and what each contributes.</p></div>
+<details><summary>Answer</summary><p>(1) <strong>Indirect probes</strong> (SWIM): other nodes try their own network paths to the pausing node, filtering out cases where the prober, not the target, had the problem. (2) <strong>Suspicion with incarnation numbers</strong>: a missed probe makes the node <em>suspect</em>, not dead; when the pause ends, the node gossips "alive" with a higher incarnation number, overriding the suspicion cluster-wide before any rebalance starts. (3) <strong>Phi-accrual detection</strong>: the detector learns this node's heartbeat history — pause pattern included — and raises its patience for this peer specifically. Together: false alarms become suspicion windows that quietly expire, and the gigabyte-moving machinery engages only for real deaths. (Also worth saying: fix the GC pause.)</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Exact answers cost memory proportional to the data; sketches answer one specific question in near-constant memory with a known, bounded error — the trade is 99% right for 1% of the RAM.</li>
+<li>Bloom filter: bit array + k hashes; "no" is a guarantee, "yes" is a probability — false positives possible, false negatives never — at roughly 10 bits per item for 1% FP (1B items ≈ 1.2GB vs 25GB+ exact).</li>
+<li>Bloom filters guard cache penetration, skip SSTable disk reads in Cassandra/RocksDB, and front crawler seen-sets — in every seat, the cheap error direction is aimed at the harmless outcome.</li>
+<li>HyperLogLog counts distinct items in ~12KB with under 1% error (Redis PFADD/PFCOUNT); count-min sketch estimates frequencies in megabytes and only ever overestimates — pair it with a min-heap for top-K.</li>
+<li>Sketches merge losslessly across shards (Bloom: OR, HLL: per-bucket max, CMS: cell add), which is why they own distributed counting; summing per-shard distinct counts double-counts.</li>
+<li>The senior rule cuts both ways: name the structure AND its error direction AND its size — and when the exact answer fits in RAM, say the hash map wins; a sketch where exact fits is a red flag, and money always gets exact.</li>
+<li>Gossip spreads versioned facts epidemically — O(log N) rounds, constant per-node cost, no boss — for membership and health; it is not consensus, and leader election still needs Raft-style machinery.</li>
+<li>Failure detection is layered against false alarms: SWIM's indirect probes and suspicion-with-incarnation-numbers (Consul/Serf), phi-accrual's adaptive per-node thresholds (Cassandra), and Merkle-tree anti-entropy to repair the data drift that downtime leaves behind.</li>
+</ul>
+</div>

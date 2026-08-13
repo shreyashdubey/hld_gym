@@ -1,0 +1,355 @@
+{
+  "chapter": "p2c03",
+  "items": [
+    {
+      "id": "p2c03-q01", "level": 1, "type": "mcq", "tag": "failure-detection",
+      "q": "Why can't a watchdog reliably decide that a primary is dead by pinging it?",
+      "options": [
+        {"t": "Pings add too much network load", "correct": false,
+         "why": "Pings are tiny — a few bytes every couple of seconds. Load isn't the issue; the meaning of silence is."},
+        {"t": "Silence can't distinguish a dead node from a slow node, a dropped packet, or a paused process", "correct": true,
+         "why": "Right. All four look identical from outside: no reply. No finite timeout separates them, so any promotion based on a timeout is a guess — and a wrong guess creates two primaries."},
+        {"t": "Firewalls usually block ICMP ping", "correct": false,
+         "why": "Health checks use whatever protocol you like — HTTP, TCP, gRPC. The problem isn't the ping mechanism; it's that non-response is ambiguous no matter how you ask."},
+        {"t": "The watchdog script needs elevated privileges on the replica host before it is allowed to run the promotion", "correct": false,
+         "why": "Permissions are an implementation detail you can grant. The fundamental issue is that the watchdog is a single observer making an unanswerable judgment call from silence."}
+      ]
+    },
+    {
+      "id": "p2c03-q02", "level": 1, "type": "mcq", "tag": "quorum",
+      "q": "A consensus cluster has 2f+1 nodes. How many node failures can it tolerate while still making decisions?",
+      "options": [
+        {"t": "f", "correct": true,
+         "why": "Yes. With f nodes down, f+1 remain — still a majority of 2f+1, so quorum can form. 3 nodes tolerate 1 failure, 5 tolerate 2, 7 tolerate 3."},
+        {"t": "f+1", "correct": false,
+         "why": "Lose f+1 and only f remain — a minority. No quorum, no decisions. The cluster stops accepting writes (safely) until nodes return."},
+        {"t": "2f", "correct": false,
+         "why": "That would leave a single survivor making decisions alone — exactly the split-brain-prone guessing that quorums exist to prevent."},
+        {"t": "Half the cluster", "correct": false,
+         "why": "Losing exactly half of an even cluster leaves no majority. That's precisely why quorum math is built around strict majorities of odd-sized groups."}
+      ]
+    },
+    {
+      "id": "p2c03-q03", "level": 1, "type": "mcq", "tag": "quorum",
+      "q": "Why do two majorities of the same 5-node cluster always share at least one node?",
+      "options": [
+        {"t": "Because the leader is a member of every quorum", "correct": false,
+         "why": "Quorums are any 3 of 5 — the leader need not be in a given majority. The overlap comes from counting, not from any special node."},
+        {"t": "3 + 3 = 6 members, but only 5 nodes exist — so at least one node is counted twice", "correct": true,
+         "why": "Exactly — it's pigeonhole arithmetic. That guaranteed shared node is why two leaders can't be elected in the same term and why committed entries can't be forgotten by the next quorum."},
+        {"t": "The cluster synchronizes every node's clock first, so all nodes observe membership changes in the same order", "correct": false,
+         "why": "Quorum overlap needs no clocks at all — that's its beauty. It holds by pure counting even with wildly skewed clocks."},
+        {"t": "They don't always overlap; consensus handles the disjoint case", "correct": false,
+         "why": "They provably always overlap — that guarantee is the foundation consensus algorithms are built on, not an edge case they patch around."}
+      ]
+    },
+    {
+      "id": "p2c03-q04", "level": 1, "type": "mcq", "tag": "quorum",
+      "q": "Why is a 6-node consensus cluster considered a waste compared to 5 nodes?",
+      "options": [
+        {"t": "Six nodes cost too much to network together", "correct": false,
+         "why": "Networking cost is negligible either way. The waste is in the fault-tolerance math, not the wiring."},
+        {"t": "It tolerates the same 2 failures as 5 nodes, but needs 4 acks per decision and adds one more machine that can fail", "correct": true,
+         "why": "Right. Majority of 6 is 4, so losing 3 halts it — same tolerance as 5 nodes (majority 3, lose 2). The sixth node adds quorum latency and failure probability while buying zero extra tolerance."},
+        {"t": "With six nodes every election can end in a 3–3 tie, so an even-sized cluster can never settle on a leader at all", "correct": false,
+         "why": "A 3–3 split can happen in one round, but randomized timeouts break it in the next, and 4 of 6 is a perfectly good majority. Even sizes work; they're just strictly worse value than the odd size below them."},
+        {"t": "Raft only supports odd cluster sizes", "correct": false,
+         "why": "Raft runs fine on any size. Odd sizes are an operational convention driven by the math, not a protocol requirement."}
+      ]
+    },
+    {
+      "id": "p2c03-q05", "level": 1, "type": "mcq", "tag": "raft",
+      "q": "In Raft, what is a term?",
+      "options": [
+        {"t": "The maximum time a leader may serve before re-election", "correct": false,
+         "why": "Terms aren't time-boxed like presidencies — a stable leader can hold one term for months. A new term starts only when an election is triggered."},
+        {"t": "A monotonically increasing epoch number; each term has at most one leader, and stale-term messages are rejected", "correct": true,
+         "why": "Yes. Every message carries its term, higher terms always win, and an ex-leader from an older term is unmasked by its own stamp — the same monotonic-number trick that fencing tokens use."},
+        {"t": "The length of the replicated log", "correct": false,
+         "why": "Log length and term are independent — a term may add thousands of entries or none. The term counts reigns, not entries."},
+        {"t": "The TTL on the leader's lease key, which expires and triggers a re-election if heartbeat renewals stop arriving", "correct": false,
+         "why": "Leases with TTLs are how you build election on top of etcd or ZooKeeper. Raft's terms are internal logical counters in the algorithm itself — no wall-clock TTL involved."}
+      ]
+    },
+    {
+      "id": "p2c03-q06", "level": 1, "type": "mcq", "tag": "raft",
+      "q": "In Raft, when is a log entry considered committed?",
+      "options": [
+        {"t": "When the leader writes it to its own disk", "correct": false,
+         "why": "A leader-only write can vanish if the leader dies before replicating — the next leader may never have seen it. One node's disk is not agreement."},
+        {"t": "When every node has acknowledged it", "correct": false,
+         "why": "Requiring all nodes means one slow or dead follower freezes all progress — the availability disaster quorums exist to avoid."},
+        {"t": "When a majority of nodes have written it", "correct": true,
+         "why": "Right. Majority-written entries survive any future election, because every future leader must win a majority vote — which overlaps with the majority holding the entry."},
+        {"t": "After the next heartbeat round", "correct": false,
+         "why": "Heartbeats keep followers from starting elections; they don't define commitment. The commit rule is about majority acknowledgment, not timing."}
+      ]
+    },
+    {
+      "id": "p2c03-q07", "level": 1, "type": "mcq", "tag": "consensus-primitive",
+      "q": "Why did Raft largely displace Paxos in new systems (etcd, Consul, TiKV, Kafka's KRaft)?",
+      "options": [
+        {"t": "Raft is mathematically stronger than Paxos", "correct": false,
+         "why": "Both solve the same problem with equivalent guarantees. Paxos is proven correct; correctness was never the gap."},
+        {"t": "Raft was designed to be understandable, so engineers implement and operate it with fewer bugs", "correct": true,
+         "why": "Yes — the paper is literally titled 'In Search of an Understandable Consensus Algorithm', with a student study to prove the point. An algorithm your team can hold in their heads is one with fewer 3am surprises."},
+        {"t": "Raft is faster because it skips leader election", "correct": false,
+         "why": "Raft is leader-based — elections are one of its three core mechanisms. Performance of the two families is broadly comparable."},
+        {"t": "Paxos was patent-encumbered, so open-source projects had to license it or engineer around its claims", "correct": false,
+         "why": "No patent barrier existed — Paxos was freely implementable, and Google among others ran it at massive scale in Chubby. The barrier was comprehension, not law."}
+      ]
+    },
+    {
+      "id": "p2c03-q08", "level": 1, "type": "mcq", "tag": "fencing",
+      "q": "What is a fencing token?",
+      "options": [
+        {"t": "A monotonically increasing number issued with each grant, which the protected resource checks to reject stale holders", "correct": true,
+         "why": "Right — and the key phrase is 'resource checks.' Enforcement moves to the storage side, the only party guaranteed to be awake when a paused ex-holder wakes up and writes."},
+        {"t": "A random secret string issued at acquisition time, which the holder presents alongside every request to prove it still owns the lock", "correct": false,
+         "why": "A secret proves you once held the lock — it can't reveal that the lock has since moved on. Only ordering (a number that grows with each grant) exposes staleness."},
+        {"t": "A timeout that fences off slow lock holders", "correct": false,
+         "why": "That's the lease TTL — and it's the mechanism that creates the stale-writer problem, not the one that solves it. The token exists precisely because TTL expiry alone isn't enough."},
+        {"t": "A firewall rule pushed during failover that isolates the old primary from the storage network entirely", "correct": false,
+         "why": "Network-level isolation (sometimes called STONITH-style fencing) is a related idea in HA clustering, but the fencing token from this chapter is application-level: a number checked on every write."}
+      ]
+    },
+    {
+      "id": "p2c03-q09", "level": 1, "type": "mcq", "tag": "control-plane",
+      "q": "What's the difference between the control plane and the data plane?",
+      "options": [
+        {"t": "Control plane = decides who leads, where shards live, what config is active (rare changes); data plane = serves every user request", "correct": true,
+         "why": "Right. And the design rule follows directly: consensus lives in the control plane, the data plane caches its decisions and never blocks on it per-request."},
+        {"t": "Control plane = the admin dashboard; data plane = the API", "correct": false,
+         "why": "It's about the role in the system, not the UI. The control plane is machinery — leases, shard maps, config — usually with no dashboard at all."},
+        {"t": "Control plane = the path writes take through the system; data plane = the path reads take, the way a primary handles writes while replicas serve reads", "correct": false,
+         "why": "Both planes have reads and writes. A user's payment is a data-plane write; a leader-election key update is a control-plane write. The split is coordination vs serving, not writes vs reads."},
+        {"t": "They're networking terms that don't apply to application design", "correct": false,
+         "why": "The terms did originate in networking (routers separating routing decisions from packet forwarding), but the split is now standard architecture vocabulary — Kubernetes is literally organized around it."}
+      ]
+    },
+    {
+      "id": "p2c03-q10", "level": 2, "type": "mcq", "tag": "lease",
+      "q": "You build leader election with an etcd key on a 10-second lease. The leader's host suffers a 45-second network stall, then reconnects. What has happened by the time it's back?",
+      "options": [
+        {"t": "Nothing — etcd waits for the leader to reconnect before expiring the lease", "correct": false,
+         "why": "Waiting indefinitely would mean a truly dead leader blocks failover forever. The whole point of the TTL is that silence forfeits the crown."},
+        {"t": "The lease expired around 35 seconds ago, another node won the key, and the stalled node is now a stale ex-leader that may not know it", "correct": true,
+         "why": "Exactly — and that last clause is the danger. Failover worked as designed; the remaining risk is the ex-leader acting on its old belief, which is why fencing exists."},
+        {"t": "etcd has split-brained: the stalled node and the new winner were each granted the lease, and etcd must reconcile the two when the stall ends", "correct": false,
+         "why": "etcd itself can't grant the same key to two holders — its Raft quorum serializes grants, so there's nothing to reconcile. The split-brain risk lives outside etcd, in a stale holder still acting like a leader."},
+        {"t": "The stalled node automatically resumes leadership since it held the lease first", "correct": false,
+         "why": "There's no seniority rule — an expired lease is gone. The returning node must campaign again like everyone else, and it will lose to the incumbent."}
+      ]
+    },
+    {
+      "id": "p2c03-q11", "level": 2, "type": "mcq", "tag": "fencing",
+      "q": "Worker A holds a lock (token 51) and freezes in a 60s GC pause. Worker B acquires the lock (token 52) and writes. A wakes and issues its write. With fencing enforced at the database, what happens?",
+      "options": [
+        {"t": "A's write carries token 51, the database has seen 52, so A's write is rejected", "correct": true,
+         "why": "Right. A cannot detect its own pause, so the database — the only party guaranteed awake — compares tokens and refuses the stale one. That comparison is the entire safety mechanism."},
+        {"t": "A's write succeeds because A never released the lock", "correct": false,
+         "why": "That's what happens WITHOUT fencing — and it's the corruption scenario (real HBase bug, per Kleppmann's write-up). The lock moved on when the lease expired, whatever A believes."},
+        {"t": "The database blocks A's write until B releases the lock", "correct": false,
+         "why": "Fencing isn't queueing — there's no waiting room. Stale tokens are refused outright; A must re-acquire the lock, get a fresh token, and redo its work."},
+        {"t": "etcd delivered a lease-revocation notice during the pause, so A learns it lost the lock and never issues the write", "correct": false,
+         "why": "A frozen process can't receive or act on anything — the notice sits unread, and A's first instruction after waking is the write itself. Any fix relying on the old holder's cooperation fails; enforcement must live where the writes land."}
+      ]
+    },
+    {
+      "id": "p2c03-q12", "level": 2, "type": "mcq", "tag": "fencing",
+      "q": "Which of these gives you a fencing token essentially for free?",
+      "options": [
+        {"t": "Redis SET NX with a random value per holder", "correct": false,
+         "why": "The random value proves identity ('I set this'), not order. Identity can't tell the database which of two past holders is stale — only a number that grows with each grant can."},
+        {"t": "The mod_revision of an etcd lock key, or a ZooKeeper ephemeral-sequential node's number", "correct": true,
+         "why": "Yes — both are monotonically increasing integers handed out at grant time. The token is free; the real work is making your storage check it, typically a token column plus a conditional update."},
+        {"t": "The wall-clock timestamp at which the holder acquired the lock, recorded with millisecond precision", "correct": false,
+         "why": "Wall clocks jump — NTP corrections can move them backwards — so timestamps don't reliably order grants no matter the precision. This clock-dependence is one of Kleppmann's core objections to Redlock."},
+        {"t": "A UUID generated by the lock holder", "correct": false,
+         "why": "UUIDs are unique but unordered — given two UUIDs, nobody can say which grant came later. Fencing needs order, not uniqueness."}
+      ]
+    },
+    {
+      "id": "p2c03-q13", "level": 2, "type": "mcq", "tag": "quorum",
+      "q": "A 5-node etcd cluster has 3 nodes crash. What is the state of the surviving 2?",
+      "options": [
+        {"t": "They keep serving reads and writes at reduced durability, then re-sync the three crashed nodes whenever those come back online", "correct": false,
+         "why": "Two nodes accepting writes could commit entries the majority never saw — exactly the forked history consensus forbids. Availability is sacrificed to protect consistency."},
+        {"t": "They elect a leader between themselves and continue", "correct": false,
+         "why": "Two of five can't form a majority (need 3), so no election can succeed. This 'failure' is the safety property working — two isolated nodes must never crown a leader."},
+        {"t": "They refuse writes — no quorum — but committed data is safe, and service resumes when a third node returns", "correct": true,
+         "why": "Right. The cluster halts rather than guesses; nothing committed is lost. This is CP behavior from p1c10: under too many failures, consensus chooses consistency over availability."},
+        {"t": "All data is lost since the majority is gone", "correct": false,
+         "why": "Committed entries live on every majority — with 2 of 5 surviving, at least one survivor holds everything committed. Losing quorum halts progress; it doesn't erase history."}
+      ]
+    },
+    {
+      "id": "p2c03-q14", "level": 2, "type": "mcq", "tag": "control-plane",
+      "q": "Your app servers resolve the current shard map by querying etcd on every request, at 20,000 req/s. What is the main problem?",
+      "options": [
+        {"t": "etcd charges per read, so cost explodes", "correct": false,
+         "why": "etcd is free software — the price is paid in latency and fragility, not licensing."},
+        {"t": "The map might be a few milliseconds stale", "correct": false,
+         "why": "Backwards — per-request queries are the FRESH option. The problem is what you pay for freshness you don't need: a consensus store in your hot path."},
+        {"t": "Every request now inherits etcd's latency and outages, and a single Raft group must absorb all 20K req/s", "correct": true,
+         "why": "Exactly — you've wired the control plane into the data plane. All traffic funnels through one leader near its ceiling, every request gains a network hop with etcd's tail latency, and an etcd hiccup becomes a full service outage. Watch-and-cache gives the same data in nanoseconds."},
+        {"t": "etcd watches would be even worse at this scale, since every map change would have to fan out to every one of the connected app servers", "correct": false,
+         "why": "Watches are the fix, not the problem: map changes are rare, so the fanout is a handful of notifications — each server caches the map in memory and thousands of reads per second become near-zero load on etcd."}
+      ]
+    },
+    {
+      "id": "p2c03-q15", "level": 2, "type": "mcq", "tag": "control-plane",
+      "q": "Your service discovery lives in ZooKeeper. ZooKeeper goes fully down for 10 minutes. Following the Pinterest lesson, a well-designed data plane should:",
+      "options": [
+        {"t": "Keep serving using cached last-known-good discovery data; only changes (new deploys, failovers) pause until ZK returns", "correct": true,
+         "why": "Right — this is exactly the decoupling Pinterest built after ZK outages took their whole site down: a local daemon mirrors ZK data to each host, so ZK's absence pauses change, not service."},
+        {"t": "Fail requests immediately — stale routing data is dangerous", "correct": false,
+         "why": "Service locations change rarely; ten-minute-old data is almost always still correct. Hard-failing converts a control-plane outage into a total site outage — the exact coupling Pinterest publicly called a single point of failure."},
+        {"t": "Fall back to broadcasting requests to all known hosts", "correct": false,
+         "why": "Broadcast multiplies load by the fleet size during an incident — a self-inflicted thundering herd at the worst possible moment. The cached map already answers the question cheaply."},
+        {"t": "Have each service maintain a second, independent ZooKeeper cluster as a hot standby and cut over to it when the primary cluster fails", "correct": false,
+         "why": "Two coordination clusters means two sources of truth — which one wins when they disagree? Pinterest's insight was to reduce the dependency, not duplicate it."}
+      ]
+    },
+    {
+      "id": "p2c03-q16", "level": 2, "type": "mcq", "tag": "election",
+      "q": "In ZooKeeper leader election, why do candidates create ephemeral-sequential nodes and watch only the node numbered just below their own?",
+      "options": [
+        {"t": "Sequential numbers make elections faster", "correct": false,
+         "why": "Speed isn't the point of watching the predecessor — a plain 'everyone watch the leader key' is equally fast. The predecessor-watch pattern is about what happens at the moment of failure."},
+        {"t": "So a leader's death wakes exactly one successor instead of stampeding every candidate at once", "correct": true,
+         "why": "Yes — the 'herd effect' fix. If all N candidates watched the leader, its death would fire N notifications and N simultaneous re-election attempts. Chaining watches wakes only the next in line."},
+        {"t": "Ephemeral nodes are the only node type ZooKeeper can watch", "correct": false,
+         "why": "Any znode can be watched. Ephemeral solves a different problem — automatic cleanup when the owner's session dies. Sequential + predecessor-watching solves the stampede."},
+        {"t": "It guarantees the candidate that has been running the longest wins, on the theory that stable processes make the best leaders", "correct": false,
+         "why": "It guarantees the EARLIEST registrant (lowest sequence number) leads — a fairness of arrival order, not uptime. Seniority of the process itself plays no role."}
+      ]
+    },
+    {
+      "id": "p2c03-q17", "level": 2, "type": "mcq", "tag": "raft",
+      "q": "A partitioned ex-leader from term 6 reconnects and sends log entries to followers who are now in term 8. What happens, and why is it safe?",
+      "options": [
+        {"t": "Followers reject the entries because term 6 is stale; the ex-leader sees term 8 and steps down to follower", "correct": true,
+         "why": "Right — the term stamp on every message unmasks it instantly, and the see-higher-term-step-down reflex converts it back to a follower. This is fencing built into the protocol."},
+        {"t": "Followers accept the entries and merge both histories", "correct": false,
+         "why": "Merging forked histories is exactly what consensus must never do — that's split brain with extra steps. One history, decided by quorum, is the entire contract."},
+        {"t": "The cluster runs a tiebreaker election between the term-6 and term-8 leaders", "correct": false,
+         "why": "No tiebreaker needed — terms already totally order leadership, and higher always wins. The term-6 node was deposed the moment term 7 was voted; it just hadn't heard yet."},
+        {"t": "Followers buffer the term-6 entries and replay them under term 8 once the new leader confirms they don't conflict", "correct": false,
+         "why": "Uncommitted entries from a deposed leader may simply be discarded — that's allowed, because they were never majority-acknowledged and so no client was ever promised them."}
+      ]
+    },
+    {
+      "id": "p2c03-q18", "level": 2, "type": "mcq", "tag": "split-brain",
+      "q": "Revisiting the cold open: primary and replica are partitioned from each other, both reachable by some app servers. With quorum-based election (say, via a 3-node etcd cluster), why can't both act as primary?",
+      "options": [
+        {"t": "etcd pings both databases and shuts down the slower one", "correct": false,
+         "why": "etcd doesn't probe or kill anything — it's a key-value store with leases. The safety comes from what it refuses to grant, not from actions it takes against your databases."},
+        {"t": "Only one can hold the leader lease: grants serialize through etcd's quorum, and a partitioned ex-primary can't renew, so its lease lapses", "correct": true,
+         "why": "Exactly. The lease is granted by a majority, and majorities can't fork. One caveat you should volunteer: the deposed primary may still ACCEPT writes briefly until its lease check fails — protecting the data itself needs fencing at the storage layer."},
+        {"t": "The partition prevents app servers from reaching the old primary", "correct": false,
+         "why": "The cold open's whole problem was that half the app servers COULD still reach it. Network reachability is exactly what you can't rely on for safety."},
+        {"t": "Both databases detect the partition themselves and voluntarily stop accepting writes until connectivity between them is fully restored, so neither can diverge", "correct": false,
+         "why": "'Detect the partition' re-runs the dead-vs-slow problem — neither side can tell. And pausing both would sacrifice all availability for a common, transient failure; quorum election exists precisely so the majority side keeps serving while the minority loses its crown."}
+      ]
+    },
+    {
+      "id": "p2c03-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Designing a payment settlement system, a candidate says: \"Workers coordinate via Redlock on our five Redis nodes — Redlock is majority-based, so it's safe.\" As the interviewer, what's the strongest concern?",
+      "options": [
+        {"t": "Redlock issues no fencing tokens, so a GC-paused worker can wake and double-post money — a correctness lock like this needs a consensus store plus fencing checked at the ledger", "correct": true,
+         "why": "This is Kleppmann's critique applied with judgment: the failure cost (double-posted money) is what makes Redlock the wrong tool here, not Redlock being universally bad. Naming the fix — fencing enforced at the resource — completes the senior answer."},
+        {"t": "Five Redis nodes are too expensive; use three", "correct": false,
+         "why": "Cost-tuning an unsafe design is polishing the wrong thing. The node count isn't the flaw — the missing fencing and the timing assumptions are."},
+        {"t": "Redlock is fine — acquiring the lock on a majority of five independent Redis nodes gives the same overlap guarantee as a proper Raft quorum, so two workers can never both hold it", "correct": false,
+         "why": "It doesn't: the Redis nodes don't run a consensus protocol between themselves, there's no term/epoch ordering across grants, and expiry rests on wall-clock timing. A majority of independent timers is not a quorum with overlap guarantees."},
+        {"t": "Redis is single-threaded, so it can't handle lock traffic", "correct": false,
+         "why": "Single-threaded Redis handles ~100K ops/sec — lock traffic is trivial for it. This objection is a performance reflex aimed at a correctness problem."}
+      ]
+    },
+    {
+      "id": "p2c03-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A candidate designing a job scheduler says: \"For leader election I'll implement Raft inside the scheduler service — it's the most reliable option since we control the code.\" How does this read at the senior bar?",
+      "options": [
+        {"t": "Strong — owning the consensus code means the team can debug and tune it directly, which demonstrates real depth", "correct": false,
+         "why": "It shows the opposite: unfamiliarity with how hard hardened consensus is. Even Chubby's team wrote that real Paxos diverges enormously from the paper — and they were Google's best."},
+        {"t": "Poor judgment: consensus is a rentable, decade-hardened primitive; the senior answer is 'etcd, and here's the guarantee I'm buying'", "correct": true,
+         "why": "Right. The interview grades judgment, and the judgment is that hand-rolled consensus buys years of subtle-bug risk to reproduce something etcd sells for free. Name the tool, name the guarantee (linearizable CAS, leases, watches), spend your depth on fencing instead."},
+        {"t": "Acceptable, so long as the candidate can also sketch Raft's election rules and log replication correctly on the whiteboard before committing", "correct": false,
+         "why": "Sketching the happy path was never the hard part — Raft's paper fits in your head by design. Disk corruption, membership changes, and the long tail of edge cases are where homegrown implementations die (see Jepsen's track record)."},
+        {"t": "Wrong because Raft is outdated; they should implement Paxos", "correct": false,
+         "why": "Swapping which algorithm to hand-roll misses the point entirely — the error is hand-rolling at all, not the choice of paper."}
+      ]
+    },
+    {
+      "id": "p2c03-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your etcd cluster must survive a full region failure, but you only have two regions available. A teammate proposes 3 nodes in region A and 2 in region B. What's the honest senior assessment?",
+      "options": [
+        {"t": "Perfect — five nodes tolerate two failures no matter where they sit, and neither region holds all of the nodes", "correct": false,
+         "why": "The math holds for NODE failures, not region failures. A region is a correlated failure domain: region A dying takes 3 nodes at once — a quorum-breaking loss the '2 failures tolerated' figure never covered."},
+        {"t": "Flip it — put 3 in region B instead", "correct": false,
+         "why": "That just moves the load-bearing region. Whichever region holds the majority is the one whose death halts writes; renaming it isn't surviving it."},
+        {"t": "With two regions, one region's death can always halt the quorum. Accept that A is load-bearing and say so, or get a third failure domain — even one cheap tiebreaker node", "correct": true,
+         "why": "This is the committed, honest answer: state the impossibility, then present the real options. Two-region consensus always quietly bets on one region; a small third-site witness node converts the bet into genuine region tolerance."},
+        {"t": "Run two independent etcd clusters, one per region, each electing its own leader, and reconcile the two histories once the failed region comes back", "correct": false,
+         "why": "Two clusters means two truths — each would happily elect its own 'leader' during a partition, which is split brain re-implemented at the coordination layer. And 'reconcile later' is exactly the forked history consensus exists to prevent."}
+      ]
+    },
+    {
+      "id": "p2c03-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: \"So your lock service guarantees only one client holds the lock at a time, right?\" The senior-calibrated reply is:",
+      "options": [
+        {"t": "\"Yes — that's the point of using a consensus-backed store\"", "correct": false,
+         "why": "The trap snaps shut. The store guarantees one lease HOLDER per grant; it cannot stop an expired, paused ex-holder from acting on stale belief. Claiming otherwise signals you haven't met the GC-pause failure."},
+        {"t": "\"No — a stale holder can always wake after a pause and act on old belief. So I enforce it at the resource: fencing tokens, checked on every write\"", "correct": true,
+         "why": "Exactly the answer the question exists to fish for: name the impossibility honestly, then show where enforcement actually lives. This is the difference between trusting the lock and designing for its limits."},
+        {"t": "\"Yes — as long as we set the TTL comfortably longer than any GC pause or network stall we have ever observed in production, expiry can never fire early\"", "correct": false,
+         "why": "Pauses are unbounded — 'longest observed' is not 'longest possible', and long TTLs also mean slow failover when the leader genuinely dies. You'd be trading a correctness hole for an availability hole and keeping both."},
+        {"t": "\"We re-verify the lease is still held immediately before every single write, which closes the window where it could have moved\"", "correct": false,
+         "why": "The pause can land between the check and the write — that razor-thin gap is precisely where the failure lives. No client-side check sequence can save a process from its own freeze."}
+      ]
+    },
+    {
+      "id": "p2c03-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your platform grows 10x. The shard map, watched-and-cached from etcd, now changes every few seconds because of constant rebalancing, and config writes are climbing toward etcd's throughput ceiling. What's the senior move?",
+      "options": [
+        {"t": "Scale etcd to 9 nodes for more write capacity", "correct": false,
+         "why": "Consensus writes serialize through one leader — MORE nodes means more acks per commit, i.e., slower writes. Scaling a Raft group out buys read fanout and fault tolerance, never write throughput."},
+        {"t": "Ask why the control plane is changing at data-plane frequency: damp and batch the rebalancer so map updates are rare again", "correct": true,
+         "why": "The senior instinct is that the workload is wrong, not the tool. A shard map churning every few seconds means the rebalancer is thrashing — hysteresis and batched, versioned map updates restore control-plane cadence and keep etcd for what it's good at. Root cause over re-platforming."},
+        {"t": "Move the shard map into Redis, which absorbs this write rate easily, keeping etcd only for leader election", "correct": false,
+         "why": "Redis absorbs the write rate but silently drops the guarantee that made the map trustworthy — linearizable updates that all observers agree on. During failover, a stale or forked shard map misroutes writes: you fixed throughput by reintroducing split brain."},
+        {"t": "Have every service poll etcd for the full map every 100ms instead of using watches, turning the load into a smooth, predictable pattern", "correct": false,
+         "why": "Polling adds enormous read load to a cluster you just said is near its ceiling, and it's strictly worse than watches on both freshness and cost. It addresses neither the churn nor the ceiling."}
+      ]
+    },
+    {
+      "id": "p2c03-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Which of these locks is it genuinely fine to run on a single Redis SET NX PX — with no fencing at all?",
+      "options": [
+        {"t": "The lock ensuring one worker recomputes an expired cache entry", "correct": true,
+         "why": "Two holders here means one redundant recomputation — pennies of CPU. This is a textbook efficiency lock, and putting it in etcd with fencing would be machinery without a payoff. Matching the tool to the failure cost IS the skill."},
+        {"t": "The lock serializing schema migrations on the orders database", "correct": false,
+         "why": "Two concurrent migrations can corrupt the schema or strand it half-applied — a correctness lock wearing work clothes. This one earns consensus backing and fencing (or a migrations table with conditional inserts doing the fencing job)."},
+        {"t": "The lock electing which node accepts writes for a user shard", "correct": false,
+         "why": "That's leader election for a write path — the highest-stakes correctness lock there is. A stale 'leader' accepting writes is the split-brain scenario this whole chapter exists to prevent."},
+        {"t": "Any of them, if the TTL is tuned carefully", "correct": false,
+         "why": "TTL tuning changes when the failure window opens, never whether it exists. Sorting locks by the cost of two holders — not by tuning confidence — is the judgment being tested."}
+      ]
+    },
+    {
+      "id": "p2c03-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "In a design review, you propose etcd-based election with fencing tokens for a settlement writer. A staff engineer asks: \"What if the settlement database can't be modified to check tokens — it's a vendor system?\" Your best answer:",
+      "options": [
+        {"t": "\"Then locking can't make the writes safe. I'd make them idempotent — deterministic posting IDs the vendor deduplicates on, or an outbox we control that fences — and treat the lock as an optimization\"", "correct": true,
+         "why": "Right. An unfenceable resource can't be protected by any lock, so safety must come from the operations themselves (p2c02's idempotency) or from inserting a fencing-capable layer you do control. Recognizing when the lock CAN'T be the answer is the deepest version of this chapter's lesson."},
+        {"t": "\"We'd extend the lease TTL to several minutes and add generous heartbeat margins, so a stale write becomes so unlikely we can accept the residual risk\"", "correct": false,
+         "why": "'Very unlikely' is not a settlement-grade guarantee — pauses are unbounded, and long TTLs slow legitimate failover. Probability-tuning a correctness invariant is the pattern this chapter warns against."},
+        {"t": "\"The election itself is provably safe — etcd serializes every grant through its Raft quorum — so in practice we're fine\"", "correct": false,
+         "why": "The election IS safe — and irrelevant, because the failure lives in the gap between election and enforcement. A safe election with an unguarded resource is a locked front door with an open window."},
+        {"t": "\"We'd switch vendors to one that supports conditional writes\"", "correct": false,
+         "why": "Occasionally the right call, but as a first answer it dodges the engineering question. The reviewer wants to see you design safety around a constraint, not purchase your way past it."}
+      ]
+    }
+  ]
+}

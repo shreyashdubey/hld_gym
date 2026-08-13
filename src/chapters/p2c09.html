@@ -1,0 +1,298 @@
+<p>Second week on the creator-dashboard team at a video app. The dashboard shows every creator how many views their videos got. The number comes from a nightly job: at 2am, a batch job reads the whole day's view events from storage, counts them per video, and writes totals to a database. Simple. Reliable. Boring.</p>
+
+<p>Then product asks for one small change: "Creators want to see views for the <em>last hour</em>, updating live."</p>
+
+<p>Fine, you think — run the batch job more often. But the job takes three hours to chew a day of data, and even a trimmed-down version can't run every minute. The deeper problem isn't speed. Batch processing assumes a finish line: "here is yesterday's data, all of it, go." Views never stop arriving. You're being asked to compute an answer over data that <em>never finishes</em>.</p>
+
+<p>So you try the obvious hack: on every view, increment a Redis counter. It works in the demo. Then reality arrives. A client retries a failed upload and the view counts twice. A phone that was offline uploads three hours of buffered views into the wrong hour. A counting bug ships on Tuesday, and on Friday someone asks you to recount Tuesday — recount from <em>what</em>? The counter only knows the present. Every patch you bolt on — dedup, late-event handling, some way to replay — is you rediscovering, badly, what stream processing systems already solved. This chapter hands you the real machinery.</p>
+
+<h2>Bounded vs unbounded: why batch can't just run faster</h2>
+
+<p>Batch works on <strong>bounded</strong> data — a dataset with a beginning and an end. The contract is beautiful: the input is complete before you start, so you can sort it, join it, count it, and emit <em>the</em> answer. If the job crashes, you rerun it on the same input and get the same answer. Completeness is free; you just wait for the day to end.</p>
+
+<p>A stream is <strong>unbounded</strong> — no end, ever. Any answer you give is provisional: "the count <em>so far</em>." And that exposes the trade that runs through this whole chapter: <strong>latency vs completeness</strong>. Wait longer before answering and your answer covers more of the data. Answer sooner and you risk having to revise it when stragglers show up. Batch sits at one extreme of this dial — wait until tomorrow, be complete. Streaming lets you pick any other point on the dial, and every mechanism you'll meet below (watermarks, lateness, windows) is a knob on exactly this dial.</p>
+
+<table>
+<thead><tr><th></th><th>Batch</th><th>Stream</th></tr></thead>
+<tbody>
+<tr><td>Input</td><td>Bounded — complete before you start</td><td>Unbounded — never complete</td></tr>
+<tr><td>Answer</td><td>Final</td><td>Provisional, may be revised</td></tr>
+<tr><td>Latency</td><td>Hours (whenever the job runs)</td><td>Seconds</td></tr>
+<tr><td>Failure recovery</td><td>Rerun the job</td><td>Restore state + replay (we'll get there)</td></tr>
+<tr><td>Typical tools</td><td>Spark, BigQuery, a SQL script</td><td>Flink, Kafka Streams</td></tr>
+</tbody>
+</table>
+
+<h2>Lambda vs kappa: two answers to "we need both"</h2>
+
+<p>The first industry answer to "we need fresh numbers <em>and</em> correct numbers" was the <strong>lambda architecture</strong> (a name coined by Nathan Marz, creator of the Storm stream processor). Run two pipelines over the same events. A <strong>batch layer</strong> recomputes everything from raw history every few hours — slow but trustworthy. A <strong>speed layer</strong> processes events as they arrive — fast but approximate. A serving layer stitches the two together: batch results for everything up to this morning, speed-layer results for the gap since.</p>
+
+<p>It works. And it has a cost that anyone who has run one will name through gritted teeth: <strong>every piece of business logic exists twice</strong>, in two codebases, on two frameworks, with two sets of bugs. Change how you count a "view"? Change it in the Spark job and the streaming job, deploy both, and pray they agree. When they don't — and they eventually don't — you get two dashboards with two different numbers and a meeting about which one is lying.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 350" role="img" aria-label="Lambda architecture with two parallel layers versus kappa architecture with a single replayable stream path">
+  <rect class="dg-zone" x="10" y="8" width="700" height="158" rx="10"/>
+  <text class="dg-txt" x="22" y="30">Lambda: two paths</text>
+  <rect class="dg-node" x="22" y="76" width="92" height="44" rx="8"/>
+  <text class="dg-txt" x="36" y="102">Events</text>
+  <rect class="dg-node" x="200" y="40" width="180" height="46" rx="8"/>
+  <text class="dg-txt" x="212" y="60">Batch layer</text>
+  <text class="dg-txt-s" x="212" y="78">all history · hours late</text>
+  <rect class="dg-node" x="200" y="110" width="180" height="46" rx="8"/>
+  <text class="dg-txt" x="212" y="130">Speed layer</text>
+  <text class="dg-txt-s" x="212" y="148">recent only · seconds</text>
+  <line class="dg-edge" x1="114" y1="90" x2="200" y2="64" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="114" y1="106" x2="200" y2="132" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="470" y="76" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="482" y="96">Serving</text>
+  <text class="dg-txt-s" x="482" y="114">merge both answers</text>
+  <line class="dg-edge" x1="380" y1="64" x2="470" y2="90" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="380" y1="132" x2="470" y2="108" marker-end="url(#arrow)"/>
+  <text class="dg-bad" x="470" y="146">same logic written twice</text>
+  <rect class="dg-zone" x="10" y="182" width="700" height="160" rx="10"/>
+  <text class="dg-txt" x="22" y="204">Kappa: one path, replay to recompute</text>
+  <rect class="dg-node" x="22" y="248" width="140" height="46" rx="8"/>
+  <text class="dg-txt" x="34" y="268">Log (Kafka)</text>
+  <text class="dg-txt-s" x="34" y="286">retained history</text>
+  <rect class="dg-node-alt" x="250" y="248" width="170" height="46" rx="8"/>
+  <text class="dg-txt" x="262" y="268">Stream job</text>
+  <text class="dg-txt-s" x="262" y="286">one codebase</text>
+  <rect class="dg-node" x="510" y="248" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="522" y="268">Serving table</text>
+  <text class="dg-txt-s" x="522" y="286">upserts</text>
+  <line class="dg-edge" x1="162" y1="271" x2="250" y2="271" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="271" x2="510" y2="271" marker-end="url(#arrow)"/>
+  <path class="dg-edge" fill="none" d="M 335 294 C 335 332, 92 332, 92 296" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="360" y="326">recompute = start a new job from offset 0</text>
+</svg>
+<figcaption>Lambda pays for correctness with a second codebase. Kappa pays for it with log retention — history stays in the log, so one codebase can always re-read it.</figcaption>
+</figure>
+
+<p>The <strong>kappa architecture</strong> is the deletion of that second codebase. The observation: the reason lambda needs a batch layer is recomputation — fixing mistakes by re-reading history. But if your events live in a <strong>replayable log</strong> (Kafka, from p1c11: an append-only file where every event has an offset and any consumer can rewind), you don't need a separate batch system to re-read history. You start a second copy of your <em>streaming</em> job at offset 0, let it chew through the past at full speed, write into a fresh table, and swap when it catches up. One codebase. Recomputation becomes an operational routine, not a parallel universe.</p>
+
+<p>In 2025+ kappa is the default, and the justification is one sentence: <strong>stream processors got good enough that the batch layer stopped earning its second codebase</strong>. Modern engines give you durable state, exactly-once semantics, and replay at millions of events per second — the correctness properties lambda's batch layer existed to provide. You should still be able to say when the old answer wins, though. That's next.</p>
+
+<div class="box story"><div class="box-tag">War story — LinkedIn and the log that ate the architecture</div>
+<p>Around 2010, LinkedIn's data infrastructure was a tangle: Hadoop jobs for batch analytics, a zoo of custom pipes shipping data between systems, and real-time needs (who viewed your profile, news feed) served by one-off systems. The team — led by Jay Kreps — built Kafka (open-sourced 2011) to replace the tangle with a single idea: every event goes into a durable, replayable, ordered log, and every system reads from it. In 2013 Kreps wrote the essay "The Log: What every software engineer should know about real-time data's unifying abstraction," arguing the log isn't plumbing — it's the backbone the whole data architecture should hang off. Then in 2014, having run lambda-style systems and eaten the maintain-everything-twice tax firsthand, he published "Questioning the Lambda Architecture," where he proposed the kappa alternative: keep enough history in the log, and recomputation is just your stream job replaying it. LinkedIn also built the Samza stream processor to consume those logs, and Kreps co-founded Confluent to commercialize Kafka. A decade later, "keep the events in a log, make everything a stream job over it" is the default shape of new data platforms — an architecture that started as one company deleting its duplicate code.</p>
+</div>
+
+<h3>When batch still wins</h3>
+
+<p>Kappa being the default doesn't make batch dead — it makes batch a <em>choice</em> you should defend with numbers. Batch wins when latency genuinely doesn't matter, because then it's strictly cheaper and simpler. A nightly billing rollup over 2 TB of events is one Spark job on spot instances for a few dollars, with no watermarks, no state management, no on-call stream job — and if it fails, you rerun it. Weekly ML training data, monthly invoices, compliance reports: nobody needs those in 200 milliseconds. The senior framing at the whiteboard: "This output is consumed once a day, so I'll batch it — streaming here buys latency nobody asked for, at the cost of a 24/7 stateful service someone gets paged for." Streaming for the dashboards, batch for the paperwork.</p>
+
+<h2>The machinery: a for-loop with durable state</h2>
+
+<p>Strip the branding off Flink or Kafka Streams and here's what a stream processor is: <strong>a for-loop over an infinite list, with durable state</strong>. You could write the naive version today: a Kafka consumer that reads view events one by one and updates a hash map of <code>video_id → count</code>. Congratulations, that's a stream processor. Now watch it die in production. The process crashes: the map is gone, and where do you resume reading? Traffic grows past one machine: who owns which keys of the map? An event arrives late: which hour does it belong to?</p>
+
+<p>Everything a stream processing framework does is making that for-loop crash-proof and shardable. The hash map becomes <strong>keyed state</strong>: the framework partitions the stream by key (same consistent-hashing idea as p1c09), so all events for <code>video_42</code> land on the same worker, and that worker's slice of the map is stored durably, not just in memory. The "where do I resume" question becomes checkpointing, which gets its own section. Kafka is the substrate that makes all of it possible — because the log lets any reader rewind, the processor gets cheap time travel, and recovery becomes "rewind and replay" instead of "hope."</p>
+
+<p>Quick sizing instinct, because numbers decide whether any of this is even hard: your app does 50M views/day — about 600 events/sec average, call it 5,000/sec at peak. A single modest Flink or Kafka Streams job eats that without noticing. State: 10M videos times ~100 bytes of counter state is 1 GB — fits on one machine. So for this system, <em>throughput is not the interesting problem; correctness is</em>. Late data, duplicates, and recovery are where the design lives. (At 4 billion events/sec — hold that thought for the Alibaba story — the sizing math flips and throughput becomes the design.)</p>
+
+<h2>Two clocks: event time vs processing time</h2>
+
+<p>A user watches your video on a train. At 11:58 the train enters a tunnel; the phone loses signal and buffers the view event. At 12:40 signal returns and the event uploads. Question: which hour's count does that view belong to?</p>
+
+<p>There are two clocks in every pipeline. <strong>Event time</strong> is when the thing actually happened: 11:58, stamped on the event by the phone. <strong>Processing time</strong> is when your server got around to seeing it: 12:40. The naive Redis-counter hack counts by processing time — the view lands in the 12:00–13:00 bucket, which is simply wrong. For a rough ops graph, who cares. For billing, ad reporting, or anything a finance team reads, event time is the only defensible answer, and interviewers deliberately pick those domains.</p>
+
+<p>But event time creates a nasty puzzle. If events can arrive 42 minutes late, when do you dare say "the 11:00–12:00 count is done"? Wait forever and you're a batch job again. This is the latency-vs-completeness dial, and the industry's knob for it is the <strong>watermark</strong>: a marker flowing through the stream that asserts <em>"we believe all events with event time up to T have now arrived."</em> When the watermark passes the end of a window, the window fires — computes its result and emits it. A common recipe: watermark = the latest event time seen so far, minus a slack for out-of-orderness. Slack of 30 seconds means you're betting events arrive at most 30 seconds out of order.</p>
+
+<p>A watermark is a bet, and bets lose. Choose the slack from data, not vibes: measure the arrival-delay distribution. Say p99.9 of your events arrive within 30 seconds of their event time — but mobile has a long tail of minutes to hours (tunnels, airplane mode, dead batteries). You cannot hold a live dashboard hostage to the last phone in a tunnel, so you layer the defenses:</p>
+
+<ul>
+<li><strong>Watermark slack</strong> (say 1 minute): the routine out-of-orderness you absorb silently, covering ~99.9% of events.</li>
+<li><strong>Allowed lateness</strong> (say 10 minutes): after firing, keep the window's state around; when a straggler arrives, update and re-emit the result. The count is "done, but correctable."</li>
+<li><strong>Late-data policy</strong> for anything later still. Three honest options: <strong>drop</strong> it (fine for an ops graph, indefensible for billing); route it to a <strong>side output</strong> — a separate stream of rejects you log, count, and reconcile later (my default: it's cheap, and the <em>volume</em> of late data becomes a metric that pages you when a mobile release breaks event buffering); or <strong>update</strong> downstream forever (correct, but now every consumer must handle revisions).</li>
+</ul>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A teacher collecting homework after a school trip. The deadline is Friday (the window closes). She knows some kids' parents mail it in, so she waits until Monday before grading — that's the watermark: "by Monday, I believe everything that's coming has come." One envelope arrives Tuesday; she's kind, reopens the grade book, and adjusts — that's allowed lateness. An envelope arriving in July goes into a folder for the school office to sort out — that's the side output. Where the analogy breaks: the teacher grades once and amends once. A stream processor might fire and re-fire a window several times, and every downstream system has to be built to accept "the count for 11:00 changed."</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Event-time timeline showing a window firing when the watermark passes and one late event arriving after">
+  <rect class="dg-zone" x="80" y="56" width="300" height="112" rx="8"/>
+  <text class="dg-txt-s" x="90" y="76">window [12:00 – 12:05)</text>
+  <circle class="dg-good" cx="140" cy="120" r="9"/>
+  <circle class="dg-good" cx="230" cy="140" r="9"/>
+  <circle class="dg-good" cx="320" cy="118" r="9"/>
+  <circle class="dg-bad" cx="290" cy="146" r="9"/>
+  <line class="dg-edge" x1="40" y1="170" x2="690" y2="170" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="80" y1="165" x2="80" y2="176"/>
+  <line class="dg-edge" x1="200" y1="165" x2="200" y2="176"/>
+  <line class="dg-edge" x1="320" y1="165" x2="320" y2="176"/>
+  <line class="dg-edge" x1="440" y1="165" x2="440" y2="176"/>
+  <line class="dg-edge" x1="560" y1="165" x2="560" y2="176"/>
+  <text class="dg-txt-s" x="62" y="192">12:00</text>
+  <text class="dg-txt-s" x="182" y="192">12:02</text>
+  <text class="dg-txt-s" x="302" y="192">12:04</text>
+  <text class="dg-txt-s" x="422" y="192">12:06</text>
+  <text class="dg-txt-s" x="542" y="192">12:08</text>
+  <text class="dg-txt-s" x="620" y="192">event time</text>
+  <line class="dg-edge" x1="380" y1="36" x2="380" y2="182"/>
+  <text class="dg-txt" x="392" y="48">watermark passes 12:05</text>
+  <text class="dg-txt-s" x="392" y="66">window fires, emits count = 3</text>
+  <line class="dg-edge" x1="290" y1="226" x2="290" y2="158" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="180" y="242">event time 12:03, arrived 12:07 — late: update, side-output, or drop</text>
+</svg>
+<figcaption>The window fires on the watermark's belief, not on the wall clock. The red event belongs inside the window but showed up after the bet was settled — your late-data policy decides its fate.</figcaption>
+</figure>
+
+<h2>Windows: chopping the infinite into answers</h2>
+
+<p>"Count of views" over an endless stream is meaningless without a "per what." Windows are how you chop an unbounded stream into finite questions. Three shapes cover essentially every interview and most of production:</p>
+
+<ul>
+<li><strong>Tumbling windows</strong>: fixed size, no overlap — the timeline cut into adjacent blocks. "Revenue per calendar hour." Every event lands in exactly one window, which makes tumbling the cheapest and the right default for billing and reporting.</li>
+<li><strong>Sliding windows</strong>: fixed size, overlapping — "views in the last 5 minutes, recomputed every 30 seconds." Smooth, ideal for alerting thresholds where a tumbling boundary could split a spike in half. Cost: each event belongs to several windows (5 min ÷ 30 s = 10 of them), so state and output multiply accordingly — say that cost out loud when you pick sliding.</li>
+<li><strong>Session windows</strong>: no fixed size at all. A window per key that stays open while events keep coming and closes after a gap of inactivity — "a browsing session ends after 30 minutes of silence." The window's shape is defined by the data itself. This is how "average session length" and "songs per listening session" get computed.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Tumbling, sliding, and session windows drawn on parallel timelines">
+  <text class="dg-txt" x="16" y="40">Tumbling</text>
+  <rect class="dg-node" x="200" y="18" width="120" height="32" rx="6"/>
+  <rect class="dg-node" x="324" y="18" width="120" height="32" rx="6"/>
+  <rect class="dg-node" x="448" y="18" width="120" height="32" rx="6"/>
+  <text class="dg-txt-s" x="230" y="38">9–10</text>
+  <text class="dg-txt-s" x="352" y="38">10–11</text>
+  <text class="dg-txt-s" x="476" y="38">11–12</text>
+  <text class="dg-txt-s" x="580" y="38">no overlap</text>
+  <text class="dg-txt" x="16" y="122">Sliding</text>
+  <rect class="dg-node" x="200" y="86" width="150" height="24" rx="6"/>
+  <rect class="dg-node" x="240" y="114" width="150" height="24" rx="6"/>
+  <rect class="dg-node" x="280" y="142" width="150" height="24" rx="6"/>
+  <text class="dg-txt-s" x="450" y="132">overlap: one event,</text>
+  <text class="dg-txt-s" x="450" y="150">many windows</text>
+  <text class="dg-txt" x="16" y="226">Session</text>
+  <rect class="dg-node-alt" x="200" y="204" width="90" height="32" rx="6"/>
+  <rect class="dg-node-alt" x="350" y="204" width="150" height="32" rx="6"/>
+  <rect class="dg-node-alt" x="560" y="204" width="60" height="32" rx="6"/>
+  <text class="dg-txt-s" x="296" y="224">gap</text>
+  <text class="dg-txt-s" x="506" y="224">gap</text>
+  <text class="dg-txt-s" x="200" y="262">closes after 30 min of silence — shaped by the data</text>
+  <line class="dg-edge" x1="16" y1="284" x2="700" y2="284" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="640" y="278">time</text>
+</svg>
+<figcaption>Pick the window from the question, not from habit: "per hour" is tumbling, "last N minutes, refreshed often" is sliding, "per visit" is session.</figcaption>
+</figure>
+
+<h2>State, checkpoints, and not losing count</h2>
+
+<p>Every window above is <strong>state</strong>: partial counts sitting in the processor's keyed store, waiting for the watermark. Kill the process and that's potentially millions of half-finished windows gone. The recovery story is what separates a real stream processor from your Redis hack, and it has two halves.</p>
+
+<p>Half one: <strong>checkpoints</strong>. Periodically — say every 30 seconds — the framework snapshots all state to durable storage (S3, HDFS), along with the log offsets that state corresponds to. The naive way is to pause the world, dump everything, resume: unacceptable at any real throughput. The elegant way is the <strong>Chandy-Lamport idea</strong> (1985, and Flink's checkpointing is a descendant of it): take a consistent snapshot of a running system <em>without stopping it</em>. The source injects a <strong>barrier</strong> — a special marker — into the stream, right after, say, offset 4,182. The barrier flows along with the data. When an operator sees the barrier, it snapshots its own state <em>at that moment</em> and forwards the barrier downstream. Since every operator snapshots at the same logical point — "I have processed everything before the barrier and nothing after" — the collected pieces form one consistent picture of the whole pipeline, taken while the pipeline kept running.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A restaurant manager wants an exact count of orders in progress without closing the kitchen. She slips a red card into the ticket rail between two orders. Each station — grill, fry, plating — keeps working, and the moment the red card reaches it, that station writes down its current tickets and passes the card on. No two stations pause, yet everything written down describes the same instant in the flow of orders: everything before the card, nothing after. That's a barrier snapshot. Where the analogy stretches: with multiple input streams, an operator must wait until the card arrives on <em>all</em> of them before writing (barrier alignment) — the grill station waiting for the card from both the dine-in rail and the delivery rail.</p>
+</div>
+
+<p>Half two: <strong>recovery = restore + replay</strong>. On a crash, the framework restores every operator's state from the last completed checkpoint and rewinds the log to that checkpoint's offsets — possible only because Kafka retains the events. The job then replays the gap between checkpoint and crash at full speed. Checkpoint every 30 seconds and your worst-case recovery replays 30 seconds of events; checkpoint every 10 minutes and a crash at minute nine replays nine minutes. That's the knob: <strong>checkpoint interval trades runtime overhead against recovery time</strong> — another decision a number should drive.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 240" role="img" aria-label="A checkpoint barrier flowing through a pipeline while operator state is snapshotted to durable storage">
+  <text class="dg-txt-s" x="20" y="28">The barrier flows with the data; each operator snapshots as it passes — nobody pauses.</text>
+  <rect class="dg-node" x="20" y="60" width="130" height="48" rx="8"/>
+  <text class="dg-txt" x="34" y="82">Source</text>
+  <text class="dg-txt-s" x="34" y="100">offset 4,182</text>
+  <rect class="dg-node-alt" x="280" y="60" width="180" height="48" rx="8"/>
+  <text class="dg-txt" x="294" y="82">Count per video</text>
+  <text class="dg-txt-s" x="294" y="100">keyed state</text>
+  <rect class="dg-node" x="570" y="60" width="120" height="48" rx="8"/>
+  <text class="dg-txt" x="584" y="90">Sink</text>
+  <line class="dg-edge" x1="150" y1="84" x2="280" y2="84" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="460" y1="84" x2="570" y2="84" marker-end="url(#arrow)"/>
+  <rect class="dg-good" x="222" y="70" width="10" height="28" rx="2"/>
+  <text class="dg-txt-s" x="196" y="126">barrier n</text>
+  <rect class="dg-node" x="280" y="166" width="180" height="42" rx="8"/>
+  <text class="dg-txt" x="294" y="192">Snapshot store (S3)</text>
+  <line class="dg-edge" x1="370" y1="108" x2="370" y2="166" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="382" y="142">state at barrier n</text>
+  <text class="dg-txt-s" x="20" y="230">recover = restore snapshot n + rewind log to 4,182 + replay</text>
+</svg>
+<figcaption>Checkpoint = consistent snapshot of all state, pinned to a log offset. Recovery is mechanical: restore, rewind, replay.</figcaption>
+</figure>
+
+<h2>Exactly-once — and the honest version of it</h2>
+
+<p>Notice what recovery just did: events between the checkpoint and the crash get processed <em>twice</em> — once before the crash, once on replay. Inside the framework that's fine; restoring state rewound the counts too, so internal state ends up right. The problem is the <strong>sink</strong> — the database or topic you already wrote results into before crashing. Replay will write those results again. Your dashboard double-counts.</p>
+
+<p>Flink's end-to-end exactly-once closes this hole by making sinks <strong>transactional</strong>: results are written inside a transaction that only commits when the checkpoint completes, coordinated by a two-phase commit (2PC — the same protocol, with the same coordinator-stuck failure modes, you met in p2c01). Crash mid-interval and the uncommitted writes vanish with the failed checkpoint; downstream readers never see them. It genuinely works. And it has real costs: results become visible only when checkpoints commit (so end-to-end latency is roughly your checkpoint interval), the sink must support transactions, and you've invited 2PC's operational sharp edges into your pipeline.</p>
+
+<p>Here's the pragmatic line, and I'll commit to it: <strong>at-least-once delivery plus an idempotent sink usually beats true exactly-once</strong>. Make the sink write an <em>upsert</em> keyed by <code>(video_id, window_start)</code> — "set the 11:00 count for video 42 to 1,847." Replay after a crash just overwrites the row with the same value. No transactions, no commit-latency coupling, no 2PC, and the observable result is exactly-once even though delivery wasn't. This is p2c02's lesson wearing streaming clothes: <em>exactly-once processing is a property you engineer at the destination, not a gift the pipe hands you.</em> Reach for transactional exactly-once only when the sink genuinely can't be idempotent — appending to a stream someone else consumes, or triggering side effects like payments, where "written twice, same value" isn't a concept that saves you.</p>
+
+<div class="box story"><div class="box-tag">War story — Alibaba runs Singles' Day on Flink</div>
+<p>Alibaba's Singles' Day (November 11) is the largest shopping event on Earth, and its famous real-time GMV dashboard — GMV is gross merchandise value, the running total of money spent, the giant number journalists watch tick upward all day — is a stream processing job. Around 2016, Alibaba forked Apache Flink into an internal version called Blink to harden it for search, recommendations, and that dashboard; in January 2019 they went all-in, acquiring data Artisans — the company Flink's creators founded, later renamed Ververica — for a reported €90 million, and contributing Blink's improvements back upstream. The scale numbers are the point: during Double 11 in 2020, Alibaba's Flink deployment peaked at about <strong>4 billion events per second</strong>, roughly 7 TB of data per second, feeding dashboards executives and media were staring at in real time. At that scale, every mechanism in this chapter stops being theory: checkpointing must not stall the pipeline, watermarks must not hold windows hostage, and recovery must replay minutes of history at a rate that dwarfs most companies' total traffic. The same year they began running batch and stream workloads on the one engine — the kappa idea, "one codebase for both," executed at the most extreme scale on record.</p>
+</div>
+
+<h2>Replay: the superpower you're actually buying</h2>
+
+<p>Two weeks after launch you discover the sessionization logic has a bug: sessions split wrongly at midnight. Every session metric for 14 days is wrong. In the Redis-counter world this is a shrug and an apology. In the kappa world it's a runbook: deploy the fixed job as a <em>second</em> instance reading from the offset of 14 days ago, writing to a new table. It replays history at full speed — replay typically runs at 10–50x the live rate, so two weeks of data might take a few hours. When it catches up to now, flip readers to the new table, retire the old job. Same trick for schema evolution: want a new field aggregated? Replay history through the new code and the past gets the new field too, as if it had always existed.</p>
+
+<p>This is the property you're really buying with the log-plus-stream-job architecture, and it comes with a bill you must name: <strong>your recompute horizon equals your log retention</strong>. Keep 7 days of Kafka and you can only replay 7 days; the bug found on day 14 is only half-fixable. That's why real platforms use tiered storage (Kafka offloading older segments to object storage) or archive every event to a data lake — cheap S3 bytes are what keep the "replay anything" promise honest. Retention is a budget line, not a footnote.</p>
+
+<h2>How deep interviews actually go</h2>
+
+<p>Calibration, because this topic has a wide staff-level ocean you should <em>not</em> drown in. This chapter is also the concept backbone for two Part 3 problems — Ad Click Aggregation (p3c13) and Metrics at Scale (p3c18) — where everything above gets assembled under interview pressure.</p>
+
+<p><strong>L5 must volunteer, unprompted:</strong></p>
+<ul>
+<li>The event-time vs processing-time distinction the moment counts or money are involved, with a one-sentence watermark explanation and a committed late-data policy ("1-minute watermark, 10 minutes allowed lateness, side-output the rest and monitor its volume").</li>
+<li>A window choice justified by the question's shape, including the state cost if you pick sliding.</li>
+<li>The crash story: "state is checkpointed every 30s; recovery restores the snapshot and replays from the checkpoint's offset" — one sentence, said before anyone asks what happens on failure.</li>
+<li>A delivery-guarantee stance, committed: "at-least-once with idempotent upserts keyed by (key, window); I'd only pay for transactional exactly-once if the sink can't be idempotent."</li>
+<li>Numbers that drive the design: events/sec → partition count, keys × bytes → state size, checkpoint interval → recovery time.</li>
+<li>The batch-vs-stream call itself, defended: streaming for the live path, batch where daily is good enough.</li>
+</ul>
+
+<p><strong>Staff-only garnish (fine to mention, wasteful to derive):</strong> Chandy-Lamport's proof and unaligned-checkpoint variants, per-partition watermark generation and idle-source handling, RocksDB state-backend tuning, incremental checkpoint internals, the exact Kafka transaction protocol inside the 2PC sink. Name-drop at most; an L5 loop rewards the committed stance above far more than a lecture on any of these.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Stream processing rarely arrives as its own question. It ambushes you inside "design ad-click counting" or "design a metrics system," and the interviewer probes whether your numbers can be trusted. A passing senior answer names the two clocks, commits to a window and a late-data policy, and explains recovery without being asked. Probes you should expect verbatim:</p>
+<ul>
+<li>"Your hourly revenue dashboard shows a dip every night at 2am, but finance says revenue was flat. What's going on?" — they're checking whether you reach for event time and late mobile data instead of adding servers.</li>
+<li>"You said exactly-once. What does that actually mean here — what happens on a crash between your processor and the database?" — they want the checkpoint-replay-duplicate story and either transactional sinks or idempotent upserts, chosen, not listed.</li>
+<li>"A bug shipped three weeks ago and corrupted the aggregates. Walk me through the fix." — they're checking for replay-through-new-code, and whether you remember to check log retention before promising it.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c09-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, why "count views per hour" is hard on a stream — covering event time vs processing time and what a watermark is.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>There are two clocks on every event: when it actually happened (event time) and when our servers received it (processing time), and they disagree whenever a phone is offline — a view from 11:58 can arrive at 12:40. If we count by arrival, that view lands in the wrong hour, so for anything involving money we must count by event time. But then we never know for sure when an hour is "complete," because a straggler could still be out there. A watermark is the system's moving bet: "I believe everything up to 12:05 has arrived now" — and when that bet passes the end of an hour, we publish that hour's count. Events that lose the bet and arrive later are handled by policy: update the published number, shunt them to a side channel for reconciliation, or drop them if the use case tolerates it. So the answer is never "the exact count instantly" — it's a trade between answering fast and answering completely, and the watermark is the dial.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Pick the window (tumbling / sliding / session) and justify in one sentence each: (a) revenue per calendar hour for finance, (b) "requests in the last 5 minutes" for an autoscaling trigger evaluated every 30 seconds, (c) average time users spend browsing per visit.</p></div>
+<details><summary>Answer</summary><p>(a) Tumbling 1h — each event in exactly one bucket, cheapest, and finance thinks in calendar hours anyway. (b) Sliding, 5-minute size, 30-second step — a tumbling boundary could split a spike and delay the scale-up; note the cost: each event now lives in 10 windows. (c) Session with an inactivity gap (say 30 minutes) — "a visit" has no fixed length, so the data itself must define where the window ends.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your watermark is "max event time seen minus 60 seconds," and the window is [12:00, 12:05). Events arrive in this order (event time → arrival time): A 12:01→12:01, B 12:04→12:04, C 12:03→12:05, D 12:05:30→12:05:45, E 12:02→12:08. When does the window fire, what count does it emit, and what happens to each event?</p></div>
+<details><summary>Answer</summary><p>The watermark reaches 12:05 only when an event pushes max-event-time to 12:06 — D's 12:05:30 gets it to 12:04:30, so the window is still open when C arrives; A, B, C are all safely in. Whenever a later event lifts the max past 12:06, the window fires with count 3 (A, B, C — D belongs to the next window). E has event time 12:02, inside the window, but arrives after the watermark passed 12:05: E is late. With allowed lateness ≥ its delay, the window re-fires with count 4; otherwise E goes to your side output or is dropped, per policy. The lesson: the firing moment depends on the events you see, not the wall clock — an idle stream can hold a window open, which is exactly the idle-source problem real systems must handle.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Batch or stream? Commit and justify with one number each: (a) monthly invoice generation, (b) fraud checks on card payments, (c) the training dataset for a weekly-retrained recommendation model, (d) a live ops dashboard for the on-call engineer.</p></div>
+<details><summary>Answer</summary><p>(a) Batch — consumed once a month; a stream job would run 720 hours to produce one artifact. (b) Stream — the decision is only worth anything within ~1 second, before the transaction completes; a nightly batch catches fraud 12 hours after the money left. (c) Batch — the consumer (weekly training) defines the freshness bar; anything fresher than weekly is wasted. (d) Stream with sliding windows — an on-call engineer needs to see a spike within seconds, not at the next batch run. Pattern: the consumer's read frequency, not the data's arrival rate, decides.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks if you set the checkpoint interval to 10 minutes on a job processing 100K events/sec, and the job crashes 9 minutes after the last checkpoint? Walk the recovery, then say what an at-least-once + idempotent-upsert sink does to the user-visible damage.</p></div>
+<details><summary>Answer</summary><p>Recovery restores state from the 9-minute-old checkpoint and rewinds the log: 9 min × 100K/sec = 54 million events to replay. At a 5x replay rate that's roughly 2 minutes of catch-up during which outputs are stale. All 54M events are processed twice; with a naive incrementing sink, counts double for that span. With idempotent upserts keyed by (key, window), replay overwrites rows with identical values — the user sees briefly stale, never wrong, numbers. If 2 minutes of staleness is too much, shorten the interval and pay checkpoint overhead more often: the interval is a recovery-time budget, and you should be able to say its value and why.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Batch computes final answers over bounded data; streams are unbounded, so every answer is a point on the latency-vs-completeness dial.</li>
+<li>Lambda buys correctness with a duplicated codebase; kappa deletes the batch layer by making the log replayable — and it's the modern default because stream processors got good enough to be trusted alone.</li>
+<li>Batch still wins when the consumer reads daily or slower: cheaper, simpler, rerunnable — defend the choice with the consumer's read frequency.</li>
+<li>A stream processor is a for-loop over an infinite list with durable keyed state; the framework's job is making that loop crash-proof and shardable.</li>
+<li>Event time is when it happened, processing time is when you saw it; a watermark is a bet that everything up to T has arrived, and allowed lateness plus a late-data policy handle the bets you lose.</li>
+<li>Windows turn infinite streams into finite questions: tumbling for "per hour," sliding for "last N minutes," session for "per visit."</li>
+<li>Checkpoints are Chandy-Lamport-style consistent snapshots taken without pausing; recovery is restore + rewind + replay, and the checkpoint interval is your recovery-time budget.</li>
+<li>Commit to at-least-once plus idempotent upserts by default; pay for transactional exactly-once only when the sink can't be idempotent — and remember your recompute horizon equals your log retention.</li>
+</ul>
+</div>

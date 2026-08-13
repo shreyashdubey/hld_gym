@@ -1,0 +1,357 @@
+{
+  "chapter": "p2c06",
+  "items": [
+    {
+      "id": "p2c06-q01", "level": 1, "type": "mcq", "tag": "hot-partition",
+      "q": "What is a hot partition?",
+      "options": [
+        {"t": "One partition receiving a disproportionate share of traffic while its siblings idle", "correct": true,
+         "why": "Right. The data is balanced; the attention isn't. One partition pins at 100% CPU with a growing queue while the fleet average stays green."},
+        {"t": "A partition running on overheating hardware", "correct": false,
+         "why": "Nothing to do with temperature. 'Hot' means traffic-hot — the machine can be in a freezer and still drown in requests for one popular key."},
+        {"t": "A partition that has ended up holding far more rows of data than any of its sibling partitions", "correct": false,
+         "why": "That's data skew — a real but different problem. A hot partition can hold exactly its fair share of rows; it's the requests, not the bytes, that are lopsided."},
+        {"t": "The partition that holds the newest data", "correct": false,
+         "why": "Sometimes the newest time-bucket IS hot (everyone reads recent messages), but that's one cause, not the definition. Any partition holding a viral key goes hot regardless of age."}
+      ]
+    },
+    {
+      "id": "p2c06-q02", "level": 1, "type": "mcq", "tag": "power-law",
+      "q": "Why doesn't a perfect hash function prevent hot partitions?",
+      "options": [
+        {"t": "Hashing spreads keys evenly, but traffic per key follows a power law", "correct": true,
+         "why": "Exactly. The hash gives each partition 1/64th of the keys — but the top 1% of keys can carry 90%+ of the traffic, and whichever partition holds today's viral key burns."},
+        {"t": "Hash functions cluster similar keys together", "correct": false,
+         "why": "Good hash functions do the opposite — similar keys scatter. The distribution of keys is fine; it's the distribution of attention that's lopsided."},
+        {"t": "Perfect hash functions are too slow for production", "correct": false,
+         "why": "Hash speed is irrelevant here — hashing is nanoseconds. Even a magically instant, perfectly uniform hash still puts the celebrity's key on exactly one partition."},
+        {"t": "It does prevent them — as long as you use consistent hashing with enough virtual nodes on the ring", "correct": false,
+         "why": "Consistent hashing solves resharding churn (chapter 1.9), not heat. One key still maps to one partition, and if the world wants that key, that partition is on fire."}
+      ]
+    },
+    {
+      "id": "p2c06-q03", "level": 1, "type": "mcq", "tag": "detection",
+      "q": "Your fleet-average CPU is 9% but users complain of slowness. Why can the average look healthy during a hot-partition incident?",
+      "options": [
+        {"t": "Averages blend one saturated partition into many idle ones", "correct": true,
+         "why": "Right. One partition at 100% among 63 at 5% averages to about 6.5% — green. Meanwhile every request touching the hot partition waits seconds. Averages hide exactly what you need to see."},
+        {"t": "CPU metrics lag behind real traffic by several minutes", "correct": false,
+         "why": "Metric lag exists but isn't the mechanism. Even perfectly real-time averages hide the hot partition, because the math of averaging does the hiding."},
+        {"t": "Slowness complaints are usually client-side issues", "correct": false,
+         "why": "Dismissing user reports because dashboards are green is the exact junior trap this chapter warns about. The dashboard is answering a different question than the users are asking."},
+        {"t": "The database throttles CPU reporting under load", "correct": false,
+         "why": "No such mechanism. The reporting is accurate — it's the aggregation that lies. Per-partition views of the same data show the fire immediately."}
+      ]
+    },
+    {
+      "id": "p2c06-q04", "level": 1, "type": "mcq", "tag": "detection",
+      "q": "What two views should you have to detect hot partitions quickly?",
+      "options": [
+        {"t": "Per-partition metrics (heat map) and a live top-K hottest-keys list", "correct": true,
+         "why": "Yes. The heat map finds WHICH partition burns; the top-K list (count-min sketch territory, chapter 2.10) finds WHICH KEY and whether it's read-hot or write-hot — which selects the fix."},
+        {"t": "Fleet-average CPU and total QPS", "correct": false,
+         "why": "These are precisely the views that hide the problem. Averages and totals stay calm while one partition drowns."},
+        {"t": "Slow-query logs and disk usage", "correct": false,
+         "why": "Slow-query logs help for bad queries, but a hot partition makes GOOD queries slow. Disk usage tracks data skew, not traffic skew."},
+        {"t": "Error rate and uptime", "correct": false,
+         "why": "Lagging indicators. By the time errors spike, the queue already overflowed. Heat maps and top-K keys show the fire while it's still just latency."}
+      ]
+    },
+    {
+      "id": "p2c06-q05", "level": 1, "type": "mcq", "tag": "caching",
+      "q": "Which kind of hot key can a cache in front of the database NOT fix?",
+      "options": [
+        {"t": "A write-hot key", "correct": true,
+         "why": "Right. Caches absorb reads. Every one of the 8,000 likes/sec still has to land on the partition that owns the counter — for write heat you need to spread the writes themselves (salting)."},
+        {"t": "A read-hot key that changes rarely", "correct": false,
+         "why": "That's the cache's dream customer — a celebrity profile with a 5-second TTL turns millions of reads into one refresh per few seconds."},
+        {"t": "A key read by millions of users at once", "correct": false,
+         "why": "Volume of readers is fine for a cache (with the L1 refinement for the cache's own hot-shard problem). It's writes, not read volume, that caches can't absorb."},
+        {"t": "A key larger than 1 MB", "correct": false,
+         "why": "Big values need care (chunking, CDN) but are cacheable. The fundamental limit of caching is writes, not size."}
+      ]
+    },
+    {
+      "id": "p2c06-q06", "level": 1, "type": "mcq", "tag": "l1-cache",
+      "q": "You cached the celebrity's profile, but now one Redis node is melting. What happened, and what's the standard fix?",
+      "options": [
+        {"t": "The cache is sharded by key too, so the hot key pinned one cache node — add a small local L1 cache in each app server", "correct": true,
+         "why": "Exactly. You moved the hot partition from the database into the cache. With an in-process L1 (few dozen hottest keys, seconds of TTL), 200 app servers answer from their own RAM and the Redis shard sees a trickle of refreshes."},
+        {"t": "Redis handles commands on one thread and can't use all the cores — switching to multi-threaded Memcached fixes it", "correct": false,
+         "why": "Redis's threading model isn't the issue — any cache sharded by key sends all of one key's traffic to one node. Swapping cache products moves the fire to a different logo."},
+        {"t": "The TTL is too long; shorten it", "correct": false,
+         "why": "Backwards — a shorter TTL means MORE traffic through to the origin. The reads hammering the one cache node are the problem, and TTL doesn't redistribute them."},
+        {"t": "Add more Redis nodes to the cluster", "correct": false,
+         "why": "More nodes reshuffle keys, but the hot key still lives on exactly one of them. Scaling out doesn't help when the load is concentrated on a single key."}
+      ]
+    },
+    {
+      "id": "p2c06-q07", "level": 1, "type": "mcq", "tag": "salting",
+      "q": "What is key salting?",
+      "options": [
+        {"t": "Splitting one hot key into N sub-keys with random suffixes so writes spread over N partitions", "correct": true,
+         "why": "Right. likes:post789 becomes likes:post789#0 through #15 — sixteen keys, sixteen partitions, writes divided by sixteen. The bill: reads must scatter-gather all sixteen and merge."},
+        {"t": "Adding a random value to each key before hashing so attackers can't precompute lookups, as with password storage", "correct": false,
+         "why": "That's salting in the password-hashing sense — same word, different world. Here the goal is spreading load, not security."},
+        {"t": "Encrypting partition keys before storage", "correct": false,
+         "why": "No encryption involved. The suffix is plain and deliberate, and the reader must know N to gather all the pieces back."},
+        {"t": "Renaming hot keys so clients can't find them", "correct": false,
+         "why": "Traffic would just follow the new name. Salting doesn't hide the key — it multiplies it, so no single partition owns all of its traffic."}
+      ]
+    },
+    {
+      "id": "p2c06-q08", "level": 1, "type": "mcq", "tag": "hybrid-fanout",
+      "q": "In the hybrid feed architecture, what happens when a celebrity posts?",
+      "options": [
+        {"t": "One write to a celebrity-posts store; followers pull and merge it at read time", "correct": true,
+         "why": "Right. No fanout at all for celebrities. Each follower's feed load fetches their precomputed timeline plus recent posts from the few celebrities they follow, merged by time."},
+        {"t": "The post is fanned out to all followers, but on a low-priority queue", "correct": false,
+         "why": "Deprioritizing 100M writes still costs 100M writes — and makes celebrity posts arrive late. The hybrid design eliminates the fanout, not just its urgency."},
+        {"t": "The post is written to a random subset of followers' feeds", "correct": false,
+         "why": "Sampling would mean most followers never see the post. The pull-at-read path shows it to everyone while writing it exactly once."},
+        {"t": "Followers are notified to refresh their feeds", "correct": false,
+         "why": "Pushing 100M notifications to avoid 100M feed writes is the same fanout explosion in a different costume."}
+      ]
+    },
+    {
+      "id": "p2c06-q09", "level": 1, "type": "mcq", "tag": "coalescing",
+      "q": "What is request coalescing (singleflight)?",
+      "options": [
+        {"t": "Collapsing many concurrent identical reads into one backend query whose result is shared", "correct": true,
+         "why": "Yes — Discord's data services do exactly this. A thousand users ask for the same message at once; one query goes to the database; a thousand waiters get the answer. Read amplification capped at the source."},
+        {"t": "Batching different writes into one transaction", "correct": false,
+         "why": "That's write batching — useful, but different. Coalescing is about concurrent IDENTICAL reads sharing one in-flight result."},
+        {"t": "Merging small partitions into bigger ones", "correct": false,
+         "why": "That's compaction/merging at the storage layer. Coalescing lives in the request path, deduplicating in-flight queries."},
+        {"t": "Retrying failed requests with backoff", "correct": false,
+         "why": "Retry logic is chapter 2.7 territory. Coalescing prevents duplicate work from ever reaching the database, rather than managing failures."}
+      ]
+    },
+    {
+      "id": "p2c06-q10", "level": 2, "type": "mcq", "tag": "detection",
+      "q": "On-call at 2am: users report 5-second page loads. Fleet dashboard: all averages green. Your first move?",
+      "options": [
+        {"t": "Pull the per-partition heat map and top-K hot keys", "correct": true,
+         "why": "The green-averages-plus-screaming-users combination is practically the hot partition's signature. Per-partition views find the burning cell in one glance; top-K names the key and its read/write nature."},
+        {"t": "Roll back the last deploy", "correct": false,
+         "why": "Reasonable reflex for many incidents, but nothing points at a deploy here — and green aggregates with slow users specifically fingerprints skewed load, not a code regression. Check the cheap hypothesis first."},
+        {"t": "Restart the database nodes one by one", "correct": false,
+         "why": "Restarting a hot partition's node makes things worse: cold caches plus the same viral traffic. Diagnose before touching anything — three graphs cost thirty seconds."},
+        {"t": "Add more app servers since load is clearly high", "correct": false,
+         "why": "Fleet load ISN'T high — averages are green. More app servers would just deliver the same hot-key traffic to the same one partition faster."}
+      ]
+    },
+    {
+      "id": "p2c06-q11", "level": 2, "type": "mcq", "tag": "mitigation-choice",
+      "q": "A viral post's like counter takes 8,000 increments/sec; your store handles ~1,000 writes/sec per partition. Best fix?",
+      "options": [
+        {"t": "Salt the counter into ~16 sub-keys and sum them on read", "correct": true,
+         "why": "Write-hot means spreading the writes. 8K/sec over 16 sub-keys is 500/sec each — comfortable headroom. Reads pay 16x scatter-gather, softened by summing once a second into a cached total."},
+        {"t": "Cache the counter with a short TTL", "correct": false,
+         "why": "Caching absorbs reads. All 8,000 writes/sec still land on the one partition that owns the counter — the cache watches it drown from the sidelines."},
+        {"t": "Add read replicas for that partition", "correct": false,
+         "why": "Worse than useless for write heat: every replica must apply every one of the 8,000 writes/sec. You just bought the same fire on five machines."},
+        {"t": "Move the counter to a bigger machine", "correct": false,
+         "why": "Vertical scaling buys one step of headroom (until the next, bigger viral post) at the price of a migration under fire. Salting solves the class of problem, not one instance."}
+      ]
+    },
+    {
+      "id": "p2c06-q12", "level": 2, "type": "mcq", "tag": "mitigation-order",
+      "q": "A celebrity's profile page (rarely updated) is getting 2M reads/sec. A teammate proposes salting the profile key 20 ways. What's wrong with that?",
+      "options": [
+        {"t": "It's the wrong rung — this is read heat, so a cache plus per-server L1 absorbs it for free, while salting adds 20x read cost", "correct": true,
+         "why": "Salting trades READ cost for WRITE relief — applying it to a read-hot, rarely-written key is exactly backwards. A staleness-tolerant profile with seconds of TTL is the cache's dream case. Ladder order exists for this reason."},
+        {"t": "Nothing — salting is the standard hot-key fix", "correct": false,
+         "why": "Salting is THE fix for write heat and an anti-fix for read heat: the 2M reads/sec would each become 20 scatter-gather reads. Classify the heat before prescribing."},
+        {"t": "20 is too few; it should be 100", "correct": false,
+         "why": "Bigger N makes the wrong medicine wronger — more scatter-gather on every read. The problem isn't the dose, it's the prescription."},
+        {"t": "Salting only works on numeric counters that can be summed — a profile object can't be split into sub-keys and merged back", "correct": false,
+         "why": "Salting works on any key mechanically (counters just merge nicely with a sum). The objection isn't feasibility — it's that it solves a problem this key doesn't have."}
+      ]
+    },
+    {
+      "id": "p2c06-q13", "level": 2, "type": "mcq", "tag": "salting",
+      "q": "Why should you salt only dynamically-tracked hot keys instead of all keys?",
+      "options": [
+        {"t": "Blanket salting multiplies every read in the system by N to fix a problem only a handful of keys have", "correct": true,
+         "why": "Heat is power-law: maybe fifty keys are ever hot. Salting everything with N=20 buys fleet-wide 20x read amplification — cost, latency (slowest of 20), and hardware — for zero benefit on the cold billion. Feed the top-K list into a per-key salting flag instead."},
+        {"t": "Salting cold keys corrupts their data", "correct": false,
+         "why": "No corruption — sub-keys merge fine. The objection is economic, not correctness: paying scatter-gather on every read of every key is a self-inflicted 20x tax."},
+        {"t": "The database only supports a limited number of salted keys", "correct": false,
+         "why": "No such limit exists — salted keys are ordinary keys. The constraint is the read bill, not a product quota."},
+        {"t": "You actually should salt all keys — uniform salting is safer because a key can go viral faster than any tracker reacts", "correct": false,
+         "why": "'Safer' here means 20x read cost fleet-wide, forever, against a risk that per-key dynamic salting handles precisely. Defensive blanket salting is this topic's over-engineering trap, and interviewers probe for it."}
+      ]
+    },
+    {
+      "id": "p2c06-q14", "level": 2, "type": "multi", "tag": "heat-classification",
+      "q": "Which mitigations actually help a WRITE-hot key? (Select all that apply.)",
+      "options": [
+        {"t": "Key salting", "correct": true,
+         "why": "Yes — the canonical write-heat fix. N sub-keys on N partitions divide the write rate by N, at the price of scatter-gather reads."},
+        {"t": "Compound keys on a spreading attribute (e.g., (tenant_id, entity_id) instead of tenant_id alone)", "correct": true,
+         "why": "Yes — a design-time spread by a real attribute: the whale tenant's writes land on many partitions because different entity_ids hash differently. Careful with time buckets, though — this instant's writes all target the current bucket, so time alone doesn't spread live write heat."},
+        {"t": "Adaptive partition splitting (DynamoDB-style split for heat)", "correct": true,
+         "why": "Yes — the platform splits the hot partition so its keys land on separate hardware; DynamoDB can even isolate one hot item into its own partition. (A single hot ITEM still has a per-item ceiling, though.)"},
+        {"t": "A cache in front of the database", "correct": false,
+         "why": "Caches absorb reads. Every write still lands on the owning partition — a cache can't take the punch for the write path."},
+        {"t": "Extra read replicas", "correct": false,
+         "why": "Actively harmful for write heat: every replica applies every write, so you've multiplied the total write work, not divided it."}
+      ]
+    },
+    {
+      "id": "p2c06-q15", "level": 2, "type": "mcq", "tag": "compound-keys",
+      "q": "Discord partitioned messages by (channel_id, 10-day time bucket) — and still got hot partitions. Why?",
+      "options": [
+        {"t": "Bucketing spreads a channel's data over time, but this instant's traffic still converges on the current bucket", "correct": true,
+         "why": "Exactly the honest caveat. Compound keys cure the chronic disease (one channel growing one partition forever) but not the acute attack (40K users reading the newest bucket right now). That's why Discord also needed request coalescing in front."},
+        {"t": "Their buckets were too large; 1-day buckets would have fixed it", "correct": false,
+         "why": "Smaller buckets change nothing about NOW — today's active bucket gets today's traffic regardless of its width. Time-bucketing can't spread simultaneous attention."},
+        {"t": "Cassandra doesn't support compound partition keys properly", "correct": false,
+         "why": "Cassandra supports compound partition keys natively — Discord's schema used them as designed. The limitation is conceptual, not a product bug."},
+        {"t": "They forgot to hash the channel_id", "correct": false,
+         "why": "The key was hashed fine. Hashing places a partition; it can't make the world stop caring about one particular channel at one particular moment."}
+      ]
+    },
+    {
+      "id": "p2c06-q16", "level": 2, "type": "mcq", "tag": "hybrid-fanout",
+      "q": "In a hybrid feed, a user follows 300 normal accounts and 4 celebrities. What happens when they open their feed?",
+      "options": [
+        {"t": "Fetch their precomputed timeline, pull recent posts from the 4 celebrities, merge by time", "correct": true,
+         "why": "Right — the read path does a cheap cache fetch plus 4 targeted pulls, then a merge. The 300 normal accounts' posts are already in the precomputed feed because they were pushed at post time."},
+        {"t": "Query all 304 followees' recent posts and sort", "correct": false,
+         "why": "That's pure pull — the thing the hybrid exists to avoid. 300 of those queries are unnecessary because push already did that work at write time."},
+        {"t": "Serve the precomputed timeline only; celebrity posts appear when fanout completes", "correct": false,
+         "why": "Celebrity posts are never fanned out in the hybrid — waiting for fanout means waiting forever. The pull-and-merge at read time is precisely how celebrity posts reach the feed."},
+        {"t": "Serve whichever of push or pull responds first", "correct": false,
+         "why": "Push and pull aren't redundant alternatives here — they cover different followees. Racing them would drop either the celebrity posts or everyone else's."}
+      ]
+    },
+    {
+      "id": "p2c06-q17", "level": 2, "type": "mcq", "tag": "multi-tenant",
+      "q": "Your multi-tenant SaaS shards by tenant_id. One tenant is 40% of all traffic and their partition neighbors suffer. Which framing is most useful?",
+      "options": [
+        {"t": "This is the celebrity problem: isolate the whale (dedicated partitions/cell), rate-limit per tenant, and spread their data with (tenant_id, entity_id) keys", "correct": true,
+         "why": "The whale tenant IS a celebrity — same power law, same playbook, plus one luxury: whales are predictable, so you can provision isolation at onboarding instead of discovering heat at 2am."},
+        {"t": "A billing problem: charge them more and the load resolves itself", "correct": false,
+         "why": "Pricing may be fair, but revenue doesn't cool a partition. Their co-tenants are suffering today regardless of the invoice."},
+        {"t": "A capacity problem: the fleet is undersized for this tenant mix — double it and the whale's load dilutes across twice as many partitions and the neighbors recover", "correct": false,
+         "why": "Doubling the fleet reshuffles keys, but the whale's traffic still concentrates on whichever partitions hold their data. Uniform scaling can't fix skewed load."},
+        {"t": "A client problem: ask the tenant to send less traffic", "correct": false,
+         "why": "Your biggest customer being your biggest user is success, not abuse. Architecture should absorb the whale — though per-tenant rate limits as a guardrail are fair and standard."}
+      ]
+    },
+    {
+      "id": "p2c06-q18", "level": 2, "type": "mcq", "tag": "replicas",
+      "q": "When do extra read replicas for the hot range beat a cache as the read-heat fix?",
+      "options": [
+        {"t": "When reads can't tolerate cache staleness but can tolerate small replication lag", "correct": true,
+         "why": "Replicas serve real (near-fresh) data with consistency guarantees a TTL cache can't offer, at the price of hardware and lag. If seconds of staleness were fine, the cache is cheaper — this rung exists for the stricter cases, and still does nothing for writes."},
+        {"t": "Always — replicas are strictly better than caches", "correct": false,
+         "why": "Replicas cost hardware per slice, still apply every write, and serve full queries slower than a cache hit. For staleness-tolerant read heat, the cache wins on every axis."},
+        {"t": "When the key is write-hot", "correct": false,
+         "why": "Write heat is where replicas are at their worst — every replica repeats every write. Neither caches nor replicas help; that's salting territory."},
+        {"t": "When you can't measure which partition is hot", "correct": false,
+         "why": "Asymmetric replication REQUIRES knowing the hot range — that's what the heat map feeds. Without measurement you'd be replicating blind, everywhere, expensively."}
+      ]
+    },
+    {
+      "id": "p2c06-q19", "level": 3, "type": "mcq", "tag": "interview-judgment",
+      "q": "Mid-interview, you've drawn a clean feed design. The interviewer says: 'One of your users is Cristiano Ronaldo — 650M followers.' What's the strongest response pattern?",
+      "options": [
+        {"t": "\"Then my push fanout breaks: one post = 650M writes. Accounts past a follower threshold skip fanout — store once, followers pull and merge at read. Also his profile partition goes read-hot: cache plus per-server L1. Trade-off: two code paths and a threshold to tune.\"", "correct": true,
+         "why": "This volunteers the mechanism, both symptoms (fanout explosion AND hot reads), the canonical hybrid fix, the cheap cache rung, and the costs — unprompted, committed, about twenty seconds. This is precisely the bell-rings-you-come-running answer the question exists to elicit."},
+        {"t": "\"The system scales horizontally, so we'd add capacity for him.\"", "correct": false,
+         "why": "Uniform scaling is exactly what hot keys defeat — his data lives on specific partitions no matter how many you have. 'Horizontally scalable' as an incantation signals the mechanism wasn't understood, and the interviewer will push through it."},
+        {"t": "\"There are several directions we could take: cache his profile aggressively, shard his data differently, push his posts through a queue to smooth the spike, rate-limit reads to his pages, or some combination — I'd want to weigh each against requirements before choosing.\"", "correct": false,
+         "why": "Option-listing without commitment or read/write classification. Two of the four options don't even fit (a queue delays fanout, it doesn't shrink it). The senior move is a committed combination with prices attached."},
+        {"t": "\"Which part concerns you — the reads or the writes?\"", "correct": false,
+         "why": "A clarifying question can be fine, but this one outsources the analysis the interviewer is testing. BOTH sides break, you should say so — classifying the heat yourself is the graded skill."}
+      ]
+    },
+    {
+      "id": "p2c06-q20", "level": 3, "type": "mcq", "tag": "commit-justify",
+      "q": "Design review: a live-sports app expects one match to dominate all traffic — score reads and a like counter. An engineer proposes: 'salt every key 32 ways now, so we're safe forever.' Your call?",
+      "options": [
+        {"t": "Reject: salt only the tracked-hot keys; serve the score via cache + per-server L1 since it's read-hot; size the counter's salt from measured write rate, not 'forever'", "correct": true,
+         "why": "Three corrections in one: blanket salting taxes every read 32x; the score is read-hot so salting is the wrong rung entirely; and N should come from arithmetic (writes/sec ÷ per-partition budget, with headroom). Committed, priced, calibrated."},
+        {"t": "Accept — over-provisioning beats an outage", "correct": false,
+         "why": "This isn't over-provisioning, it's mis-provisioning: a permanent 32x read tax on every key to prevent heat that only a few keys will ever see. The outage risk is better handled by targeted salting plus detection."},
+        {"t": "Accept for counters, reject for everything else", "correct": false,
+         "why": "Closer, but still unsized and static. Which counters? At what N? Salting cold counters wastes reads too. The senior version is dynamic: top-K-driven, with N from the write-rate math."},
+        {"t": "Reject: salting is obsolete now that databases have adaptive capacity", "correct": false,
+         "why": "Adaptive splitting helps but has a floor — a single hot ITEM still hits a per-item ceiling (DynamoDB: 3,000 RCU/1,000 WCU even when isolated). Application-level salting remains the tool that breaks through that ceiling. Declaring rungs obsolete is its own miscalibration."}
+      ]
+    },
+    {
+      "id": "p2c06-q21", "level": 3, "type": "mcq", "tag": "interview-judgment",
+      "q": "An interviewer asks: 'Your salted counter works. What did reads just cost you, and how would you contain that?' The strongest answer:",
+      "options": [
+        {"t": "\"Reads went from 1 query to N, and latency is now the slowest of the N. I'd contain it with a once-per-second aggregator that sums the sub-keys into a cached total, so users read one value and the scatter-gather runs once a second regardless of viewer count.\"", "correct": true,
+         "why": "Names the price precisely (N-way fan-out AND tail-latency shape), then kills it with the standard aggregator pattern — the read bill paid by one background job instead of millions of users. Cost named, cost contained, done in three sentences."},
+        {"t": "\"Reads touch more partitions now, so they're marginally slower, but modern databases parallelize scatter-gather queries across nodes very well — in practice the overhead is negligible and I wouldn't spend engineering time containing something users won't notice.\"", "correct": false,
+         "why": "Hand-waving the cost the question explicitly asked for. Parallel scatter-gather still waits for the slowest of N — tail latency compounds, which is why p99 is precisely where this hurts."},
+        {"t": "\"I'd un-salt the key once traffic drops to restore cheap reads.\"", "correct": false,
+         "why": "Un-salting when keys cool is genuinely part of dynamic salting — but it answers 'later' when the question asked about 'now,' during the fire, when reads are at their most expensive. The aggregator handles now."},
+        {"t": "\"Reads should go through the cache anyway, so the cost doesn't materialize.\"", "correct": false,
+         "why": "Half a thought: WHAT fills the cache? Something must do the N-way gather on every refresh — that something is the aggregator, and saying so explicitly is the difference between an answer and an assumption."}
+      ]
+    },
+    {
+      "id": "p2c06-q22", "level": 3, "type": "mcq", "tag": "failure-modes",
+      "q": "Your per-server L1 caches (2s TTL) absorbed the celebrity read storm. What's the sharpest NEW failure mode you just created, worth raising unprompted?",
+      "options": [
+        {"t": "Synchronized expiry: 200 servers' L1 entries can expire around the same moment and stampede the origin together every TTL cycle", "correct": true,
+         "why": "The thundering-herd-on-expiry pattern — 200 simultaneous refreshes per cycle, worse if a deploy clears all L1s at once. Contained by jittering TTLs and coalescing the refresh so one flight per server (or per fleet) fills the cache. Raising this unprompted is exactly the senior reflex."},
+        {"t": "L1 caches use too much app-server memory", "correct": false,
+         "why": "A few dozen hot keys is kilobytes to megabytes — noise. The interesting failure is behavioral (correlated expiry), not resource exhaustion."},
+        {"t": "Users hitting different app servers may briefly see different values, since each server's L1 refreshes on its own schedule and can be up to ~2s stale", "correct": false,
+         "why": "True — but it's not NEW information; you accepted staleness knowingly when you chose this rung for staleness-tolerant data. The unpriced surprise is the synchronized refresh stampede."},
+        {"t": "The L1 makes cache invalidation impossible", "correct": false,
+         "why": "Harder, not impossible: short TTLs bound staleness by design, and a pub/sub invalidation broadcast can tighten it. 'Impossible' overstates it — precision matters when naming failure modes."}
+      ]
+    },
+    {
+      "id": "p2c06-q23", "level": 3, "type": "mcq", "tag": "ops-judgment",
+      "q": "You inherit a system with recurring surprise hot-partition incidents. Budget for exactly one investment this quarter. Which first?",
+      "options": [
+        {"t": "Detection: per-partition heat maps, per-partition p99, and a live top-K hot-key feed with alerts", "correct": true,
+         "why": "Every mitigation rung consumes detection as input — targeted salting needs the top-K list, asymmetric replicas need the heat map, and incident response needs to find the fire in seconds not hours. Observability first is the classic ops-maturity ordering; you can't fix what you can't see."},
+        {"t": "Migrate to a database with adaptive capacity, so the platform detects heat and splits hot partitions automatically at the source", "correct": false,
+         "why": "A quarter-long migration gamble that helps eventually and blinds you never — you'd still lack the visibility to verify it works, and per-item ceilings remain. Detection is cheaper, faster, and makes every later investment smarter."},
+        {"t": "Preemptively salt the 100 largest keys", "correct": false,
+         "why": "Largest by data size isn't hottest by traffic — and static choices go stale as heat moves. Without the top-K feed you're guessing; with it, salting becomes surgical. Order of operations matters."},
+        {"t": "Double the cache cluster", "correct": false,
+         "why": "More cache nodes don't help a hot KEY (it still lives on one shard), and half the incidents may be write-hot where caches are spectators. Spending before seeing is the pattern that got this system here."}
+      ]
+    },
+    {
+      "id": "p2c06-q24", "level": 3, "type": "mcq", "tag": "resharding",
+      "q": "A partition is at 100% right now, and the long-term fix is splitting it. The senior sequencing is:",
+      "options": [
+        {"t": "Contain the heat first (cache/L1, coalescing, targeted salting), then split calmly via a dual-write migration once the node has headroom", "correct": true,
+         "why": "Splitting means copying data off a machine that's already saturated — the migration itself can tip it over. Contain, buy headroom, then run the chapter 2.11 playbook (dual writes, backfill, verified cutover) as a boring planned change instead of a panic move."},
+        {"t": "Split immediately — the fire IS the reason to split", "correct": false,
+         "why": "The urge is right, the sequencing wrong: backfill reads and dual writes add load to the drowning node. Emergency surgery on a crashing patient — stabilize first."},
+        {"t": "Don't split — the mitigations make splitting permanently unnecessary", "correct": false,
+         "why": "Sometimes true (a one-day viral spike), but recurring structural heat deserves the structural fix. Mitigations that quietly become permanent load-bearing duct tape are how the next, bigger incident is born."},
+        {"t": "Fail over to the partition's replica and split the old primary offline", "correct": false,
+         "why": "The replica inherits the identical traffic the moment it's promoted — same key, same heat, cold caches too. Failover moves the fire; it doesn't shrink it."}
+      ]
+    },
+    {
+      "id": "p2c06-q25", "level": 3, "type": "mcq", "tag": "calibration",
+      "q": "Interviewer says 'traffic to some keys is very uneven.' Candidate A spends four minutes on count-min sketch width/depth math, then runs low on time. Candidate B says: 'Hot partition — I'd detect with per-partition metrics plus a top-K hot-key sketch, then: cache with per-server L1 for read heat, salting with the scatter-gather price for write heat, hybrid fanout if it's a feed. For this system I'd start with the cache since the heat is reads.' Who calibrated better, and why?",
+      "options": [
+        {"t": "B — detection plus an ordered, priced ladder plus a commitment is the L5 bar; sketch internals are garnish that costs clock time", "correct": true,
+         "why": "B named the tool and spent the time where levels are decided: classification, mitigation order, trade-offs, and a committed choice. A demonstrated depth in the wrong place — the interviewer learned a lot about sketches and nothing about A's judgment on the actual problem."},
+        {"t": "A — demonstrating genuine mathematical depth on a real data structure beats reciting a checklist anyone can memorize from a blog", "correct": false,
+         "why": "Depth counts when aimed at the crux. Sketch parameters are staff-only garnish for this question — 'name the tool, move on' is the calibration; the crux is what you DO about the heat."},
+        {"t": "Both equal — they covered the same concepts", "correct": false,
+         "why": "Coverage isn't the rubric; judgment-per-minute is. A's four minutes bought one paragraph of signal; B's ninety seconds bought the whole senior checklist plus a committed recommendation."},
+        {"t": "B, but only because B spoke less", "correct": false,
+         "why": "Brevity wasn't the virtue — completeness-per-minute was. B's answer contains detection, classification, three rungs with prices, and a commitment. Cutting A's answer short wouldn't make it equivalent; it would just be a shorter lecture on sketches."}
+      ]
+    }
+  ]
+}

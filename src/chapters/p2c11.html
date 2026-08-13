@@ -1,0 +1,299 @@
+<p>Two years ago someone at your company sharded the <code>users</code> table four ways — <code>user_id % 4</code>, clean and simple, Chapter 1.9 stuff. It worked. The company grew. Now shard 2 is at 85% disk, its p99 is twice everyone else's, and capacity planning says you have four months before it falls over. The fix is obvious: go from 4 shards to 16. The problem is everything else: hundreds of millions of rows have to physically move to different machines, the routing logic in every service has to change, and at this exact moment about 40 million people are logged in.</p>
+
+<p>The old answer was a maintenance window. Put up a banner — "down for maintenance Sunday 2–6 a.m." — stop the writes, run the scripts, check the counts, bring it back up. Half the internet was built this way.</p>
+
+<p>So pick your window. 2 a.m. where? You have users in forty countries; 2 a.m. in Virginia is mid-morning in Mumbai and evening in Sydney. There is no hour when your traffic sleeps, because your traffic is the planet. And even if there were: Chapter 2.8 gave you an SLO of 99.95%, which is a budget of about 22 minutes of downtime per month. A four-hour window spends a year of error budget on one schema change — and this is the first of three migrations on this quarter's roadmap.</p>
+
+<p>This is also a real interview question, almost word for word. At the senior level it arrives as: <em>"You need to change the shard key on a live table with zero downtime. Go."</em> No hints, no menu. There is a standard professional answer to this — a pattern so established that Stripe, GitHub, and Shopify have each written it down in public. By the end of this chapter you'll be able to walk it end to end, with a rollback plan at every step.</p>
+
+<h2>The spine: expand → migrate → contract</h2>
+
+<p>Every zero-downtime migration — new column, new table, new database, new shard layout, even a whole new datastore — is the same four-phase movie. Learn it once and you can improvise any variation.</p>
+
+<ul>
+<li><strong>EXPAND.</strong> Add the new thing <em>alongside</em> the old thing. Ship code that writes to <em>both</em>. Reads still come from the old thing. Nothing visible changes.</li>
+<li><strong>MIGRATE.</strong> Copy history — all the rows that existed before dual writes began — into the new thing, in small, resumable, repeatable batches.</li>
+<li><strong>VERIFY.</strong> Prove the two copies agree, with a metric, not with hope. Read both, compare, count mismatches. You only move on when mismatches are ~zero.</li>
+<li><strong>CONTRACT.</strong> Flip reads to the new thing behind a feature flag. Watch. Then stop writing the old thing. Then — weeks later — delete it.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 240" role="img" aria-label="Timeline of the four migration phases with a rollback plan under each">
+  <text class="dg-txt-s" x="12" y="30">reads served from the OLD store this whole time</text>
+  <line class="dg-edge" x1="12" y1="38" x2="520" y2="38"/>
+  <rect class="dg-node" x="10" y="52" width="155" height="60" rx="8"/>
+  <text class="dg-txt" x="24" y="76">1. EXPAND</text>
+  <text class="dg-txt-s" x="24" y="96">dual writes on</text>
+  <rect class="dg-node" x="185" y="52" width="155" height="60" rx="8"/>
+  <text class="dg-txt" x="199" y="76">2. MIGRATE</text>
+  <text class="dg-txt-s" x="199" y="96">backfill history</text>
+  <rect class="dg-node" x="360" y="52" width="155" height="60" rx="8"/>
+  <text class="dg-txt" x="374" y="76">3. VERIFY</text>
+  <text class="dg-txt-s" x="374" y="96">shadow reads</text>
+  <rect class="dg-node-alt" x="535" y="52" width="175" height="60" rx="8"/>
+  <text class="dg-txt" x="549" y="76">4. CONTRACT</text>
+  <text class="dg-txt-s" x="549" y="96">flip reads, drop old</text>
+  <line class="dg-edge" x1="165" y1="82" x2="185" y2="82" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="340" y1="82" x2="360" y2="82" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="515" y1="82" x2="535" y2="82" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="14" y="150">rollback: flag off,</text>
+  <text class="dg-txt-s" x="14" y="166">stop dual writes</text>
+  <text class="dg-txt-s" x="189" y="150">rollback: pause job,</text>
+  <text class="dg-txt-s" x="189" y="166">nothing is lost</text>
+  <text class="dg-txt-s" x="364" y="150">rollback: keep serving</text>
+  <text class="dg-txt-s" x="364" y="166">from old, investigate</text>
+  <text class="dg-txt-s" x="539" y="150">rollback: flip the read</text>
+  <text class="dg-txt-s" x="539" y="166">flag back in seconds</text>
+  <text class="dg-txt-s" x="14" y="210">Each phase ships on its own, gets watched for days, and can be undone without touching the phases before it.</text>
+</svg>
+<figcaption>The expand → migrate → contract timeline. Notice the second row: every phase carries its own escape hatch.</figcaption>
+</figure>
+
+<p>Two rules make this pattern safe, and both are worth saying out loud in an interview. First: <strong>every phase is independently deployable and independently revertible</strong>. You never ship two phases in one deploy, because then a problem in either forces you to unwind both. Second: <strong>you decide how to get back <em>before</em> you go forward</strong>. Amazon's vocabulary is useful here: a two-way door is a decision you can walk back through; a one-way door isn't. The whole art of zero-downtime migration is converting one giant one-way door (the big-bang cutover) into a corridor of small two-way doors.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>It's moving to a new house while living your normal life — no hotel, no vacation days. First you get the keys to the new place and set up mail forwarding, so everything new arrives at both addresses (expand: dual writes). Then, over a few weekends, you move the old boxes room by room (migrate: backfill). Before giving up the old lease you walk both houses with a checklist — is everything really there? (verify: shadow reads). Only then do you change your official address, and you still keep the old keys for a month in case you find an empty drawer that shouldn't be empty (contract: flip, watch, then let go). Where the analogy breaks: your furniture doesn't change while you're moving it. Your data does — thousands of times per second. That's the entire technical difficulty, and it's what the next three sections are about.</p>
+</div>
+
+<h2>EXPAND: dual writes, and the discipline they demand</h2>
+
+<p>Phase one ships the new destination — new column, new table, the 16 new shards — plus code that writes every change to both old and new. Sounds like two lines of code. It is not, because the second write can fail, and the two writes are not one atomic action.</p>
+
+<p>The discipline that keeps you safe has three parts:</p>
+
+<ul>
+<li><strong>Pick one source of truth and say it out loud.</strong> Until cutover, the old store is the truth. All reads come from it. The new store is a shadow being warmed up — if it's wrong for a while, no user ever sees that.</li>
+<li><strong>Order the writes accordingly.</strong> Write the old store first, synchronously — if that fails, the whole request fails, exactly as today. Then write the new store. If <em>that</em> write fails, you do not fail the user's request over a copy nobody reads yet. You record the failure (log it, queue it for repair) and move on. Verification will catch anything that slips through.</li>
+<li><strong>Make the new-store write idempotent</strong> — safe to apply twice (Chapter 2.2). Retries and backfill will both hit the same rows; an upsert keyed on the primary key means "applied twice" equals "applied once."</li>
+</ul>
+
+<p>Even with discipline, application-level dual writes have a known flaw: the app can crash <em>between</em> the two writes, and now the stores disagree and nothing recorded it. If you want to close that gap properly, you already know the tool from Chapter 2.1: the <strong>outbox pattern</strong> — commit the change and an event describing it in one transaction, and let a relay apply the event to the new store. Or go one level lower with <strong>CDC, change data capture</strong> (Chapter 2.9): tail the database's own write-ahead log or binlog — the append-only journal where the database records every row change — and replay those changes into the new store. CDC can't miss a write, because it reads the same journal the database itself trusts. The senior framing: "I'll dual-write from the app for speed of shipping, or from CDC for correctness — for a money table I'd insist on CDC or outbox, because a silent gap between two non-atomic writes is not a risk I'll carry on a ledger."</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Dual writes from the app to old and new stores, with a backfill worker copying history">
+  <rect class="dg-node" x="30" y="110" width="130" height="56" rx="8"/>
+  <text class="dg-txt" x="52" y="134">App code</text>
+  <text class="dg-txt-s" x="44" y="152">every mutation</text>
+  <rect class="dg-node-alt" x="270" y="40" width="170" height="60" rx="8"/>
+  <text class="dg-txt" x="290" y="66">OLD store</text>
+  <text class="dg-txt-s" x="290" y="86">source of truth · all reads</text>
+  <rect class="dg-node" x="270" y="230" width="170" height="60" rx="8"/>
+  <text class="dg-txt" x="290" y="256">NEW store</text>
+  <text class="dg-txt-s" x="290" y="276">shadow, warming up</text>
+  <line class="dg-edge" x1="160" y1="122" x2="270" y2="76" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="94">1. write, must succeed</text>
+  <line class="dg-edge" x1="160" y1="154" x2="270" y2="254" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="128" y="216">2. write, best effort +</text>
+  <text class="dg-txt-s" x="128" y="232">logged on failure</text>
+  <rect class="dg-node" x="520" y="130" width="180" height="66" rx="8"/>
+  <text class="dg-txt" x="540" y="156">Backfill worker</text>
+  <text class="dg-txt-s" x="540" y="176">chunks · checkpoint · retry</text>
+  <line class="dg-edge" x1="440" y1="80" x2="560" y2="130" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="470" y="92">read old rows</text>
+  <line class="dg-edge" x1="560" y1="196" x2="440" y2="262" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="474" y="248">idempotent upsert</text>
+  <text class="dg-txt-s" x="30" y="318">Backfill must never overwrite a row the dual-write already made newer — compare a version or updated_at first.</text>
+</svg>
+<figcaption>Expand + migrate running together: live writes go to both stores while the backfill worker copies history behind them.</figcaption>
+</figure>
+
+<h2>MIGRATE: the backfill, which is a marathon with rules</h2>
+
+<p>Dual writes only cover changes from now on. Everything written before — years of history — has to be copied by a batch job, while the system runs at full traffic. Do the arithmetic before anything else, because the number changes the design: 2 billion rows at a polite 10,000 rows per second is 200,000 seconds — a bit over two days. At that scale the backfill is not a script someone babysits; it's a small production service with three non-negotiable properties:</p>
+
+<ul>
+<li><strong>Chunked and rate-limited.</strong> Copy in small batches — say 1,000 rows by primary-key range — with a throttle you can turn. The job must watch the database's health signals, above all <strong>replica lag</strong> (how far the read replicas from Chapter 1.8 have fallen behind the primary), and slow itself down when lag grows. A backfill that outruns replication takes your read path down as collateral.</li>
+<li><strong>Resumable.</strong> After every batch, checkpoint "done up to key X" somewhere durable. Two days in, the worker <em>will</em> die — deploy, out-of-memory kill, spot instance reclaimed — and it must pick up from X, not from zero.</li>
+<li><strong>Idempotent.</strong> Batches will be retried and will overlap with dual writes. Every copy is an upsert, and — the classic subtle bug — an upsert that <em>skips</em> rows the dual-write already made newer. Compare a version number or <code>updated_at</code> before writing, or your backfill will happily overwrite tonight's data with last year's.</li>
+</ul>
+
+<p>That last bullet deserves a slow-motion replay, because it's the most common way this pattern goes wrong in practice. The backfill reads row 42 at 14:00:00. At 14:00:01, a user updates row 42 — the dual-write puts the fresh value in both stores. At 14:00:02 the backfill, holding its stale 14:00:00 copy, writes row 42 into the new store. Blind upsert: the new store now has old data, and no error was raised anywhere. This is why "idempotent" alone isn't enough — the write must be conditional: apply only if what I hold is newer than what's there.</p>
+
+<h2>VERIFY: shadow reads, or proof instead of vibes</h2>
+
+<p>The backfill finished. Row counts match. Are the stores identical? You don't know. Counts don't catch a million rows with a mangled timezone. Before you point users at the new store, you make the system prove equivalence — continuously, on real traffic.</p>
+
+<p>The tool is the <strong>shadow read</strong> (also called a dark read): on some fraction of real read requests, the app reads <em>both</em> stores, serves the old store's answer to the user — the user experience cannot regress, because the old answer is by definition today's behavior — and compares the two results in the background. Every disagreement increments a <strong>mismatch metric</strong> and logs a sample. Now you have a dashboard that measures the one thing you care about: do the two stores agree <em>on the reads production actually performs</em>, which weights hot rows exactly as much as production does. Pair it with an offline checker — chunked checksums over both stores — to cover the cold rows nobody read this week.</p>
+
+<p>The gate is strict and worth stating as policy: <strong>cut over only when mismatches are approximately zero and have stayed there for days.</strong> Not "low." A steady 0.01% mismatch rate on a billion daily reads is a hundred thousand wrong answers a day, and a steady rate is never random noise — it's a systematic bug (a null handled differently, a timezone conversion, an encoding) sitting in a specific slice of your data. Find the class, fix it, re-backfill that slice, watch the metric fall to zero. <em>Then</em> move.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Shadow read: the app reads both stores, serves the old answer, and counts mismatches">
+  <rect class="dg-node" x="20" y="120" width="130" height="56" rx="8"/>
+  <text class="dg-txt" x="44" y="144">Request</text>
+  <text class="dg-txt-s" x="34" y="162">GET /user/42</text>
+  <rect class="dg-node" x="230" y="120" width="120" height="56" rx="8"/>
+  <text class="dg-txt" x="260" y="152">App</text>
+  <line class="dg-edge" x1="150" y1="148" x2="230" y2="148" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="470" y="30" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="490" y="54">OLD store</text>
+  <text class="dg-txt-s" x="490" y="72">this answer is served</text>
+  <rect class="dg-node" x="470" y="210" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="490" y="234">NEW store</text>
+  <text class="dg-txt-s" x="490" y="252">read in the shadow</text>
+  <line class="dg-edge" x1="350" y1="134" x2="470" y2="62" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="382" y="86">read</text>
+  <line class="dg-edge" x1="350" y1="162" x2="470" y2="234" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="368" y="216">read (shadow)</text>
+  <rect class="dg-node" x="200" y="222" width="180" height="56" rx="8"/>
+  <text class="dg-bad" x="220" y="246">mismatch metric</text>
+  <text class="dg-txt-s" x="220" y="264">answers differ → +1, log both</text>
+  <line class="dg-edge" x1="290" y1="176" x2="290" y2="222" marker-end="url(#arrow)"/>
+  <text class="dg-good" x="20" y="106">user always gets the old answer</text>
+  <text class="dg-txt-s" x="404" y="292">cut over only when this metric reads ~0 for days</text>
+</svg>
+<figcaption>Shadow reads: production traffic becomes your test suite, and disagreement becomes a number on a dashboard.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — Stripe</div>
+<p>In 2017 Stripe published "Online migrations at scale," the post that made this pattern a named industry standard. They needed to restructure hundreds of millions of Subscription objects — customers were moving from one-subscription-each to many — on data that processes real money, where a wrong row isn't a stale feed item, it's a wrong charge. Their recipe is exactly this chapter's spine, stated as four phases: dual-write to the old and new representations; then move all <em>read</em> paths over; then move all <em>write</em> paths; then remove the old data. Each phase shipped separately and was validated before the next began, with the backfill running against a live production collection. Their framing is worth quoting in an interview because it names the payoff precisely: each step is small enough to reason about, and the system answers traffic normally the entire time. The migration took months of calendar time — and users never saw any of it. Months of patient, boring, reversible steps is what "zero downtime" costs, and at Stripe's stakes that trade is obviously right.</p>
+</div>
+
+<h2>CONTRACT: the flip, and the trap of never contracting</h2>
+
+<p>Cutover day is deliberately boring, because the switch is not a deploy — it's a <strong>feature flag</strong>: a runtime setting your code checks on each request, flippable in seconds without shipping code (you met flags in Chapter 2.8's rollout discussion). You flip reads to the new store for 1% of traffic. Watch p99 latency, error rate, and the mismatch metric — which you keep running, now comparing in the other direction. Then 10%, then 50%, then 100%, watching at each step. If anything looks wrong at 1%, you've exposed 1% of users for a few minutes, and the rollback is one flag flip. Compare that to discovering the same bug at 100% after a big-bang cutover with no way back.</p>
+
+<p>One ordering rule does a lot of quiet work here: <strong>flip reads before you flip writes.</strong> While both stores are still being written, reads can move back and forth freely — both copies stay current, so the read flag is a perfect two-way door. Once reads are 100% on the new store and stable for days, the new store becomes the source of truth, and <em>then</em> you change the write path. Even here, the careful move keeps a door open: reverse the dual write — new store first and authoritative, old store still updated best-effort — so that for a few more weeks even a late-discovered disaster has a path back to the old store without data loss. Then, and only then: remove the flag, stop writing the old store, snapshot it, and drop it.</p>
+
+<p>Now the trap. Every step of contract is optional in the sense that the system works without it — and that's exactly why teams stop halfway. Reads are flipped, everything's green, the sprint ends, priorities shift. The dual writes stay on. Quietly, forever.</p>
+
+<p>Six months later you have <strong>two sources of truth</strong>: every write costs double, every schema change must be made twice, the copies drift (the repair queue stopped being watched in March), and during every incident someone asks "which store is right?" — and gets two answers. Naming this failure mode unprompted is a genuinely strong signal — it's the difference between knowing the pattern and having lived with one: <em>"Dual-write is a state I pass through, not a state I operate in. Contract gets a calendar date before expand ships, and the migration isn't 'done' on the tracker until the old path is deleted."</em></p>
+
+<table>
+<thead><tr><th>Phase</th><th>What ships</th><th>Who serves reads</th><th>How you get back</th></tr></thead>
+<tbody>
+<tr><td>Expand</td><td>New store + dual writes (or CDC/outbox relay)</td><td>Old</td><td>Flag off dual writes; delete new store; nothing happened</td></tr>
+<tr><td>Migrate</td><td>Backfill job: chunked, rate-limited, checkpointed, idempotent</td><td>Old</td><td>Pause or abandon the job; old store never depended on it</td></tr>
+<tr><td>Verify</td><td>Shadow reads + mismatch metric + offline checksums</td><td>Old</td><td>Nothing to revert — you simply don't proceed until ~0</td></tr>
+<tr><td>Contract</td><td>Read flag 1%→100%; then write flip (reversed dual-write); then delete old</td><td>New</td><td>Flip the flag back in seconds; after write flip, reversed dual-write keeps old current</td></tr>
+</tbody>
+</table>
+
+<h2>The schema-change special case: gh-ost and friends</h2>
+
+<p>Not every migration is a new datastore. The most common migration in any company's life is humbler: add a column, change a type, add an index — on a MySQL table with 400 million rows. And the naive move, a plain <code>ALTER TABLE</code>, is a small production incident you schedule yourself. Historically MySQL rebuilt the whole table while blocking writes — hours of read-only on a big table. Modern "online DDL" — schema changes the database applies while still serving reads and writes — is better but still bites: the ALTER can wedge behind one long-running query on a <strong>metadata lock</strong>, and then every query behind <em>it</em> queues — a traffic jam where nobody honks, the app just stops. And on replicas the ALTER applies as one giant serial operation, so your read replicas fall an hour behind while it runs.</p>
+
+<p>The fix is the expand/migrate/contract pattern in miniature, automated by a tool. First generation: Percona's <code>pt-online-schema-change</code> creates an empty copy of the table with the new schema (a "ghost" table), backfills it in chunks, and keeps it current using <strong>triggers</strong> — little stored procedures on the original table that mirror every insert, update, and delete into the ghost. It works, but the triggers run inside your production write transactions: every write to the real table now pays extra latency and lock contention, you can't pause a trigger, and on an already-hot table that overhead arrives exactly when you can least afford it.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="gh-ost copies rows to a ghost table while replaying binlog events, then swaps tables">
+  <rect class="dg-node-alt" x="30" y="50" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="50" y="74">users (live)</text>
+  <text class="dg-txt-s" x="50" y="92">app reads + writes as normal</text>
+  <rect class="dg-node" x="30" y="210" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="50" y="234">binary log</text>
+  <text class="dg-txt-s" x="50" y="252">journal of every row change</text>
+  <rect class="dg-node" x="290" y="130" width="160" height="64" rx="8"/>
+  <text class="dg-txt" x="310" y="156">gh-ost</text>
+  <text class="dg-txt-s" x="310" y="176">throttles on replica lag</text>
+  <rect class="dg-node" x="530" y="50" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="550" y="74">users_ghost</text>
+  <text class="dg-txt-s" x="550" y="92">new schema, filling up</text>
+  <line class="dg-edge" x1="200" y1="78" x2="300" y2="130" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="196" y="118">copy rows in chunks</text>
+  <line class="dg-edge" x1="200" y1="238" x2="300" y2="188" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="188" y="220">tail live changes</text>
+  <line class="dg-edge" x1="450" y1="150" x2="530" y2="92" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="462" y="132">apply both</text>
+  <line class="dg-edge" x1="530" y1="60" x2="200" y2="60" marker-end="url(#arrow)"/>
+  <text class="dg-good" x="250" y="46">atomic rename swap at cut-over</text>
+  <text class="dg-txt-s" x="30" y="304">No triggers touch the live table: gh-ost reads the same journal the database itself trusts.</text>
+</svg>
+<figcaption>gh-ost's design: chunked copy plus binlog replay into a ghost table, then a near-instant rename swap.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — GitHub</div>
+<p>GitHub's schema migrations were frequent — their workflow ran continuous changes to a MySQL fleet serving the busiest developer site on earth — and trigger-based tools kept hurting on their hottest tables: the trigger overhead landed inside production write transactions, migrations couldn't truly pause, and aborting one was messy. So in 2016 their database team built and open-sourced <strong>gh-ost</strong>, whose announcement leads with the design goal: a <em>triggerless</em> online schema migration tool. Instead of triggers, gh-ost subscribes to MySQL's binary log — typically from a replica, so even the listening cost leaves the primary alone — and replays row changes onto the ghost table while copying old rows in small chunks. Because gh-ost owns the entire flow, it can do what triggers never could: throttle itself when replica lag climbs, pause completely on command, resume, and hold before the final table-swap until a human says go. The cut-over itself is an atomic rename — the app sees the old table one instant and the new one the next. It's the chapter's whole philosophy compressed into one tool: never block the live path, copy behind it, stay controllable, keep the exit open.</p>
+</div>
+
+<p>Postgres users have gentler defaults — adding a nullable column is instant, and indexes can build concurrently — but the same discipline applies to anything that rewrites a big table. And one rule is universal, worth volunteering in any interview that touches schemas: <strong>never couple a schema change to a code deploy.</strong> Expand the schema first (new column, nullable, ignored by old code), deploy code that handles both shapes, migrate the data, and only later contract by dropping the old column. If the deploy rolls back, the schema still fits the old code. Sound familiar? It's the same four phases, applied to one table.</p>
+
+<h2>Boss level: reshard 4 → 16, while hot</h2>
+
+<p>Back to the cold open, because this is the version interviewers reach for when they want senior-or-above signal. Changing the shard <em>key</em> or shard <em>count</em> is the hardest migration there is: the data's home address changes, every row moves, and the routing layer — the code deciding which shard holds user 7,204,911 — must agree with reality at every instant. Here's the full walk, with the rollback at each step, exactly as you'd narrate it at a whiteboard.</p>
+
+<p><strong>Step 0 — exploit the math.</strong> Going 4 → 16 is a multiply-by-4, and that's not an accident. With modulo routing, every user on shard <code>user_id % 4 = 1</code> can only land on new shards 1, 5, 9, or 13 — <code>x % 4 = 1</code> forces <code>x % 16</code> into that set. Each old shard splits cleanly into four children; no row ever crosses between old shards. (This is the same instinct as consistent hashing in Chapter 1.9: choose a scheme where growth means <em>splitting</em>, not <em>reshuffling</em>.) Say this in the interview — it cuts the problem's size by 75% before any machinery appears.</p>
+
+<p><strong>Expand.</strong> Stand up the 16 new shards, empty. Teach the router both layouts: old (mod 4) stays authoritative for reads and primary writes; a flag turns on dual writes to the new layout. For resharding at scale, prefer CDC over app-level dual writes — tail each old shard's binlog and route each change to its new home. One relay per old shard, no app code in the write path, no crash-between-two-writes gap. Rollback: flag off, truncate the new shards. Cost so far: hardware.</p>
+
+<p><strong>Migrate.</strong> Four backfill workers, one per old shard, each streaming its rows into that shard's four children — chunked, throttled on replica lag, checkpointed, idempotent, version-checked against the CDC stream's newer writes. At 10,000 rows/second per worker, the four streams together move 2 billion rows in about 14 hours — the clean four-way split is also a four-way speedup. Rollback: pause; the old shards never stopped being the truth.</p>
+
+<p><strong>Verify.</strong> Shadow reads on a sample of production traffic: route the read both ways, serve old, compare, count. Offline checksums sweep the long tail. Gate: ~0 mismatches, held for days. Rollback: still nothing to roll back — you just don't proceed.</p>
+
+<p><strong>Contract.</strong> Flip reads by flag: 1% of users routed to the new layout, then 10, 50, 100, watching p99 and mismatches at each stop — and if the graphs so much as twitch, flip back and diagnose at leisure, because the old shards are still fully current. After days of green, make the new layout authoritative for writes, keep a reverse CDC stream feeding the old shards for two more weeks as the final escape hatch, then decommission: snapshot the old shards, drop them, delete the mod-4 code path. Put the date for that last step on a calendar during expand — you know why by now.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A hospital moving to a new building doesn't pick a Sunday to wheel every patient across town and hope. It opens the new building empty, staffs it, and runs both in parallel. New admissions get charts in both systems (dual writes). Old records move ward by ward, checked against the originals (backfill + verify). Patients transfer a ward at a time, stable ones first (percentage cutover), and the old building keeps power, staff, and beds until the last transfer has been stable for weeks (the old store outlives the flip). The one thing a hospital never does is close the old building the same day the new one opens — and neither do you.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Shopify, and the ghost of Foursquare</div>
+<p>Shopify runs on sharded MySQL, with each merchant's shop living on one shard — and shards fill up unevenly, because one merchant going viral inflates a shard (Chapter 2.6's problem wearing a different shirt). So they built <strong>Ghostferry</strong>, an open-source Go tool that is the migrate phase productized: batch-copy a shop's rows to the target shard while tailing the binlog to replay concurrent changes, with verifiers that check data integrity before, during, and after the move. On top of it, moving a shop between shards is a routine operation: the copy runs in the background at full traffic, and the move ends with a brief write-lock on <em>that one shop</em> — seconds, not hours — while the final binlog entries drain and the router repoints. That's the mature endgame: rebalancing so routine it's just another background operation, and "downtime" scoped to one tenant for seconds. Now the dark twin. In October 2010, Foursquare ran user check-ins on two MongoDB shards of 66GB RAM each. Growth skewed; one shard blew past its RAM and started thrashing to disk. They tried to fix it live, under peak load — adding a third shard and migrating chunks off the hot one — but freeing 5% of the data didn't free 5% of the memory: the deleted rows left the remaining data fragmented across the same number of pages. The site went down for about eleven hours while they compacted the database offline, and MongoDB's CTO published the postmortem. Same operation as Shopify's — moving data off a hot shard — but attempted as an emergency instead of rehearsed as a routine. The lesson seniors quote: reshard while it's a project, because done as a rescue it inherits the emergency.</p>
+</div>
+
+<h2>How deep interviews actually go</h2>
+
+<p>Calibration, so you neither undershoot nor gold-plate. At the senior bar, an interviewer hearing "we need to change this live" expects you to <strong>volunteer</strong>, unprompted:</p>
+
+<ul>
+<li>The four phases by name, in order — and "no maintenance window" justified with a number (SLO math or global traffic), not with fashion.</li>
+<li>Dual-write discipline: which store is the source of truth, write ordering, what happens when the second write fails — and the crash-between-writes gap, with outbox/CDC named as the honest fix.</li>
+<li>Backfill as arithmetic plus three adjectives: <em>how long</em> at what rate, rate-limited against replica lag, resumable via checkpoints, idempotent with a version check against newer dual writes.</li>
+<li>Verification as a metric with a gate — shadow reads, mismatch counter, "~0 for days" — never "then we test it carefully."</li>
+<li>Cutover by flag with percentages, reads flipped before writes, and the answer to "how do I get back" stated <em>before</em> the flip, at every phase.</li>
+<li>The dual-write trap named as a failure mode with a scheduled contract date.</li>
+</ul>
+
+<p>Staff-level garnish — welcome for a sentence, but never at the cost of the list above: gh-ost's cut-over locking choreography, cross-region cutover sequencing on top of Chapter 2.5, building a generic migration platform with pluggable verifiers, formal reconciliation for financial data. The grading distinction is blunt: the senior list is <em>how you execute one migration safely</em>; the staff garnish is <em>how you build the machinery so fifty teams can</em>. Nail the first completely before touching the second — a candidate who name-drops Ghostferry but can't say why backfill needs a version check has it exactly backwards.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This topic is rarely its own interview; it's an ambush inside another one. You've designed something, it works, and then: "the users table needs a new shard key — zero downtime. Go." A passing senior answer walks expand → migrate → verify → contract concretely for <em>this</em> system, with a rollback per phase and numbers on the backfill. Probes to expect:</p>
+<ul>
+<li>"Your backfill and a live write race on the same row — walk me through exactly what prevents the stale overwrite."</li>
+<li>"Reads are 100% on the new store and day three reveals silent corruption. What's your path back, and when did you build it?"</li>
+<li>"Why not just dual-write forever and skip the risky cutover?" — they're inviting you to name the two-sources-of-truth trap and put a date on contract.</li>
+<li>"This table is 10,000 rows in an internal admin tool. Same plan?" — they're checking whether the ceremony scales <em>down</em>: a transaction and a deploy is the right answer there, and knowing that is judgment too.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c11-f1">
+<p class="fey-prompt">A junior asks: "We need to change a column's type on a 500M-row production table. Why can't we just run ALTER TABLE tonight?" Explain the zero-downtime way in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A plain ALTER on a table that size can lock or lag the database for hours, and we have users on it around the clock — there is no "tonight." So instead of changing the table in place, we build the change next door: add the new column, and ship code that writes every update to both the old and new column, while reads still use the old one. A background job then copies the 500M historical rows across in small, resumable batches, careful never to overwrite a row the live writes already updated. Then we prove the two columns agree: on real traffic we read both, serve the old one, and count every mismatch — we only proceed when that counter sits at zero for days. The switch itself is a feature flag: point 1% of reads at the new column, watch, ramp to 100%, and if anything looks wrong we flip back in seconds. Weeks later, once nothing has moved, we delete the old column — and only then is the migration actually done.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your service has a 99.9% monthly SLO. A teammate proposes a 3-hour maintenance window for a storage migration, arguing "99.9 isn't that strict." Do the arithmetic and give a verdict — plus the one scenario where you'd approve a window anyway.</p></div>
+<details><summary>Answer</summary><p>99.9% of a 30-day month leaves about 43 minutes of allowed downtime. Three hours is ~180 minutes — a bit over four months of error budget spent on one planned event, before a single unplanned incident this quarter. Verdict: no window; use expand → migrate → contract, which costs calendar time but zero availability. The exception is judgment, not dogma: an internal tool with tolerant users and no SLO, or a system with genuinely idle hours (a single-country B2B app at 3 a.m. local), where a short window is the cheapest correct answer. Seniors scale the ceremony to the stakes — in both directions.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>An engineer implements dual writes as: write the NEW store first ("it's the future, it should be primary"), then the old store; if either fails, fail the request. Name two concrete problems this ordering and policy create during the migration window.</p></div>
+<details><summary>Answer</summary><p>First: failing the user's request when the <em>new</em> store errors couples your production availability to an unproven shadow system — the warming-up copy can now take down the site, which inverts the whole point of keeping the old store authoritative. Second: writing new-first means a crash between the writes leaves data in the new store that the old (source-of-truth) store never saw; since all reads serve the old store, the user's successful-looking write is invisible to them — and worse, the backfill or verifier may later "confirm" the new store's phantom row. Correct discipline: old store first and synchronous (its failure fails the request, same as today), new store second and best-effort with the failure logged for repair — or skip app-level ordering entirely and drive the new store from CDC/outbox so there's nothing to race.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>You're backfilling 2B rows and can sustain 8,000 rows/sec without pushing replica lag past your threshold. How long does the backfill take? Halfway through, the job crashes and, separately, the verifier later finds ~50K rows where the new store holds older data than the old store. Diagnose both.</p></div>
+<details><summary>Answer</summary><p>2,000,000,000 ÷ 8,000 = 250,000 seconds ≈ 2.9 days — so this was always going to be a multi-day service, not a script. The crash is the expected case, not the surprise: with per-batch checkpoints ("done through key X") the job resumes from X and loses minutes; without them it restarts from zero and, if its writes are blind upserts, re-clobbers days of dual-written data as it re-runs. The 50K stale rows are the classic race: the backfill read those rows, a live dual-write updated them, then the backfill's stale copy landed last. The fix is a conditional write — apply only if the incoming version/<code>updated_at</code> is newer than what the new store holds — and the remedy now is to re-copy exactly those rows with the condition in place, then let the verifier confirm the count falls to zero.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Sketch the full plan (phases, verification, rollback per step) for changing a 4-shard user table to 16 shards with modulo routing — then answer: which users' rows can end up on new shard 9, and why does that matter operationally?</p></div>
+<details><summary>Answer</summary><p>Plan: (1) Expand — 16 empty shards; router learns both layouts; CDC relays from each old shard's binlog route live changes to the new homes; rollback = stop relays, truncate. (2) Migrate — one backfill worker per old shard streaming into its four children: chunked, lag-throttled, checkpointed, version-checked upserts; rollback = pause. (3) Verify — shadow reads on sampled traffic (serve old, compare, count) plus offline checksums; gate at ~0 mismatches for days. (4) Contract — read flag 1→10→50→100%, then writes flip with a reverse relay feeding the old shards for two weeks, then snapshot and drop, on a date scheduled back in step 1. Shard 9: only users with <code>user_id % 4 = 1</code>, because <code>x % 16 = 9</code> forces <code>x % 4 = 1</code> — new shard 9 is one of old shard 1's four children {1, 5, 9, 13}. Operationally this means every row's source is known and single: workers never contend, verification can run shard-pair by shard-pair, and a problem found on new shard 9 implicates exactly one backfill stream, not sixteen.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Maintenance windows died because traffic is global and SLO math is brutal — a 99.95% SLO allows ~22 minutes a month, and one window spends a year of it.</li>
+<li>Every live migration is expand → migrate → verify → contract: add the new alongside the old, copy history, prove agreement, then flip and remove.</li>
+<li>Dual writes need discipline — old store authoritative and written first, new store best-effort and idempotent — and their crash-between-writes gap is properly closed by outbox or CDC.</li>
+<li>A backfill is a small production service: rate-limited against replica lag, checkpointed so it can resume, and conditional on versions so it never overwrites newer dual-written data.</li>
+<li>Verification is a metric with a gate — shadow reads serving the old answer while counting disagreements — and cutover waits for approximately zero mismatches held for days, because a steady nonzero rate is a systematic bug.</li>
+<li>Cut over with a feature flag in percentages, flip reads before writes, and decide how you get back before every step forward; the phases must each ship and revert independently.</li>
+<li>The long-lived dual-write is the trap to name unprompted: two sources of truth drifting forever — contract gets a calendar date before expand ships.</li>
+<li>Big ALTER TABLEs get the same treatment via gh-ost's design — ghost table, chunked copy, binlog replay instead of triggers, throttled, pausable, atomic rename — and schema changes never couple to code deploys.</li>
+<li>Reshard as a rehearsed project, not a rescue: Shopify relocates shops routinely with seconds of write-lock per tenant; Foursquare resharded during the fire and spent eleven hours down.</li>
+</ul>
+</div>

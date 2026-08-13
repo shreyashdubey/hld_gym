@@ -1,0 +1,300 @@
+<p>It's the last Friday of the month — payday. At 9:41pm, a user of your food-delivery app taps <strong>Pay ₹499</strong>. The spinner spins. Five seconds. Ten. The app gives up: "Something went wrong. Please try again." She sighs, taps Pay again, it works instantly, and the biryani is on its way.</p>
+
+<p>Three days later, support ticket #4187: <em>"You charged me twice."</em></p>
+
+<p>Here's what actually happened. Her first request reached your server. The charge succeeded. The database committed. Then the <em>response</em> — the little 200 OK — died somewhere in a flaky mobile network. From her phone's point of view, a request that never arrived and a response that never returned look exactly the same: silence. So the app retried. And your server, seeing what looked like a brand-new request, charged her again.</p>
+
+<p>You can't fix this by "making the network reliable" — networks fail; that's physics plus economics. Retries are therefore mandatory: a client that doesn't retry silently drops orders, which is worse. And if retries are mandatory, duplicates are mandatory. The only question left — the question that decides payment-adjacent interviews — is <strong>who absorbs the duplicates</strong>.</p>
+
+<h2>The timeout tells you nothing</h2>
+
+<p>When a request times out, exactly one of three things happened: it never reached the server; it reached the server and the work failed; or the work <em>succeeded</em> and only the response was lost. The client cannot tell which. Not "it's hard to tell" — no protocol, no handshake, no number of acknowledgments lets two machines on an unreliable network be <em>certain</em> they agree on what happened.</p>
+
+<p>This has a famous name: the <strong>Two Generals problem</strong>. Two generals on opposite hills will win only if they attack at the same time, so they send messengers through an enemy-held valley — and any messenger might be captured. "Attack at dawn." Did it arrive? Send a confirmation back. Did <em>that</em> arrive? Confirm the confirmation… there is no finite number of messengers after which both generals are certain, because the last message sent is always unacknowledged. This is why "exactly-once delivery" is marketing shorthand: over a lossy network it's impossible. What's actually possible is better-defined — we'll get there in a minute.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="Timeline showing a lost response causing a client retry and a double charge">
+  <rect class="dg-node" x="40" y="12" width="110" height="36" rx="8"/>
+  <text class="dg-txt" x="55" y="35">Client app</text>
+  <rect class="dg-node" x="555" y="12" width="130" height="36" rx="8"/>
+  <text class="dg-txt" x="570" y="35">Server + DB</text>
+  <line class="dg-edge" x1="95" y1="48" x2="95" y2="310"/>
+  <line class="dg-edge" x1="620" y1="48" x2="620" y2="310"/>
+  <line class="dg-edge" x1="95" y1="80" x2="612" y2="80" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="200" y="72">POST /pay ₹499 — attempt 1</text>
+  <rect class="dg-node-alt" x="555" y="92" width="160" height="30" rx="6"/>
+  <text class="dg-txt-s" x="563" y="111">₹499 charged, committed</text>
+  <line class="dg-edge" x1="612" y1="150" x2="380" y2="150" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="420" y="142">200 OK (never arrives)</text>
+  <text class="dg-bad" x="352" y="156">✕</text>
+  <text class="dg-txt-s" x="30" y="190">timeout — was it the request</text>
+  <text class="dg-txt-s" x="30" y="205">or the response that died?</text>
+  <line class="dg-edge" x1="95" y1="240" x2="612" y2="240" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="180" y="232">POST /pay ₹499 — attempt 2 (same tap, honest retry)</text>
+  <rect class="dg-bad" x="555" y="252" width="160" height="30" rx="6"/>
+  <text class="dg-txt-s" x="563" y="271">₹499 charged AGAIN</text>
+  <text class="dg-txt-s" x="555" y="302">user has now paid ₹998</text>
+</svg>
+<figcaption>The retry that double-charges. Nothing misbehaved — client and server both acted correctly. The <em>design</em> is what's missing.</figcaption>
+</figure>
+
+<p>So you get exactly two honest delivery choices. <strong>At-most-once</strong>: send, don't retry — sometimes the work happens zero times. <strong>At-least-once</strong>: retry until acknowledged — sometimes it happens twice. For money, "sometimes zero" means lost orders, so every payment system on earth picks at-least-once — and therefore receives duplicates, on purpose, every day. Duplicates aren't an edge case. They're the contract.</p>
+
+<h2>"Exactly-once," the honest version</h2>
+
+<p>So how does your bank avoid double-charging you every time your phone flakes? The reframe that unlocks everything: you can't have exactly-once <em>delivery</em>, but you don't need it. You need exactly-once <em>effect</em>. Let duplicates arrive freely — and build the receiver so that processing a request twice has the same result as processing it once. That property is <strong>idempotency</strong>: doing an operation N times leaves the same state as doing it once.</p>
+
+<p><strong>At-least-once delivery + idempotent processing = exactly-once effect.</strong> That equation is the real meaning behind every "exactly-once" claim you'll ever read — including Kafka's famous "exactly-once semantics," which is at-least-once delivery plus transactional deduplication under the hood. When an interviewer says "exactly-once," a senior candidate says this sentence back, unprompted.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>An elevator call button is idempotent. Press it five times — impatiently, like all of us — and exactly one elevator comes, because the system's state is "a request for this floor exists," and pressing again re-asserts a fact that's already true. A chai vending machine is not: press five times, get five cups, pay five times. "Charge ₹499" is a vending machine; our whole job is turning it into an elevator button. Where the analogy breaks: the button is <em>naturally</em> idempotent because its state is a flag. "Charge the card" isn't naturally anything — idempotency has to be bolted on, and how you bolt it on is exactly what interviews probe.</p>
+</div>
+
+<p>Some operations are idempotent for free: "set status to CANCELLED." But "add ₹499 to the merchant's balance" is not, and rewriting it as "set balance to ₹52,499" doesn't rescue it — another payment landing in between gets silently erased. Real systems do something more general: they <em>detect</em> the duplicate and refuse to redo the work. For that, the server needs a durable memory of what it has already done — and the request needs a name.</p>
+
+<div class="box story"><div class="box-tag">War story — Knight Capital</div>
+<p>On August 1, 2012, Knight Capital — then one of the biggest stock-trading firms in the US — deployed new order-routing code to its eight production servers. The deploy missed one. Worse, the release reused an old feature flag, and on that eighth server the flag activated dead test code from years earlier called Power Peg — code built to keep sending child orders until a counter said "the parent order is filled, stop." The code that updated that counter had been moved years before, so the eighth server never saw "done." It fired orders continuously into the open market: millions of orders, around four million executions across roughly 150 stocks, in about 45 minutes. The loss was over $440 million — more than the company's cash on hand — and Knight had to be rescued and was ultimately acquired. Strip away the finance and the root cause is this chapter's theme: work executing with no durable record of what was already done. One missing "have I already processed this?" check is a company-ending event.</p>
+</div>
+
+<h2>Idempotency keys, done properly</h2>
+
+<p>The standard mechanism is the <strong>idempotency key</strong>. The idea is small; the correctness details are where interviews are won and lost.</p>
+
+<p><strong>The client names the intent.</strong> When the user taps Pay, the client generates a unique key — a UUID — and attaches it to the request, typically as an <code>Idempotency-Key</code> header. The crucial rule: the key is born with the <em>logical operation</em> (this tap, this order's payment), not the HTTP attempt — attempt 1 and attempt 2 carry the <em>same</em> key. That's the entire point: a server-generated key would make every retry look brand new. Client-generated, reused across retries. Non-negotiable.</p>
+
+<p><strong>The server remembers what it did.</strong> First time it sees a key, the server does the work and records three things in an idempotency table: the key, a hash of the request body, and the response it produced. When the same key arrives again, the server skips the work and replays the stored response — the retry gets a 200 OK with the same charge ID, never knowing its first attempt succeeded. If a known key arrives with a <em>different</em> request hash, that's not a retry, it's a client bug (often a key reused for a new purchase) — reject it with an error like 422; never replay, never execute.</p>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>The key record and the business record must commit in the <strong>same ACID transaction</strong>. One <code>BEGIN</code>: insert the key row, insert the charge row, write the response, <code>COMMIT</code>. Store them separately and you've re-created the original problem one layer down: crash after the key but before the charge, and every retry replays a success for work that never happened; crash the other way and the retry re-executes — double charge. Atomicity makes the crash cases fall out for free: if the server dies mid-work, <em>neither</em> row committed, so the retry finds no key and executes fresh, correctly. This is also why the idempotency table lives in the same ACID database as the business data — not Redis. <code>SETNX</code> (Redis's set-if-not-exists write) plus a separate database write is two systems pretending to be one transaction; one crash or eviction between them and your dedup is fiction. (Redis as a lookup cache is fine — the source of truth stays transactional.)</p>
+</div>
+
+<p><strong>The race you must name before the interviewer does:</strong> two requests with the same key in flight at once — the client's timeout fired while attempt 1 was still running. Handle it in the database, where atomicity lives: put a <code>UNIQUE</code> constraint on the key column and insert the key row <em>first</em>, marked "in progress," before doing the work. The second request's insert hits the constraint, and you choose a policy: block on the winner's row lock until it commits, then replay its stored response — or fail fast with a 409 "already in progress," which is what Stripe does. Blocking is kinder to clients; fail-fast protects your connection pool from piled-up waiters. Pick one and say why. What you may never do is let both proceed.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 360" role="img" aria-label="Flowchart of server-side idempotency key handling">
+  <rect class="dg-node" x="20" y="20" width="210" height="48" rx="8"/>
+  <text class="dg-txt" x="32" y="42">Request arrives with</text>
+  <text class="dg-txt" x="32" y="59">Idempotency-Key</text>
+  <rect class="dg-node" x="20" y="108" width="210" height="44" rx="8"/>
+  <text class="dg-txt" x="32" y="135">Key row already in DB?</text>
+  <line class="dg-edge" x1="125" y1="68" x2="125" y2="108" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="300" y="108" width="180" height="44" rx="8"/>
+  <text class="dg-txt" x="312" y="135">Request hash same?</text>
+  <line class="dg-edge" x1="230" y1="130" x2="300" y2="130" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="248" y="122">yes</text>
+  <rect class="dg-good" x="540" y="70" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="552" y="93">Replay stored</text>
+  <text class="dg-txt" x="552" y="110">response — no re-run</text>
+  <line class="dg-edge" x1="480" y1="120" x2="540" y2="102" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="492" y="102">yes</text>
+  <rect class="dg-bad" x="540" y="160" width="170" height="52" rx="8"/>
+  <text class="dg-txt" x="552" y="182">422 — same key,</text>
+  <text class="dg-txt" x="552" y="199">different body</text>
+  <line class="dg-edge" x1="480" y1="140" x2="540" y2="180" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="492" y="168">no</text>
+  <rect class="dg-node-alt" x="20" y="196" width="240" height="88" rx="8"/>
+  <text class="dg-txt" x="32" y="220">ONE ACID transaction:</text>
+  <text class="dg-txt-s" x="32" y="240">insert key row (unique constraint)</text>
+  <text class="dg-txt-s" x="32" y="257">write charge + ledger entries</text>
+  <text class="dg-txt-s" x="32" y="274">store response, COMMIT</text>
+  <line class="dg-edge" x1="125" y1="152" x2="125" y2="196" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="135" y="178">no</text>
+  <rect class="dg-node" x="20" y="308" width="200" height="40" rx="8"/>
+  <text class="dg-txt" x="32" y="333">Return fresh response</text>
+  <line class="dg-edge" x1="125" y1="284" x2="125" y2="308" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="300" y="232">concurrent duplicate hits the</text>
+  <text class="dg-txt-s" x="300" y="249">unique constraint → wait for the</text>
+  <text class="dg-txt-s" x="300" y="266">winner and replay, or 409 fast</text>
+</svg>
+<figcaption>The full key flow. Everything interesting lives in the highlighted box: one transaction, both records, or neither.</figcaption>
+</figure>
+
+<p><strong>Scope and TTL are decisions, not defaults.</strong> Scope the key per account and per operation — <code>UNIQUE(account_id, endpoint, key)</code> — so two merchants who generate the same UUID never collide, and a key used on "create charge" can't suppress a "create refund." And keys can't live forever: pick a TTL longer than your longest realistic retry window — including a mobile client that queued the request offline and syncs an hour later. Stripe keeps keys for 24 hours, now the industry default (there's even a draft IETF standard for the header). Too short and a late retry becomes a real double charge; longer costs only storage, and the numbers below say storage is a non-issue.</p>
+
+<div class="box story"><div class="box-tag">War story — Stripe</div>
+<p>Stripe made idempotency keys famous by making them boring. Every mutating endpoint in their API accepts an <code>Idempotency-Key</code> header; in 2017 engineer Brandur Leach published "Designing robust and predictable APIs with idempotency," laying out the machinery this chapter teaches. Stripe stores each key with a fingerprint of the request's parameters and the response it produced; a replayed key returns the recorded response — the original outcome, whatever it was — without re-executing. Reuse a key with different parameters and you get an error; send the same key concurrently and the second request gets a 409 rather than a second execution. Keys are pruned after 24 hours. The telling detail: Stripe's client libraries <em>automatically generate</em> keys and reuse them across their built-in retries — so a developer who has never heard the word "idempotency" still can't double-charge a customer over a flaky connection. That's the mature end state: the safety is on by default, and you have to work to turn it off.</p>
+</div>
+
+<h2>Money is a ledger, not a variable</h2>
+
+<p>Duplicates handled. Now for the second habit that separates people who've run money systems from people who've read about them: how you <em>store</em> money. The CRUD instinct is a balance column — <code>UPDATE accounts SET balance = balance - 499</code>. That design fails slowly, then suddenly. Crash between debiting one account and crediting another, and money vanishes. A bug overwrites a balance and you have no way to know what it <em>should</em> be — the history was overwritten in place. A customer asks "why is my balance ₹3,240?" and your honest answer is "because that's what the column says."</p>
+
+<p>Every bank and every accountant since 15th-century Venice uses the same fix: the <strong>double-entry ledger</strong>. Three rules. First, it's <strong>append-only</strong> — rows are added, never updated or deleted. Second, every movement of money is recorded <strong>twice</strong>: a debit on the account it leaves, a credit on the account it enters, and within one transaction total debits must equal total credits. (Real accountants have a richer debit/credit convention; "debit = out, credit = in" is the engineer's simplification — say you're simplifying.) Third, a mistake is fixed by appending a <strong>reversing entry</strong> — equal and opposite — never by editing the wrong row, which stays visible forever, followed by its correction.</p>
+
+<table>
+<thead><tr><th>txn_id</th><th>account</th><th>debit (paise)</th><th>credit (paise)</th><th>memo</th></tr></thead>
+<tbody>
+<tr><td>t_9001</td><td>wallet:user_42</td><td>49900</td><td>—</td><td>order #551 payment</td></tr>
+<tr><td>t_9001</td><td>clearing:processor</td><td>—</td><td>49900</td><td>order #551 payment</td></tr>
+<tr><td>t_9042</td><td>clearing:processor</td><td>49900</td><td>—</td><td>refund of order #551</td></tr>
+<tr><td>t_9042</td><td>wallet:user_42</td><td>—</td><td>49900</td><td>refund of order #551</td></tr>
+</tbody>
+</table>
+
+<p>Why 49900 and not 499.00? Because <strong>money is stored as integers in minor units — paise, cents — never as floats</strong>. Floats can't represent most decimal fractions exactly: <code>0.1 + 0.2</code> is <code>0.30000000000000004</code> in every language using IEEE floats, and that error smeared across ten million daily transactions means books that disagree with the bank's by an amount nobody can explain. Integer paise everywhere, with explicit rounding rules at the few places division happens (fees, taxes, conversion). Say it in the interview, one sentence, unprompted: "amounts are integer minor units, never floats." Tiny sentence, lots of credibility.</p>
+
+<p>Notice what the ledger gives you: a <strong>balance is now a derived fact</strong>, not a stored one — <code>SUM(credits) - SUM(debits)</code> over an account's entries. At scale you won't run that SUM on every read, so you keep a materialized balance — but the relationship never flips: the cache serves reads, and a reconciliation process continuously re-derives balances from the ledger and screams if they disagree. When they differ, the ledger wins, always — it's the record of what happened; the balance is merely an opinion about it.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A ledger is the shopkeeper's bound notebook, written in pen. Every sale, every payout — one line, never torn out, never erased. Wrote ₹500 instead of ₹50? You don't scribble over it; you add a new line — "correction, minus ₹450" — and both stay. The cash drawer is the "balance," but nobody trusts the drawer: at closing you re-add the notebook column and count the cash, and if they disagree, the notebook is right. A balance column without a ledger is a shop that keeps only the drawer — fast to check, impossible to audit. The analogy is honest on one more point: the notebook works because it's <em>one</em> notebook. Ledgers hate being split casually, which brings us to consistency.</p>
+</div>
+
+<p>Now the stance interviewers wait to hear, stated as a commitment: <strong>there is no eventual consistency on the ledger.</strong> Ledger writes go through one ACID primary and commit atomically — every leg of the transaction, plus the idempotency key, in one commit. Plenty of the surrounding system can be eventual: analytics replicas, cached balances, notification fanout. But two entries that must balance cannot be "eventually" balanced — in the gap, money exists in two places or neither, and Part 1 taught you exactly what async replication does during that gap. Scale it the way banks do: shard <em>by account</em>, so single-account transactions stay ACID on one primary; cross-shard transfers become a two-phase or saga-style dance you accept reluctantly and audit heavily. Latency is the price; for money, you pay it and say you're paying it on purpose.</p>
+
+<h2>The payment state machine, and the webhooks that attack it</h2>
+
+<p>A card payment isn't one event — it's a slow conversation. <strong>Created</strong>: intent recorded. <strong>Authorized</strong>: the bank approves and holds the customer's money — nothing has moved yet. <strong>Captured</strong>: you claim the held money — now the charge is real. <strong>Settled</strong>: it lands in your bank account, a day or two later, minus fees. Off the happy path: <strong>failed</strong> (declined, expired) and <strong>refunded</strong> — which, in ledger terms, is a new pair of reversing entries, not an edit.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Payment state machine from created to settled with failure and refund states">
+  <rect class="dg-node" x="20" y="100" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="42" y="127">created</text>
+  <rect class="dg-node" x="185" y="100" width="120" height="44" rx="8"/>
+  <text class="dg-txt" x="205" y="127">authorized</text>
+  <rect class="dg-node" x="360" y="100" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="380" y="127">captured</text>
+  <rect class="dg-good" x="540" y="36" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="565" y="63">settled</text>
+  <rect class="dg-node" x="540" y="164" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="558" y="191">refunded</text>
+  <rect class="dg-bad" x="185" y="190" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="215" y="217">failed</text>
+  <line class="dg-edge" x1="130" y1="122" x2="185" y2="122" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="128" y="94">bank holds funds</text>
+  <line class="dg-edge" x1="305" y1="122" x2="360" y2="122" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="300" y="94">you claim it</text>
+  <line class="dg-edge" x1="470" y1="110" x2="540" y2="66" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="478" y="66">money lands (T+1/T+2)</text>
+  <line class="dg-edge" x1="470" y1="134" x2="540" y2="180" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="478" y="180">reversing entries</text>
+  <line class="dg-edge" x1="75" y1="144" x2="185" y2="208" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="70" y="188">declined</text>
+  <line class="dg-edge" x1="245" y1="144" x2="245" y2="190" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="255" y="172">hold expires / voided</text>
+  <text class="dg-txt-s" x="20" y="245">every arrow is a legal move; any other transition is stale or a bug — ignore or alert, never apply</text>
+</svg>
+<figcaption>The payment state machine. Its real job isn't documentation — it's a bouncer that rejects illegal transitions.</figcaption>
+</figure>
+
+<p>You learn most of these transitions from <strong>webhooks</strong> — HTTP callbacks the processor sends you: "payment.captured," "payment.failed." Webhooks are the same hostile network story, from the other direction. The processor delivers them <strong>at-least-once</strong> (duplicates), retries for hours or days when your endpoint is down (huge delays), and promises no ordering ("captured" can arrive before "authorized," because a retry of an older event lands after a newer one). A consumer that trusts arrival order or arrival count is a time bomb.</p>
+
+<p>The defense is two rules stacked. <strong>Rule one: the consumer is idempotent.</strong> Every webhook carries an event ID; record processed IDs — same-transaction trick as before — and a redelivered event becomes a no-op. <strong>Rule two: events are proposals, not commands.</strong> A webhook doesn't <em>set</em> state; it <em>requests a transition</em>, and the state machine only permits legal moves. When "payment.authorized" arrives while you're already captured, captured→authorized isn't a legal move — the event is recognized as stale and dropped. That's what "tolerate reordering" means mechanically: the state machine, not the arrival sequence, is the source of order. Belt-and-suspenders, straight from Stripe's docs: treat the webhook as a doorbell, not a letter — on receipt, fetch the payment's current state from the processor's API rather than trusting the event's payload snapshot.</p>
+
+<h2>Reconciliation: the net under the net</h2>
+
+<p>Idempotency keys absorb duplicates. The state machine absorbs disorder. Now the uncomfortable senior question: what catches the failures those two <em>can't see</em>? Your webhook endpoint 500s for three days and the processor's retries give up. A consumer bug writes ₹499 as ₹4,990. The processor has an incident and never emits the event at all. Each of these leaves your ledger quietly wrong, and nothing in the request path will ever notice — the request path only checks what arrives, not what should have arrived.</p>
+
+<p>The answer is gloriously boring: <strong>reconciliation</strong>. Every day, the processor publishes a settlement file — a plain file listing every transaction settled on your behalf: IDs, amounts, fees, dates. A daily batch job matches it line-by-line against your ledger, and every discrepancy lands in a named bucket. In their file, not your ledger: a missed webhook — ingest it, book the entries, alert. In your ledger, not their file: a payment stuck in limbo — investigate before the customer does. Amounts differ: usually fees or currency conversion (book adjustment entries), sometimes a real bug (page someone). The one-liner worth memorizing: <strong>webhooks are the fast path, reconciliation is the truth path — reconciliation catches what webhooks miss.</strong> Mature shops three-way match — ledger against settlement file against bank statement — so even the processor's own mistakes get caught.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Reconciliation job matching ledger, settlement file, and bank statement into outcome buckets">
+  <rect class="dg-node" x="25" y="24" width="205" height="52" rx="8"/>
+  <text class="dg-txt" x="38" y="46">Your ledger</text>
+  <text class="dg-txt-s" x="38" y="64">what you think happened</text>
+  <rect class="dg-node" x="25" y="118" width="205" height="52" rx="8"/>
+  <text class="dg-txt" x="38" y="140">Settlement file (daily)</text>
+  <text class="dg-txt-s" x="38" y="158">what the processor settled</text>
+  <rect class="dg-node" x="25" y="212" width="205" height="52" rx="8"/>
+  <text class="dg-txt" x="38" y="234">Bank statement</text>
+  <text class="dg-txt-s" x="38" y="252">what money actually moved</text>
+  <rect class="dg-node-alt" x="305" y="110" width="160" height="70" rx="8"/>
+  <text class="dg-txt" x="322" y="140">Recon job</text>
+  <text class="dg-txt-s" x="322" y="160">match by txn id + amount</text>
+  <line class="dg-edge" x1="230" y1="50" x2="305" y2="126" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="230" y1="144" x2="305" y2="144" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="230" y1="238" x2="305" y2="164" marker-end="url(#arrow)"/>
+  <rect class="dg-good" x="530" y="16" width="175" height="44" rx="8"/>
+  <text class="dg-txt" x="544" y="43">matched — done</text>
+  <rect class="dg-node" x="530" y="80" width="175" height="56" rx="8"/>
+  <text class="dg-txt-s" x="542" y="102">in file, not in ledger →</text>
+  <text class="dg-txt-s" x="542" y="120">missed webhook: ingest it</text>
+  <rect class="dg-node" x="530" y="156" width="175" height="56" rx="8"/>
+  <text class="dg-txt-s" x="542" y="178">in ledger, not in file →</text>
+  <text class="dg-txt-s" x="542" y="196">stuck payment: investigate</text>
+  <rect class="dg-bad" x="530" y="232" width="175" height="56" rx="8"/>
+  <text class="dg-txt-s" x="542" y="254">amount mismatch →</text>
+  <text class="dg-txt-s" x="542" y="272">adjust entries or page ops</text>
+  <line class="dg-edge" x1="465" y1="120" x2="530" y2="42" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="465" y1="136" x2="530" y2="108" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="465" y1="156" x2="530" y2="180" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="465" y1="172" x2="530" y2="256" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Reconciliation is a daily sort-and-match, not a distributed system. Every mismatch has a named bucket and a named action.</figcaption>
+</figure>
+
+<p>Volunteering reconciliation unprompted is one of the strongest "has actually operated money" signals in an interview — it's the layer that exists only if you've asked, "and what catches everything else?"</p>
+
+<h2>How deep the interview actually goes</h2>
+
+<p>Calibration, so you neither undershoot nor gold-plate. At L5, the left column is <strong>volunteered, not extracted</strong> — if the interviewer has to ask, the signal is already weaker:</p>
+
+<table>
+<thead><tr><th>L5 must volunteer</th><th>Staff-level garnish (fine to name, don't camp on it)</th></tr></thead>
+<tbody>
+<tr><td>"Retries mean duplicates; exactly-once delivery is impossible — I get exactly-once <em>effect</em> via at-least-once plus idempotent handling"</td><td>Two Generals / FLP theory beyond one intuition sentence</td></tr>
+<tr><td>Full key mechanics: client-generated, reused across retries, stored with request hash + response <em>in the business transaction</em>, unique-constraint race handling, TTL and scope with reasons</td><td>Kafka transactional internals; exactly-once inside stream processors</td></tr>
+<tr><td>Double-entry append-only ledger, balances derived (or cached with reconciliation), integer minor units, reversing entries</td><td>Multi-currency ledger normalization, FX revaluation entries</td></tr>
+<tr><td>"No eventual consistency on the ledger" — one ACID primary per account shard, and why</td><td>Hot-account mitigation via sub-account balance buckets (name it if probed at 100x)</td></tr>
+<tr><td>State machine + idempotent, reorder-tolerant webhook consumer</td><td>Formal saga orchestration frameworks across many services</td></tr>
+<tr><td>Daily reconciliation against the settlement file, with the mismatch buckets</td><td>Regulatory reporting, audit-compliance specifics</td></tr>
+</tbody>
+</table>
+
+<p>And keep the numbers doing the deciding, because this topic tempts people into over-building. Key table at 10 million payments a day, roughly a kilobyte per row: about 10 GB a day, and with a 24-hour TTL a steady state of 10–20 GB — one Postgres table with a nightly delete. Anyone proposing a dedicated cluster for that has stopped doing arithmetic. Reconciliation at the same scale: 10 million rows against 10 million is two sorted files and a merge — minutes on one machine. The senior version of this topic is small numbers, small boxes, and correctness obsession; the junior version is big words and Kafka.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Payment-adjacent questions ("design a wallet," "design checkout," "integrate Stripe") are graded almost entirely on this chapter. A passing senior answer narrates the duplicate's journey unprompted: key born at the client, absorbed transactionally at the server, money appended to a ledger, state machine guarding transitions, recon sweeping behind. Probes to expect verbatim:</p>
+<ul>
+<li>"Your client times out and retries while the first request is still executing. Walk me through exactly what happens in the database." (They want the unique constraint, the in-progress row, and your block-vs-409 choice with a reason.)</li>
+<li>"Why can't the idempotency keys live in Redis? It's faster." (Dedup must commit atomically with the business write; cache as optimization only.)</li>
+<li>"Your cached balance says ₹10,000, SUM over the ledger says ₹9,500. Which is right?" (The ledger, always; fix the cache, root-cause the drift. Hesitate on which is truth and the interview turns.)</li>
+<li>"The processor says their webhooks are exactly-once. Do you still build dedup?" (Yes — the claim is impossible over a network, and the defense costs one table.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c02-f1">
+<p class="fey-prompt">A junior asks: "Why can't we just have exactly-once delivery? And if we can't, how does Stripe manage to never double-charge anyone?" Answer in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>When a request times out, the sender can't tell whether the request was lost or the reply was lost — and no amount of extra acknowledgments fixes that, because the last message is always unconfirmed. So a network can only offer "maybe never" or "maybe twice," and for payments we choose "maybe twice" and retry until we get an answer. The trick is making "twice" harmless: the app attaches the same unique key to every retry of one payment, and the server keeps a record of keys it has already processed. If a key comes back, the server doesn't charge again — it resends the answer it saved the first time. The key record and the charge are saved in one atomic transaction, so no crash can leave one without the other. Nobody achieved exactly-once delivery — duplicates arrive all the time — but each is recognized and absorbed, and the card sees exactly one charge.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Size the idempotency table: 20 million payment requests a day, roughly 1 KB per stored row, 24-hour TTL. How big is it, where does it live, and what would have to change before you'd consider anything fancier?</p></div>
+<details><summary>Answer</summary><p>20M × 1 KB ≈ 20 GB per day; with a 24h TTL, a steady state of roughly 20–40 GB. That's one indexed Postgres table — in the same database as the charges, because the design depends on committing the key with the charge — plus a nightly delete (or drop yesterday's time partition, which is cheaper). Nothing fancier is justified until the payment database itself shards; then the key table shards with it by the same account key, so key and charge still share a transaction. If your instinct said DynamoDB or Redis, notice what got lost: atomicity with the business write — the one property that made the mechanism correct.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Write the ledger entries (account, debit, credit, in paise) for: customer pays ₹799 for an order; your platform keeps a ₹79 fee; the restaurant gets the rest. One transaction or several? Check your invariant.</p></div>
+<details><summary>Answer</summary><p>One ledger transaction, three legs, committed atomically: debit <code>wallet:customer</code> 79900; credit <code>merchant:restaurant</code> 72000; credit <code>revenue:platform_fees</code> 7900. Debits 79900 = credits 72000 + 7900 — invariant holds. Splitting into two transactions ("customer pays platform," "platform pays restaurant") also balances, but a crash between them leaves the restaurant unpaid with money parked in a platform account, so you'd need a sweeper to complete the second leg. The one-transaction version has no in-between state — that's why it's the default. Say the trade-off out loud.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks if the <em>server</em> generates the idempotency key when a request arrives, instead of the client generating it?</p></div>
+<details><summary>Answer</summary><p>Everything, quietly. The key's job is to give one logical operation one name <em>across retries</em> — and only the client knows attempt 2 is a retry of attempt 1, because only the client experienced the timeout. A server-generated key names the HTTP attempt, not the intent: each retry gets a fresh key, looks unique, and executes. You've built the full apparatus — table, constraint, replay logic — and it will never once fire. A favorite interview trap, because the broken version contains all the right components wired to the wrong trigger. The key is born where the intent is born.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Webhooks for one payment arrive in this order: <code>payment.refunded</code>, <code>payment.captured</code>, <code>payment.authorized</code>. Your stored state is <code>created</code>. Walk each event through your consumer and give the final state.</p></div>
+<details><summary>Answer</summary><p>Event 1, refunded, arrives in state created: not a legal move. Don't apply it, but don't drop it either — park it (dead-letter or re-check later), and better, fetch the payment from the processor's API: the true state is refunded, so fast-forward through the legal chain (created→authorized→captured→refunded), booking ledger entries in order. Working from events alone: refunded parks, captured arrives and parks (or applies if your machine allows the compound move created→captured), authorized applies, then the parked events replay in legal order. Final state either way: refunded, every transition recorded. Teaching point: arrival order carried no information; the state machine plus an authoritative fetch reconstructed the truth.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Find the bug: "We do <code>SETNX key</code> in Redis; on success we process the payment in Postgres and set a 24h expiry on the key; on failure we return 409." Name two failure sequences that double-charge or wrongly block.</p></div>
+<details><summary>Answer</summary><p>Sequence one (wrongly blocks): <code>SETNX</code> succeeds, the server crashes before the Postgres commit. The charge never happened, but the key exists — every honest retry gets 409 until expiry, and the order is silently lost. Sequence two (double-charge): the charge commits, then Redis restarts without persistence or evicts the key under memory pressure — the retry's <code>SETNX</code> succeeds and the payment executes again. Sequence three (subtle): attempt 2 correctly gets 409 while attempt 1 is in flight — but no stored response exists to replay later, so the client never learns the outcome. One root disease: dedup record and business record in different systems can't commit atomically. The fix is moving the key into the payment database's transaction, with Redis demoted to an optional cache.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Networks fail, so retries are mandatory, so duplicates are mandatory; the design question is never "how do I prevent duplicates" but "which layer absorbs them."</li>
+<li>Exactly-once delivery over a network is impossible (Two Generals); the real thing is at-least-once delivery plus idempotent processing, which yields exactly-once effect.</li>
+<li>Idempotency keys are client-generated per logical operation and reused across retries; the server stores key, request hash, and response in the same ACID transaction as the business record, and replays the stored response on duplicates.</li>
+<li>Concurrent duplicates are settled by the database — unique constraint on the key, then block-and-replay or fail fast with 409; the dedup store never lives outside the transactional database.</li>
+<li>Money lives in an append-only double-entry ledger: every movement is a debit and a matching credit, corrections are reversing entries, and amounts are integer minor units, never floats.</li>
+<li>Balances are derived from the ledger; a cached balance is an optimization that reconciliation continuously checks, and when they disagree the ledger wins.</li>
+<li>There is no eventual consistency on the ledger: entries commit atomically on one ACID primary per account shard, and you pay the latency on purpose.</li>
+<li>Webhooks arrive duplicated, delayed, and out of order — the consumer dedups by event ID and treats events as proposed transitions a state machine can refuse; daily reconciliation against the settlement file catches what webhooks miss.</li>
+</ul>
+</div>

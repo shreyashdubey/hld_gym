@@ -1,0 +1,355 @@
+{
+  "chapter": "p2c09",
+  "items": [
+    {
+      "id": "p2c09-q01", "level": 1, "type": "mcq", "tag": "batch-vs-stream",
+      "q": "What is the fundamental difference between batch and stream processing?",
+      "options": [
+        {"t": "Batch runs on bounded data with a finish line; streams are unbounded, so answers are always provisional", "correct": true,
+         "why": "Right. Batch's contract is 'the input is complete before you start,' which makes answers final and reruns trivial. A stream never completes, so every answer is 'the count so far' — and everything else in the chapter (watermarks, windows) exists to manage that."},
+        {"t": "Batch uses disks, streams use memory", "correct": false,
+         "why": "Both use both. Stream processors keep large state on disk (RocksDB) and batch jobs cache in memory. The distinction is about the input being bounded or not, not the storage medium."},
+        {"t": "Streams are just faster batch jobs — the same computation run continuously on smaller chunks for lower latency", "correct": false,
+         "why": "That's the trap from the cold open — 'just run the batch job more often.' A stream job isn't a fast batch job; it's a different contract where the input never ends and completeness is never guaranteed."},
+        {"t": "Batch is for SQL, streaming is for code", "correct": false,
+         "why": "Both worlds speak SQL (Spark SQL, Flink SQL) and both accept code. The interface has nothing to do with it — boundedness of input does."}
+      ]
+    },
+    {
+      "id": "p2c09-q02", "level": 1, "type": "mcq", "tag": "lambda-kappa",
+      "q": "In the lambda architecture, why do the batch layer and speed layer both exist?",
+      "options": [
+        {"t": "Batch gives complete, trustworthy answers hours late; speed gives fresh, approximate answers now — serving merges them", "correct": true,
+         "why": "Exactly. Lambda is a two-legged answer to the latency-vs-completeness trade: recompute everything from raw history for correctness, patch the recent gap with a stream job for freshness."},
+        {"t": "The speed layer is a hot standby that serves all queries whenever the batch layer's job fails", "correct": false,
+         "why": "They're not redundant copies — they answer different time ranges. Batch covers 'up to this morning,' speed covers 'since this morning.' Neither can replace the other."},
+        {"t": "One handles reads, the other handles writes", "correct": false,
+         "why": "That's CQRS-flavored thinking from a different topic. Both lambda layers process the same incoming events; they differ in latency and completeness, not read/write roles."},
+        {"t": "Regulations require keeping two copies of data", "correct": false,
+         "why": "Nothing regulatory here. Lambda was an engineering workaround for stream processors not yet being trustworthy enough to stand alone — which is exactly what changed by the time kappa became the default."}
+      ]
+    },
+    {
+      "id": "p2c09-q03", "level": 1, "type": "mcq", "tag": "lambda-kappa",
+      "q": "What does the kappa architecture use instead of a batch layer?",
+      "options": [
+        {"t": "A faster stream processor with more machines", "correct": false,
+         "why": "More horsepower isn't the idea. Kappa's insight is about where history lives and how you re-read it, not about job speed."},
+        {"t": "The replayable log: recompute by running your stream job again from an earlier offset", "correct": true,
+         "why": "Right. The batch layer existed to re-read history and fix mistakes. If history sits in a replayable log (Kafka), your existing stream job can re-read it too — start a second instance at offset 0, write to a new table, swap. One codebase does both jobs."},
+        {"t": "A data warehouse that stores the aggregates", "correct": false,
+         "why": "A warehouse stores results; it can't recompute them from raw events with new logic. Kappa's whole superpower is replaying raw history through updated code."},
+        {"t": "Nightly snapshots of the stream job's state, restored and re-run whenever history needs recomputing with new logic", "correct": false,
+         "why": "Snapshots (checkpoints) are for crash recovery of the current logic. Recomputing with fixed logic needs the raw events again — that's what the retained log provides."}
+      ]
+    },
+    {
+      "id": "p2c09-q04", "level": 1, "type": "mcq", "tag": "event-time",
+      "q": "A user's phone buffers a view event at 11:58 in a tunnel and uploads it at 12:40. What are the event time and processing time?",
+      "options": [
+        {"t": "Event time 12:40, processing time 11:58", "correct": false,
+         "why": "Reversed. Event time is when the thing happened in the real world (the view, at 11:58); processing time is when your servers finally saw it (12:40)."},
+        {"t": "Event time 11:58, processing time 12:40", "correct": true,
+         "why": "Yes. Event time = when it happened, stamped by the phone. Processing time = when the pipeline received it. They diverge whenever devices go offline — and which clock you count by changes which hour gets the view."},
+        {"t": "Both are 12:40, since the server clock is authoritative", "correct": false,
+         "why": "If the server clock were authoritative, every offline device would corrupt your history. The event carries its own timestamp precisely so the 11:58 truth survives the tunnel."},
+        {"t": "It depends on the timezone configuration", "correct": false,
+         "why": "Timezones are a display problem (and events should carry UTC). The two-clocks distinction exists even with perfect timezone handling — it's about delay between happening and arriving."}
+      ]
+    },
+    {
+      "id": "p2c09-q05", "level": 1, "type": "mcq", "tag": "watermark",
+      "q": "What does a watermark of T = 12:05 assert?",
+      "options": [
+        {"t": "A summary of the past: every event processed so far carried an event time earlier than 12:05", "correct": false,
+         "why": "Close but backwards-looking. The watermark isn't a summary of what you've seen — it's a forward-looking bet about what's still coming: nothing older than 12:05 should arrive anymore."},
+        {"t": "The system believes all events with event time up to 12:05 have now arrived", "correct": true,
+         "why": "Right — and the word 'believes' is load-bearing. It's a bet, usually 'max event time seen minus a slack.' Windows ending at or before 12:05 can now fire. Events that break the bet are late data, handled by policy."},
+        {"t": "Events after 12:05 will be rejected", "correct": false,
+         "why": "Nothing is rejected for having a LATER event time — those belong to future windows. The watermark concerns events with EARLIER timestamps that haven't shown up yet."},
+        {"t": "The wall clock at the processor reads 12:05", "correct": false,
+         "why": "Watermarks live on the event-time clock, not the wall clock. A processor replaying yesterday's log at 3am has watermarks marching through yesterday's timestamps."}
+      ]
+    },
+    {
+      "id": "p2c09-q06", "level": 1, "type": "mcq", "tag": "windows",
+      "q": "What distinguishes a sliding window from a tumbling window?",
+      "options": [
+        {"t": "Sliding windows overlap, so one event belongs to several windows; tumbling windows tile the timeline with no overlap", "correct": true,
+         "why": "Right. Tumbling: adjacent blocks, each event in exactly one. Sliding: 'last 5 minutes, every 30 seconds' — smooth, but each event lands in 10 windows, multiplying state and output. Say that cost when you choose it."},
+        {"t": "Sliding windows are smaller", "correct": false,
+         "why": "Size is independent — you can have a 1-second tumbling window or a 1-hour sliding one. The difference is overlap: whether the window's step is smaller than its size."},
+        {"t": "Tumbling windows only work with processing time; sliding windows are the ones that support event-time and watermark semantics", "correct": false,
+         "why": "Every window type works with either clock. Window shape (how you chop time) and time domain (which clock) are independent choices."},
+        {"t": "Sliding windows close when the user goes inactive", "correct": false,
+         "why": "That's a session window — the one whose end is defined by a gap in the data. Sliding windows have a fixed size and step regardless of activity."}
+      ]
+    },
+    {
+      "id": "p2c09-q07", "level": 1, "type": "mcq", "tag": "windows",
+      "q": "What ends a session window?",
+      "options": [
+        {"t": "A fixed duration expiring", "correct": false,
+         "why": "Fixed durations are tumbling/sliding territory. Session windows deliberately have no fixed size — a visit can last two minutes or two hours."},
+        {"t": "The watermark reaching midnight", "correct": false,
+         "why": "Midnight is just another timestamp; nothing special ends sessions there. (In the chapter's replay story, splitting sessions at midnight was the BUG.)"},
+        {"t": "A gap of inactivity for that key exceeding the configured timeout", "correct": true,
+         "why": "Yes. The window stays open while events keep coming for that key and closes after, say, 30 minutes of silence. The data shapes the window — which is why sessions fit 'per visit' questions."},
+        {"t": "The state store hitting its memory limit, forcing the oldest open sessions to close and emit their results", "correct": false,
+         "why": "State pressure is an ops problem, not window semantics. If sessions bloat state you add TTLs or caps — but that's a safeguard, not the definition of when a session ends."}
+      ]
+    },
+    {
+      "id": "p2c09-q08", "level": 1, "type": "mcq", "tag": "checkpoint",
+      "q": "After a crash, how does a checkpointed stream job recover?",
+      "options": [
+        {"t": "Restore all state from the last checkpoint, rewind the log to that checkpoint's offsets, replay forward", "correct": true,
+         "why": "That's the whole mechanism: restore + rewind + replay. It only works because the log retains events — Kafka gives the processor cheap time travel. Worst-case replay is one checkpoint interval of events."},
+        {"t": "Resume from the current end of the log to avoid duplicates", "correct": false,
+         "why": "Skipping to 'now' silently loses every event between the checkpoint and the crash. You'd have gaps in your counts forever — at-least-once exists precisely to refuse this trade."},
+        {"t": "Rebuild operator state by querying the sink database, which holds every emitted result", "correct": false,
+         "why": "The sink holds emitted results, not operator state (in-flight windows, partial counts). Recovery needs the internal picture, which is exactly what the checkpoint snapshotted."},
+        {"t": "Restart empty; the state warms up naturally", "correct": false,
+         "why": "Restarting empty means every in-progress window loses its history — an hour-long window restarted at minute 50 emits garbage. Durable state is the entire point of checkpointing."}
+      ]
+    },
+    {
+      "id": "p2c09-q09", "level": 1, "type": "mcq", "tag": "exactly-once",
+      "q": "Flink's end-to-end exactly-once combines which two mechanisms?",
+      "options": [
+        {"t": "Checkpoints plus transactional sinks committed on checkpoint completion (a 2PC)", "correct": true,
+         "why": "Right. Checkpoints make internal state consistent after replay; the transactional sink makes sure downstream readers never see the writes from a failed interval — results commit only when the checkpoint does."},
+        {"t": "A deduplication table of processed event IDs consulted before every write, plus automatic retries", "correct": false,
+         "why": "That's a hand-rolled idempotency approach (a fine one — p2c02). Flink's built-in exactly-once is checkpoint-coordinated transactions, not a dedup table."},
+        {"t": "Watermarks plus allowed lateness", "correct": false,
+         "why": "Those handle time correctness (late events landing in the right window), a completely separate axis from delivery guarantees (events counted once despite crashes)."},
+        {"t": "Leader election plus fencing tokens", "correct": false,
+         "why": "Those prevent split-brain among coordinators (p2c03). Exactly-once here is about replay-induced duplicate writes, solved by tying sink commits to checkpoints."}
+      ]
+    },
+    {
+      "id": "p2c09-q10", "level": 2, "type": "mcq", "tag": "windows",
+      "q": "Finance wants revenue per calendar hour for invoicing. Which window, and why?",
+      "options": [
+        {"t": "Sliding 1h every 5 min, for smoother numbers", "correct": false,
+         "why": "Smoothness is for alerting, not invoicing. Overlapping windows mean one purchase appears in 12 windows — which of the 12 goes on the invoice? Finance needs each event in exactly one bucket."},
+        {"t": "Tumbling 1 hour", "correct": true,
+         "why": "Each event lands in exactly one bucket, buckets align with calendar hours, and it's the cheapest option. Billing wants unambiguous, non-overlapping totals — tumbling is built for exactly that."},
+        {"t": "Session windows keyed by customer", "correct": false,
+         "why": "Sessions answer 'per visit' questions. Finance asked 'per hour' — the window should come from the question's shape, and this question's shape is a fixed calendar grid."},
+        {"t": "No window; keep a running total", "correct": false,
+         "why": "A running total can't answer 'how much in the 2pm hour' after the fact, and it's unauditable when late events arrive. Windowed totals keyed by hour are correctable and reconcilable."}
+      ]
+    },
+    {
+      "id": "p2c09-q11", "level": 2, "type": "mcq", "tag": "windows",
+      "q": "You need 'error rate over the last 5 minutes, evaluated every 30 seconds' to trigger autoscaling. A colleague suggests 5-minute tumbling windows. What's wrong with that?",
+      "options": [
+        {"t": "Nothing is wrong — tumbling computes the same totals at a tenth of the state cost, so it's the better engineering choice for this job", "correct": false,
+         "why": "Cheaper yes, equivalent no. With tumbling you get one reading per 5 minutes, and a spike starting at minute 4 of a window is diluted and then reported late — your scale-up fires minutes after the fire started."},
+        {"t": "A spike straddling a window boundary gets diluted and reported late — use a sliding window: 5-minute size, 30-second step", "correct": true,
+         "why": "Exactly. Alerting needs a smooth, frequently-refreshed view; that's the sliding window's job. Own the cost out loud: each event now counts in 10 windows, so state and output multiply by 10."},
+        {"t": "Tumbling windows don't work with error rates", "correct": false,
+         "why": "They compute rates fine — the problem is cadence and boundary-splitting, not the arithmetic. The window type must match how often the consumer (the autoscaler) needs a fresh answer."},
+        {"t": "You should use session windows keyed by server", "correct": false,
+         "why": "Sessions end on inactivity gaps, which makes no sense for a fleet-wide error rate. This is a fixed-size, frequently-slid question — a textbook sliding window."}
+      ]
+    },
+    {
+      "id": "p2c09-q12", "level": 2, "type": "mcq", "tag": "event-time",
+      "q": "Your hourly 'active users' chart, computed on processing time, shows a dip at 2am and a matching bump at 6am every day. Mobile users in one region lose connectivity overnight and their phones upload buffered events in the morning. What's happening?",
+      "options": [
+        {"t": "Users genuinely stop using the app at 2am", "correct": false,
+         "why": "Then where does the matching 6am bump come from? A dip with a compensating bump later is the classic fingerprint of delayed events being counted at arrival instead of occurrence."},
+        {"t": "2am activity is real but counted at 6am because processing-time windows bucket by arrival; switching the windows to event time fixes the chart on its own, with no other changes to the pipeline needed", "correct": false,
+         "why": "Right diagnosis, wrong ending. Events arriving four hours late blow past any live watermark, so a plain event-time switch would drop them at the other end of the pipeline. The fix needs lateness handling too — long allowed lateness, a side output, or a nightly correction."},
+        {"t": "The 2am events arrive at 6am; event-time windows would assign them to 2am — which also means those windows must accept hours-late data via allowed lateness or a reconciliation pass", "correct": true,
+         "why": "Complete answer: diagnosis (arrival-time bucketing) plus the honest consequence — switching to event time forces you to handle events arriving hours late (long lateness, side output, or a nightly correction), because a live watermark won't wait 4 hours."},
+        {"t": "A cron job at 2am is hogging the ingestion cluster, delaying processing until it finishes in the morning", "correct": false,
+         "why": "Plausible-sounding, but it doesn't explain the bump equal to the dip, and the region-specific connectivity pattern is given in the problem. Follow the evidence you have before inventing new causes."}
+      ]
+    },
+    {
+      "id": "p2c09-q13", "level": 2, "type": "mcq", "tag": "watermark",
+      "q": "Watermark = max event time seen minus 60s. Window is [12:00, 12:05). An event with event time 12:03 arrives while the max event time seen is 12:07. What happens to it?",
+      "options": [
+        {"t": "It's late: the watermark is 12:06, past the window's end — allowed lateness or the late policy decides its fate", "correct": true,
+         "why": "Watermark = 12:07 − 60s = 12:06, which passed 12:05, so the window already fired. The 12:03 event lost the bet. With allowed lateness still open, the window updates and re-fires; otherwise side-output or drop, per policy."},
+        {"t": "It's on time: 12:03 is inside the window's range", "correct": false,
+         "why": "Being inside the window's time range isn't enough — the window already FIRED when the watermark passed 12:05. Late means 'belongs to a window whose bet was already settled.'"},
+        {"t": "It resets the watermark backwards to 12:02", "correct": false,
+         "why": "Watermarks never move backwards — they're monotonic by construction (max seen minus slack). A late event can't unfire windows; it can only trigger updates under allowed lateness."},
+        {"t": "It's assigned to the currently open [12:05, 12:10) window, since its own window already fired", "correct": false,
+         "why": "Events are bucketed by their own event time, and 12:03 belongs to [12:00, 12:05) — shoving it into the next window would corrupt both windows' counts. Late data is corrected in place or set aside, never re-bucketed."}
+      ]
+    },
+    {
+      "id": "p2c09-q14", "level": 2, "type": "mcq", "tag": "event-time",
+      "q": "Two pipelines, two late-data policies: (1) hourly ad-spend billing, (2) a CPU-usage ops graph. Which pairing is right?",
+      "options": [
+        {"t": "Billing: drop late events; ops graph: update forever", "correct": false,
+         "why": "Backwards on both. Dropping money is the one thing billing can't do — advertisers reconcile invoices. And infinite revisions on an ops graph nobody audits is machinery without a customer."},
+        {"t": "Billing: side-output late events for reconciliation (or update with revisions); ops graph: drop them", "correct": true,
+         "why": "Right. Money demands completeness — capture every late event, reconcile, issue corrections. The ops graph is glanced at for shapes; a 0.1% undercount at 2am costs nothing, so dropping is the honest cheap choice."},
+        {"t": "Both should update downstream forever — correctness always wins, and any policy that discards data is indefensible", "correct": false,
+         "why": "'Always' is the tell. Downstream-revision support is a real tax on every consumer of the data. Paying it for a throwaway ops graph is over-engineering — policy should follow the consumer's actual needs."},
+        {"t": "Both should drop — late data is unreliable anyway", "correct": false,
+         "why": "Late data is usually perfectly valid data that took the scenic route (tunnels, retries). Dropping it from billing means undercharging or overcharging someone systematically by region — an incident waiting for an audit."}
+      ]
+    },
+    {
+      "id": "p2c09-q15", "level": 2, "type": "mcq", "tag": "checkpoint",
+      "q": "A job processes 200K events/sec with a 10-minute checkpoint interval. It crashes 8 minutes after the last checkpoint. Roughly what does recovery involve?",
+      "options": [
+        {"t": "Restore state, then replay about 96M events (8 min × 200K/s) before catching up to live", "correct": true,
+         "why": "Right, and the number is the point: the checkpoint interval is a recovery-time budget. At 5x replay speed that's ~90 seconds of stale output. If that's too long, checkpoint more often and pay the overhead more often."},
+        {"t": "Restore state and resume from the crash point instantly", "correct": false,
+         "why": "There's no durable record of 'the crash point' state — that's what was lost. Only the checkpoint is durable, so everything after it must be replayed from the log."},
+        {"t": "Replay the full log from offset 0", "correct": false,
+         "why": "Offset-0 replay is for recomputation (bug fixes, schema changes), not crash recovery. Checkpoints exist precisely so recovery replays minutes, not days."},
+        {"t": "Nothing needs replaying — the sink already holds every result emitted before the crash", "correct": false,
+         "why": "The sink has EMITTED results but the job's internal state (open windows, partial counts) died with the process. Without restore-and-replay, every in-flight window emits garbage."}
+      ]
+    },
+    {
+      "id": "p2c09-q16", "level": 2, "type": "mcq", "tag": "exactly-once",
+      "q": "Your pipeline is at-least-once: after a crash, some events replay. Which sink design makes the user-visible results still correct?",
+      "options": [
+        {"t": "INCREMENT counter BY 1 per event", "correct": false,
+         "why": "Increments are the classic at-least-once landmine: replayed events increment again, and the dashboard double-counts exactly the crash window. Increments demand true exactly-once delivery — expensive."},
+        {"t": "UPSERT the computed total keyed by (video_id, window_start)", "correct": true,
+         "why": "Replay recomputes the same total and overwrites the row with the same value — duplicates become harmless. This is the chapter's committed default: engineer exactly-once at the destination instead of buying it from the pipe."},
+        {"t": "Append every event to a results log", "correct": false,
+         "why": "Appends duplicate on replay just like increments — now downstream consumers must dedup. Append-only sinks are exactly the case where you'd consider paying for transactional exactly-once."},
+        {"t": "Write the row only if it doesn't exist yet, so replayed events can never change a stored result", "correct": false,
+         "why": "Insert-if-absent freezes the FIRST value written — but windows legitimately re-fire with updated counts (allowed lateness), and your 'no overwrite' rule would silently discard corrections. Upsert, not insert-once."}
+      ]
+    },
+    {
+      "id": "p2c09-q17", "level": 2, "type": "mcq", "tag": "replay",
+      "q": "A bug in your aggregation logic shipped 10 days ago. Your Kafka topics retain 30 days. Walk the kappa-style fix.",
+      "options": [
+        {"t": "Deploy the fixed job as a second instance reading from the 10-days-ago offset, write to a new table, swap readers when it catches up", "correct": true,
+         "why": "The replay runbook: old job keeps serving (stale but stable), new job backfills history through corrected code at replay speed, and the cutover is a reader swap — reversible if the fix is wrong. Retention covers 10 days, so this works."},
+        {"t": "Patch the live job in place; history will fix itself", "correct": false,
+         "why": "The patch fixes events from now on — the 10 days of wrong aggregates sit in the serving table forever. Nothing recomputes history unless you replay it."},
+        {"t": "Write a one-off script of UPDATE statements against the serving table, hand-correcting every affected row across the 10 days of bad data", "correct": false,
+         "why": "Hand-editing derived data means guessing what the correct logic WOULD have produced — for every key and window. That guess is exactly what replaying the raw events through fixed code computes for you, verifiably."},
+        {"t": "Restore the job from a checkpoint taken 10 days ago", "correct": false,
+         "why": "That checkpoint contains state computed by the BUGGY code — restoring it restores the bug's output. Recomputation needs raw events through new code, which is the log's job, not the checkpoint's."}
+      ]
+    },
+    {
+      "id": "p2c09-q18", "level": 2, "type": "mcq", "tag": "batch-vs-stream",
+      "q": "Which of these workloads is the strongest case for plain batch rather than streaming?",
+      "options": [
+        {"t": "Fraud scoring of card transactions", "correct": false,
+         "why": "Fraud decisions are only worth anything before the transaction completes — a ~1-second budget. A nightly batch catches fraud 12 hours after the money left. This is streaming's home turf."},
+        {"t": "Monthly invoice generation from usage events", "correct": true,
+         "why": "The consumer reads it once a month. A stream job would run 720 hours to produce one artifact, with watermarks and state to operate all the while. One rerunnable batch job on cheap compute wins on every axis except a latency nobody asked for."},
+        {"t": "The on-call ops dashboard", "correct": false,
+         "why": "On-call needs to see a spike within seconds. Any batch cadence turns incidents into archaeology."},
+        {"t": "The live leaderboard for a weekend game tournament with cash prizes", "correct": false,
+         "why": "'Live' is in the name — players expect their score to move now. Latency is the product here, so streaming earns its complexity."}
+      ]
+    },
+    {
+      "id": "p2c09-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your ad-click pipeline — do you guarantee exactly-once?' Which answer reads senior?",
+      "options": [
+        {"t": "\"Yes — Flink supports exactly-once, so I'll enable it.\"", "correct": false,
+         "why": "Checkbox thinking. It doesn't say what exactly-once means end-to-end, what it costs (sink transactions, results gated on checkpoint commits), or whether this sink even needs it. Invites a follow-up you'll lose."},
+        {"t": "\"At-least-once delivery with an idempotent sink — upserts keyed by (ad_id, window). Replay overwrites identical values, so the observable result is exactly-once without transactional sinks or commit-latency coupling. I'd pay for true transactional exactly-once only if the sink couldn't be idempotent.\"", "correct": true,
+         "why": "A committed stance, the mechanism that makes it safe, the cost consciously avoided, and the boundary where the other choice wins. This is the chapter's pragmatic line delivered as a decision, not a menu."},
+        {"t": "\"Exactly-once is impossible in distributed systems, so no.\"", "correct": false,
+         "why": "A half-truth used as an exit. Exactly-once DELIVERY is unattainable in general, but exactly-once observable EFFECT is routinely engineered (idempotency, transactions). Stopping at the impossibility theorem dodges the design question."},
+        {"t": "\"We could do at-most-once, which risks losing clicks; at-least-once, which risks duplicates; or exactly-once, which costs performance. Each sits somewhere on the reliability-versus-cost spectrum, so the right guarantee really depends on the requirements, the sink, and the team's appetite for operational complexity.\"", "correct": false,
+         "why": "Textbook option-listing. True, complete, and committing to nothing — the exact pattern that caps a senior loop. The interviewer asked what YOU guarantee in THIS design."}
+      ]
+    },
+    {
+      "id": "p2c09-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Finance reports your streaming revenue dashboard runs ~0.5% below the batch reconciliation, consistently. Watermark slack is 30s. The senior first move:",
+      "options": [
+        {"t": "Trust the batch number, since it's computed from complete data, and apply a calibrated correction factor to the dashboard so the systems agree while you investigate", "correct": false,
+         "why": "A fudge factor hides the mechanism instead of finding it, and it will silently break when the late-data distribution shifts (new app release, new region). You'd be shipping a lie that happens to be calibrated today."},
+        {"t": "Measure the arrival-delay distribution — the 0.5% is likely events arriving later than 30s and being dropped; then side-output late events and size the lateness from data", "correct": true,
+         "why": "A consistent undercount vs batch is the signature of late data falling past a too-tight watermark with a drop policy. Measure first, then fix the policy: side-output what you can't wait for, and make late-event volume a monitored metric. Numbers drive the knob."},
+        {"t": "Increase watermark slack to 24 hours so nothing is ever late", "correct": false,
+         "why": "Now every window waits a day to fire and the 'live' dashboard is batch with extra steps. Completeness bought by destroying latency isn't a fix — layered lateness handling exists precisely to avoid this."},
+        {"t": "Switch the dashboard to processing time so all events are counted somewhere", "correct": false,
+         "why": "Total volume matches but every number is in the wrong hour — you've traded a visible 0.5% gap for invisible time-corruption of revenue data. Finance will find it at the next hourly audit, angrier."}
+      ]
+    },
+    {
+      "id": "p2c09-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "One video goes mega-viral: 40% of all view events now carry the same key. Your keyed-state cluster has one worker pinned at 100% CPU while nine idle. What's happening and what's the fix?",
+      "options": [
+        {"t": "Hot key skew — every event for that key must reach the worker owning its state. Fix with two stages: pre-aggregate on a compound key (video_id, random salt 0–15), then merge the 16 partial counts", "correct": true,
+         "why": "This is p2c06's celebrity problem arriving in streaming clothes. Keyed state REQUIRES same-key-same-worker, so hot keys concentrate; salting splits the hot key's load 16 ways and a cheap merge restores the total. Adding workers changes nothing — the key still lands on one."},
+        {"t": "Add more workers to spread the load", "correct": false,
+         "why": "The trap answer. Partitioning is BY KEY: all events for that video must reach the worker owning its state, no matter how many workers exist. Ten idle workers become nineteen idle workers."},
+        {"t": "Cache the hot video's count in Redis to offload the worker", "correct": false,
+         "why": "The bottleneck is event PROCESSING (updating state per event), not reads of the result. A read cache doesn't touch the ingest path that's melting the worker."},
+        {"t": "Sample the hot key: drop 9 of every 10 of its events and multiply its count by 10 — viral totals are approximate at that magnitude anyway, and sampling is standard practice in high-volume metrics pipelines", "correct": false,
+         "why": "Sampling is a legitimate last resort for approximate metrics, but for view counts (creator payments may hang off these) you'd be inventing numbers when an exact fix — salted two-stage aggregation — is standard and cheap."}
+      ]
+    },
+    {
+      "id": "p2c09-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A candidate designing a metrics pipeline in 2026 proposes lambda: 'a Spark batch layer for correctness plus a Flink speed layer.' Best senior critique?",
+      "options": [
+        {"t": "Approve it — belt and suspenders is safest for metrics: the batch layer catches anything the stream layer gets wrong, doubling your confidence in every number", "correct": false,
+         "why": "The 'safety' has a price the proposal never names: every metric definition implemented twice, drifting twice, debugged twice. Lambda's dual-codebase tax is the documented reason the industry moved off it, and metrics logic changes often — maximizing the tax."},
+        {"t": "Default to kappa: one stream job over a retained log — correctness comes from replay, not a parallel batch layer — while naming where separate batch still earns its place, like ML training sets", "correct": true,
+         "why": "Commits to the modern default, states WHY it's now safe (stream engines matured; replay replaces recompute-in-batch), and keeps intellectual honesty by naming where batch survives. That's judgment, not fashion."},
+        {"t": "Lambda is obsolete; batch itself is dead", "correct": false,
+         "why": "Overcorrection into dogma. Batch is alive wherever the consumer reads daily or slower — cheaper, simpler, rerunnable. 'X is dead' claims read as fashion-following, the same failure as reflexive lambda."},
+        {"t": "Ask the interviewer which architecture they prefer", "correct": false,
+         "why": "Architecture selection with clear modern consensus is exactly where you're expected to have an opinion. Outsourcing it is the waiting-to-be-led pattern at the worst moment."}
+      ]
+    },
+    {
+      "id": "p2c09-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your Flink job's checkpoints took 5s last quarter; they now take 55s against a 60s interval, and the duration is still climbing. What does this signal, and what do you do?",
+      "options": [
+        {"t": "Nothing yet — checkpoints still complete within the interval", "correct": false,
+         "why": "You're watching a line cross a threshold in slow motion. When duration exceeds the interval, checkpoints back up, backpressure kicks in, and recovery windows balloon — during your next incident, not a calm Tuesday. Trends are the page, not the crossing."},
+        {"t": "State is growing without bound — something never expires. Find what's accumulating, add TTLs for dead keys, check allowed-lateness scope; incremental checkpoints are mitigation while you fix the leak", "correct": true,
+         "why": "Checkpoint duration tracks state size, so a steady climb means something never gets cleaned up — sessions for churned users, unbounded allowed lateness holding windows forever. Root-cause the growth, cap it with TTLs, and use incremental checkpointing as mitigation, not cure."},
+        {"t": "Double the checkpoint interval to 120 seconds: checkpoints then fit comfortably, the job stops flirting with its deadline, and you've bought headroom for another quarter of growth without touching the application", "correct": false,
+         "why": "Buys weeks, fixes nothing — the growth continues and now a crash replays twice as much. Treating a leak's symptom by raising the ceiling is the classic 3am-postponement move."},
+        {"t": "Disable checkpointing; the sink has the data anyway", "correct": false,
+         "why": "The sink holds emitted results, not open-window state. Disabling checkpoints converts the next crash from a 60-second replay into 'all in-flight aggregations are wrong forever.' This deletes the safety system to silence its warning light."}
+      ]
+    },
+    {
+      "id": "p2c09-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Startup, 3 engineers, ~2,000 events/sec. The PM wants a live activity dashboard. One engineer proposes a 12-node Flink cluster with exactly-once, RocksDB state, and a savepoint pipeline. The senior call:",
+      "options": [
+        {"t": "Approve it — traffic will grow, migrations are painful, and standing up the fully scalable version now means the team never has to re-architect the pipeline under deadline pressure later", "correct": false,
+         "why": "2K events/sec is a laptop-sized workload. A 12-node stateful cluster is an on-call burden three engineers will carry for imaginary traffic — the over-engineering pattern that reads insecure, not ambitious."},
+        {"t": "A Kafka consumer (or Kafka Streams app) doing windowed counts with idempotent upserts to Postgres — one deployable, same concepts, and a clear trigger for when to graduate to Flink", "correct": true,
+         "why": "Right-sized: the concepts (windows, event time, idempotent sink) are identical, the operational surface is one small service, and naming the graduation trigger (sustained event rate, state size, or multi-job needs) shows the simplicity is chosen, not naive."},
+        {"t": "Skip streaming; refresh a batch query every night", "correct": false,
+         "why": "Undershoots the actual requirement — the PM asked for live, and at 2K events/sec live is cheap. Right-sizing means meeting the requirement minimally, not quietly deleting it."},
+        {"t": "Use Flink but with a single node to keep it cheap", "correct": false,
+         "why": "Closer, but you still adopt a framework's full operational surface (cluster lifecycle, savepoints, upgrades) for a job a library or plain consumer handles. Minimizing a heavyweight isn't the same as choosing a lightweight."}
+      ]
+    },
+    {
+      "id": "p2c09-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "An aggregation bug corrupted 45 days of results. Kafka retains 14 days; every raw event is also archived to S3. Leadership wants corrected numbers by Monday. The senior plan:",
+      "options": [
+        {"t": "Replay the Kafka log from 45 days ago through the fixed job", "correct": false,
+         "why": "The log physically doesn't have it — retention is 14 days, so offsets from day 45 are gone. Your recompute horizon equals your log retention; promising a replay past it is promising time travel."},
+        {"t": "Batch-recompute days 45–14 from the S3 archive with the fixed logic, replay days 14–0 from Kafka, and validate the two segments agree where they overlap", "correct": true,
+         "why": "Uses each store for what it still has, and the overlap check catches semantic drift between the batch and stream paths before finance does. This hybrid is exactly why kappa shops still archive events to a lake — the log is the fast lane, not the only copy."},
+        {"t": "Correct the 45 days by extrapolating from the 14 replayable days", "correct": false,
+         "why": "Statistical guesswork presented as corrected data — with the raw events sitting in S3, fabricating 31 days is indefensible. Extrapolation is for when the data is truly gone; it isn't."},
+        {"t": "Extend Kafka retention to 60 days so the gap can't recur, report the 14 replayable days of corrected numbers now, and tell leadership the older 31 days are unrecoverable", "correct": false,
+         "why": "Half an answer: a (reasonable) future policy change used to dodge the actual ask. Monday's deliverable is achievable today from the archive — proposing prevention INSTEAD of the fix reads as not knowing the fix exists."}
+      ]
+    }
+  ]
+}

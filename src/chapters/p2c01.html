@@ -1,0 +1,328 @@
+<p>Friday evening, flash sale. Your company split its monolith last year, and everyone's proud of the clean new architecture: an order service, a payment service, an inventory service, each with its own database. A customer taps "Buy" on the last discounted PS5. The order service creates the order. The payment service charges her card — ₹41,999, gone from her account. Then the order service calls the inventory service to reserve the console… and the call times out, because inventory is mid-deploy.</p>
+
+<p>So now the universe contains: one charged card, zero reserved consoles, and an order row that says <code>CREATED</code>. The customer refreshes. Nothing. She tweets a screenshot of her bank statement. Support escalates. An engineer — you — gets to spend Saturday writing a script that finds every order in this half-finished state and refunds it by hand.</p>
+
+<p>Here's the bitter part: two years ago, in the monolith, this bug was <em>impossible</em>. Order, charge, and stock lived in one database, wrapped in one transaction. Either all three writes happened or none did. You didn't build that guarantee — the database gave it to you for free, and when you split the data, you gave it back without noticing.</p>
+
+<p>This chapter is about how to get it back — or more honestly, about the three patterns for living without it, and how to talk about them the way a senior engineer does. This topic is quietly one of the highest-signal areas in senior interviews, because it has a wrong answer that sounds right (2PC), a right answer that sounds messy (sagas), and a trap hiding in almost every whiteboard diagram (the dual write).</p>
+
+<h2>The transaction you lost when you split the database</h2>
+
+<p>In the monolith, the checkout was one block:</p>
+
+<pre><code>BEGIN;
+  INSERT INTO orders ...;        -- create the order
+  INSERT INTO charges ...;       -- record the payment
+  UPDATE stock SET qty = qty - 1 WHERE item = 'ps5';
+COMMIT;</code></pre>
+
+<p>That all-or-nothing property — atomicity, the A in ACID — is a promise a single database makes about its own rows. The moment orders, charges, and stock live in three different databases owned by three different services, no single <code>BEGIN … COMMIT</code> can span them. A distributed transaction — one business operation that must update data in multiple places — stops being a statement and becomes a <em>sequence of network calls</em>. And every gap between two calls is a place where the process can die, the network can drop, or the next service can be down.</p>
+
+<p>Put numbers on it, because numbers are what make this real in an interview. Say each of the three steps succeeds 99.9% of the time — a perfectly respectable service. The chance that all three succeed is 0.999³ ≈ 99.7%. So about 0.3% of checkouts hit at least one failure mid-sequence. At 100,000 orders a day, that's <strong>300 half-finished orders, every single day</strong>. Partial failure isn't an edge case you'll get to later. It's a scheduled daily event, and your design either handles it automatically or an engineer handles it by hand on Saturdays.</p>
+
+<p>So the question becomes: how do you make a multi-service operation behave all-or-nothing-ish? Computer science has a famous answer from the 1970s. It's worth understanding well — mostly so you can explain why you're not going to use it.</p>
+
+<h2>Two-phase commit: appoint a chairman</h2>
+
+<p>Two-phase commit (2PC) makes several databases commit together by adding a boss. One node plays <strong>coordinator</strong>; the databases doing the writes are <strong>participants</strong>. The protocol has two rounds:</p>
+
+<ul>
+<li><strong>Phase 1 — prepare.</strong> The coordinator asks every participant: "Can you commit this?" Each participant does all the work — writes the changes to its log, takes locks on the affected rows — and votes yes or no. A yes vote is a binding promise: "I can commit, and I will not change my mind, even if I crash and restart."</li>
+<li><strong>Phase 2 — commit or abort.</strong> If every vote was yes, the coordinator tells everyone: commit. If anyone said no (or didn't answer), it tells everyone: abort. Participants obey and release their locks.</li>
+</ul>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>2PC is a wedding ceremony. The officiant (coordinator) asks each party in turn: "Do you take…?" — that's the prepare phase, and "I do" is a binding yes vote. Only after hearing every "I do" does the officiant declare "I now pronounce you…" — the commit. Now imagine the officiant faints right after the "I do"s and before the pronouncement. The couple can't leave — they promised. They can't marry — nobody with authority said so. They just… stand there, frozen at the altar, until the officiant wakes up. That frozen state is exactly what happens to databases in 2PC, except the couple is holding row locks that every other request in your system is queued behind.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="2PC timeline where the coordinator crashes after collecting yes votes, leaving both participants in doubt and holding locks">
+  <rect class="dg-node" x="30" y="14" width="160" height="40" rx="8"/>
+  <text class="dg-txt" x="52" y="39">Coordinator</text>
+  <rect class="dg-node" x="280" y="14" width="160" height="40" rx="8"/>
+  <text class="dg-txt" x="300" y="39">Payment DB</text>
+  <rect class="dg-node" x="530" y="14" width="160" height="40" rx="8"/>
+  <text class="dg-txt" x="548" y="39">Inventory DB</text>
+  <line class="dg-edge" x1="110" y1="54" x2="110" y2="190" stroke-dasharray="4 4"/>
+  <line class="dg-edge" x1="360" y1="54" x2="360" y2="310" stroke-dasharray="4 4"/>
+  <line class="dg-edge" x1="610" y1="54" x2="610" y2="310" stroke-dasharray="4 4"/>
+  <line class="dg-edge" x1="110" y1="84" x2="356" y2="84" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="110" y1="104" x2="606" y2="104" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="76">1. prepare? (do work, lock rows)</text>
+  <line class="dg-edge" x1="360" y1="138" x2="114" y2="138" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="610" y1="158" x2="114" y2="158" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="130">2. YES — a promise, locks stay held</text>
+  <path class="dg-bad" fill="none" d="M96 196 L124 224 M124 196 L96 224"/>
+  <text class="dg-bad" x="30" y="248">coordinator dies before</text>
+  <text class="dg-bad" x="30" y="264">sending the verdict</text>
+  <rect class="dg-zone" x="300" y="222" width="390" height="76" rx="8"/>
+  <text class="dg-bad" x="322" y="250">Both participants: "in doubt"</text>
+  <text class="dg-txt-s" x="322" y="270">Can't commit. Can't abort. Rows stay locked.</text>
+  <text class="dg-txt-s" x="322" y="287">Every request touching those rows now waits.</text>
+</svg>
+<figcaption>The 2PC failure that matters: after voting yes, a participant may not unilaterally commit or abort. If the coordinator dies, the participant is stuck holding locks — and everything queued behind those locks stalls with it.</figcaption>
+</figure>
+
+<h3>Why 2PC is almost never the interview answer</h3>
+
+<p>On paper, 2PC gives you real atomicity across machines. In practice, across microservices, it fails four separate audits:</p>
+
+<ul>
+<li><strong>It blocks.</strong> That window between "I voted yes" and "the coordinator told me the verdict" is called being <strong>in doubt</strong>. An in-doubt participant must hold its locks — that's what its promise means. If the coordinator crashes, participants can stay in doubt for minutes, and every other transaction that touches those rows queues up behind them. One crashed box turns into a system-wide traffic jam.</li>
+<li><strong>The coordinator is a single point of failure</strong> — and it dies at the worst possible moment by definition, because the only moment that matters is mid-protocol.</li>
+<li><strong>It's slow even when it works.</strong> Two full round trips to every participant, and the whole transaction moves at the speed of the slowest one. Your checkout latency is now max(payment, inventory, orders) × 2, plus locks held the entire time.</li>
+<li><strong>It behaves worst exactly when networks behave worst.</strong> Under a partition (remember CAP from Part 1), 2PC chooses consistency and just… stops. A protocol that freezes during network trouble is a poor fit for the situations it exists to survive.</li>
+</ul>
+
+<p>There's a practical audit too: 2PC across heterogeneous systems requires everyone to speak a common protocol (the traditional standard is called XA), and most of the things in a modern design simply don't. Kafka doesn't. Your payment provider's HTTP API certainly doesn't — you cannot 2PC a call to a payment gateway. The pattern quietly assumes a world of cooperating enterprise databases that mostly no longer describes production systems.</p>
+
+<p>One honest footnote, worth one sentence in an interview and no more: 2PC is alive and well <em>inside</em> single distributed databases, where the vendor controls everything. Google Spanner runs 2PC across shards — but each participant and the coordinator state are themselves replicated with Paxos, so no single machine death can strand the protocol. That's the fix for 2PC's blocking problem, and it costs an engineering effort roughly the size of Spanner. Between your microservices, you don't have that. So at the whiteboard, the senior line is: <em>"I'm not using 2PC across services — it holds locks while blocked on a coordinator, and a coordinator crash leaves participants in doubt. I'll use a saga."</em> Two sentences, then move on.</p>
+
+<h2>Sagas: a chain of small commits, each with an undo</h2>
+
+<p>A <strong>saga</strong> gives up on one big atomic transaction and replaces it with a sequence of small <em>local</em> transactions — each one inside a single service, each one committing immediately and releasing its locks. In exchange for a plan B: every step ships with a <strong>compensating transaction</strong>, a new forward action that semantically undoes it. If step 4 fails, you run the compensations for steps 3, 2, 1 — in reverse — and the system ends up in a state that means "this never happened."</p>
+
+<p>Note the word <em>semantically</em>. A compensation is not a database rollback — the original transaction committed ages ago; there's nothing to roll back. You can't un-charge a card; you issue a refund. You can't un-reserve stock by time travel; you add the unit back. The undo is a business action, visible in the real world (the customer may see charge-then-refund on her statement), and it's your job to design one for every step.</p>
+
+<table>
+<thead><tr><th>Step</th><th>Local transaction</th><th>Compensation</th></tr></thead>
+<tbody>
+<tr><td>1. Order service</td><td>Create order, status <code>PENDING</code></td><td>Mark order <code>CANCELLED</code></td></tr>
+<tr><td>2. Payment service</td><td>Charge the card</td><td>Refund the charge</td></tr>
+<tr><td>3. Inventory service</td><td>Reserve one unit</td><td>Release the reservation</td></tr>
+<tr><td>4. Order service</td><td>Mark order <code>CONFIRMED</code></td><td>— (last step; nothing after it can fail)</td></tr>
+</tbody>
+</table>
+
+<p>Now replay Friday's disaster. Payment succeeds, inventory times out and — after retries — reports failure. The saga runs compensations backwards: refund the charge, cancel the order. The customer sees "order failed, payment refunded" instead of silence. No Saturday script. The 300 daily half-finished orders now clean themselves up.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Saga: three forward local transactions, step three fails, compensations run in reverse">
+  <text class="dg-txt-s" x="24" y="28">Forward: each step is its own committed local transaction</text>
+  <rect class="dg-node" x="24" y="44" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="44" y="68">1. Create order</text>
+  <text class="dg-txt-s" x="44" y="86">status = PENDING</text>
+  <rect class="dg-node" x="264" y="44" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="284" y="68">2. Charge card</text>
+  <text class="dg-txt-s" x="284" y="86">committed ✓</text>
+  <rect class="dg-node" x="504" y="44" width="190" height="56" rx="8"/>
+  <text class="dg-txt" x="524" y="68">3. Reserve stock</text>
+  <text class="dg-txt-s" x="524" y="86">FAILS after retries</text>
+  <line class="dg-edge" x1="204" y1="72" x2="260" y2="72" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="444" y1="72" x2="500" y2="72" marker-end="url(#arrow)"/>
+  <path class="dg-bad" fill="none" d="M582 30 L610 58 M610 30 L582 58"/>
+  <text class="dg-txt-s" x="24" y="146">Backward: compensations, newest first</text>
+  <rect class="dg-node-alt" x="264" y="162" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="284" y="186">Refund charge</text>
+  <text class="dg-txt-s" x="284" y="204">undoes step 2</text>
+  <rect class="dg-node-alt" x="24" y="162" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="44" y="186">Cancel order</text>
+  <text class="dg-txt-s" x="44" y="204">undoes step 1</text>
+  <line class="dg-edge" x1="560" y1="104" x2="430" y2="162" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="264" y1="190" x2="208" y2="190" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>A saga failing at step 3. The already-committed steps aren't rolled back — they're compensated, in reverse order, by new transactions.</figcaption>
+</figure>
+
+<p>Two design rules fall out immediately. First, <strong>not everything can be compensated</strong>. You can't un-send an email, un-ship a package, or un-dispense cash. So order your steps to put hard-to-undo actions last — after the last step that can fail. The step after which you can no longer turn back has a name, the <em>pivot</em>: before it, failure means compensate backwards; after it, failure means push forwards (retry until done). Second, <strong>know when to retry and when to compensate</strong>. A timeout or a 500 is transient — retry it. "Card declined" or "out of stock" is a business fact — no number of retries will change it; compensate. Conflating those two is a classic mid-level tell.</p>
+
+<p>The name, by the way, is older than microservices: Hector Garcia-Molina and Kenneth Salem coined "sagas" in a 1987 paper about breaking up long-running transactions inside a single database. The microservices world dug the idea out of the library because it was suddenly the exact shape of the problem.</p>
+
+<h2>Who runs the saga? Choreography vs orchestration</h2>
+
+<p>Somebody has to know what step comes next and what to do on failure. There are exactly two answers.</p>
+
+<p><strong>Choreography:</strong> no boss. Each service listens for events and reacts. The order service emits <code>OrderPlaced</code>; the payment service hears it, charges, emits <code>PaymentCaptured</code>; inventory hears that, reserves, emits <code>StockReserved</code>; the order service hears that and confirms. Failures are events too: <code>PaymentFailed</code> triggers whoever needs to compensate. The saga's logic lives nowhere — it <em>emerges</em> from everyone's subscriptions.</p>
+
+<p><strong>Orchestration:</strong> a boss. One component — the orchestrator, usually living in the service that owns the business flow — holds the state machine. It commands: charge this card; awaits the reply; commands: reserve this unit; and on failure it walks its own list of completed steps and commands the compensations. Every order's exact state lives in one queryable place.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Orchestration is a wedding planner: she calls the florist, then the caterer, then the band, checks each one off, and if the venue cancels she personally phones everyone to unwind the bookings. Choreography is a potluck: there's no planner, everyone just knows "when I see the invite, I bring a dish." The potluck needs no manager and scales beautifully — but when the dessert person silently flakes, nobody notices until dinner, and finding out <em>who was supposed to react to what</em> means interviewing every guest. That's the trade, honestly: choreography removes the manager and with it the single place you can ask "where is order 123 stuck?"</p>
+</div>
+
+<table>
+<thead><tr><th></th><th>Choreography (events)</th><th>Orchestration (coordinator)</th></tr></thead>
+<tbody>
+<tr><td>Coupling</td><td>Loose — services only know event names</td><td>Orchestrator knows every step</td></tr>
+<tr><td>"Where is order 123?"</td><td>Reconstruct from event logs across services</td><td>One row in the orchestrator's state table</td></tr>
+<tr><td>Adding a step</td><td>Touch several services' subscriptions</td><td>Edit one state machine</td></tr>
+<tr><td>Timeouts / stuck flows</td><td>Every service handles its own; easy to miss</td><td>Orchestrator owns all timers and escalation</td></tr>
+<tr><td>Failure risk</td><td>Invisible flow, cyclic event spaghetti</td><td>Orchestrator outage stalls new sagas; can grow into a god-object</td></tr>
+<tr><td>Sweet spot</td><td>2–3 steps, fire-and-forget reactions</td><td>Money flows, 4+ steps, anything support must inspect</td></tr>
+</tbody>
+</table>
+
+<p>The senior move is to commit with a reason, not to present the table and shrug. A good verbatim line: <em>"This flow moves money across four services, and support will need to see exactly where any order is stuck — I'll orchestrate it from the order service. For one-way reactions like 'send a confirmation email when an order confirms,' choreography: just subscribe to the event, nothing to unwind."</em> Both patterns, each where it belongs, decision anchored to visibility and rollback needs.</p>
+
+<div class="box story"><div class="box-tag">War story — Uber builds Cadence</div>
+<p>By the mid-2010s, Uber had the saga problem at company scale: business flows like driver onboarding — document checks, background verification, activation — span many services and can take days, and dozens of teams were each hand-rolling the same fragile machinery of queues, cron jobs, and "current_step" database columns to track where each flow stood. Every homegrown orchestrator had the same bugs: state lost on crashes, flows stuck with no owner, retries and timers reinvented badly. Maxim Fateev and Samar Abbas — who had met at Amazon around 2009 building Simple Workflow Service, AWS's coordination engine — reunited at Uber's Seattle office in 2015 and built Cadence: a shared orchestration engine that records every step of a workflow as an event history in a database, so when a worker crashes, the workflow replays its history and resumes exactly where it left off, timers and retries included. Orchestration code went from infrastructure every team rebuilt to a platform they all shared; Uber open-sourced it in 2017 and runs a huge number of internal flows on it. In 2019 the pair left to found Temporal — a fork of Cadence — and today companies like Netflix, Datadog, and Coinbase run their sagas on it. The lesson for your whiteboard: orchestration-with-durable-state is so consistently needed that it became a product category ("durable execution"). Mentioning that category is staff-level garnish; knowing <em>why</em> the orchestrator must persist its state — because the orchestrator can crash mid-saga too — is senior table stakes.</p>
+</div>
+
+<h2>The saga's dirty secret: no isolation</h2>
+
+<p>ACID transactions gave you a second gift you may not have noticed losing: isolation, the I — nobody sees a transaction's changes until it commits. Sagas have no isolation <em>at all</em>. Each local transaction commits immediately and is instantly visible to the whole world, while the saga may still fail and compensate. Other requests can observe — and act on — a state that is about to be undone. It's the distributed cousin of a dirty read.</p>
+
+<p>Concretely: between "charge card" and "reserve stock," another customer queries availability and gets told the unit is gone (it's reserved for a payment that will fail — she walks away from a sale you actually could have made). Or a "total revenue today" dashboard counts a charge that gets refunded two seconds later. Or, nastier, another workflow makes a decision — extends credit, triggers a shipment — based on an order that then gets cancelled.</p>
+
+<p>The everyday countermeasure is one you should volunteer at the whiteboard: the <strong>semantic lock</strong>, better known as a pending state. Don't write final values mid-saga; write in-progress markers. The order is <code>PENDING</code>, not <code>CONFIRMED</code>. The stock isn't decremented; a <em>reservation</em> row exists with an expiry. Every reader is expected to treat pending as "in flight": the UI shows "processing…", the dashboard excludes pending charges, and a competing checkout can decide whether reserved-but-unpaid stock counts as available. You've rebuilt a small, explicit, application-level version of the isolation the database used to give you for free. The full taxonomy of countermeasures (commutative updates, version checks, re-reads before the pivot) is staff-level garnish; pending states are the 80% answer and are expected at L5.</p>
+
+<h2>The dual-write problem: two lines of code, one lie</h2>
+
+<p>Now shrink the problem, because the deadliest version of it hides in a single service. Nearly every event-driven design contains this innocent pair of lines:</p>
+
+<pre><code>db.commit(order)                    // write to MY database
+kafka.publish("OrderPlaced", ...)   // tell the world</code></pre>
+
+<p>Two systems. No transaction can span them — your database and your message broker cannot commit together. This is the <strong>dual-write problem</strong>, and both possible orderings are broken:</p>
+
+<ul>
+<li><strong>Commit, then publish:</strong> the process dies between the lines. The order exists, the event never fires. Every downstream system — search index, analytics, the shipping service, the saga's next step — simply never hears about this order. No error, no retry, no alert. <em>Silent</em> inconsistency, the worst kind, discovered weeks later during a reconciliation audit.</li>
+<li><strong>Publish, then commit:</strong> the process dies between the lines. Now the world is celebrating an order that doesn't exist. The email service congratulates a customer on a phantom purchase. Arguably worse.</li>
+</ul>
+
+<p>And no, wrapping it in try/catch doesn't fix it (a crash executes no catch blocks), and retrying doesn't fix it (the process that knew to retry is the thing that died). Interviewers plant this trap deliberately: they wait for you to draw an arrow to the database and another to Kafka, then ask what happens if you crash between them. Finding it in your <em>own</em> diagram before they ask is one of the cleanest senior signals this topic offers.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 230" role="img" aria-label="Dual write: app writes to database and separately publishes to broker; crash between the two writes loses the event">
+  <rect class="dg-node" x="40" y="80" width="170" height="60" rx="8"/>
+  <text class="dg-txt" x="66" y="106">Order service</text>
+  <text class="dg-txt-s" x="66" y="124">one process</text>
+  <rect class="dg-node" x="480" y="20" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="520" y="44">Database</text>
+  <text class="dg-txt-s" x="500" y="62">order committed ✓</text>
+  <rect class="dg-node" x="480" y="150" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="522" y="174">Kafka</text>
+  <text class="dg-txt-s" x="500" y="192">event never arrives</text>
+  <line class="dg-edge" x1="210" y1="94" x2="476" y2="52" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="250" y="56">1. commit order</text>
+  <line class="dg-edge" x1="210" y1="126" x2="476" y2="172" stroke-dasharray="5 5"/>
+  <path class="dg-bad" fill="none" d="M330 138 L358 166 M358 138 L330 166"/>
+  <text class="dg-bad" x="238" y="200">2. crash before publish</text>
+  <text class="dg-txt-s" x="40" y="30">Two writes, two systems, no shared transaction:</text>
+  <text class="dg-txt-s" x="40" y="47">whatever the order, a crash between them splits the truth.</text>
+</svg>
+<figcaption>The dual write. Step 1 succeeded, step 2 never happened, and nothing anywhere knows something is missing.</figcaption>
+</figure>
+
+<h2>The transactional outbox: smuggle the event into the commit</h2>
+
+<p>The fix is almost disappointingly small, which is why interviewers love hearing it by name. You cannot atomically write to two systems — so don't. Write both things to <em>one</em> system, the one that already gives you atomicity: your own database.</p>
+
+<p>Alongside your business tables, add an <code>outbox</code> table. When you save the order, insert the event as a row in the outbox — <em>in the same local ACID transaction</em>:</p>
+
+<pre><code>BEGIN;
+  INSERT INTO orders (...);
+  INSERT INTO outbox (event_type, payload, created_at)
+       VALUES ('OrderPlaced', '{...}', now());
+COMMIT;</code></pre>
+
+<p>Now it's physically impossible for the order to exist without its event, or the event without its order — one transaction, one database, the A in ACID doing what it's always done. A separate process, the <strong>relay</strong>, reads unsent outbox rows and publishes them to the broker, marking each row sent. If the relay crashes mid-publish, it restarts and re-reads unsent rows. Nothing is ever lost; the event sits safely in the outbox until it's delivered.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 270" role="img" aria-label="Transactional outbox: order row and event row committed in one transaction, relay publishes from outbox to broker, consumer receives">
+  <rect class="dg-zone" x="24" y="30" width="300" height="190" rx="10"/>
+  <text class="dg-txt-s" x="44" y="56">Order service DB — ONE transaction</text>
+  <rect class="dg-node" x="44" y="72" width="260" height="52" rx="8"/>
+  <text class="dg-txt" x="60" y="94">orders table</text>
+  <text class="dg-txt-s" x="60" y="112">+ order #123, PENDING</text>
+  <rect class="dg-node-alt" x="44" y="146" width="260" height="52" rx="8"/>
+  <text class="dg-txt" x="60" y="168">outbox table</text>
+  <text class="dg-txt-s" x="60" y="186">+ event OrderPlaced #123</text>
+  <rect class="dg-node" x="392" y="146" width="130" height="52" rx="8"/>
+  <text class="dg-txt" x="418" y="168">Relay</text>
+  <text class="dg-txt-s" x="404" y="186">poll or CDC</text>
+  <rect class="dg-node" x="580" y="146" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="608" y="168">Kafka</text>
+  <text class="dg-txt-s" x="592" y="186">→ consumers</text>
+  <line class="dg-edge" x1="324" y1="172" x2="388" y2="172" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="522" y1="172" x2="576" y2="172" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="330" y="160">read</text>
+  <text class="dg-txt-s" x="528" y="160">publish</text>
+  <text class="dg-txt-s" x="24" y="248">Crash anywhere after COMMIT → the event row is still there. The relay retries until Kafka has it.</text>
+  <text class="dg-txt-s" x="24" y="265">Guarantee: at-least-once. Duplicates are possible — consumers must be idempotent.</text>
+</svg>
+<figcaption>The transactional outbox. The event rides inside the business transaction; a relay ferries it to the broker afterwards, retrying as needed.</figcaption>
+</figure>
+
+<p>The relay comes in two flavors. The simple one polls: <code>SELECT * FROM outbox WHERE sent = false</code> every couple of hundred milliseconds. The elegant one uses <strong>change data capture (CDC)</strong>: instead of querying tables, it tails the database's own write-ahead log — the append-only journal every database keeps of committed changes — and turns each committed outbox insert into a published message. Debezium is the standard open-source tool for this. CDC adds no query load and reacts in near real time; polling is an afternoon of work. Either is a correct answer; naming the trade-off is the senior version.</p>
+
+<p>One price tag, and you must volunteer it: the outbox delivers <strong>at-least-once</strong>. If the relay publishes an event and crashes before marking the row sent, it will publish it again on restart. Duplicates are not a bug in your implementation — they are a guaranteed, designed-in behavior, and every consumer must handle them: processing the same event twice must have the same effect as processing it once. That property is idempotency, it's the outbox's inseparable partner, and it's the entire subject of the next chapter.</p>
+
+<div class="box story"><div class="box-tag">War story — Airbnb's SpinalTap</div>
+<p>As Airbnb broke its Rails monolith (internally nicknamed "monorail") into services through the mid-2010s, dozens of downstream systems needed to know the moment core data changed — a reservation created, a listing price updated — to refresh search indexes, caches, risk checks, and dependent services. Teams gluing this together with dual writes and periodic re-syncs got exactly the drift this chapter predicts: consumers whose view of the data quietly disagreed with the source database. Airbnb's answer was SpinalTap, a change-data-capture service they open-sourced in 2018: it tails MySQL's binlog — the database's own journal of committed changes — plus DynamoDB streams, and publishes every committed mutation to Kafka as a standardized event, in commit order. That last phrase is the whole point: the events aren't what application code <em>claims</em> happened, they're what the database <em>actually committed</em>, so publish-without-write and write-without-publish become structurally impossible. It's the outbox idea graduated into platform infrastructure: stop trusting application code to remember to tell the world; read the truth from the database's log and tell the world yourself.</p>
+</div>
+
+<h2>How deep interviews actually go — and the decision rule</h2>
+
+<p>First, the rule. Memorize it in this exact shape, because it converts this entire chapter into three sentences you can deliver at the whiteboard:</p>
+
+<blockquote><p><strong>Single-service DB write that must also emit an event → transactional outbox. Multi-service business operation that needs rollback → saga (orchestrated, if money or support visibility is involved). 2PC → name it, then explain in two sentences why you're not using it.</strong></p></blockquote>
+
+<p>Second, calibration — because the failure mode at senior isn't ignorance of these patterns, it's misjudging how much of this to volunteer, in which order, unprompted:</p>
+
+<table>
+<thead><tr><th>L5 — volunteer this unprompted</th><th>Staff-level garnish — one sentence, only if the flow invites it</th></tr></thead>
+<tbody>
+<tr><td>Spot the dual write in your own diagram the moment you draw "save + publish," and fix it with the outbox, by name, with the mechanism (event row in the same local transaction; relay publishes after)</td><td>CDC internals — binlog tailing, Debezium, ordering guarantees per partition key</td></tr>
+<tr><td>Say "at-least-once, so consumers must be idempotent" in the same breath as the outbox</td><td>Broker-level exactly-once machinery and its limits</td></tr>
+<tr><td>Choose saga over 2PC for any multi-service flow, with the two-sentence why-not (blocking; in-doubt participants holding locks when the coordinator dies)</td><td>Where 2PC legitimately lives: inside Spanner-class databases, coordinator state itself replicated via Paxos</td></tr>
+<tr><td>Sketch concrete compensations for order → payment → inventory (refund, release, cancel), and order steps so non-compensatable ones come last</td><td>Formal pivot-transaction vocabulary; retriable-vs-compensatable step taxonomy</td></tr>
+<tr><td>Name the isolation gap — "another request can see the half-done state" — and fix it with pending states / semantic locks</td><td>Full countermeasure catalog: commutative updates, version checks, re-reads</td></tr>
+<tr><td>Persist the orchestrator's own state (it can crash mid-saga too) and give every stuck saga a timeout and an owner</td><td>Durable-execution platforms — Temporal/Cadence — and their replay model</td></tr>
+</tbody>
+</table>
+
+<p>The left column is the pass. The right column, delivered <em>instead of</em> the left column, is a fail — garnish on a missing meal. Delivered after it, in single-sentence portions, it reads as depth.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This topic is rarely its own question. It ambushes you mid-design, the moment your diagram spans two datastores. What a passing answer sounds like: you catch the inconsistency yourself, name the pattern, state its guarantee and its price, and keep moving — thirty seconds, no lecture. The probes to expect:</p>
+<ul>
+<li>"You've drawn 'save the order, then publish the event.' What happens if the process dies between those two operations?" — the dual-write trap, laid politely. They're checking whether you've been burned before.</li>
+<li>"Why not just use two-phase commit here?" — they want the two-sentence indictment (blocking, in-doubt locks, coordinator SPOF), not an essay, and definitely not "hmm, maybe I should."</li>
+<li>"Payment succeeded, but inventory says out of stock. Walk me through what happens." — they want the word <em>compensate</em>, the refund flow, and who triggers it; bonus for "that's a business failure, so retrying is wrong."</li>
+<li>"A user refreshes their orders page mid-saga. What do they see?" — the isolation probe. They want pending states, not a blank stare at the words "eventual consistency."</li>
+<li>"Your outbox relay is down for ten minutes. What's lost?" — trick question. Nothing is lost; events queue in the table and delivery resumes. If you flinch, you've memorized the pattern without the mechanism.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c01-f1">
+<p class="fey-prompt">A junior teammate asks: "Why can't we just use a transaction across the order and payment services, like we do inside one database?" Explain the problem and what we do instead, in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A transaction is a promise one database makes about its own rows — the moment the data lives in two services with two databases, there's no single thing that can make that promise. There is an old protocol, two-phase commit, that fakes it with a coordinator who asks everyone "ready?" then "commit" — but while a participant waits for the verdict it must hold its locks, so if the coordinator dies, rows stay locked and requests pile up behind them. Instead we use a saga: break the operation into small steps that each commit normally in one service, and give each step an undo — refund the charge, release the stock. If a step fails, we run the undos in reverse, so the system ends up as if the order never happened. The catch is that between steps the world can see the half-done state, so we mark things "pending" until the saga finishes. And wherever we write our database and also announce an event, we write the event into an outbox table in the same transaction and let a relay publish it — so the write and the announcement can never disagree.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Take the four-step order saga (create pending order → charge card → reserve stock → confirm order). For a crash or failure at each of the four points, say what the recovery is — and whether it's a retry or a compensation. Then answer: which failure is the most dangerous if your orchestrator does <em>not</em> persist its state?</p></div>
+<details><summary>Answer</summary><p>Fail at step 1: nothing committed anywhere — nothing to do (the client retries checkout). Fail at step 2, card declined: business failure — compensate step 1 (cancel the pending order). Fail at step 3, out of stock: compensate steps 2 and 1 in reverse — refund, then cancel. Timeout at step 3 with unknown outcome: retry first (timeouts are transient and the reserve call should be idempotent); only after retries exhaust do you compensate. Fail at step 4: everything real already succeeded — push forward, retry the confirm until it lands (past the pivot you never go backwards). Most dangerous without persisted orchestrator state: a crash <em>between</em> step 2 and 3 — the charge exists, but no surviving record says a saga was mid-flight, so nobody ever refunds it. That's exactly why the orchestrator's step log must be in a database, not in memory.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Design the saga for a hotel booking: reserve the room, charge the card, email the confirmation. Put the steps in the right order, name each compensation, and identify the pivot.</p></div>
+<details><summary>Answer</summary><p>Order: reserve room (compensation: release the room) → charge card (compensation: refund) → send email (no compensation exists — you can't unsend it). The email must come last precisely because it can't be compensated: it may only fire once nothing after it can fail. The pivot is the charge: before it completes, any failure walks backwards (release the room); after it, you push forward (retry the email until it sends — and email sending had better be idempotent, or a retry double-sends). Bonus consideration: the room reservation should carry an expiry (a semantic lock with a TTL) so a saga that dies un-noticed doesn't hold the room forever.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A teammate's design doc reads: "On signup we insert the user row, then publish <code>UserCreated</code> to Kafka so the search indexer and the welcome-email service pick it up. Both operations are in a try/catch with three retries, so we're covered." Find the flaw, fix it, and name the new problem your fix introduces.</p></div>
+<details><summary>Answer</summary><p>It's a dual write. The try/catch and retries live in the process that can die — a crash between the insert and the publish executes no catch block and no retry, leaving a user that search and email never hear about (or, if publish goes first, an announcement for a user that doesn't exist). Fix: transactional outbox — insert the user row and a <code>UserCreated</code> event row in the same database transaction; a relay (polling, or CDC via something like Debezium) publishes from the outbox to Kafka and marks rows sent. New problem introduced: at-least-once delivery — if the relay crashes after publishing but before marking, the event goes out twice, so the indexer and email service must be idempotent (dedupe on the event id; "welcome email sent" recorded so a duplicate doesn't send twice).</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimation drill: your checkout saga has 4 steps, each 99.95% reliable, at 500,000 orders/day. (a) How many orders per day need compensation or recovery? (b) Your refund compensation itself calls a payment provider that's 99.9% reliable — what does that imply about how compensations must be built?</p></div>
+<details><summary>Answer</summary><p>(a) P(all four succeed) = 0.9995⁴ ≈ 0.998, so about 0.2% of orders — roughly 1,000 per day, or one every ~90 seconds — hit a failure mid-saga. At that rate, compensation is not an exception path; it's a production feature that needs its own metrics, dashboard, and alerts. (b) ~1,000 compensations/day × 0.1% failure ≈ one <em>failed refund</em> per day. Compensations must therefore be durable and retried from a persistent queue — never fire-and-forget — with a dead-letter queue and a human runbook for the ones that exhaust retries, because "we dropped a refund" is the incident that ends up on Twitter. A saga is only as trustworthy as its worst compensation.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Splitting data across services silently revokes the database's all-or-nothing guarantee; every multi-service operation becomes a sequence of independently failing steps, and at scale some fail every day.</li>
+<li>2PC restores atomicity by adding a coordinator, but it blocks: participants that voted yes hold locks until the verdict, so a dead coordinator strands them in doubt — say why-not-2PC in two sentences and move on.</li>
+<li>A saga is a chain of local transactions, each with a compensating action; on failure, compensations run in reverse — refund, release, cancel — as new business actions, not rollbacks.</li>
+<li>Order saga steps so non-compensatable actions (emails, shipments) come last; retry transient failures, compensate business failures.</li>
+<li>Choreography reacts to events with no boss and hides the flow; orchestration centralizes the state machine and answers "where is order 123?" — orchestrate money flows, choreograph one-way reactions.</li>
+<li>Sagas have no isolation: half-done state is visible, so model it explicitly with pending states and reservation rows instead of final values.</li>
+<li>"Write the DB and publish the event" is the dual-write trap; the transactional outbox fixes it by committing the event row in the same local ACID transaction and letting a relay publish it afterwards.</li>
+<li>The outbox is at-least-once by design — duplicates will happen, so idempotent consumers are not optional; that's the next chapter.</li>
+</ul>
+</div>

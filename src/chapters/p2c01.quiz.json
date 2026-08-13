@@ -1,0 +1,355 @@
+{
+  "chapter": "p2c01",
+  "items": [
+    {
+      "id": "p2c01-q01", "level": 1, "type": "mcq", "tag": "distributed-txn",
+      "q": "Why does a single BEGIN…COMMIT transaction stop working when orders, payments, and inventory move into separate services?",
+      "options": [
+        {"t": "Atomicity is a promise one database makes about its own rows — no single transaction can span three databases", "correct": true,
+         "why": "Right. ACID atomicity is scoped to one database engine. Split the data, and the 'all-or-nothing' guarantee evaporates: the operation becomes a sequence of network calls that can each fail independently."},
+        {"t": "Network calls between the services are too slow and unreliable to hold a transaction open across them for a whole request", "correct": false,
+         "why": "Latency is a real cost but not the reason. Even with an infinitely fast network, three separate databases have no shared commit — there's nothing that can make the all-or-nothing promise across them."},
+        {"t": "Microservices frameworks disable transactions by default", "correct": false,
+         "why": "Each service still uses local transactions happily inside its own database. What's lost is a transaction that spans services — that's an architectural fact, not a framework setting."},
+        {"t": "SQL syntax doesn't allow multiple databases in one statement", "correct": false,
+         "why": "This isn't about syntax. Some databases can even link to others. The issue is that no single engine owns all the rows, so no single engine can guarantee they commit or abort together."}
+      ]
+    },
+    {
+      "id": "p2c01-q02", "level": 1, "type": "mcq", "tag": "2pc",
+      "q": "In 2PC, what does a participant promise when it votes 'yes' in the prepare phase?",
+      "options": [
+        {"t": "That it will probably be able to commit if things go well", "correct": false,
+         "why": "'Probably' is exactly what the vote is NOT. A yes vote is unconditional — that's what makes the protocol work, and also what makes the in-doubt state so painful."},
+        {"t": "That it can commit and will not change its mind — even across its own crash and restart", "correct": true,
+         "why": "Correct. The participant has done the work, logged it durably, and locked the rows. That binding promise is why it must then wait — locks held — for the coordinator's verdict, however long that takes."},
+        {"t": "That it has already committed the transaction", "correct": false,
+         "why": "Not yet — committing before the verdict would defeat the protocol. Prepare means 'ready and locked in,' commit only happens when the coordinator says every participant voted yes."},
+        {"t": "That it will retry the transaction if it fails", "correct": false,
+         "why": "Retries aren't part of the vote. The vote is about ability and commitment to this transaction: 'I can commit it, and I won't back out.'"}
+      ]
+    },
+    {
+      "id": "p2c01-q03", "level": 1, "type": "mcq", "tag": "2pc",
+      "q": "The 2PC coordinator crashes after collecting yes votes but before announcing the verdict. What happens to the participants?",
+      "options": [
+        {"t": "They wait, in doubt, holding their locks — they may not unilaterally commit or abort", "correct": true,
+         "why": "Yes — this is THE reason 2PC is avoided across services. A yes vote forbids acting alone, so participants sit locked until the coordinator recovers, and every request touching those rows queues up behind them."},
+        {"t": "They commit, since everyone voted yes", "correct": false,
+         "why": "A participant only knows its own vote — someone else may have voted no. Committing unilaterally could split the outcome, which is the exact thing 2PC exists to prevent."},
+        {"t": "They abort after a short timeout and move on", "correct": false,
+         "why": "Aborting would break their promise — the coordinator may have already told another participant to commit. That asymmetry is why they're stuck: neither direction is safe."},
+        {"t": "They elect a new coordinator and finish normally", "correct": false,
+         "why": "Basic 2PC has no such recovery — that requires replicating coordinator state with a consensus protocol, which is how Spanner-class databases fix it. Between ordinary microservices, no such machinery exists."}
+      ]
+    },
+    {
+      "id": "p2c01-q04", "level": 1, "type": "mcq", "tag": "saga",
+      "q": "What is a compensating transaction?",
+      "options": [
+        {"t": "A database rollback that the failed service triggers on every earlier service, restoring each row to its value before the saga began", "correct": false,
+         "why": "There's nothing left to roll back — the earlier steps committed long ago and released their locks. That's precisely why the undo must be a brand-new action."},
+        {"t": "A new forward transaction that semantically undoes a committed step — refund rather than un-charge", "correct": true,
+         "why": "Right. The original commit is history, so you undo its business meaning with a new action: refund the charge, release the reservation, cancel the order. It can even be visible to the customer (charge, then refund)."},
+        {"t": "A retry of the failed step with backoff", "correct": false,
+         "why": "Retries push the saga forward; compensations walk it backward. Confusing the two matters: 'card declined' won't succeed on retry — it needs the previous steps compensated."},
+        {"t": "A penalty payment to affected users", "correct": false,
+         "why": "Tempting from the word 'compensating,' but no — it's compensation in the accounting sense: an offsetting entry that cancels an earlier step's effect."}
+      ]
+    },
+    {
+      "id": "p2c01-q05", "level": 1, "type": "mcq", "tag": "choreography-vs-orchestration",
+      "q": "What's the core difference between choreography and orchestration in a saga?",
+      "options": [
+        {"t": "Choreography: services react to each other's events with no central brain; orchestration: one coordinator commands each step and owns the state machine", "correct": true,
+         "why": "That's the whole distinction. Choreography's flow emerges from subscriptions; orchestration's flow lives in one queryable place. Everything else — visibility, coupling, debugging — follows from where the logic lives."},
+        {"t": "Choreography means the services call each other synchronously in a chain, while orchestration means the steps run asynchronously through a message broker", "correct": false,
+         "why": "Both are typically asynchronous. The axis isn't sync vs async — it's where the saga's control logic lives: nowhere in particular, or in one coordinator."},
+        {"t": "Choreography uses Kafka, orchestration uses REST", "correct": false,
+         "why": "Transport is an implementation detail. An orchestrator can command over a queue; choreographed services could poll an API. The pattern is about control, not protocol."},
+        {"t": "Orchestration requires a workflow product like Temporal", "correct": false,
+         "why": "Temporal-class tools are one way to orchestrate, but an orchestrator can be a state machine table inside your order service. The pattern comes first; the platform is optional."}
+      ]
+    },
+    {
+      "id": "p2c01-q06", "level": 1, "type": "mcq", "tag": "dual-write",
+      "q": "What is the dual-write problem?",
+      "options": [
+        {"t": "Two services writing to the same table concurrently", "correct": false,
+         "why": "That's write contention — a real issue, but a different one. Dual write is one process writing to two different systems that can't share a transaction."},
+        {"t": "Writing to your database and publishing to a broker as two separate operations — a crash between them splits the truth", "correct": true,
+         "why": "Exactly. DB and broker cannot commit together, so 'save then publish' can end with a saved order the world never hears about, and 'publish then save' with an announcement for an order that doesn't exist."},
+        {"t": "Writing the same data twice due to a retry bug", "correct": false,
+         "why": "Duplicate writes are the idempotency problem (next chapter). Dual write is about two different systems receiving one write each — and one of them possibly receiving nothing."},
+        {"t": "A replication conflict between primary and replica", "correct": false,
+         "why": "Replication lag and conflicts live inside one database system. Dual write is an application-level gap between two unrelated systems, like Postgres and Kafka."}
+      ]
+    },
+    {
+      "id": "p2c01-q07", "level": 1, "type": "mcq", "tag": "outbox",
+      "q": "What makes the transactional outbox pattern atomic?",
+      "options": [
+        {"t": "The relay confirms the publish before the transaction commits", "correct": false,
+         "why": "Backwards — the relay only acts after commit, and the transaction never waits for it. Coupling commit to a broker confirmation would just reinvent the dual write with extra steps."},
+        {"t": "The broker and database run on the same machine", "correct": false,
+         "why": "Co-location changes nothing — they'd still be two systems with two separate commit mechanisms. The trick is using only ONE system for the atomic part."},
+        {"t": "The event row is inserted in the same local ACID transaction as the business row", "correct": true,
+         "why": "Right. One database, one transaction, so order-without-event and event-without-order are both impossible. The A in ACID does all the work; the relay just ferries the already-committed event out."},
+        {"t": "Kafka's transactional producer API wraps the database write and the topic publish together in one atomic cross-system commit", "correct": false,
+         "why": "Kafka's transactions cover Kafka topics, not your Postgres tables. No broker feature can enclose another system's writes — which is why the event must ride inside the database's own transaction."}
+      ]
+    },
+    {
+      "id": "p2c01-q08", "level": 1, "type": "mcq", "tag": "outbox",
+      "q": "What delivery guarantee does the outbox pattern give, and what follows from it?",
+      "options": [
+        {"t": "Exactly-once — that's the point of the pattern", "correct": false,
+         "why": "A common misreading. The outbox guarantees the event isn't LOST; it can't prevent a re-publish when the relay crashes after sending but before marking the row sent. Loss is solved; duplication is accepted."},
+        {"t": "At-least-once — so every consumer must handle duplicates idempotently", "correct": true,
+         "why": "Correct, and saying both halves in one breath is the senior version: the relay retries until the broker has the event, duplicates are designed-in, and consumers must make 'processed twice' equal 'processed once.'"},
+        {"t": "At-most-once — events can be dropped under load", "correct": false,
+         "why": "The opposite. Dropping events is precisely what the outbox eliminates — unsent rows wait in the table through any crash or outage until the relay delivers them."},
+        {"t": "Exactly-once within each partition, as long as outbox rows are published in primary-key order by a single relay instance", "correct": false,
+         "why": "Ordering can be arranged per key, but exactly-once is not what the outbox provides — a crash between publish and mark-sent re-publishes. Idempotent consumers, not the relay, absorb that."}
+      ]
+    },
+    {
+      "id": "p2c01-q09", "level": 1, "type": "mcq", "tag": "saga-isolation",
+      "q": "Which ACID property do sagas give up entirely?",
+      "options": [
+        {"t": "Durability — saga steps can be lost", "correct": false,
+         "why": "No — each local transaction is as durable as ever once committed. Sagas lose nothing about surviving crashes; they lose privacy of in-progress state."},
+        {"t": "Isolation — every committed step is visible to the world while the saga may still fail and compensate", "correct": true,
+         "why": "Yes. There's no 'I' in saga — literally. Between steps, other requests can see and act on state that's about to be undone: the dirty-read problem, distributed. Pending states are the standard countermeasure."},
+        {"t": "Consistency — saga data is permanently inconsistent", "correct": false,
+         "why": "Too strong. Each local step keeps its own database consistent, and a completed-or-compensated saga leaves the system in a valid state. What's exposed is the temporary in-between, which is an isolation gap, not permanent inconsistency."},
+        {"t": "Atomicity — and nothing replaces it", "correct": false,
+         "why": "Half right, half wrong. The single atomic commit is indeed gone, but compensations exist specifically to rebuild all-or-nothing at the business level. Isolation is the property with no built-in replacement."}
+      ]
+    },
+    {
+      "id": "p2c01-q10", "level": 2, "type": "mcq", "tag": "dual-write",
+      "q": "Your order service commits the order row, then the process is OOM-killed before publishing OrderPlaced to Kafka. What's the system-level symptom?",
+      "options": [
+        {"t": "The order exists but no downstream system ever hears about it — silent inconsistency with no error anywhere", "correct": true,
+         "why": "Right, and 'silent' is the key word: no exception was thrown, no retry ran (the process that would retry is dead), no alert fires. Search, shipping, and analytics just quietly disagree with the orders table until an audit notices."},
+        {"t": "Kafka detects the missing event and requests it", "correct": false,
+         "why": "Brokers can't request what was never sent — Kafka has no idea an event was intended. There's no negative to detect; that's what makes this failure mode so nasty."},
+        {"t": "The database transaction rolls back when the process dies", "correct": false,
+         "why": "The commit already succeeded — it's durable precisely so that crashes can't undo it. Durability working as designed is what strands the event."},
+        {"t": "The customer's order fails and they see an error", "correct": false,
+         "why": "Worse: the order likely LOOKS fine — the row is there, the response may even have been sent. The damage is downstream and invisible, which beats a visible error for sheer cleanup cost."}
+      ]
+    },
+    {
+      "id": "p2c01-q11", "level": 2, "type": "mcq", "tag": "saga",
+      "q": "Mid-saga, the payment step returns 'card declined.' Your code retries it five times with backoff, then gives up and pages on-call. What's wrong?",
+      "options": [
+        {"t": "Nothing — retries with backoff are best practice", "correct": false,
+         "why": "For transient failures, yes. But 'card declined' is a business answer, not a glitch — the bank said no, and it will say no five more times. Applying transport-failure medicine to a business failure is the bug."},
+        {"t": "It should have retried more times before paging", "correct": false,
+         "why": "More retries mean more identical 'no's, slower failure, and possibly an annoyed bank flagging you for suspicious repeat attempts. The count isn't the problem; retrying at all is."},
+        {"t": "'Card declined' is a business failure — the correct response is to compensate the earlier steps and fail the order cleanly, no retries, no page", "correct": true,
+         "why": "Exactly. Retry transient faults (timeouts, 503s); compensate business refusals. A declined card is a normal, expected outcome that the saga should handle automatically — cancel the pending order, tell the user. Paging a human for it confuses an error with an answer."},
+        {"t": "The payment provider's SDK should be handling retries internally, so the saga code never needs to distinguish transient failures from declines at all", "correct": false,
+         "why": "Providers do retry their own transient internals, but that's beside the point — no layer of retrying converts 'declined' into 'approved.' The saga must recognize refusal and walk backwards."}
+      ]
+    },
+    {
+      "id": "p2c01-q12", "level": 2, "type": "mcq", "tag": "choreography-vs-orchestration",
+      "q": "You're designing a 6-step loan-approval flow across five services. Compliance needs an audit trail, and support must answer 'where is application #4411 stuck?' in seconds. Choreography or orchestration?",
+      "options": [
+        {"t": "Orchestration — the flow's state lives in one queryable place, and timeouts, audit, and compensation logic have a single owner", "correct": true,
+         "why": "Right. Six steps, money, and a hard requirement to inspect state — every factor points at a central state machine. 'Where is #4411?' becomes a row lookup instead of a cross-service log archaeology dig."},
+        {"t": "Choreography — coupling five services to a central orchestrator creates a single point of failure, and loose event-driven coupling is safer for a regulated flow", "correct": false,
+         "why": "Choreography's loose coupling is real, but here it trades away exactly what the requirements demand: a visible, queryable flow. With six steps, emergent event chains become the risk, not the orchestrator."},
+        {"t": "Choreography, with a separate tracking service that listens to all events to rebuild state", "correct": false,
+         "why": "This builds an orchestrator's read-side without its control-side — you get the extra component AND still have no single owner for timeouts and compensations. If you're going to centralize state, centralize control with it."},
+        {"t": "Neither — use 2PC so there's no intermediate state to track", "correct": false,
+         "why": "A six-participant 2PC over services (some of which are likely external — credit bureaus don't speak XA) would hold locks across the slowest participant twice over, and a coordinator crash strands everyone. This is the pattern's worst-case shape."}
+      ]
+    },
+    {
+      "id": "p2c01-q13", "level": 2, "type": "mcq", "tag": "choreography-vs-orchestration",
+      "q": "A notification service must send a push message whenever an order is confirmed. How should this hang off the order flow?",
+      "options": [
+        {"t": "As a step in the order saga, with 'delete the notification' as its compensation", "correct": false,
+         "why": "You can't unsend a push, and confirmation is the saga's final state anyway — there's nothing left to fail. Bolting one-way reactions into the saga bloats the state machine for zero rollback benefit."},
+        {"t": "Choreography — subscribe to OrderConfirmed and react; nothing to unwind, so no coordinator needed", "correct": true,
+         "why": "Right. This is choreography's sweet spot: a fire-and-forget reaction to a final event. No compensation, no ordering dependency, and new subscribers (analytics, CRM) can attach later without touching the order service."},
+        {"t": "The orchestrator should call the notification service synchronously after confirming", "correct": false,
+         "why": "Now a slow or down notification service delays or errors order confirmation — you've coupled a must-work flow to a nice-to-have one. Confirmation should not wait on a push message."},
+        {"t": "Poll the orders table from the notification service every minute, track which confirmed orders it has already seen, and send a push for each new one", "correct": false,
+         "why": "Works, but it's a worse outbox: another service reading your tables couples schemas, adds up to a minute of latency, and skips the event stream you already publish. Subscribe to the event."}
+      ]
+    },
+    {
+      "id": "p2c01-q14", "level": 2, "type": "mcq", "tag": "saga-isolation",
+      "q": "A user refreshes their orders page while their checkout saga is between 'charge card' and 'reserve stock.' What should they see, and why?",
+      "options": [
+        {"t": "The order marked 'processing' — a deliberate pending state that tells readers this state is in flight and may yet be undone", "correct": true,
+         "why": "Yes. Sagas have no isolation, so you model the in-between explicitly: status PENDING, UI says 'processing,' dashboards exclude it from revenue. The half-done state exists either way — the design choice is whether it's labeled."},
+        {"t": "Nothing — hide the order until the saga completes", "correct": false,
+         "why": "Now the user who was charged sees no order at all — cue panic, refresh-spam, and duplicate checkout attempts. Invisible in-flight money is worse than visible in-progress money."},
+        {"t": "The order as confirmed — it'll almost certainly succeed", "correct": false,
+         "why": "'Almost certainly' is doing criminal work here. When inventory fails, you've shown a confirmation you now must un-show, and the user may have already forwarded it. Never display a state you may retract."},
+        {"t": "An error page, since the system is temporarily inconsistent", "correct": false,
+         "why": "There's no error — a saga in flight is normal operation, thousands of times a day. Erroring on the ordinary state punishes users for your architecture."}
+      ]
+    },
+    {
+      "id": "p2c01-q15", "level": 2, "type": "mcq", "tag": "saga",
+      "q": "Your fulfillment saga includes: charge card, reserve stock, print shipping label, hand package to courier. Where must 'hand to courier' go, and why?",
+      "options": [
+        {"t": "First, so shipping — the slowest step — starts early", "correct": false,
+         "why": "Speed is the wrong axis. If a later step then fails, your compensation is 'chase a courier van down the road.' Physical-world actions are the least undoable things a system does."},
+        {"t": "Anywhere, as long as it has a compensation", "correct": false,
+         "why": "That's the point — it can't have a real one. 'Recall the package' is expensive, slow, and unreliable; a compensation that mostly doesn't work is not a compensation."},
+        {"t": "Last — it's effectively non-compensatable, so it must come after every step that can still fail", "correct": true,
+         "why": "Right. Order steps by undoability: freely compensatable steps first, the pivot (charge) in the middle, irreversible physical actions last. After the handoff, failures are handled by pushing forward, never backward."},
+        {"t": "In parallel with the charge, to minimize total latency", "correct": false,
+         "why": "Parallelizing a reversible step with an irreversible one means a declined card can leave a package already in a van. Latency optimizations belong among the compensatable steps only."}
+      ]
+    },
+    {
+      "id": "p2c01-q16", "level": 2, "type": "mcq", "tag": "outbox",
+      "q": "Your outbox relay crashed right after publishing event #4512 to Kafka but before marking it sent. What happens next, and whose job is it to cope?",
+      "options": [
+        {"t": "Kafka notices the second publish carries an identical payload and deduplicates it automatically, so consumers only ever see event #4512 once", "correct": false,
+         "why": "Not in general — the broker sees two produce calls and stores what it's given. Broker idempotence features cover narrow producer-session cases, not a restarted relay re-reading its table. Design for the duplicate."},
+        {"t": "On restart the relay re-reads unsent rows and publishes #4512 again — consumers must treat the duplicate as a no-op", "correct": true,
+         "why": "Exactly the designed behavior: the row still says unsent, so it goes out again. At-least-once means this WILL happen; consumers dedupe (e.g., by event id) so twice equals once. Relay retries + idempotent consumers is the complete pattern."},
+        {"t": "Event #4512 is lost because the relay's memory was wiped", "correct": false,
+         "why": "The relay keeps no state worth losing — that's the design's elegance. The outbox table IS the state, and it's in the database, crash-proof. Loss is the one outcome the pattern makes impossible."},
+        {"t": "The database transaction for order #4512 gets rolled back for consistency", "correct": false,
+         "why": "That transaction committed and is untouchable — and rolling back a real order because a message went out twice would be the tail wagging the dog. The duplicate is absorbed downstream, not repaired upstream."}
+      ]
+    },
+    {
+      "id": "p2c01-q17", "level": 2, "type": "mcq", "tag": "2pc",
+      "q": "Interviewer: 'Why not two-phase commit between your order, payment, and inventory services?' Which reply lands at senior?",
+      "options": [
+        {"t": "\"2PC blocks: participants that voted yes hold locks until the coordinator's verdict, so a coordinator crash leaves rows locked and requests queuing. And my payment provider's API can't participate in 2PC anyway. I'll run a saga with compensations.\"", "correct": true,
+         "why": "The complete two-sentence indictment — the blocking mechanism, the in-doubt consequence, the practical XA reality — plus a committed alternative. This is the calibrated depth: enough to prove you understand it, short enough to keep driving."},
+        {"t": "\"2PC doesn't scale.\"", "correct": false,
+         "why": "Directionally fine, mechanically empty. 'Doesn't scale' without naming locks, blocking, or the in-doubt window is a slogan — the follow-up question will find the gap immediately."},
+        {"t": "\"2PC is deprecated; nobody uses it anymore.\"", "correct": false,
+         "why": "False — it's alive inside Spanner-class databases and plenty of enterprise systems — and confidently wrong claims are worse than honest gaps. The truthful version: it's the wrong tool BETWEEN services, for stated mechanical reasons."},
+        {"t": "\"There are several valid approaches — 2PC gives strong consistency, sagas give availability, eventual consistency is simplest to run — and each brings trade-offs around latency, complexity, and failure handling that we should weigh carefully before committing either way.\"", "correct": false,
+         "why": "The option-listing hedge. The question was an invitation to demonstrate judgment; cataloging alternatives without choosing declines it. Commit, justify, move."}
+      ]
+    },
+    {
+      "id": "p2c01-q18", "level": 2, "type": "mcq", "tag": "dual-write",
+      "q": "A teammate proposes fixing dual writes by publishing to Kafka FIRST and writing the database only after the broker acknowledges. Sound?",
+      "options": [
+        {"t": "Yes — the broker ack guarantees the event is durable before the DB write", "correct": false,
+         "why": "The event is durable, sure — durably describing an order that may never exist. Durability of the wrong fact isn't a fix."},
+        {"t": "No — a crash after publish but before commit announces an order that doesn't exist, which downstream systems then act on", "correct": true,
+         "why": "Right. Reordering just swaps which lie you tell: ghost events instead of missing events. Emails congratulate phantom purchases; inventory reserves stock for nothing. The only fix is making the two writes one transaction — the outbox."},
+        {"t": "No — Kafka acks are too slow to sit in the request path", "correct": false,
+         "why": "Broker acks are single-digit milliseconds — latency isn't the flaw. The flaw is correctness: the gap between the two writes still exists, just mirrored."},
+        {"t": "Yes, if the consumer waits a few seconds before processing, giving the DB write time to land", "correct": false,
+         "why": "A sleep is a prayer, not a protocol. The producer crashed — the DB write isn't late, it's never coming. Time-based hacks around atomicity gaps fail exactly when things are already going wrong."}
+      ]
+    },
+    {
+      "id": "p2c01-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Three candidates handle checkout spanning order, payment, and inventory services. A: \"2PC across the three databases — correctness first.\" B: \"Saga: pending order, charge, reserve, confirm — refund and release on failure; orchestrated from the order service so support can query any order's state.\" C: \"Write to all three and rely on eventual consistency to converge.\" Who's at the senior bar, and why?",
+      "options": [
+        {"t": "B — the saga names its steps, its compensations, and where its state lives; it's the only answer that has planned for the failure case", "correct": true,
+         "why": "B commits to a pattern, sketches concrete compensations, and picks orchestration with an operational reason. That's the full L5 package: pattern choice + failure plan + justification, delivered unprompted."},
+        {"t": "A — distributed transactions were invented for exactly this case, and choosing 2PC shows the candidate puts correctness above convenience instead of accepting weaker guarantees", "correct": false,
+         "why": "It sounds rigorous and it's the classic sounds-right-is-wrong answer: locks held across service calls, an in-doubt freeze when the coordinator dies, and a payment provider that can't do 2PC at all. 'Correctness first' that melts under partitions isn't correctness."},
+        {"t": "C — embracing eventual consistency shows distributed-systems maturity", "correct": false,
+         "why": "'Eventual consistency' without a mechanism is a hope, not a design. Converge HOW? Who refunds the charge when inventory fails? C has borrowed the vocabulary of maturity while skipping the machinery — interviewers probe exactly one level below the buzzword."},
+        {"t": "A and B are equally strong — both guarantee a consistent outcome", "correct": false,
+         "why": "They aren't equivalent even on paper: 2PC buys its atomicity with blocking and lock-holding across the slowest participant, and it can't enroll external APIs. B reaches business-level consistency without freezing the system to get it."}
+      ]
+    },
+    {
+      "id": "p2c01-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You've just drawn 'save order to Postgres' and 'publish OrderPlaced to Kafka' as two arrows from your service. The interviewer is quiet. The strongest next move:",
+      "options": [
+        {"t": "Catch it yourself: \"These two writes aren't atomic — a crash between them loses the event. I'll write the event to an outbox table in the same transaction and have a relay publish it. That's at-least-once, so consumers dedupe by event id.\"", "correct": true,
+         "why": "Naming the trap in your own diagram before it's probed is worth more than a perfect answer after the probe — it reads as scar tissue from production, not exam prep. Pattern, mechanism, guarantee, and consequence in four sentences."},
+        {"t": "Keep going — the diagram matches how most production systems are drawn, and pausing to enumerate rare crash windows before anyone asks invites nitpicking and burns whiteboard time you'll need for the deep dives the interviewer actually cares about", "correct": false,
+         "why": "The dual write isn't obscure; it's the single most-planted trap in event-driven designs, and the silence often IS the probe. Unvolunteered, it becomes the interviewer's easiest 'what happens if it crashes here?' — now you're reacting instead of driving."},
+        {"t": "Preempt with scale: \"Kafka easily absorbs this event volume, so throughput isn't a concern\"", "correct": false,
+         "why": "True and beside the point — you've answered a question nobody asked while the correctness hole sits on the board. Volunteering the wrong depth is a calibration miss."},
+        {"t": "Replace Kafka with a direct HTTP call to each consumer to simplify the diagram", "correct": false,
+         "why": "This trades one dual write for N of them, plus synchronous coupling to every consumer's uptime. Retreating from the queue doesn't dodge the atomicity problem — the DB write and ANY external notify still can't commit together."}
+      ]
+    },
+    {
+      "id": "p2c01-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A 3-step checkout saga at a startup doing 2,000 orders/day. Your teammate insists on deploying a Temporal cluster for it. The senior-calibrated call:",
+      "options": [
+        {"t": "\"At this scale, a saga-state table plus a small state machine in the order service does everything we need. I'd reach for Temporal when flows multiply, run for days, or need heavy retry/timer machinery — and I'd note that trigger now.\"", "correct": true,
+         "why": "Right-sized with a named upgrade trigger — the same judgment as 'no Kafka for 300 requests/sec.' A homegrown orchestrator for ONE short flow is a table and a loop; a durable-execution cluster is real operational surface. Committing to simple, with the escalation condition stated, reads senior."},
+        {"t": "Agree — workflow engines are the industry best practice for sagas, the operational cost is paid only once, and migrating a hand-rolled state machine to Temporal later would mean rewriting every flow under production pressure with real orders in flight", "correct": false,
+         "why": "'Best practice' unmoored from scale is how startups end up operating three clusters for one cron job's worth of work. Migration pain is real but speculative; the cluster's on-call burden is immediate and certain."},
+        {"t": "Refuse any orchestration — at this size, synchronous calls with try/catch are enough", "correct": false,
+         "why": "Under-engineering past the problem: try/catch dies with the process, and 2,000 orders/day still yields daily half-finished orders (that's the math that opened this chapter). The saga is needed; the heavyweight platform isn't."},
+        {"t": "Compromise: run Temporal but only for the payment step", "correct": false,
+         "why": "The worst quadrant — full operational cost of the platform, applied to a fraction of one flow, with saga state now split across two mechanisms. Splitting the difference on infrastructure decisions usually buys both costs and neither benefit."}
+      ]
+    },
+    {
+      "id": "p2c01-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your outbox works great in staging. The interviewer asks: 'What do you monitor on it in production, and what breaks at 10x traffic?' The strongest answer:",
+      "options": [
+        {"t": "\"Outbox lag — age of the oldest unsent row — with an alert, since relay death silently stalls all events. At 10x, a polling relay and an ever-growing table are the bottlenecks: move to CDC and prune published rows.\"", "correct": true,
+         "why": "Names the one metric that catches the silent failure mode, the alert on it, and the two 10x pressure points with their fixes. Ops thinking plus a scaling story in three sentences — exactly what the question was fishing for."},
+        {"t": "\"Standard service metrics — CPU, memory, error rate on the relay\"", "correct": false,
+         "why": "A dead relay throws no errors and burns no CPU — it's absent, not failing. Generic dashboards miss precisely this pattern's failure mode; the signal that matters is data-level: how stale is the oldest unsent event?"},
+        {"t": "\"Nothing special — the outbox is self-healing by design: events wait safely in the table through any relay outage and delivery resumes automatically on restart, so there's no failure mode that needs its own dashboard or alert\"", "correct": false,
+         "why": "The table makes events WAIT, not DELIVER. If nobody notices the relay is down, 'no events lost' becomes 'all events six hours late,' which downstream may experience as an outage. Self-healing storage still needs monitored delivery."},
+        {"t": "\"At 10x I'd shard Kafka topics and scale consumer groups\"", "correct": false,
+         "why": "Downstream scaling for an upstream question. The broker is rarely the outbox's bottleneck — the poll query, row churn, and table bloat in YOUR database are. Scaling the part that was fine is a classic misdirection under pressure."}
+      ]
+    },
+    {
+      "id": "p2c01-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Inventory failed, so your saga must refund the customer — but the refund call to the payment provider now fails too. What must the design already have in place?",
+      "options": [
+        {"t": "Compensations recorded durably and retried from a persistent queue, with a dead-letter queue and a paged runbook for ones that exhaust retries", "correct": true,
+         "why": "A saga is only as trustworthy as its worst compensation. Refund attempts must survive process death (durable, not in-memory), retry on their own schedule, and escalate to humans when stuck — because a dropped refund is stolen money with a paper trail."},
+        {"t": "Nothing extra — log the refund failure and continue; reconciliation will find it eventually", "correct": false,
+         "why": "'Eventually' here means 'when the customer tweets the bank statement.' A log line is not an obligation-tracking system; compensation failures are exactly the events that must never rely on someone reading logs."},
+        {"t": "Wrap the refund and order-cancellation in a 2PC so they succeed together", "correct": false,
+         "why": "The refund endpoint is an external HTTP API — it cannot vote in anyone's prepare phase. Reaching for 2PC to fix a saga's weak spot re-imports every problem the saga was chosen to avoid, and it isn't even implementable here."},
+        {"t": "Skip the refund and re-run the whole forward saga from the top, so the customer ends up receiving the item they originally wanted instead of a refund they never asked for", "correct": false,
+         "why": "Deciding the customer now wants a maybe-in-stock item rather than their money back is a product decision made unilaterally by an error handler. Forward recovery is legitimate past the pivot — not as improvisation to dodge a failing compensation."}
+      ]
+    },
+    {
+      "id": "p2c01-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "One PS5 left. Customer A's saga has reserved it but payment is still processing. Customer B checks out now. What does the senior design do with that last unit?",
+      "options": [
+        {"t": "Reservation rows with a TTL: B is told 'held, try shortly' or queued; if A's payment fails or the TTL lapses, the hold releases and B gets it", "correct": true,
+         "why": "The semantic-lock pattern earning its keep: the in-flight claim is explicit, time-bounded, and self-releasing, so a crashed saga can't strand the unit forever. Oversell prevented, availability restored automatically — this is what replacing isolation deliberately looks like."},
+        {"t": "Let B buy it too — chargebacks and apologies are cheaper than lost sales", "correct": false,
+         "why": "Deliberate oversell IS a real strategy in some domains (airlines), but as a default for a last-unit console it converts a solvable concurrency problem into guaranteed customer harm. If you choose oversell, it must be a priced business policy, not a shrug."},
+        {"t": "Row-lock the inventory record until A's saga fully completes", "correct": false,
+         "why": "A database lock held across an external payment call is 2PC's blocking sin rebuilt by hand — a slow provider now freezes that row for every reader, and a crashed saga leaks the lock. Sagas exist specifically so no lock spans a network call."},
+        {"t": "Decrement the visible stock count the moment A reserves, and re-increment it if A's payment later fails, so B simply sees the item as sold out while A's payment is processing", "correct": false,
+         "why": "Close — this is a reservation, but implicit and unlabeled. 'Sold out' shown to B during A's doomed payment is a lost sale, and a crash between decrement and re-increment strands the unit with no TTL to rescue it. Model the hold explicitly."}
+      ]
+    },
+    {
+      "id": "p2c01-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Two mini-designs: (1) a profile service that updates a user row and must notify the search indexer; (2) a travel-booking flow that charges a card, books a flight, and books a hotel, where any failure must unwind the rest. Apply the decision rule.",
+      "options": [
+        {"t": "(1) Transactional outbox; (2) orchestrated saga with compensations", "correct": true,
+         "why": "The rule, applied clean: one service + one DB write + an event to emit is exactly the outbox's shape; a multi-service business operation needing rollback is exactly a saga's — and refund/cancel compensations across payment and two suppliers want a coordinator that knows each booking's state."},
+        {"t": "(1) Saga; (2) transactional outbox", "correct": false,
+         "why": "Inverted. (1) has nothing to compensate — one local write plus a notification needs no saga. (2)'s problem isn't publishing an event atomically; it's unwinding real money and reservations across three parties — that's compensation logic, which an outbox alone doesn't provide."},
+        {"t": "Outbox for both — it's the more modern pattern", "correct": false,
+         "why": "The outbox gets (2)'s events delivered reliably and still leaves the actual question — who refunds the card when the hotel booking fails? — completely unanswered. Patterns aren't fashion; they map to problem shapes. (2)'s shape is rollback."},
+        {"t": "Saga for both — a single-step saga handles (1) fine, and sagas subsume the outbox anyway since both patterns exist to coordinate writes across multiple systems", "correct": false,
+         "why": "Backwards in an interesting way: real sagas often USE outboxes to emit their step events atomically, but wrapping (1)'s single write in saga machinery is pure ceremony — there's no second step, no compensation, nothing to coordinate. Match the lightest pattern that solves the problem."}
+      ]
+    }
+  ]
+}

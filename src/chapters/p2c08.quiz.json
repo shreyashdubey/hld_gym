@@ -1,0 +1,355 @@
+{
+  "chapter": "p2c08",
+  "items": [
+    {
+      "id": "p2c08-q01", "level": 1, "type": "mcq", "tag": "pillars",
+      "q": "Which pillar of observability is the cheap one you build alerts on?",
+      "options": [
+        {"t": "Metrics", "correct": true,
+         "why": "Right. Metrics pre-aggregate — a million requests collapse into a few numbers per second — so they're cheap to store for months and fast to query, which is exactly what alerting and dashboards need."},
+        {"t": "Logs", "correct": false,
+         "why": "Logs are the expensive pillar: one detailed line per event. You dig through them to explain an incident after metrics detected it — searching logs to detect problems is slow and costly."},
+        {"t": "Traces", "correct": false,
+         "why": "Traces reconstruct one request's journey across services — the locate tool. They're per-request detail (often sampled), not the cheap aggregate stream that feeds alerts."},
+        {"t": "All three cost about the same", "correct": false,
+         "why": "The cost gap is the whole point. Metrics collapse millions of events into a few series; logs and traces keep per-event detail. That's why each pillar has a different job."}
+      ]
+    },
+    {
+      "id": "p2c08-q02", "level": 1, "type": "mcq", "tag": "tracing",
+      "q": "In distributed tracing, what is 'context propagation'?",
+      "options": [
+        {"t": "Passing the trace ID along in headers as the request hops between services", "correct": true,
+         "why": "Yes. Every service forwards the trace ID (and records its own span). That hand-off is what lets the tracing system stitch spans from ten services into one waterfall for one request."},
+        {"t": "Replicating trace data to multiple regions", "correct": false,
+         "why": "That's storage replication, a different concern. Propagation happens at request time, in the request itself — it's how the journey stays connected, not how the data is stored."},
+        {"t": "Copying logs into the tracing system", "correct": false,
+         "why": "Logs and traces can be linked, but propagation isn't about logs. It's the trace ID riding along in headers so every hop tags its span with the same request identity."},
+        {"t": "Broadcasting config changes to all services", "correct": false,
+         "why": "Config distribution is unrelated. In tracing, 'context' means the trace ID and span info that must travel with the request — drop it at one hop and the trace has a hole."}
+      ]
+    },
+    {
+      "id": "p2c08-q03", "level": 1, "type": "mcq", "tag": "golden-signals",
+      "q": "The four golden signals are:",
+      "options": [
+        {"t": "Latency, traffic, errors, saturation", "correct": true,
+         "why": "Correct — Google SRE's default dashboard. Is it slow, how much is being asked, is it broken, and how close to full are we? Saturation is the forward-looking one: it predicts trouble before users feel it."},
+        {"t": "CPU, memory, disk, network", "correct": false,
+         "why": "Those are machine resources — causes, not user experience. They appear inside saturation, but a dashboard of only these can be all-green while checkout fails for 40% of users."},
+        {"t": "Uptime, throughput, cost, security", "correct": false,
+         "why": "Real concerns, wrong list. The golden signals are deliberately about a service's live health as users experience it, on one screen — cost and security live elsewhere."},
+        {"t": "p50, p95, p99, p999", "correct": false,
+         "why": "Those are percentiles — ways to summarize just one of the signals (latency). The golden four cover latency plus traffic, errors, and saturation."}
+      ]
+    },
+    {
+      "id": "p2c08-q04", "level": 1, "type": "mcq", "tag": "percentiles",
+      "q": "Your p99 latency is 800ms. What does that mean?",
+      "options": [
+        {"t": "99% of requests finish faster than 800ms; the slowest 1% take longer", "correct": true,
+         "why": "Exactly. Sort all response times; p99 is the threshold the slowest 1% cross. It keeps the tail visible — which matters because heavy users with big accounts live disproportionately in the tail."},
+        {"t": "The average request takes 800ms once you smooth out spikes over the measurement window", "correct": false,
+         "why": "Percentiles exist precisely because averages lie: 99 fast requests plus one 10-second straggler average to a number no user experienced. p99 is a position in the sorted list, not a mean."},
+        {"t": "99% of servers respond within 800ms", "correct": false,
+         "why": "Percentiles here describe requests, not servers. A single overloaded server can drag the request-level p99 while '99% of servers' look fine."},
+        {"t": "Requests time out after 800ms", "correct": false,
+         "why": "A timeout is a limit you configure; p99 is a measurement of what actually happened. They interact (timeouts cap the tail) but they're different things."}
+      ]
+    },
+    {
+      "id": "p2c08-q05", "level": 1, "type": "mcq", "tag": "slo-math",
+      "q": "A 99.9% availability SLO over a 30-day month allows roughly how much full downtime?",
+      "options": [
+        {"t": "43 minutes", "correct": true,
+         "why": "Right: 30 days = 43,200 minutes, and 0.1% of that is 43.2 minutes. Doing this math out loud in an interview is the move — it turns an abstract 'three nines' into a budget a team can actually reason about."},
+        {"t": "4.3 minutes", "correct": false,
+         "why": "That's 99.99% — one more nine, ten times less downtime. Each nine divides the allowance by ten, which is also why each nine multiplies the cost roughly tenfold."},
+        {"t": "7 hours", "correct": false,
+         "why": "That's 99% (about 7.2 hours/month). Easy to mix up — the gap between two and three nines is the gap between 'fix it after lunch' and 'carry a pager.'"},
+        {"t": "26 seconds", "correct": false,
+         "why": "That's five nines (99.999%). At 26 seconds a month, no human can be in the loop at all — everything must fail over automatically, at enormous cost."}
+      ]
+    },
+    {
+      "id": "p2c08-q06", "level": 1, "type": "mcq", "tag": "sli-slo-sla",
+      "q": "SLI, SLO, SLA — what's the chain?",
+      "options": [
+        {"t": "SLI = the measured indicator, SLO = your internal target for it, SLA = the external contract with penalties", "correct": true,
+         "why": "That's the chain. You measure something close to user happiness (SLI), set your own bar (SLO), and promise customers a looser version with teeth (SLA). Internal target strict, external promise soft."},
+        {"t": "Three names for the same 99.9% number", "correct": false,
+         "why": "They're three different things, and the numbers should differ on purpose: SLO tighter than SLA, so your internal alarm fires while there's still runway before the contract burns."},
+        {"t": "SLA is the internal engineering goal, and SLO is the looser number published to customers in the terms of service", "correct": false,
+         "why": "Swapped. The A in SLA is 'agreement' — the customer-facing contract with penalties. The O is 'objective' — your own target."},
+        {"t": "SLI is the alerting rule; SLO is the dashboard", "correct": false,
+         "why": "An SLI is a measurement (good events / total events), not an alert rule. Alerts and dashboards are built on top of SLIs, usually keyed to how fast the SLO's budget is burning."}
+      ]
+    },
+    {
+      "id": "p2c08-q07", "level": 1, "type": "mcq", "tag": "error-budget",
+      "q": "What is an error budget?",
+      "options": [
+        {"t": "100% minus the SLO — the amount of failure you're allowed to spend", "correct": true,
+         "why": "Yes. A 99.9% SLO leaves 0.1% — about 43 minutes a month — as a budget. Budget left: ship features and take risks. Budget gone: launches pause and effort shifts to reliability. It turns arguments into arithmetic."},
+        {"t": "Money reserved for outage compensation", "correct": false,
+         "why": "SLA penalty credits are money; the error budget is measured in allowed unreliability (failed requests, minutes of downtime), and it's spent by engineering risk-taking, not by finance."},
+        {"t": "The number of bugs allowed per release", "correct": false,
+         "why": "Bug counts don't measure user pain — a thousand cosmetic bugs matter less than one checkout outage. The budget is defined on the SLI, the user-experience measurement."},
+        {"t": "Alert threshold for the error rate", "correct": false,
+         "why": "Related but not it. Good alerting is derived from the budget — page when it's burning fast — but the budget itself is the total allowance: 100% minus SLO over the window."}
+      ]
+    },
+    {
+      "id": "p2c08-q08", "level": 1, "type": "mcq", "tag": "cardinality",
+      "q": "Why is adding a user_id label to a metric a famous mistake?",
+      "options": [
+        {"t": "Each unique label value creates its own time series, so millions of users multiply storage into an explosion", "correct": true,
+         "why": "Right — that's a cardinality explosion. 2,500 series times 10M users is 25 billion series, which eats the monitoring cluster's memory. Unbounded identifiers belong in logs and traces, which store per-event detail anyway."},
+        {"t": "It breaks privacy rules — regulations forbid storing user identifiers anywhere in a monitoring or analytics system", "correct": false,
+         "why": "There can be privacy angles, but that's not why monitoring systems die. The killer is mechanical: one time series per label combination, multiplied by millions of users."},
+        {"t": "User IDs change too often to be useful", "correct": false,
+         "why": "IDs are stable — that's not the issue. The issue is how many distinct values exist: every distinct value is a separate series the metrics store must hold in memory."},
+        {"t": "Metrics can only hold numeric labels", "correct": false,
+         "why": "Labels are strings in most systems; a numeric user ID would be accepted just fine. It would then create ten million series and take the cluster down — acceptance is the trap."}
+      ]
+    },
+    {
+      "id": "p2c08-q09", "level": 1, "type": "mcq", "tag": "alerting",
+      "q": "'Page on symptoms, not causes.' Which of these is a symptom?",
+      "options": [
+        {"t": "Checkout success rate dropped below target", "correct": true,
+         "why": "That's user pain, measured directly — the thing the business actually cares about. Symptoms page a human; causes (CPU, restarts, disk) become dashboard panels you consult to diagnose after the symptom fires."},
+        {"t": "CPU at 85% and climbing on three of the payment service's hosts", "correct": false,
+         "why": "A cause — and maybe a healthy one; autoscaled systems run hot on purpose. If it's genuinely hurting users, a symptom alert on latency or errors will fire. If it isn't, why is anyone awake?"},
+        {"t": "A pod restarted", "correct": false,
+         "why": "Routine machinery noise — orchestrators restart pods all day. Paging on it teaches the on-call that pages are ignorable, which is how the real page gets slept through."},
+        {"t": "Disk usage crossed 70%", "correct": false,
+         "why": "A predictive cause: worth a ticket sized by how fast it's filling ('full in 4 days' = morning task). It only earns a page when it's about to become user pain."}
+      ]
+    },
+    {
+      "id": "p2c08-q10", "level": 2, "type": "mcq", "tag": "pillars",
+      "q": "A user reports: 'my payment yesterday at 21:04 took 9 seconds.' Your architecture spans ten services. Which tool finds where the time went?",
+      "options": [
+        {"t": "The distributed trace for that request", "correct": true,
+         "why": "This is the trace's exact job: one request, many services, where did the time go. The span waterfall shows 8.8 of the 9 seconds sitting in the fraud-check hop — then logs from that service explain why."},
+        {"t": "The latency dashboard for yesterday evening", "correct": false,
+         "why": "Metrics are aggregates — they'll show whether many requests were slow at 21:04, but they can't reconstruct one request's path. One slow request may not even dent the p99."},
+        {"t": "Grep all ten services' logs for the timestamp", "correct": false,
+         "why": "Possible but painful: ten separate haystacks, clock skew between hosts, thousands of interleaved requests at 21:04. The trace ID exists precisely so you don't correlate by timestamp."},
+        {"t": "CPU and memory graphs for each service", "correct": false,
+         "why": "Resource graphs are causes, and per-host besides. Nothing there connects to this user's request. You'd be inferring the journey instead of reading it."}
+      ]
+    },
+    {
+      "id": "p2c08-q11", "level": 2, "type": "mcq", "tag": "percentiles",
+      "q": "You have p99 latency from each of 20 servers and need the fleet-wide p99. What's correct?",
+      "options": [
+        {"t": "You can't combine the p99s — export histograms from each server and compute the percentile after merging", "correct": true,
+         "why": "Right. A percentile is a property of one specific distribution; twenty summaries can't be recombined. Merge the underlying bucket counts (or sketches — built properly in p3c18), then take the percentile of the merged whole."},
+        {"t": "Average the 20 values", "correct": false,
+         "why": "The classic mistake. The true fleet p99 depends on each server's traffic share and distribution shape — the average of the summaries can be wildly off in either direction, and dashboards built this way lie."},
+        {"t": "Take the worst of the 20", "correct": false,
+         "why": "A defensible pessimistic bound, but not the fleet p99 — one weird low-traffic server dominates the number and you'll chase ghosts. Merging histograms is barely more work and actually correct."},
+        {"t": "Weight each p99 by that server's request count", "correct": false,
+         "why": "Sounds rigorous, still wrong — a weighted average of percentiles is not the percentile of the union. No arithmetic on the summaries recovers the merged distribution; only merging the data does."}
+      ]
+    },
+    {
+      "id": "p2c08-q12", "level": 2, "type": "mcq", "tag": "slo-choice",
+      "q": "You're asked for an availability target for an internal analytics dashboard used by ~40 analysts on weekdays. The senior answer:",
+      "options": [
+        {"t": "\"99.5% — a rare half-day outage is an inconvenience here, and each extra nine multiplies cost tenfold for benefit nobody gets\"", "correct": true,
+         "why": "Naming a modest number and defending why it isn't higher is the senior signal. Reliability targets are economic decisions; matching the target to actual user need is the judgment being graded."},
+        {"t": "\"99.999% — reliability should be a core value here, and internal users deserve the same engineering bar we already hold for paying customers\"", "correct": false,
+         "why": "The trap answer, verbatim. Five nines is 26 seconds a month: multi-region failover and no maintenance windows, for a tool where an hour of downtime costs almost nothing. Values talk isn't engineering."},
+        {"t": "\"Whatever our cloud provider offers\"", "correct": false,
+         "why": "Dodges the question and gets the dependency logic backwards: your service sits on top of the provider, so you're at best a bit less available than they are. The target should come from user need."},
+        {"t": "\"100% — internal tools are small enough to keep up always\"", "correct": false,
+         "why": "100% is the wrong target for basically everything — Google SRE's founding observation. Deploys, dependencies, and hardware make it unachievable, and promising it forbids all change."}
+      ]
+    },
+    {
+      "id": "p2c08-q13", "level": 2, "type": "mcq", "tag": "burn-rate",
+      "q": "Service SLO 99.9%. At 2am, error rate hits 0.3% for 40 seconds, then recovers. At 4am, errors climb to 5% and stay there. What should page?",
+      "options": [
+        {"t": "Only the 4am event — it burns the monthly budget at ~50x and would exhaust it within hours", "correct": true,
+         "why": "That's burn-rate alerting. The 2am blip spent a rounding error of budget and self-healed — waking a human achieves nothing. The 4am sustained burn is a fire: budget-threatening, and only intervention stops it."},
+        {"t": "Both — the error rate exceeded the 0.1% implied by the SLO each time, and every breach of the objective deserves a page", "correct": false,
+         "why": "Threshold-paging on every excursion is the alert-fatigue machine: nightly wakeups for blips that resolve before the laptop opens, until the on-call sleeps through the real one."},
+        {"t": "Neither — wait for the monthly SLO report", "correct": false,
+         "why": "By month's end, the 4am burn has torched the entire budget many times over. The budget is a live tripwire, not a retrospective scorecard."},
+        {"t": "Both, but route them to different people", "correct": false,
+         "why": "Routing doesn't fix the false positive — someone still gets woken for a 40-second self-healing blip. The blip's correct destination is a dashboard, at most a ticket if it recurs."}
+      ]
+    },
+    {
+      "id": "p2c08-q14", "level": 2, "type": "mcq", "tag": "sli-slo-sla",
+      "q": "Your customer contract (SLA) promises 99.9%. Where do you set the internal SLO?",
+      "options": [
+        {"t": "Tighter — say 99.95% — so your own alarm trips while there's still runway before the contract does", "correct": true,
+         "why": "Right: SLO strict, SLA soft. The gap is your reaction time — breach your own objective first, mobilize, and the customer never sees a penalty event. If SLO equals SLA, your first warning is a payout."},
+        {"t": "Exactly 99.9%, so targets stay aligned", "correct": false,
+         "why": "Alignment sounds tidy but leaves zero margin: the moment you notice a problem, you're already in contractual breach. The whole point of the internal bar is to fail it before the external one."},
+        {"t": "Looser — 99.5% — to keep the team's goal achievable", "correct": false,
+         "why": "Backwards and dangerous: you could be comfortably meeting your internal target while writing service-credit checks. The contract must be the softer of the two promises."},
+        {"t": "No internal SLO needed once an SLA exists", "correct": false,
+         "why": "The SLA is a legal document, not an operational tool. Without an internal SLO there's no error budget, no burn-rate alerting, no launch-governance — just penalties arriving as surprises."}
+      ]
+    },
+    {
+      "id": "p2c08-q15", "level": 2, "type": "mcq", "tag": "tail-amplification",
+      "q": "A page fans out to 100 backends and waits for all. Each backend is slow on 1% of calls. Roughly what fraction of page loads hit at least one slow call?",
+      "options": [
+        {"t": "About 63%", "correct": true,
+         "why": "1 − 0.99¹⁰⁰ ≈ 0.63. Tail latency amplification: fan out wide enough and the 1-in-100 slow case becomes the majority experience, because the page waits for the slowest leg. This is why wide fan-outs obsess over p99s."},
+        {"t": "About 1%", "correct": false,
+         "why": "That's the per-leg probability. The page needs ALL 100 legs fast, and 0.99 multiplied by itself 100 times collapses to ~37% — the intuition that failure odds stay small doesn't survive fan-out."},
+        {"t": "About 10%", "correct": false,
+         "why": "Feels like a reasonable middle guess, but the math compounds harder than intuition suggests: even 10 legs gives ~10%, and 100 legs gives ~63%. Width is brutal."},
+        {"t": "Nearly 100%", "correct": false,
+         "why": "Close in spirit — at 300+ legs you'd be right — but at 100 legs it's ~63%. Knowing the actual formula (1 minus 0.99 to the fan-out power) is what lets you size the problem before building the page."}
+      ]
+    },
+    {
+      "id": "p2c08-q16", "level": 2, "type": "mcq", "tag": "percentiles",
+      "q": "After a deploy, users complain about slowness, but your average-latency graph is flat. Most likely explanation?",
+      "options": [
+        {"t": "A tail regression — p99 spiked for a subset of requests, and the average smears it invisible", "correct": true,
+         "why": "Averages hide the tail: 1% of requests going from 200ms to 10s barely moves the mean but generates real complaints — often from your heaviest users, whose requests touch the most data. Check p95/p99, then trace a slow request."},
+        {"t": "Users are imagining it; the graph is authoritative", "correct": false,
+         "why": "When telemetry and users disagree, suspect the telemetry — an averaged metric measures a user who doesn't exist. Dismissing reports because a mean is flat is how tail regressions ship to production and stay there."},
+        {"t": "The deploy failed to roll out", "correct": false,
+         "why": "Then users wouldn't have started complaining right after it. The graph being flat doesn't prove nothing changed — it proves the average is the wrong instrument for what changed."},
+        {"t": "The monitoring pipeline is down, so the graph is frozen at its last healthy value instead of showing live data", "correct": false,
+         "why": "A flat-lining graph from dead monitoring is worth ruling out, but a live, updating average that misses a tail regression is far more common — that failure mode needs no outage, just the wrong summary statistic."}
+      ]
+    },
+    {
+      "id": "p2c08-q17", "level": 2, "type": "mcq", "tag": "alert-fatigue",
+      "q": "Your team gets ~40 pages a night; most are auto-resolving blips, and last week a real outage page was slept through. The fix:",
+      "options": [
+        {"t": "Delete or demote every non-actionable alert, and rebuild paging around symptoms and budget burn rate", "correct": true,
+         "why": "Alert fatigue is a system design flaw, not a discipline problem. Pages must be rare enough to mean 'real user pain, act now' — symptom-based, burn-rate-gated paging typically cuts volume by 10x while catching more real incidents."},
+        {"t": "Add an escalation policy so any page left unacknowledged for five minutes automatically rings the secondary on-call, then the manager", "correct": false,
+         "why": "Escalating noise produces louder noise — now two people distrust the pager. Escalation is for real pages that need backup, and it only works after the noise is gone."},
+        {"t": "Coach the on-call to acknowledge every page within 5 minutes", "correct": false,
+         "why": "Treats the symptom (slow acks) instead of the cause (worthless pages). Humans cannot stay vigilant against a 97%-false-positive alarm stream — Knight Capital's 97 unread warnings show where that ends."},
+        {"t": "Split the pages across two on-call rotations", "correct": false,
+         "why": "Halving each person's noise still trains both to ignore it, and doubles the staffing cost of a broken system. The pages themselves are the bug."}
+      ]
+    },
+    {
+      "id": "p2c08-q18", "level": 2, "type": "mcq", "tag": "pillars",
+      "q": "Two needs: (A) a 13-month graph of requests/sec by region for capacity planning; (B) find out why user 4711's upload failed yesterday. Where does each belong?",
+      "options": [
+        {"t": "A in metrics; B in logs (or trace attributes)", "correct": true,
+         "why": "A is aggregated, low-cardinality, long-retention — the definition of a metric. B is a needle-in-haystack search for one user's events — per-event detail that lives in logs and traces. Each pillar doing its own job."},
+        {"t": "Both in metrics — add a user_id label for B", "correct": false,
+         "why": "The user_id label is the cardinality explosion: millions of users times existing labels equals billions of time series. The monitoring cluster dies so you could avoid one log query."},
+        {"t": "Both in logs — compute the graph by scanning them", "correct": false,
+         "why": "Works at toy scale, then the 13-month scan over per-request logs costs a fortune and takes minutes per dashboard refresh. Aggregates you consult repeatedly should be pre-aggregated — that's what metrics are."},
+        {"t": "A in traces; B in metrics", "correct": false,
+         "why": "Reversed. Traces reconstruct individual journeys (closer to B's shape via trace search); they're useless for a regional throughput graph, and metrics can't answer anything about one specific user."}
+      ]
+    },
+    {
+      "id": "p2c08-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Ending a feed-design interview, which instrumentation closing reads most senior?",
+      "options": [
+        {"t": "\"My SLIs: feed-load success rate and p99 latency, measured at the edge. SLO 99.9% — that's 43 minutes a month. Fast budget burn pages; CPU never does. Ships canary-first with auto-rollback on SLO breach.\"", "correct": true,
+         "why": "Named SLIs for THIS design, a target with the math done aloud, symptom-based paging, and a rollout gate — thirty seconds proving you've operated software. This is what 'instrument your design unprompted' means at L5."},
+        {"t": "\"I'd add Prometheus for metrics, Grafana for dashboards, the ELK stack for logs, Jaeger for distributed tracing, OpenTelemetry for instrumentation, and PagerDuty for alerting — full observability coverage across every service.\"", "correct": false,
+         "why": "Tool names without objects — the interviewer learns you can name vendors, not what you'd measure, what target you'd defend, or what wakes a human. Buzzword architecture, monitoring edition."},
+        {"t": "\"I'd add monitoring and logging to all services.\"", "correct": false,
+         "why": "The checkbox sentence. It's not wrong — it's empty. No SLI, no number, no paging philosophy: nothing distinguishes it from a candidate who has never held a pager."},
+        {"t": "\"I'd aim for five nines so users never see downtime.\"", "correct": false,
+         "why": "Volunteers the trap: five nines is 26 seconds a month, demanding fully automated multi-region failover a feed doesn't need. Maximal nines without cost reasoning reads junior, not ambitious."}
+      ]
+    },
+    {
+      "id": "p2c08-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Error budget exhausted mid-quarter after two bad deploys. The PM wants to launch a major feature anyway — 'it's committed to leadership.' The senior move:",
+      "options": [
+        {"t": "Apply the pre-agreed policy — launch pauses, reliability work starts — and route the exception request to the leadership that signed the policy", "correct": true,
+         "why": "The budget's entire value is that consequences were agreed before anyone was upset — waive it under pressure once and it's dead forever. Exceptions can exist, but they're made deliberately by the policy's owners, not by whoever pushes hardest in the hallway."},
+        {"t": "Launch anyway — business needs outrank an internal metric", "correct": false,
+         "why": "The budget IS a business metric: users are already hurting at exactly the level the business said was its maximum. Launching risky change on zero budget is spending money the account doesn't have."},
+        {"t": "Refuse and let engineering and product escalate against each other", "correct": false,
+         "why": "Personal refusal turns a governance mechanism back into the political standoff error budgets were invented at Google to end. You're not the policy — invoke it, don't embody it."},
+        {"t": "Quietly widen the SLO to a level the service already meets comfortably, so the budget shows headroom again and the launch can proceed without a policy fight", "correct": false,
+         "why": "Redefining the measurement to permit the decision is the worst outcome — it converts your reliability data into fiction and teaches everyone the numbers are negotiable under pressure."}
+      ]
+    },
+    {
+      "id": "p2c08-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'The business says this payment service can never be down.' Your best response:",
+      "options": [
+        {"t": "\"100% isn't achievable — my dependencies alone cap me below it. I'd propose 99.99% on payment success rate, and here's what those four minutes a month buy and cost.\"", "correct": true,
+         "why": "Pushing back on an impossible requirement with mechanism (dependency ceilings, cost-per-nine) and converting it into a concrete, defensible target is exactly the judgment the prompt is fishing for. 'Never down' is a feeling; an SLO is a decision."},
+        {"t": "\"Understood — I'll design for 100% availability.\"", "correct": false,
+         "why": "Accepting an impossible requirement signals you don't know it's impossible. Every deploy, cert rotation, and cloud dependency makes 100% fiction — and designing toward fiction produces unauditable promises."},
+        {"t": "\"We'll build in as much redundancy, replication, and failover as the budget allows and get as many nines as we possibly can — availability will be a top priority at every layer of the design.\"", "correct": false,
+         "why": "Sounds pragmatic, commits to nothing — no SLI, no target, no trade-off made visible. The senior skill is naming the number and defending it, not deferring to an unnamed budget."},
+        {"t": "\"Five nines, then — the industry maximum.\"", "correct": false,
+         "why": "Reflexively bidding maximum nines skips the analysis: 26 seconds a month means no human in any loop, at cost that may dwarf the payment margin. Even for payments, the number must be argued, not assumed."}
+      ]
+    },
+    {
+      "id": "p2c08-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your service beat its 99.9% SLO for six straight months, averaging 99.99%. A teammate proposes formally raising the SLO to 99.99% 'since we already deliver it.' What's the senior concern?",
+      "options": [
+        {"t": "The extra nine costs 10x in engineering and freezes risk-taking — and dependents are already silently assuming the higher bar, which is itself a problem to manage", "correct": true,
+         "why": "Overdelivering quietly raises expectations you never agreed to fund — Google's Chubby team ran planned outages precisely to stop dependents from building on unpromised reliability. Ratchet the SLO only if users need it and the business will pay for automation, stricter rollouts, and slower shipping."},
+        {"t": "Great idea — targets should reflect demonstrated performance", "correct": false,
+         "why": "Six calm months prove the weather, not the climate. Formalizing 99.99% converts luck into obligation: 4.3 minutes a month leaves no room for the bad quarter, and the team never chose to fund what that takes."},
+        {"t": "Raise it to 99.999% and aim even higher", "correct": false,
+         "why": "Doubles down on the mistake — each nine is roughly 10x cost, and five nines means no human response is fast enough. Nines are purchases, not aspirations."},
+        {"t": "SLOs should never change once set", "correct": false,
+         "why": "Too rigid — SLOs are periodically renegotiated as user needs and architecture change. The error isn't changing it; it's ratcheting to match lucky overperformance without pricing the commitment."}
+      ]
+    },
+    {
+      "id": "p2c08-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "For your chat system, you must pick exactly two paging alerts. Which pair?",
+      "options": [
+        {"t": "Message-delivery success rate burning budget fast; client connection success rate collapsing", "correct": true,
+         "why": "Both are symptoms — the two ways users actually suffer in chat (messages not arriving; can't get online at all) — gated by burn rate so blips don't wake anyone. Any cause that matters will surface through one of these within minutes."},
+        {"t": "CPU above 80%; memory above 90%", "correct": false,
+         "why": "Pure causes. A hot, healthy fleet pages you nightly while a bad deploy that returns fast errors — low CPU! — delivers zero messages and never pages. Resource graphs belong on the diagnostic dashboard."},
+        {"t": "Any node down; any queue above 10k messages", "correct": false,
+         "why": "Replication exists so a dead node isn't user pain, and a deep-but-draining queue can be a healthy 9pm spike. Both are dashboard signals; paging on them is paging on weather."},
+        {"t": "Delivery success rate as the primary symptom page, plus CPU above 80% as a cause-based safety net in case the symptom alert ever fails to fire", "correct": false,
+         "why": "Half right — but the CPU 'safety net' is the alert-fatigue seed, firing on hot-but-healthy nights until pages read as noise. The better second page is another symptom: users unable to connect, which delivery rate alone can miss."}
+      ]
+    },
+    {
+      "id": "p2c08-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Day 24 of the month: 80% of the error budget remains, and a risky-but-valuable database migration (p2c11 style) is ready. The senior read:",
+      "options": [
+        {"t": "Run it now, canary-gated with a rollback plan — unspent budget is capacity for exactly this kind of deliberate risk", "correct": true,
+         "why": "The budget is a currency, not a trophy: chronically underspending it means you're shipping too timidly. A guarded migration with 80% budget in reserve is the textbook deliberate spend — risk taken on purpose, with instruments watching and a retreat prepared."},
+        {"t": "Hold the migration until day 1 of next month, when a fresh, full budget gives maximum cushion in case anything goes wrong", "correct": false,
+         "why": "Perpetual deferral logic — next month will have its own reasons. With 80% remaining and a rollback plan, the risk math already clears; hoarding budget you'll never spend just slows the business for nothing."},
+        {"t": "Run it without extra ceremony — plenty of budget to absorb whatever happens", "correct": false,
+         "why": "Budget justifies taking the risk, not taking it carelessly. An unguarded migration can torch a month's budget in an hour — the canary and rollback plan are what make the spend a decision rather than a gamble."},
+        {"t": "Never spend error budget voluntarily; it exists for accidents", "correct": false,
+         "why": "Backwards per the original Google framing: the budget would ideally be spent on deliberate risks — launches, migrations, chaos drills — that move the product. Reliability meaningfully above target is, in that framework, wasted opportunity."}
+      ]
+    },
+    {
+      "id": "p2c08-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "During an incident, users report failures on social media, but every dashboard is green. Beyond firefighting, what's the structural lesson?",
+      "options": [
+        {"t": "Your SLIs measure the wrong place — instrument closer to the user (edge or client-side) and add an external probe, so 'green' can't coexist with visible user pain", "correct": true,
+         "why": "Green-during-outage means measurement gap: server-side SLIs miss DNS, CDN, TLS, and client-path failures — and dashboards can even share fate with the outage, like AWS's status page needing S3 during the 2017 S3 outage. Measure from where users stand, and verify from outside your own infrastructure."},
+        {"t": "Users exaggerate; trust the dashboards until internal data confirms", "correct": false,
+         "why": "When telemetry contradicts users, users are the ground truth — the SLI was only ever a proxy for their experience. 'Dashboards say we're fine' during a visible outage is how incident response loses an hour it never gets back."},
+        {"t": "Increase coverage: add dashboards and alerts for every internal component and dependency, so next time at least one panel somewhere is guaranteed to catch whatever fails", "correct": false,
+         "why": "More instruments in the wrong place produce more confident blindness. The gap isn't coverage depth — it's vantage point: everything measured sat behind the layer that failed."},
+        {"t": "Social media isn't a monitoring channel; ignore it operationally", "correct": false,
+         "why": "It's a legitimate (if noisy) last-resort SLI — several major outages were user-reported before internal detection. The mature goal is making it redundant: your own edge and probe telemetry should always know first."}
+      ]
+    }
+  ]
+}

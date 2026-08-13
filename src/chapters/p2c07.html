@@ -1,0 +1,294 @@
+<p>It's 11:55pm, five minutes before your flash sale. You did everything right. You load-tested at 3x normal traffic. You warmed the caches. Autoscaling is on. The war room has snacks. At midnight the sale opens and traffic climbs to 2.2x normal — comfortably under plan. Everyone relaxes.</p>
+
+<p>At 12:04, your payment provider slows down. Not down — slow. Their p99 goes from 200 milliseconds to 2 seconds. Annoying, but survivable, right? At 12:09, your checkout service stops responding. At 12:14, product pages die — pages that never touch payments at all. By 12:19 every dashboard is red. Traffic is still only 2.2x normal.</p>
+
+<p>The next morning, one graph from the postmortem explains everything: the requests <em>hitting your backend</em> peaked at 9x normal, while requests <em>from actual users</em> never passed 2.2x. Where did the other traffic come from? From inside the house. Your own retries. Nobody attacked you. You attacked yourself, and your system had no way to say "stop."</p>
+
+<p>This chapter is the anatomy of that outage, and the toolkit that prevents it: timeouts, retries done right, circuit breakers, bounded queues, backpressure, and load shedding. At the senior bar this is not optional garnish. "What happens at 10x load?" is the single most reliable E5 probe, and your answer needs to be loaded before the question is asked.</p>
+
+<h2>The anatomy of a cascade</h2>
+
+<p>Overload almost never kills a system directly. The system's <em>reaction</em> to overload kills it. The sequence is so repeatable it deserves to be memorized like a folk tale.</p>
+
+<p><strong>Act one: the queue grows.</strong> A server running at 80% capacity is fine. Push arrivals past 100% of what it can process and requests start waiting in line — in a queue, a thread pool backlog, a connection pool, somewhere. Here's the brutal arithmetic of queues: your waiting time is roughly the queue depth divided by the processing rate. A queue 10,000 deep in front of a service that handles 1,000 requests per second means every new arrival waits 10 seconds <em>before any work starts</em>.</p>
+
+<p><strong>Act two: clients give up, but the work doesn't.</strong> No user waits 10 seconds. Clients time out and disconnect — but their requests are still sitting in the queue. The server faithfully processes them and sends answers to callers who left long ago. Call this <em>zombie work</em>: real CPU spent producing responses nobody will receive. Past a certain queue depth, your server can be 100% busy and 0% useful.</p>
+
+<p><strong>Act three: the retries arrive.</strong> Every client that timed out tries again. If clients retry 3 times, each original request becomes up to 4 attempts. Your load just quadrupled — at the exact moment your capacity is at its worst. This is the cruelest property of naive retries: they cost nothing when the system is healthy and multiply load precisely when it is sick.</p>
+
+<p><strong>Act four: the starvation spreads.</strong> Meanwhile, in every service that calls the slow dependency, threads are parked waiting for answers. Thread pools are finite — say 200 threads per server. When all 200 are stuck waiting on the payment provider, that server cannot serve <em>anything</em>, including the product pages that never touch payments. This is why "one dependency got slow" becomes "the whole site is down": the slowness travels through shared thread pools, connection pools, and memory.</p>
+
+<p><strong>Act five: nothing can recover.</strong> Even when the original fault heals, the accumulated queues and swarming retries keep every service pinned at maximum load. The outage now sustains itself. Someone has to break the loop by hand.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Cascade loop: spike, queue growth, latency, timeouts, retries feeding back into the queue, ending in total outage">
+  <rect class="dg-node" x="20" y="30" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="32" y="50">Spike</text>
+  <text class="dg-txt-s" x="32" y="68">2.2x traffic</text>
+  <rect class="dg-node" x="200" y="30" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="212" y="50">Queues grow</text>
+  <text class="dg-txt-s" x="212" y="68">arrivals &gt; capacity</text>
+  <rect class="dg-node" x="380" y="30" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="392" y="50">Latency climbs</text>
+  <text class="dg-txt-s" x="392" y="68">p99: 200ms to 8s</text>
+  <rect class="dg-node" x="560" y="30" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="572" y="50">Clients give up</text>
+  <text class="dg-txt-s" x="572" y="68">timeouts fire</text>
+  <line class="dg-edge" x1="160" y1="54" x2="200" y2="54" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="340" y1="54" x2="380" y2="54" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="520" y1="54" x2="560" y2="54" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="630" y1="78" x2="630" y2="150" marker-end="url(#arrow)"/>
+  <rect class="dg-bad" x="560" y="150" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="572" y="170">Retries fire</text>
+  <text class="dg-txt-s" x="572" y="188">1 req becomes 4</text>
+  <rect class="dg-node" x="380" y="150" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="392" y="170">Dependency</text>
+  <text class="dg-txt-s" x="392" y="188">drowns</text>
+  <rect class="dg-node" x="200" y="150" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="212" y="170">Threads starve</text>
+  <text class="dg-txt-s" x="212" y="188">healthy paths too</text>
+  <rect class="dg-bad" x="20" y="150" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="32" y="170">Total outage</text>
+  <text class="dg-txt-s" x="32" y="188">self-sustaining</text>
+  <line class="dg-edge" x1="560" y1="174" x2="520" y2="174" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="380" y1="174" x2="340" y2="174" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="200" y1="174" x2="160" y2="174" marker-end="url(#arrow)"/>
+  <path class="dg-zone" d="M 615 150 C 560 100, 360 92, 288 80" marker-end="url(#arrow)"/>
+  <text class="dg-bad" x="330" y="118">retry load re-enters the queue</text>
+  <text class="dg-txt-s" x="20" y="235">Users sent 2.2x traffic. The backend received 9x. The difference was self-inflicted.</text>
+</svg>
+<figcaption>The cascade is a loop, not a line. Retries feed the queue that caused the timeouts that caused the retries.</figcaption>
+</figure>
+
+<p>Every tool in this chapter attacks one arrow in that diagram. Timeouts cap how long threads are held hostage. Smart retries shrink the feedback arrow. Circuit breakers and bulkheads stop the starvation from spreading. Bounded queues kill zombie work. Load shedding caps what enters.</p>
+
+<h2>Retry storms: the DDoS you run against yourself</h2>
+
+<p>Start with the multiplication, because the numbers are shocking. Suppose your stack is four layers deep — edge, service A, service B, database — and every layer retries failed calls 3 times. One user request that fails at the bottom can generate 4 × 4 × 4 = <strong>64 attempts</strong> against the database. You built a 64x load amplifier and armed it to trigger exactly when the database is struggling. Amazon's Builders' Library is blunt about it: retries are "selfish" — each retry spends more of the server's scarce capacity to improve one caller's odds — so at scale, your biggest DDoS threat is your own retrying client fleet.</p>
+
+<p>Three guards turn retries from a weapon into a tool.</p>
+
+<p><strong>Guard one: exponential backoff — with jitter.</strong> Waiting longer between attempts (1s, 2s, 4s, 8s) helps, but it has a sneaky flaw: every client that failed at the same moment retries at the same moment. Backoff without randomness turns a crowd into a synchronized army that attacks in waves — the waves just get further apart. The fix is <em>jitter</em>: randomize each delay, for example <code>sleep = random(0, base × 2^attempt)</code>. Now the herd arrives as a gentle drizzle spread across time instead of a battering ram. In an interview, saying "exponential backoff" without "jitter" is a half-answer, and interviewers know it.</p>
+
+<p><strong>Guard two: retry budgets.</strong> Backoff spreads retries out; it doesn't limit how many there are. A retry budget does: cap retries at a percentage of total traffic — say, retries may never exceed 10% of requests. While the dependency is healthy, nothing changes. When it breaks, amplification is capped at 1.1x instead of 4x, and the excess failures return errors immediately. A simple token bucket implements it.</p>
+
+<p><strong>Guard three: only retry what's safe, and only in one place.</strong> Retrying a read is free. Retrying "charge the card" without an idempotency key (p2c02) is how customers get billed twice — the timeout tells you the outcome is <em>unknown</em>, not that it failed. And pick <em>one</em> layer of the stack to own retries (usually near the edge, where you know the user is still waiting); inner layers should fail upward, not multiply. That single decision turns 4 × 4 × 4 back into 4.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Power companies fear the moment <em>after</em> a blackout more than the blackout itself. When electricity returns, every fridge, water heater, and air conditioner in the city starts compressors at the same instant — demand surges far above normal and trips the grid again. Engineers call it cold load pickup, and the cure is to re-energize neighborhood by neighborhood, staggered in time. That's your retry storm: the original fault is brief, but the synchronized reconnection is what keeps knocking the system back down. Jitter is the staggering; load shedding is choosing which neighborhoods wait. The analogy is honest on one more point: the grid solves it with a human plan made in advance — and so should you.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Amazon DynamoDB, September 20, 2015</div>
+<p>Early on a Sunday morning, a brief network disruption hit DynamoDB's storage fleet in US-East. Storage servers periodically confirm their "membership" — which table partitions they own — with an internal metadata service. The recently launched Global Secondary Indexes feature had quietly made those membership lists much larger, pushing responses close to the timeout limit. When the network blip ended, a huge number of storage servers all requested their membership at once. The oversized responses timed out; servers that couldn't confirm membership took themselves out of service <em>and kept retrying</em> — flooding the metadata service so completely that even healthy requests failed. The network fault lasted moments; the retry storm held the door shut for hours. AWS engineers had to explicitly pause requests to the metadata service — shedding load on their own system — just to get enough breathing room to add capacity. Error rates didn't return to normal until after 7am, and the blast radius included SQS, CloudWatch, and EC2 Auto Scaling. The public postmortem reads like this chapter's checklist: they increased metadata capacity, lengthened timeouts, and reduced retry aggressiveness. The lesson seniors quote: the fault triggers the outage, but retries are what sustain it.</p>
+</div>
+
+<h2>Timeouts: every remote call gets a deadline</h2>
+
+<p>A remote call without a timeout is a thread donated to the void. Many HTTP and database client libraries default to timeouts of minutes — or infinity. During the cascade's act four, those defaults decide how fast your thread pools drain: with a 30-second default, one slow dependency eats 200 threads in seconds.</p>
+
+<p>Two rules make timeouts a system instead of a superstition.</p>
+
+<p><strong>Rule one: derive timeouts from data, not vibes.</strong> Set a call's timeout from its observed latency — a common choice is around p99 plus margin. Too tight and you fail healthy-but-slow requests, triggering needless retries; too loose and you hold threads hostage — a 10-second timeout on a 50ms call is a 200x hostage multiplier, not "safety."</p>
+
+<p><strong>Rule two: budget timeouts end-to-end.</strong> The caller's timeout must be longer than everything the callee might do — all attempts plus backoff — or you've built a machine for manufacturing zombie work. If the edge gives up after 1 second but service A's plan is "two tries at 700ms each," then A routinely burns 1.4 seconds computing answers for a caller who left at 1.0s — and the edge's retry arrives while the first attempt is still running. Sum it, write it down, check the inequality: <strong>caller timeout &gt; (tries × per-try timeout) + backoff + own work</strong>. Mature systems propagate the remaining budget with the request — gRPC calls this a deadline — so a callee with 300ms left doesn't start a 500ms operation. Naming deadline propagation is a strong senior move; implementing the plumbing is not expected at the whiteboard.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 240" role="img" aria-label="Nested timeout budget bars: client 2000ms encloses service A's budget, which encloses two tries to B plus jitter">
+  <rect class="dg-node-alt" x="40" y="25" width="640" height="36" rx="8"/>
+  <text class="dg-txt" x="56" y="48">client timeout: 2000ms</text>
+  <rect class="dg-node" x="40" y="85" width="520" height="36" rx="8"/>
+  <text class="dg-txt" x="56" y="108">service A: own work + calls to B, budget 1600ms</text>
+  <rect class="dg-node" x="40" y="145" width="130" height="36" rx="8"/>
+  <text class="dg-txt-s" x="52" y="168">B try 1: 400ms</text>
+  <rect class="dg-zone" x="180" y="145" width="70" height="36" rx="8"/>
+  <text class="dg-txt-s" x="188" y="168">jitter</text>
+  <rect class="dg-node" x="260" y="145" width="130" height="36" rx="8"/>
+  <text class="dg-txt-s" x="272" y="168">B try 2: 400ms</text>
+  <text class="dg-good" x="410" y="168">~1s of tries, inside A's 1600ms ✓</text>
+  <text class="dg-txt-s" x="40" y="215">Rule: caller timeout &gt; (tries × per-try timeout) + backoff + own work — check it at every hop.</text>
+</svg>
+<figcaption>Timeouts nest like budgets. If any inner layer can spend more than its caller will wait, you manufacture zombie work.</figcaption>
+</figure>
+
+<h2>Circuit breakers: fail fast, on purpose</h2>
+
+<p>Timeouts cap the damage per call, but they still pay full price per call. If the payment provider is going to be down for five minutes, why spend 800ms and a thread on every request to rediscover that fact ten thousand times? Once you <em>know</em> a dependency is sick, the right response is to stop calling it.</p>
+
+<p>That's a circuit breaker: a small state machine wrapped around each dependency.</p>
+
+<ul>
+<li><strong>Closed</strong> (normal): calls flow through; the breaker counts failures and slow responses over a sliding window.</li>
+<li><strong>Open</strong> (tripped): when the window crosses a threshold — say, more than 50% failures across at least 20 requests in 10 seconds — the breaker stops calling entirely. Every request fails instantly, in microseconds, without touching the dependency. The minimum-volume condition matters: 1 failure out of 2 requests is noise, not an outage.</li>
+<li><strong>Half-open</strong> (probing): after a cool-off (say 30 seconds), the breaker lets a few trial requests through. If they succeed, it closes; if they fail, it snaps open again. This is how it recovers automatically without re-unleashing the full herd on a barely-recovered dependency.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Circuit breaker state machine with closed, open, and half-open states and labeled transitions">
+  <rect class="dg-good" x="30" y="60" width="170" height="64" rx="8"/>
+  <text class="dg-txt" x="52" y="88">CLOSED</text>
+  <text class="dg-txt-s" x="52" y="106">calls flow, count errors</text>
+  <rect class="dg-bad" x="520" y="60" width="170" height="64" rx="8"/>
+  <text class="dg-txt" x="548" y="88">OPEN</text>
+  <text class="dg-txt-s" x="548" y="106">fail fast, no calls</text>
+  <rect class="dg-node-alt" x="275" y="200" width="180" height="64" rx="8"/>
+  <text class="dg-txt" x="298" y="228">HALF-OPEN</text>
+  <text class="dg-txt-s" x="298" y="246">few trial calls only</text>
+  <line class="dg-edge" x1="200" y1="80" x2="520" y2="80" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="240" y="70">errors &gt; 50% of ≥20 reqs / 10s</text>
+  <line class="dg-edge" x1="590" y1="124" x2="452" y2="212" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="520" y="180">after 30s cool-off</text>
+  <line class="dg-edge" x1="278" y1="212" x2="122" y2="124" marker-end="url(#arrow)"/>
+  <text class="dg-good" x="130" y="180">trials succeed</text>
+  <path class="dg-edge" d="M 455 240 C 600 240, 660 180, 630 128" marker-end="url(#arrow)"/>
+  <text class="dg-bad" x="500" y="252">trial fails: reopen</text>
+</svg>
+<figcaption>One breaker per dependency. Trip on error rate or latency over a window with minimum volume; probe carefully in half-open.</figcaption>
+</figure>
+
+<p>Failing fast is only half the value. The other half is the <strong>fallback</strong>: what you return while the breaker is open. Options, in rough order of preference: a cached or stale copy of the data; a sensible default (an empty "recommended for you" row); a degraded response ("payments are busy, your order is saved and will process shortly"); or an honest, <em>instant</em> error. Even the bare error is a win — it answers in microseconds instead of burning a thread for 800ms, which keeps <em>your</em> thread pool alive and gives the sick dependency silence in which to recover.</p>
+
+<p>Which brings us to the cold open's mystery: why did product pages die when only payments were slow? Because every request, payment-related or not, drew threads from the same pool. The fix is <strong>bulkheads</strong>: give each dependency its own small, isolated resource pool — its own threads, connections, or a semaphore cap on concurrent calls. If payments gets 20 threads out of 200, then when payments hangs, it exhausts its 20 and the other 180 keep serving product pages. The name comes from ships: watertight compartments so one breach floods one section, not the hull.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The name "circuit breaker" is borrowed from your house's electrical panel, and the borrow is honest with one twist. The breaker in your wall exists because the alternative — wires overheating inside your walls until they ignite — is catastrophically worse than the inconvenience of a dark kitchen. It converts "invisible slow-burning disaster" into "visible instant failure," which is exactly what the software version does: an open breaker turns a thread-eating slow death into a clean, fast, obvious error. The twist: your wall breaker protects only <em>your house</em>, and a human must walk over and reset it. The software breaker protects both sides — the caller's threads and the struggling dependency's remaining capacity — and half-open is its built-in electrician, probing on a timer to see whether it's safe to reset.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Netflix Hystrix, and what replaced it</div>
+<p>Around 2011, Netflix's API layer fanned out to dozens of backend services: with 30 dependencies each at 99.99% uptime, something is always failing somewhere — and any <em>one</em> dependency going slow could exhaust the API tier's threads and take down the whole product. After exactly such cascades, Netflix built Hystrix and open-sourced it in 2012: circuit breakers, per-dependency thread-pool bulkheads, timeouts, fallbacks, and a live dashboard, wrapped around every remote call. It became the defining resilience library of the microservices era. Then in November 2018, Netflix put Hystrix into maintenance mode — not because the ideas failed, but because one of them aged badly: Hystrix's thresholds and pool sizes were static configuration, hand-tuned numbers that drifted out of date every time traffic patterns changed. Netflix's newer direction is <em>adaptive concurrency limits</em>: instead of a human guessing "20 threads for payments," the client continuously measures latency and adjusts its own concurrency cap, the way TCP discovers available bandwidth. The community successor for the classic pattern is resilience4j, which Spring officially recommended as Hystrix's replacement. The senior takeaway: breakers and bulkheads are permanent ideas; hand-tuned static thresholds are the part that rots.</p>
+</div>
+
+<h2>Bounded queues: an unbounded queue is a deferred outage</h2>
+
+<p>Part 1 taught queues as shock absorbers: buffer a burst, work it off when the spike passes. That's true for <em>bursts</em>. Under sustained overload — arrivals persistently above capacity — a queue doesn't absorb anything. It just grows, and with it grows latency (depth ÷ throughput), memory usage, and the fraction of the queue that is zombie work whose callers have already gone. An unbounded queue converts "reject some users now" into "crash for everyone later, after wasting maximum effort." That is not a safety feature. It's a deferred outage with interest.</p>
+
+<p>So: every queue in your design gets a size and a full-policy, chosen out loud. When the queue is full, you have exactly three options, and the choice is a design decision, not an accident:</p>
+
+<ul>
+<li><strong>Reject the newest</strong> — fail fast back to the caller, who gets an instant, honest error while their retry budget is still intact. The default for user-facing request paths.</li>
+<li><strong>Drop the oldest</strong> — the head of the queue has waited longest, so its caller has most likely given up; serving the freshest requests maximizes useful work. Ideal for real-time data like presence updates or live locations, where an old message is worthless anyway.</li>
+<li><strong>Block the producer</strong> — make the sender wait. This is backpressure in its purest form, and it's the right answer <em>inside</em> your system, which is where we're headed next.</li>
+</ul>
+
+<h2>Backpressure inside, load shedding at the edge</h2>
+
+<p>When demand exceeds capacity, somebody, somewhere, must either slow down or be turned away. The senior framing is that these are two named mechanisms applied at two different places:</p>
+
+<p><strong>Backpressure</strong> operates <em>inside your boundary</em>: an overloaded component signals its upstream to slow down, and the signal propagates until it reaches something that can safely absorb it. A bounded queue that blocks its producer is backpressure. TCP flow control is backpressure at the internet's foundations: receivers advertise what they can accept. Kafka consumers <em>pull</em> messages rather than having them pushed, so a slow consumer naturally reads slower — pull systems get backpressure for free. The key property: inside your walls, you control both ends of every arrow, so "please slow down" is enforceable.</p>
+
+<p><strong>Load shedding</strong> operates <em>at the edge</em>: you cannot make the public slow down, so you reject excess work before it costs you anything. A cheap, instant <code>429 Too Many Requests</code> with a <code>Retry-After</code> hint, served at the load balancer or gateway. Two rules make shedding effective. First, <strong>reject early and cheaply</strong> — shedding a request after you've done auth, session loading, and two database reads saves almost nothing; the whole point is that a rejection costs microseconds while a served request costs milliseconds. Second, <strong>shed by priority, not at random</strong>: classify requests — checkout and login are sacred, browsing is important, analytics beacons and speculative prefetches are disposable — and drop from the bottom. Dropping 100% of analytics is invisible; dropping 5% of checkouts is a revenue incident. The priority list must be written <em>before</em> the incident, because 2am during an outage is the worst possible moment to debate whether courier location pings outrank review images.</p>
+
+<p>The trigger for shedding is usually <strong>utilization-based admission</strong>: watch a signal that tracks saturation — CPU, queue depth, or in-flight request count — and when it crosses a threshold, start rejecting the lowest priority class, escalating to higher classes only as needed. Google's SRE guidance lands on the same stance: a service should serve at its true capacity and reject the excess cheaply and predictably — degraded service beats no service, and predictable rejection beats unpredictable collapse.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 290" role="img" aria-label="Users flow through an edge that sheds low-priority traffic; inside the boundary, backpressure signals flow upstream from database to service to edge">
+  <rect class="dg-node" x="15" y="90" width="100" height="52" rx="8"/>
+  <text class="dg-txt" x="35" y="120">Users</text>
+  <rect class="dg-node-alt" x="165" y="90" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="180" y="112">Edge / LB</text>
+  <text class="dg-txt-s" x="180" y="130">admission control</text>
+  <rect class="dg-node" x="365" y="90" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="378" y="112">Service</text>
+  <text class="dg-txt-s" x="378" y="130">bounded queue</text>
+  <rect class="dg-node" x="565" y="90" width="130" height="52" rx="8"/>
+  <text class="dg-txt" x="590" y="112">DB pool</text>
+  <text class="dg-txt-s" x="578" y="130">finite conns</text>
+  <line class="dg-edge" x1="115" y1="116" x2="165" y2="116" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="305" y1="116" x2="365" y2="116" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="505" y1="116" x2="565" y2="116" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="345" y="55" width="365" height="175"/>
+  <text class="dg-txt-s" x="358" y="75">inside the boundary: backpressure</text>
+  <line class="dg-edge" x1="600" y1="185" x2="480" y2="185" marker-end="url(#arrow)" stroke-dasharray="5 5"/>
+  <text class="dg-txt-s" x="480" y="205">"slow down"</text>
+  <line class="dg-edge" x1="450" y1="185" x2="320" y2="185" marker-end="url(#arrow)" stroke-dasharray="5 5"/>
+  <text class="dg-txt-s" x="240" y="205">reaches the edge</text>
+  <line class="dg-edge" x1="235" y1="142" x2="235" y2="225" marker-end="url(#arrow)"/>
+  <text class="dg-bad" x="60" y="250">shed: 429 analytics, prefetch, bots</text>
+  <text class="dg-good" x="60" y="270">keep: checkout, login</text>
+</svg>
+<figcaption>Backpressure propagates "slow down" upstream inside your walls; at the edge, where the public can't slow down, pressure converts into cheap, priority-ordered rejections.</figcaption>
+</figure>
+
+<p>Notice how the two mechanisms connect: backpressure travels upstream hop by hop until it reaches the edge, and the edge — the one place that can't tell its upstream to slow down — converts the pressure into shedding. A system with backpressure but no shedding jams up at the front door; a system with shedding but no backpressure protects the door while the kitchen drowns. You need both, and saying that sentence at the whiteboard is a senior signal all by itself.</p>
+
+<div class="box story"><div class="box-tag">War story — GitHub, November 27, 2021</div>
+<p>During the final step of a schema migration — an ordinary table rename — a significant portion of GitHub's MySQL read replicas hit a semaphore deadlock and crashed into recovery. The remaining healthy replicas inherited the full production read load, buckled, and crashed too. Then the recovery itself failed: as each replica finished crash-recovery and rejoined, the full weight of pent-up production traffic slammed into it immediately, and it would — in GitHub's own words — "temporarily recover from their crash-recovery state only to crash again due to load." A classic recovery crash-loop: the herd re-killed every node that stood up. GitHub promoted every healthy internal replica into production to add capacity; it wasn't enough. What finally worked was deliberate load shedding: proactively holding production traffic <em>away</em> from recovering replicas until they had fully finished the rename, accepting deeper degradation now to make recovery possible at all. The incident degraded Actions, API, Issues, Pull Requests, and webhooks for about 2 hours 50 minutes; the remediation included functional partitioning — bulkheads at the database layer — so one cluster's failure can't take the whole product down. The transferable lesson: recovery is itself an overload event. If your design can't shed load, it can't come back up, because returning traffic re-kills each node the moment it stands.</p>
+</div>
+
+<h2>The graceful degradation menu</h2>
+
+<p>Shedding answers "who gets rejected." Degradation answers a gentler question: "what can we serve <em>instead</em>?" The options form a menu, and strong teams write it down before the incident, with a feature flag next to each item:</p>
+
+<ul>
+<li><strong>Stale content:</strong> serve the cached copy past its expiry when the source is down. A five-minute-old product page beats an error page every single time. (Staleness is safe where it informs — browsing — and dangerous where it transacts: never charge from a stale price.)</li>
+<li><strong>The lighter page:</strong> drop the expensive trimmings — recommendations, "customers also bought," personalized ranking — and serve the fast core. Most users never notice.</li>
+<li><strong>Fewer results:</strong> 10 search results from one shard instead of 50 from ten. Partial answers from the shards that responded beat waiting on the one that won't.</li>
+<li><strong>Deferred writes:</strong> accept the action, queue it durably, confirm "saved, processing shortly" — turning a synchronous dependency into an asynchronous one (p1c11) while it heals.</li>
+</ul>
+
+<p>These menu items are exactly what your circuit-breaker fallbacks return. Breakers decide <em>when</em> to degrade; the menu decides <em>what</em> degraded looks like. Designed together, users experience a slightly duller product; designed never, users experience a 500.</p>
+
+<h2>How deep interviews actually go</h2>
+
+<p>This topic surfaces in one costume: <em>"Nice design. What happens at 10x load?"</em> At E5, that question is not an invitation to think — it's a check that you already have. The passing answer is a preloaded, ordered narrative: "The first thing to saturate is X — here's the number that says so. The queue in front of it is bounded at N, so when it fills we reject rather than balloon latency. The edge starts shedding in this priority order; these three features degrade to cached fallbacks via their breakers; checkout stays up. Here's the alert that fires before users notice." Failure modes volunteered, numbers attached, priorities pre-decided.</p>
+
+<p>Calibration — what L5 must volunteer, unprompted, versus what is staff-level garnish:</p>
+
+<ul>
+<li><strong>L5 must volunteer:</strong> a timeout on every remote call, derived from latency percentiles; retries with backoff <em>plus jitter plus a budget</em>, restricted to idempotent operations, owned by one layer; the caller-timeout inequality checked across hops; every queue bounded, with a stated full-policy; a breaker with a named fallback on each fragile dependency; bulkheads so one dependency can't starve unrelated paths; shedding at the edge with an explicit priority order; a degradation menu for the product's core pages.</li>
+<li><strong>Staff-level garnish</strong> (name it if natural, never derive it): adaptive concurrency algorithms and how gradient-based limits work; CoDel-style queue management; the internals of deadline propagation; control-theory approaches to admission; criticality-aware quota systems across services.</li>
+</ul>
+
+<p>The trap to avoid is the vocabulary answer: "I'd add circuit breakers and rate limiting" with no thresholds, no fallbacks, no priority order. Interviewers hear that the way you'd hear "I'd add security." The mechanisms only count when they come with numbers and decisions attached.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>How this actually gets probed at E5/L5 — usually as a live stress-test of the design you just drew:</p>
+<ul>
+<li>"Your payment provider's p99 goes from 200ms to 5 seconds — not down, just slow. Walk me through the next ten minutes inside your system." (They're checking you know slow is more dangerous than dead: dead trips breakers fast; slow eats threads while looking alive.)</li>
+<li>"What exactly does a user see when you shed their request?" (Checking that shedding is a designed experience — instant, honest, with a retry hint — not an accidental timeout.)</li>
+<li>"This queue between your services — how big is it, and what happens when it's full?" (Any answer but a number and a policy means you've never watched one fill.)</li>
+<li>"The dependency recovered. Why is your system still down?" (They want retry storms, thundering-herd recovery, and staged re-admission of traffic — the DynamoDB/GitHub lesson.)</li>
+</ul>
+<p>A passing answer commits: "Retries live at the edge only: two attempts, full jitter, 10% budget, idempotency keys on writes. Payments gets a breaker at 50% errors over 10 seconds with a queue-and-confirm fallback, and its own connection pool so checkout being sick never touches browsing."</p>
+</div>
+
+<div class="feynman" data-key="p2c07-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, why adding retries can take down a healthy system — and what three guards make retries safe.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>When a service gets slow, every caller that times out tries again — so a service that's already drowning suddenly gets two, three, four times its normal traffic, exactly when it can least handle it. Worse, all those retries tend to arrive at the same moment, like everyone redialing the instant a call drops, so the load comes in synchronized waves that knock the service down each time it tries to stand up. Three guards fix this. First, exponential backoff with jitter: wait longer between attempts and randomize the wait, so the herd spreads out instead of stampeding. Second, a retry budget: retries may never exceed some small fraction of total traffic — say 10% — so amplification is capped no matter how bad things get. Third, only retry operations that are safe to repeat: a timed-out "charge the card" didn't necessarily fail, so writes need idempotency keys before they're retryable, and only one layer of the stack should retry at all — otherwise three layers of three retries each turns one request into dozens.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your stack is edge → service A → service B → database, and every layer independently retries failures up to 3 times (so up to 4 attempts each). The database has a rough moment. What's the worst-case number of database attempts generated by one user request? What does it become if only the edge retries? And with a 10% retry budget at every layer instead?</p></div>
+<details><summary>Answer</summary><p>Worst case: 4 × 4 × 4 = 64 database attempts from one user click — each of the edge's 4 attempts drives A to 4 attempts, each of which drives B to 4. If only the edge retries and inner layers fail upward: 4 attempts total, a 16x improvement from one policy decision. With a 10% budget per layer, amplification is capped at 1.1 per layer ≈ 1.33x overall — the system stays roughly at normal load even during total dependency failure. This is why "retries in one place, budgeted" is the senior answer, and why every layer having its own generous retry loop is a 64x amplifier hiding in plain sight.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Code review: the edge calls service A with a 1-second timeout. Service A calls service B with a per-try timeout of 700ms and 2 tries, plus ~100ms of its own work. Find the bug and propose fixed numbers.</p></div>
+<details><summary>Answer</summary><p>A's worst case is 700 + 700 + 100 = 1500ms, but its caller gives up at 1000ms. So whenever B's first try times out, A's second try is pure zombie work — and worse, the edge's own retry of the whole request arrives while A is still mid-flight, doubling load during slowness. Fix by making the inequality hold: e.g., edge timeout 1s → A gets a ~900ms budget → B gets 2 tries at 350ms each plus ~100ms backoff and 100ms own work ≈ 900ms. (Or keep 700ms per try but allow only one try.) The senior habit: walk every hop and check caller timeout &gt; tries × per-try + backoff + work — this bug ships constantly because each number looks reasonable alone.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A service processes 2,000 requests/second. A spike pushes arrivals to 3,000/second, and there's an unbounded queue in front. Clients time out at 5 seconds. How fast does the queue grow, when does the service stop doing any useful work, and what bound plus full-policy would you set?</p></div>
+<details><summary>Answer</summary><p>The queue grows at 1,000 requests/second (arrivals minus capacity). Waiting time is depth ÷ 2,000/s, so once depth passes 10,000 (after just 10 seconds of overload), every queued request waits over 5 seconds — beyond the client timeout. From that moment the service runs at 100% capacity producing answers nobody will receive: fully busy, zero useful. A sane bound is capacity × the client timeout with margin — e.g., 2,000/s × 2s = 4,000, keeping worst-case queue wait around 2 seconds. Full-policy: reject newest with an instant 429 (callers get fast honest errors while their wait would have been useless anyway). The one-liner worth memorizing: a queue deeper than capacity × client-timeout is a machine for wasting your own CPU.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>You run a food-delivery app. A regional traffic spike forces shedding. Rank these five request types from first-shed to never-shed, and justify: (a) analytics events, (b) restaurant browsing, (c) order placement, (d) courier location pings for active deliveries, (e) review photo loads.</p></div>
+<details><summary>Answer</summary><p>One defensible ranking: shed (a) analytics first — zero user impact, often 30%+ of traffic; then (e) review photos — pages work without them; then degrade (b) browsing — serve cached restaurant lists, drop personalization, but keep it alive since browsing feeds ordering; protect (d) courier pings hard — they look like telemetry but they're the live product for every active delivery, and dropping them breaks tracking and dispatch (the trap in this question: "pings" sound disposable and aren't); never shed (c) order placement — it's the revenue event. The meta-lesson: rank by business damage per rejected request, not by how technical the traffic sounds — and write the ranking down before the incident, because you will not have this debate calmly at 2am.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Overload rarely kills systems directly — the cascade does: queues grow, latency climbs, clients time out, retries multiply load, thread pools starve, and healthy paths die alongside sick ones.</li>
+<li>Naive retries are a self-inflicted DDoS that activates exactly when capacity is lowest; make them safe with exponential backoff plus jitter, a retry budget capping retries at a small percent of traffic, idempotent-only targets, and ownership by a single layer.</li>
+<li>Every remote call gets a timeout derived from latency data, and timeouts must nest: a caller's timeout exceeds everything its callee might attempt, or you manufacture work for callers who already left.</li>
+<li>A circuit breaker (closed → open → half-open) converts a known-sick dependency into instant failures with a designed fallback — stale data, a default, or an honest fast error — protecting your threads and giving the dependency room to recover.</li>
+<li>Bulkheads give each dependency its own small resource pool, so one slow dependency exhausts its compartment instead of every thread in the process.</li>
+<li>An unbounded queue is a deferred outage: bound every queue and choose its full-policy on purpose — reject newest, drop oldest, or block the producer.</li>
+<li>Backpressure propagates "slow down" upstream inside your boundary; load shedding rejects cheaply at the edge in a pre-written priority order — drop analytics long before checkout, and remember recovery itself needs shedding or the returning herd re-kills each healing node.</li>
+<li>At the interview, "what happens at 10x load" must be answered from memory with numbers, an ordered failure story, and pre-decided priorities — mechanisms without thresholds and fallbacks read as vocabulary, not experience.</li>
+</ul>
+</div>

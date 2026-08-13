@@ -1,0 +1,293 @@
+<p>You did everything right. Chapter 1.9 taught you consistent hashing, and you used it: 64 partitions, keys spread beautifully, each partition holding almost exactly 1/64th of your users. The dashboards have been green for six months. You could frame them.</p>
+
+<p>Then a K-pop star joins your platform. On Tuesday evening she posts a photo, and forty million people open it within an hour. Your phone buzzes. p99 latency is up 40x. Timeouts are climbing. And here's the part that makes the on-call engineer question reality: the database fleet's average CPU reads 11%. The fleet is <em>bored</em>. Sixty-three partitions are napping — and partition 23, the one that happens to hold her data, is pinned at 100%, its request queue growing by the second.</p>
+
+<p>Nothing is wrong with your hashing. Hashing distributes <strong>keys</strong> evenly. Nobody promised it would distribute <strong>traffic</strong> evenly — and today, the entire internet cares about exactly one key.</p>
+
+<p>This is the hot partition problem, and its most famous costume is the celebrity problem. It is one of the most reliably asked senior topics there is, because it sits at the exact spot where textbook sharding meets the real world. The moment an interviewer says "one of your users has 100 million followers," they are ringing a bell, and you are expected to come running with a very specific set of answers. This chapter is that set.</p>
+
+<h2>Traffic is a power law wearing a uniform costume</h2>
+
+<p>Every sharding scheme you learned makes a quiet assumption: each key gets roughly the same amount of attention. Reality never cooperates. Real traffic follows a <strong>power law</strong> — a distribution where a tiny fraction of items gets a huge fraction of the attention. A few accounts have millions of followers while the median has a hundred. One post goes viral while a billion others get four likes. One enterprise tenant in your B2B product generates 40% of all API calls. One product page carries the flash sale.</p>
+
+<p>The numbers are brutal. On social platforms it's routine for the top 1% of keys to receive well over 90% of reads. So "perfectly balanced by key count" and "perfectly balanced by load" are different universes. Your hash function solved the first. The second is this chapter.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A library shelves its books alphabetically — a beautifully even split, every shelf holding about the same number of books. Then a new Harry Potter comes out. Suddenly three hundred people crowd one shelf while the rest of the library sits empty. The shelving system isn't broken; it balanced <em>books</em>, not <em>readers</em>. No rearrangement of the other shelves helps, because the problem isn't where the books are — it's where the people are. That's a hot partition: the storage is balanced, the demand is not. (Where the analogy breaks: a library can put out fifty copies of one book in a day. Making "more copies" of a partition that's absorbing writes is the hard part — copies of data have to be kept in sync.)</p>
+</div>
+
+<p>And note the shape of the problem carefully, because the fix depends on it: a key can be <strong>read-hot</strong> (forty million people opening one profile), <strong>write-hot</strong> (eight thousand likes per second landing on one counter), or both. Keep asking "read-hot or write-hot?" throughout this chapter — the mitigation ladder forks on exactly that question.</p>
+
+<h2>What "hot" looks like — and why your dashboard lies</h2>
+
+<p>Here's what happens mechanically. One partition serves the hot key. Its CPU pins, its request queue backs up, and latency climbs — not just for the hot key, but for <em>every</em> key that happens to live on that partition. Innocent-bystander users, sharded onto partition 23 by pure hash luck, now see multi-second responses for their own boring profiles. Meanwhile the sibling partitions idle.</p>
+
+<p>Now the trap: your fleet-average dashboard. Average CPU across 64 partitions where one is at 100% and the rest at 5%? About 6.5%. Green. Average latency, when most requests still hit cold partitions? Looks fine. But if partition 23 serves 30% of live traffic (which is the whole point — it's hot), then 30% of your requests are slow, your p99 has exploded, and your p90 is next. <strong>Aggregate metrics are averages, and averages hide exactly the thing you need to see.</strong></p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Heat map of 16 partitions where one is saturated while the rest idle">
+  <text class="dg-txt" x="20" y="28">Fleet dashboard: avg CPU 9% — looks healthy</text>
+  <rect class="dg-node" x="20" y="48" width="78" height="54" rx="6"/><text class="dg-txt-s" x="30" y="70">P0</text><text class="dg-txt-s" x="30" y="88">4%</text>
+  <rect class="dg-node" x="106" y="48" width="78" height="54" rx="6"/><text class="dg-txt-s" x="116" y="70">P1</text><text class="dg-txt-s" x="116" y="88">3%</text>
+  <rect class="dg-node" x="192" y="48" width="78" height="54" rx="6"/><text class="dg-txt-s" x="202" y="70">P2</text><text class="dg-txt-s" x="202" y="88">5%</text>
+  <rect class="dg-node" x="278" y="48" width="78" height="54" rx="6"/><text class="dg-txt-s" x="288" y="70">P3</text><text class="dg-txt-s" x="288" y="88">2%</text>
+  <rect class="dg-node" x="364" y="48" width="78" height="54" rx="6"/><text class="dg-txt-s" x="374" y="70">P4</text><text class="dg-txt-s" x="374" y="88">4%</text>
+  <rect class="dg-node" x="450" y="48" width="78" height="54" rx="6"/><text class="dg-txt-s" x="460" y="70">P5</text><text class="dg-txt-s" x="460" y="88">3%</text>
+  <rect class="dg-node" x="536" y="48" width="78" height="54" rx="6"/><text class="dg-txt-s" x="546" y="70">P6</text><text class="dg-txt-s" x="546" y="88">6%</text>
+  <rect class="dg-node" x="622" y="48" width="78" height="54" rx="6"/><text class="dg-txt-s" x="632" y="70">P7</text><text class="dg-txt-s" x="632" y="88">4%</text>
+  <rect class="dg-node" x="20" y="112" width="78" height="54" rx="6"/><text class="dg-txt-s" x="30" y="134">P8</text><text class="dg-txt-s" x="30" y="152">3%</text>
+  <rect class="dg-node" x="106" y="112" width="78" height="54" rx="6"/><text class="dg-txt-s" x="116" y="134">P9</text><text class="dg-txt-s" x="116" y="152">5%</text>
+  <rect class="dg-node" x="192" y="112" width="78" height="54" rx="6"/><text class="dg-txt-s" x="202" y="134">P10</text><text class="dg-txt-s" x="202" y="152">2%</text>
+  <rect class="dg-bad" x="278" y="112" width="78" height="54" rx="6"/><text class="dg-txt-s" x="288" y="134">P11</text><text class="dg-txt-s" x="288" y="152">100%</text>
+  <rect class="dg-node" x="364" y="112" width="78" height="54" rx="6"/><text class="dg-txt-s" x="374" y="134">P12</text><text class="dg-txt-s" x="374" y="152">4%</text>
+  <rect class="dg-node" x="450" y="112" width="78" height="54" rx="6"/><text class="dg-txt-s" x="460" y="134">P13</text><text class="dg-txt-s" x="460" y="152">3%</text>
+  <rect class="dg-node" x="536" y="112" width="78" height="54" rx="6"/><text class="dg-txt-s" x="546" y="134">P14</text><text class="dg-txt-s" x="546" y="152">5%</text>
+  <rect class="dg-node" x="622" y="112" width="78" height="54" rx="6"/><text class="dg-txt-s" x="632" y="134">P15</text><text class="dg-txt-s" x="632" y="152">4%</text>
+  <text class="dg-txt-s" x="20" y="200">P11 queue: growing. Every key that hashes to P11 — hot or not — now waits seconds.</text>
+  <text class="dg-txt-s" x="20" y="222">If P11 serves 30% of live traffic, 30% of requests are slow while the average stays green.</text>
+</svg>
+<figcaption>The per-partition heat map. The fleet average says "healthy"; the one red cell says "incident." Never trust an average to find a hot spot.</figcaption>
+</figure>
+
+<p>So detection rule one: <strong>keep per-partition metrics</strong> — QPS, CPU, and p99 latency for each partition, drawn as a heat map, not blended into an average. Detection rule two: know your <strong>top-K hottest keys</strong> at any moment. You can't afford to count every key exactly (billions of counters), but a count-min sketch — a small probabilistic counter that overcounts slightly but never undercounts, covered properly in chapter 2.10 — gives you a live "top 50 keys by traffic" list for a few megabytes of memory. That list is not just a debugging tool; two rungs of the mitigation ladder below need it as an input.</p>
+
+<div class="box story"><div class="box-tag">War story — Discord's hot partitions</div>
+<p>Discord stored trillions of chat messages in Cassandra, partitioned by <code>(channel_id, time_bucket)</code>. Sound sharding — but Discord servers obey a power law too. When a giant community got busy, every reader and writer in it converged on the same channel partition, and Cassandra developed what Discord's engineers described as unbounded concurrency on the hot partition: queries piled up, latency grew, which made more queries pile up, cascading until JVM garbage-collection pauses forced painful node babysitting — on-call engineers were regularly firefighting the messages cluster. Their fix came in two layers. First, they built intermediary "data services" in Rust that do <strong>request coalescing</strong>: when a thousand users request the same message at once, the service issues <em>one</em> database query and fans the answer back out to all thousand waiters. Second, they migrated the whole thing from 177 Cassandra nodes to 72 ScyllaDB nodes in 2022–2023. Read p99 fell from 40–125ms to 15ms; write p99 from 5–70ms to 5ms. Notice the shape of the lesson: the partition key design was reasonable, and they <em>still</em> needed a traffic-shaping layer in front of the database, because no key schema makes a million people care about a million different things.</p>
+</div>
+
+<p>You can now detect the fire. Time to fight it — and the order in which you reach for the extinguishers is itself graded.</p>
+
+<h2>The mitigation ladder</h2>
+
+<p>Learn these in order, cheapest first, and always say what each rung costs. Interviewers grade the ordering as much as the list: jumping to an exotic fix while skipping the cheap one reads as inexperience, and naming a fix without its price reads as blog-post knowledge.</p>
+
+<h3>Rung 1: put a cache in front (and then fix the cache)</h3>
+
+<p>For a <strong>read-hot</strong> key, the first answer is the boring one from chapter 1.6: cache it. Forty million people opening one profile don't need forty million database reads — the profile changes rarely. A cache with even a 5-second TTL absorbs virtually all of that heat: one database read per 5 seconds instead of thousands per second.</p>
+
+<p>But run the numbers before declaring victory, because the hot key follows you into the cache. Your cache cluster is itself sharded by key — so all traffic for the celebrity's key lands on <em>one</em> cache node. A single Redis node handles on the order of 100K ops/sec; a truly viral key can see over a million reads/sec. Congratulations: you moved the hot partition from the database into Redis. Same fire, more expensive building.</p>
+
+<p>The senior finish is a <strong>local L1 cache</strong>: a small in-process cache (just a hash map with TTLs) inside each app server, holding only the few dozen hottest keys — fed by that top-K list from your detection layer. Now 200 app servers each answer from their own RAM, the Redis shard sees 200 refresh requests every few seconds instead of a million reads, and nobody melts. The cost: staleness of a few seconds, and 200 servers that may briefly disagree. For a follower count or a profile photo, nobody notices. For an account balance, this rung is not available — which is exactly the kind of caveat to say out loud.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="App servers with local L1 caches absorbing a hot key before the shared cache">
+  <text class="dg-txt-s" x="40" y="22">1M reads/sec for one key, spread across 200 app servers</text>
+  <rect class="dg-node" x="40" y="34" width="180" height="66" rx="8"/>
+  <text class="dg-txt" x="52" y="56">App server 1</text>
+  <rect class="dg-good" x="52" y="66" width="156" height="24" rx="4"/>
+  <text class="dg-txt-s" x="58" y="83">L1: hot keys, 2s TTL</text>
+  <rect class="dg-node" x="40" y="118" width="180" height="66" rx="8"/>
+  <text class="dg-txt" x="52" y="140">App server 2</text>
+  <rect class="dg-good" x="52" y="150" width="156" height="24" rx="4"/>
+  <text class="dg-txt-s" x="58" y="167">L1: hot keys, 2s TTL</text>
+  <rect class="dg-node" x="40" y="202" width="180" height="66" rx="8"/>
+  <text class="dg-txt" x="52" y="224">App server 200</text>
+  <rect class="dg-good" x="52" y="234" width="156" height="24" rx="4"/>
+  <text class="dg-txt-s" x="58" y="251">L1: hot keys, 2s TTL</text>
+  <rect class="dg-node-alt" x="480" y="110" width="200" height="80" rx="8"/>
+  <text class="dg-txt" x="494" y="140">Cache shard holding</text>
+  <text class="dg-txt" x="494" y="160">the celebrity key</text>
+  <line class="dg-edge" x1="220" y1="67" x2="480" y2="135" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="220" y1="151" x2="480" y2="150" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="220" y1="235" x2="480" y2="165" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="300" y="95">on L1 miss only:</text>
+  <text class="dg-txt-s" x="300" y="113">~1 read per server per 2s</text>
+  <text class="dg-txt-s" x="480" y="215">was: 1M ops/sec (melted)</text>
+  <text class="dg-txt-s" x="480" y="233">now: ~100 ops/sec</text>
+</svg>
+<figcaption>The hot key chased into the cache, then absorbed. Each app server answers from its own RAM; the shared cache shard sees a trickle of refreshes instead of the full flood.</figcaption>
+</figure>
+
+<h3>Rung 2: extra read replicas for the hot range</h3>
+
+<p>If the read-hot data can't tolerate cache staleness, or the hot set is too big for L1 caches, replicate unevenly: give the hot partition five read replicas while cold partitions keep two. Chapter 1.8 gave you the machinery; the senior twist is applying it <em>asymmetrically</em>, driven by the heat map. Costs: replication lag (reads may be slightly behind the primary), extra hardware for one slice of the keyspace — and it does absolutely nothing for writes, because every replica must still apply every write. Which brings us to the harder half of the problem.</p>
+
+<h3>Rung 3: key salting — write sharding on purpose</h3>
+
+<p>Now suppose the key is <strong>write-hot</strong>: a like counter on a viral post taking 8,000 increments per second, a live-match score, one IoT tenant firehosing telemetry at a single device row. Caching is useless — caches absorb reads, not writes. Replicas are worse than useless — they multiply the write load. A single partition sustains maybe 1,000–10,000 writes/sec depending on the store. You need the writes to land on <em>more than one partition</em>. But the key is the key — same key, same partition. That's the whole contract of sharding.</p>
+
+<p>So break the contract deliberately. <strong>Salting</strong>: instead of writing to <code>likes:post789</code>, append a random suffix from 0 to N−1 and write to <code>likes:post789#0</code> … <code>likes:post789#15</code>. Sixteen different keys hash to sixteen different partitions, and your 8,000 writes/sec become 500/sec per partition. Fire out.</p>
+
+<p>Now pay the bill: to read the like count you must query <em>all sixteen</em> sub-keys and add them up — a <strong>scatter-gather</strong> read. One read became sixteen, and your read latency is now the latency of the <em>slowest</em> of the sixteen. Say this trade-off exactly this way in an interview: <strong>"I traded read cost for write relief."</strong> That one sentence is the difference between knowing the trick and understanding it.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Salted key writes spreading across four partitions and a scatter-gather read merging them">
+  <text class="dg-txt-s" x="240" y="16">Write path: pick one random suffix — heat divided by 4</text>
+  <rect class="dg-node" x="20" y="130" width="140" height="64" rx="8"/>
+  <text class="dg-txt" x="34" y="156">Writers</text>
+  <text class="dg-txt-s" x="34" y="176">8K likes/sec</text>
+  <rect class="dg-node" x="290" y="30" width="170" height="50" rx="8"/>
+  <text class="dg-txt-s" x="302" y="50">P4 — likes:post789#0</text>
+  <text class="dg-txt-s" x="302" y="68">2K/sec</text>
+  <rect class="dg-node" x="290" y="104" width="170" height="50" rx="8"/>
+  <text class="dg-txt-s" x="302" y="124">P17 — likes:post789#1</text>
+  <text class="dg-txt-s" x="302" y="142">2K/sec</text>
+  <rect class="dg-node" x="290" y="178" width="170" height="50" rx="8"/>
+  <text class="dg-txt-s" x="302" y="198">P29 — likes:post789#2</text>
+  <text class="dg-txt-s" x="302" y="216">2K/sec</text>
+  <rect class="dg-node" x="290" y="252" width="170" height="50" rx="8"/>
+  <text class="dg-txt-s" x="302" y="272">P41 — likes:post789#3</text>
+  <text class="dg-txt-s" x="302" y="290">2K/sec</text>
+  <line class="dg-edge" x1="160" y1="150" x2="290" y2="55" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="160" y1="158" x2="290" y2="129" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="160" y1="166" x2="290" y2="203" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="160" y1="174" x2="290" y2="277" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="560" y="130" width="140" height="64" rx="8"/>
+  <text class="dg-txt" x="574" y="156">Reader</text>
+  <text class="dg-txt-s" x="574" y="176">query all 4, sum</text>
+  <line class="dg-edge" x1="460" y1="55" x2="560" y2="146" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="460" y1="129" x2="560" y2="156" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="460" y1="203" x2="560" y2="166" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="460" y1="277" x2="560" y2="176" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="360" y="322">Read path: 1 read became 4 — as slow as the slowest</text>
+</svg>
+<figcaption>Salting with N=4. Writes spread across four partitions; every read must scatter to all four and merge. You traded read cost for write relief — say the price out loud.</figcaption>
+</figure>
+
+<p>Two refinements make this rung senior-grade. First: <strong>only salt the hot keys.</strong> If you salt every key with N=16, every read in your system becomes sixteen reads — you've bought fleet-wide 16x read amplification to fix a problem that maybe fifty keys have. Salt the keys on your dynamically tracked top-K list, and leave the billion cold keys alone. Second: pick N from arithmetic, not vibes. 8,000 writes/sec against a 1,000/sec-per-partition budget → N=10 with headroom, not N=100 "to be safe" — because every notch of N is a notch of permanent read cost on that key.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A bank assigns every customer to one teller — tidy, until payroll day, when a single giant company's deposits swamp teller #3 while the others file their nails. Salting is telling that one company: "your deposits can go to any of eight tellers." The queue vanishes. But now, to know the company's balance, the manager must walk to all eight tellers and add up eight ledgers — and the answer arrives only when the slowest teller finishes counting. Faster deposits, slower audits. Regular customers still use one teller, because making everyone's balance an eight-ledger scavenger hunt would be madness.</p>
+</div>
+
+<h3>Rung 4: compound keys — design the heat out up front</h3>
+
+<p>Salting is a patch you apply when a key catches fire. A <strong>compound key</strong> is the same idea applied at design time, using a real attribute instead of a random number. Don't partition messages by <code>channel_id</code> — partition by <code>(channel_id, time_bucket)</code>, as Discord did with 10-day buckets, so one giant channel's history spreads over many partitions instead of growing one partition forever. Don't key IoT telemetry by <code>device_id</code> — key it by <code>(device_id, hour)</code>. Don't key a multi-tenant table by <code>tenant_id</code> alone — key it by <code>(tenant_id, entity_id)</code> so the whale tenant's rows spread out.</p>
+
+<p>The cost is the same scatter shape as salting, but bounded and meaningful: a query spanning three time buckets does three reads. And be honest about what compound keys don't fix — Discord's schema already had time buckets, and they still got hot partitions, because bucketing spreads a key's <em>data over time</em>, not <em>this instant's traffic</em>. When forty thousand people are reading the newest bucket right now, the newest bucket is hot. Compound keys prevent the chronic disease; they don't stop the acute attack.</p>
+
+<h3>Rung 5: hybrid architecture — treat celebrities as a different species</h3>
+
+<p>Now the canonical exam question: the social feed. Chapter 1's push-vs-pull returns, at senior difficulty. Push (fan-out-on-write) precomputes every follower's feed at post time — reads are cheap cache hits. But a celebrity with 100M followers turns one tweet into 100M writes. Pull (fan-out-on-read) writes once and assembles feeds at read time — but now every feed load queries hundreds of followees. Each pure strategy dies at scale, just at opposite ends.</p>
+
+<p>The senior answer refuses to pick one policy for all users: <strong>push for normal accounts, pull for celebrities, merge at read time.</strong> When a normal user posts, fan out to their 200 followers — trivial. When a celebrity posts, write it once to a celebrity-posts store and fan out nothing. When you open your feed, the system fetches your precomputed timeline and merges in recent posts from the handful of celebrities you follow. The load profile of each entity class gets the strategy that suits it, with a follower-count threshold deciding who counts as a celebrity.</p>
+
+<div class="box story"><div class="box-tag">War story — Twitter's celebrity fanout</div>
+<p>In Raffi Krikorian's famous "Timelines at Scale" talk (he ran Twitter's platform engineering), Twitter had about 150 million active users and roughly 300K QPS of timeline reads, served by fan-out-on-write: every tweet was copied into each follower's Redis-backed home timeline. Then follower counts exploded. Lady Gaga had around 31 million followers — one tweet from her meant ~31 million timeline writes, and a fanout that could take minutes to finish. The visible symptom was almost comic: replies raced ahead of the original. A follower with a fast fanout path would receive someone's <em>reply</em> to Gaga's tweet before Gaga's tweet itself reached their timeline — conversations arriving before the thing they replied to. Twitter's fix was the hybrid: high-follower accounts are excluded from fanout entirely; their tweets are fetched and merged into timelines at read time, while ordinary accounts keep the push path. This design — push for the many, pull for the few, merge at read — is now the textbook answer, and interviewers expect you to reinvent it on the spot when they say "100 million followers."</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 360" role="img" aria-label="Hybrid fanout: push path for normal users, pull path for celebrities, merged at read time">
+  <rect class="dg-node" x="20" y="36" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="32" y="58">Normal user posts</text>
+  <text class="dg-txt-s" x="32" y="78">2K followers</text>
+  <rect class="dg-node" x="240" y="36" width="140" height="56" rx="8"/>
+  <text class="dg-txt" x="252" y="58">Fanout</text>
+  <text class="dg-txt-s" x="252" y="78">workers</text>
+  <rect class="dg-node" x="450" y="36" width="200" height="56" rx="8"/>
+  <text class="dg-txt" x="462" y="58">Follower feed caches</text>
+  <text class="dg-txt-s" x="462" y="78">2K small writes, done</text>
+  <line class="dg-edge" x1="170" y1="64" x2="240" y2="64" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="380" y1="64" x2="450" y2="64" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="20" y="150" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="32" y="172">Celebrity posts</text>
+  <text class="dg-txt-s" x="32" y="192">100M followers</text>
+  <rect class="dg-node-alt" x="240" y="150" width="180" height="56" rx="8"/>
+  <text class="dg-txt" x="252" y="172">Celebrity post store</text>
+  <text class="dg-txt-s" x="252" y="192">1 write. No fanout.</text>
+  <line class="dg-edge" x1="170" y1="178" x2="240" y2="178" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="20" y="272" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="32" y="294">Follower opens</text>
+  <text class="dg-txt-s" x="32" y="314">the app</text>
+  <rect class="dg-node-alt" x="450" y="258" width="200" height="70" rx="8"/>
+  <text class="dg-txt" x="462" y="284">Merge at read</text>
+  <text class="dg-txt-s" x="462" y="304">own feed + celebrity</text>
+  <text class="dg-txt-s" x="462" y="320">posts, sorted by time</text>
+  <line class="dg-edge" x1="170" y1="300" x2="450" y2="296" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="550" y1="92" x2="550" y2="258" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="206" x2="480" y2="258" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="560" y="180">precomputed feed</text>
+  <text class="dg-txt-s" x="300" y="245">pull recent posts</text>
+</svg>
+<figcaption>The hybrid: normal posts are pushed to followers at write time; celebrity posts are written once and pulled in at read time. Each entity class gets the strategy its load profile deserves.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Letters from your friends get delivered to your mailbox — push, done once per letter, cheap because your friends write to a handful of people. But the morning newspaper isn't hand-delivered to every reader by its columnist; you pick it up from the newsstand when you want it — pull, because one writer with a million readers can't visit a million mailboxes. Your morning reading merges both: mailbox first, newsstand on the way to work. Nobody thinks this is exotic; it's just matching the delivery method to the audience size.</p>
+</div>
+
+<h3>Rung 6: let the system fight back — adaptive partitioning and coalescing</h3>
+
+<p>Everything so far is you, the engineer, spotting heat and applying a fix. The final rung builds reflexes into the platform: <strong>load-aware partitioning</strong>, where the system itself watches per-partition heat and splits or relocates hot ranges automatically instead of trusting hash arithmetic; and <strong>request coalescing</strong> (Discord's trick from earlier — often called "singleflight"), where a thousand concurrent identical reads collapse into one database query whose answer is shared by all thousand waiters. Coalescing deserves special respect: it caps read amplification at the source, works even for cache misses, and costs almost nothing.</p>
+
+<div class="box story"><div class="box-tag">War story — DynamoDB splits the heat</div>
+<p>Amazon's DynamoDB enforces hard per-partition limits: 3,000 read capacity units and 1,000 write capacity units per second, per partition. For years, a hot key meant throttling errors even when the table as a whole had capacity to spare — the classic "fleet is bored, one partition is drowning." DynamoDB's answer, rolled out through 2018–2019 and on by default for every table, is <strong>adaptive capacity</strong>: the system detects sustained heat on a partition and reacts on its own. It shifts throughput allowance toward the hot partition instantly, and if heat persists it performs a "split for heat" — dividing the hot partition into two, each on separate hardware. In the extreme case, AWS documents that a single relentlessly hot item can end up <em>isolated in a partition of its own</em>, getting the full 3,000/1,000 to itself. The celebrity literally gets a private server. The design lesson: even a database run by one of the best infrastructure teams on Earth cannot make the hot-key problem disappear — the per-item ceiling still exists — but a platform that detects and splits automatically turns a 3am page into a non-event. That's the end state your own architecture should aspire to.</p>
+</div>
+
+<p>One more grim scenario completes the picture: the partition is on fire <em>right now</em>, and the real fix is splitting it — which means moving live data off a machine that's already at 100%. Resharding under fire is a zero-downtime migration problem: dual writes, backfill, verified cutover, and the discipline to contain the heat with rungs 1 and 6 first so the migration itself doesn't tip the node over. Chapter 2.11 is that playbook; here, just know the sequence — contain first, split calmly second.</p>
+
+<table>
+<thead><tr><th>Rung</th><th>Fixes</th><th>The price</th><th>Reach for it when</th></tr></thead>
+<tbody>
+<tr><td>Cache + local L1</td><td>Read heat</td><td>Seconds of staleness; brief cross-server disagreement</td><td>Read-hot, staleness-tolerant (profiles, counts)</td></tr>
+<tr><td>Extra replicas on hot range</td><td>Read heat</td><td>Replication lag; hardware for one slice; writes untouched</td><td>Read-hot, can't tolerate cache staleness</td></tr>
+<tr><td>Key salting (N ways)</td><td>Write heat</td><td>Every read of that key becomes N reads (scatter-gather)</td><td>Write-hot counters/streams; reads infrequent or batched</td></tr>
+<tr><td>Compound keys</td><td>Chronic growth + heat</td><td>Multi-bucket queries; must be designed in early</td><td>Schema design time — always consider it</td></tr>
+<tr><td>Hybrid per entity class</td><td>Fanout explosions</td><td>Two code paths; threshold tuning; merge logic at read</td><td>Power-law fanout: feeds, notifications</td></tr>
+<tr><td>Adaptive splits + coalescing</td><td>Everything, automatically</td><td>Platform complexity; still a per-item ceiling</td><td>Platform-scale; recurring unpredictable heat</td></tr>
+</tbody>
+</table>
+
+<h2>How deep do interviews actually go?</h2>
+
+<p>Calibration, so you neither undershoot nor gold-plate. The bell that rings this topic is unmistakable: "one user has 100M followers," "a post goes viral," "one tenant is huge," or a suspiciously specific "traffic is uneven." When you hear it, an L5 answer volunteers — unprompted — this exact sequence:</p>
+
+<ul>
+<li><strong>Name the mechanism:</strong> "Hashing balances keys, not traffic — this is a hot partition, and my aggregate dashboards would look green while it burns, so I need per-partition metrics and a live top-K hot-key list."</li>
+<li><strong>Classify the heat:</strong> read-hot or write-hot — and say which one this scenario is.</li>
+<li><strong>Apply two or three rungs in order, with prices:</strong> "Cache with a per-server L1 absorbs the read side — the hot key would melt a single cache shard otherwise. The like counter is write-hot, so I'd salt it 10 ways, accepting 10x scatter-gather on reads of that key. And for the feed itself, hybrid fanout: push for normal users, pull for accounts above roughly a million followers." Then commit to the combination for this scenario.</li>
+</ul>
+
+<p>That's the whole L5 bar: detection story, read/write classification, ordered mitigations with trade-offs stated, one committed recommendation. Ten sentences, maybe ninety seconds. What you do <em>not</em> need — staff-level garnish that wastes your clock if you lead with it: count-min sketch error bounds and internals (name the tool, cite chapter 2.10's territory, move on), designing a custom load-aware rebalancer from scratch, Zipf exponents, or DynamoDB's internal split heuristics. Mention that adaptive systems exist ("DynamoDB does this automatically — split for heat") as one sentence of awareness, not five minutes of trivia. A crisp ladder beats a probabilistic-data-structures lecture every single time.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>How this topic is actually probed — usually as an ambush on a design you already drew:</p>
+<ul>
+<li>"Nice feed design. One of your users is Cristiano Ronaldo with 650M followers — walk me through what happens when he posts." (They're checking whether you flip to hybrid fanout without being pushed, and whether you name the follower threshold as a tunable.)</li>
+<li>"Your dashboards are green but users are screaming about slowness. Debug it for me." (They want per-partition metrics and top-K keys in your first two sentences — reaching for fleet averages is the junior tell.)</li>
+<li>"You salted that counter 16 ways. What did reads just cost you?" (One right answer: sixteen queries, latency of the slowest, which is why salting is only for tracked-hot, write-heavy keys.)</li>
+<li>"Why not just cache it?" when the key is write-hot. (A trap testing whether you classified the heat before prescribing. Caches absorb reads; the writes still land on one partition.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c06-f1">
+<p class="fey-prompt">Explain to a junior engineer, in four or five sentences, what a hot partition is, why perfect sharding doesn't prevent it, and the first two things you'd do about one.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Sharding spreads keys evenly across partitions, but it can't spread attention — and real traffic is wildly uneven, so when one key goes viral, the single partition holding it gets hammered while its siblings sit idle. Your average-based dashboards will look healthy the whole time, because one saturated partition out of sixty-four barely moves the average — you need per-partition metrics and a list of the hottest keys to even see it. First move: if the key is being read a lot, cache it — including a tiny cache inside each app server, because otherwise the hot key just melts one cache node instead of one database node. If the key is being written a lot, caching does nothing; instead you split the key into N sub-keys on different partitions, which spreads the writes but means every read now has to query all N pieces and merge them. That read-cost-for-write-relief trade is the heart of the whole topic.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>A World Cup final. Your live "match hub" page has one likes counter taking 500K likes per minute at peak. Your database sustains about 1,000 writes/sec per partition comfortably. Size the salting: pick N, justify it, and state what reads of the counter now cost — plus one trick to make that read cost irrelevant to users.</p></div>
+<details><summary>Answer</summary><p>500K/min ≈ 8,300 writes/sec. Against a 1,000/sec budget you need at least 9 partitions; N=16 gives ~520/sec per sub-key, roughly 2x headroom for spikes — justified, not vibes. (N=100 would work too but buys nothing except more read cost.) Reads now scatter-gather 16 sub-keys, latency = slowest of 16. The trick: nobody needs a like count that's fresh to the millisecond — run a small aggregator that sums the 16 sub-keys once per second and caches the total, so user reads hit one cached value and the scatter-gather happens once per second regardless of viewer count. Write relief, and the read bill is paid by one background job instead of millions of users.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Users report multi-second load times. Fleet dashboard: average CPU 10%, average latency 80ms, error rate normal. Name the three graphs you pull up next, in order, and what each would tell you.</p></div>
+<details><summary>Answer</summary><p>(1) Per-partition heat map of CPU/QPS — one red cell among green confirms a hot partition and names it. (2) Per-partition p99 latency — confirms the red partition is where the slow requests live, and shows the blast radius (every key co-resident on it). (3) Top-K hottest keys (count-min-backed) — tells you <em>which key</em> and whether it's read-hot or write-hot, which selects the mitigation rung. Bonus senior point: check whether the slow user reports correlate with the hot partition's key range. The pattern to internalize: averages said "fine" three times; per-partition views found the fire in three graphs.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks if, "to be safe," you salt every key in the system with N=20 instead of only the hot ones?</p></div>
+<details><summary>Answer</summary><p>Every read in the system becomes 20 reads. Fleet-wide read amplification of 20x: your database fleet needs to serve 20x the query volume for the same user traffic, every read's latency becomes the slowest of 20 partitions (so p99 gets dramatically worse for everyone), and costs scale accordingly — all to fix a problem that perhaps fifty keys actually have, since heat is power-law by nature. This is why salting must be targeted: track the top-K hot keys dynamically, salt only those (a per-key flag or a hot-key config the writers consult), and unsalt when they cool. Defensive blanket salting is the over-engineering version of this topic, and interviewers probe for exactly this misjudgment.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your B2B analytics SaaS has 4,000 tenants sharded by <code>tenant_id</code>. One whale tenant generates 40% of all traffic and their queries are slowing down neighbors on their partition. Sketch your response — immediate, structural, and organizational.</p></div>
+<details><summary>Answer</summary><p>This is the celebrity problem wearing a suit: the whale is your Lady Gaga. Immediate: per-tenant rate limits so the whale can't starve co-tenants, plus caching/coalescing on their heaviest read queries. Structural: move the whale to dedicated partitions (or a dedicated cell, in chapter 2.5's language) — a live migration, dual-write then cutover per chapter 2.11 — and change the key schema to <code>(tenant_id, entity_id)</code> so any single tenant's data spreads over multiple partitions instead of concentrating. Organizational: whales are predictable, unlike viral posts — sales knows who the big customers are, so provision dedicated capacity at onboarding rather than discovering it from a heat map. Hybrid thinking again: normal tenants share infrastructure (push-model economics), whales get isolated treatment (pull-model economics), and a threshold decides who's who.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Sharding balances keys, not traffic; real traffic is a power law, so a perfectly even key distribution still yields one partition on fire while its siblings idle.</li>
+<li>Aggregate metrics hide hot partitions by construction — detection requires per-partition metrics drawn as heat maps plus a live top-K hot-key list (count-min sketch territory, chapter 2.10).</li>
+<li>Classify the heat before prescribing: caches and replicas absorb read heat only; write heat requires spreading the writes themselves.</li>
+<li>The first answer for read heat is a cache — finished with a local L1 per app server, because the hot key otherwise just melts one cache shard instead of one database partition.</li>
+<li>Key salting splits one hot key into N sub-keys to spread writes, and every read becomes an N-way scatter-gather: you traded read cost for write relief, which is why you only salt tracked-hot keys with N sized by arithmetic.</li>
+<li>Compound keys like (channel_id, time_bucket) design chronic heat out up front but don't stop everyone reading the newest bucket at once.</li>
+<li>The canonical celebrity answer is hybrid fanout: push for normal accounts, pull for celebrities above a follower threshold, merge at read — one policy per entity class, not one policy for all.</li>
+<li>The L5 bar, volunteered unprompted at the words "100M followers": name the hot partition, show the detection story, give two or three mitigations in cheapest-first order with their prices, and commit to one for this scenario.</li>
+</ul>
+</div>

@@ -1,0 +1,296 @@
+<p>Friday evening. Your payment service runs the way the replication chapter taught you: one primary database taking writes, one replica standing by. A small watchdog script pings the primary every two seconds; if it misses five pings in a row, it promotes the replica. You've tested this. It works.</p>
+
+<p>Tonight, a top-of-rack switch starts silently dropping packets. The watchdog can't reach the primary, waits its ten seconds, and promotes the replica. But the primary isn't dead — it's on the wrong side of a sulking switch, happily accepting writes from the half of your app servers that can still reach it. Now two databases both believe they're the boss. Payments land on both sides. Some customers get charged twice, some orders exist in only one place, and Monday will be spent hand-merging transaction logs.</p>
+
+<p>This is split brain, and back in p1c08 you were promised a real fix later. This is later. The fix is one of the deepest ideas in distributed systems — <strong>consensus</strong> — and here's the good news: at the senior bar you are not expected to implement it. You're expected to do something rarer. Know exactly what it guarantees, know where to rent it, and know the one famous way people who rent it still manage to corrupt their data.</p>
+
+<h2>You can't tell dead from slow</h2>
+
+<p>Start with why the watchdog was doomed. It made a decision based on silence: "the primary didn't answer, so it must be dead." But over a network, silence proves nothing. A dead server, a slow server, a dropped packet, and a server frozen mid-garbage-collection all look <em>identical</em> from the outside: no reply. There is no test that distinguishes them within any finite timeout. This isn't an engineering gap you can tune away with better pings — it's a hard fact about distributed systems.</p>
+
+<p>So any single observer that promotes a new primary based on a timeout is guessing. Sometimes the guess is right. When it's wrong, you get two primaries — and notice the watchdog itself is just another process that can die, stall, or get partitioned. Adding a second watchdog to watch the first only doubles the number of guessers.</p>
+
+<p>The escape is to change the question. "Is the primary dead?" is unanswerable. "Do a <em>majority</em> of us agree who the boss is?" is answerable — and it has a property that saves you.</p>
+
+<h2>Majority rules: the quorum trick</h2>
+
+<p>Take a fixed group of servers — say five. Define a <strong>quorum</strong> as any majority of them: three out of five. Now enforce one rule: nothing counts — no leader is elected, no write is durable — until a quorum has agreed to it.</p>
+
+<p>The magic is a piece of arithmetic so small it's easy to miss: <strong>any two majorities of the same group must share at least one member.</strong> Three out of five and another three out of five overlap in at least one node, no matter how you pick them. That overlap is the whole trick. Two candidates can't both win an election in the same round, because they'd each need three votes and there are only five voters — some voter would have to vote twice, and we forbid that. And whatever the last quorum agreed to, the next quorum is guaranteed to contain at least one node that remembers it. News can never be lost between decisions.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Five nodes with two overlapping majorities sharing node C">
+  <rect class="dg-zone" x="40" y="70" width="385" height="100" rx="10"/>
+  <text class="dg-txt-s" x="48" y="62">Majority 1: A, B, C</text>
+  <rect class="dg-zone" x="292" y="95" width="386" height="100" rx="10"/>
+  <text class="dg-txt-s" x="520" y="215">Majority 2: C, D, E</text>
+  <rect class="dg-node" x="60" y="110" width="90" height="44" rx="8"/>
+  <text class="dg-txt" x="96" y="137">A</text>
+  <rect class="dg-node" x="185" y="110" width="90" height="44" rx="8"/>
+  <text class="dg-txt" x="221" y="137">B</text>
+  <rect class="dg-node-alt" x="310" y="110" width="90" height="44" rx="8"/>
+  <text class="dg-txt" x="346" y="137">C</text>
+  <rect class="dg-node" x="435" y="110" width="90" height="44" rx="8"/>
+  <text class="dg-txt" x="471" y="137">D</text>
+  <rect class="dg-node" x="560" y="110" width="90" height="44" rx="8"/>
+  <text class="dg-txt" x="596" y="137">E</text>
+  <text class="dg-txt-s" x="60" y="238">Any two majorities of five overlap in at least one node — here, C. That node carries the news forward.</text>
+</svg>
+<figcaption>Quorum overlap: two majorities of the same group always share a member, so decisions can't fork and can't be forgotten.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Your housing society has a five-member committee, and any decision needs three signatures. Two rival factions can't both pass conflicting resolutions in the same meeting — three plus three is six signatures, and there are only five pens in the room, so at least one member would have to sign both, which the rules forbid. And when the committee meets next month with a different mix of three, at least one person in the room was present for last month's decision and can say "we already resolved that." Overlap prevents forked decisions and preserves memory. The analogy breaks in one place: committee members can lie or change their story; quorum systems assume nodes are honest but crash-prone, which is why the bookkeeping must be written down, not remembered.</p>
+</div>
+
+<p>Now do the sizing math, because interviewers love this and it takes ten seconds. A cluster of <strong>2f+1</strong> nodes tolerates <strong>f</strong> failures while still forming a majority:</p>
+
+<table>
+<thead><tr><th>Cluster size</th><th>Quorum</th><th>Failures tolerated</th></tr></thead>
+<tbody>
+<tr><td>3</td><td>2</td><td>1</td></tr>
+<tr><td>4</td><td>3</td><td>1</td></tr>
+<tr><td>5</td><td>3</td><td>2</td></tr>
+<tr><td>6</td><td>4</td><td>2</td></tr>
+<tr><td>7</td><td>4</td><td>3</td></tr>
+</tbody>
+</table>
+
+<p>Look at rows 3 and 4. A four-node cluster tolerates exactly as many failures as a three-node cluster — one — but its quorum is bigger (three acks instead of two, so agreement is slower) and it has one more machine that can break. The fourth node buys you nothing and costs you twice. That's why coordination clusters are always odd-sized: 3 for most teams, 5 when you want to survive two failures or do maintenance on one node while still tolerating a crash. Seven is for the deeply paranoid; beyond that, quorum latency eats you.</p>
+
+<p>So majorities give you a safe way to vote. But who runs the vote? Nodes crash mid-election. Votes arrive out of order. A candidate dies after winning but before telling anyone. Handling every one of those interleavings correctly is a genuinely hard algorithm — and that algorithm has a name.</p>
+
+<h2>Consensus: a primitive you rent, not build</h2>
+
+<p><strong>Consensus</strong> is the problem of getting a group of unreliable machines to agree on a value — or a sequence of values — such that once agreed, the decision is permanent, even as nodes crash and networks partition. The two famous algorithms are <strong>Paxos</strong> (Leslie Lamport, published 1998) and <strong>Raft</strong> (Diego Ongaro and John Ousterhout, 2014). For the interview, you need Raft at concept level — three ideas, no more.</p>
+
+<h3>Terms: numbered reigns</h3>
+
+<p>Time is chopped into <strong>terms</strong>, each with a number that only ever goes up. Each term has at most one leader. Every message a node sends is stamped with its current term, and every node follows one reflex: if you see a higher term than yours, update yourself and, if you were a leader, stop being one. A leader from term 3 who was frozen while the cluster moved on to term 4 will have every one of its messages rejected — the stamps give it away. File that reflex away; it comes back later in this chapter wearing a different hat.</p>
+
+<h3>Elections: timeout, then ask for votes</h3>
+
+<p>The leader proves it's alive by sending heartbeats. If a follower hears nothing for a randomized timeout (typically 150–300 milliseconds), it assumes the leader is gone, increments the term, and asks everyone for votes. Each node grants at most one vote per term — first come, first served — so getting a majority of votes makes you the one true leader of that term. The randomization matters: it makes it unlikely that two followers time out simultaneously and split the vote forever.</p>
+
+<h3>Log replication: agreed once a majority has it</h3>
+
+<p>The leader accepts commands, appends them to an ordered log, and sends them to followers. An entry is <strong>committed</strong> once a majority has written it. Because of quorum overlap, any future leader must have been elected by a majority — which must include at least one node holding every committed entry — and Raft's voting rules ensure the candidate with the most complete log wins. Committed entries survive any election. That's the whole guarantee.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 230" role="img" aria-label="Timeline of Raft terms: term 1 with leader A, an election, term 2 with leader B, and a stale write rejected">
+  <line class="dg-edge" x1="30" y1="55" x2="685" y2="55" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="640" y="40">time</text>
+  <rect class="dg-zone" x="40" y="75" width="215" height="56" rx="8"/>
+  <text class="dg-txt" x="52" y="100">Term 1</text>
+  <text class="dg-txt-s" x="52" y="120">leader: A</text>
+  <rect class="dg-zone" x="275" y="75" width="115" height="56" rx="8"/>
+  <text class="dg-txt" x="287" y="100">Election</text>
+  <text class="dg-txt-s" x="287" y="120">A went quiet</text>
+  <rect class="dg-zone" x="410" y="75" width="260" height="56" rx="8"/>
+  <text class="dg-txt" x="422" y="100">Term 2</text>
+  <text class="dg-txt-s" x="422" y="120">leader: B (majority vote)</text>
+  <path class="dg-edge" d="M180 190 C 300 190, 420 165, 495 138" marker-end="url(#arrow)"/>
+  <text class="dg-bad" x="40" y="185">A wakes, writes stamped "term 1"</text>
+  <text class="dg-bad" x="40" y="207">cluster is on term 2 — rejected</text>
+</svg>
+<figcaption>Terms only go up, and every message wears its term. A frozen ex-leader is unmasked by its own timestamp.</figcaption>
+</figure>
+
+<p>Why did Raft win over Paxos in practice? Not correctness — Paxos is proven. <em>Understandability.</em> Raft's paper is literally titled "In Search of an Understandable Consensus Algorithm"; the authors ran a study on students and showed they could learn and apply Raft far more reliably than Paxos. That sounds like an academic nicety until you remember that someone has to implement, debug, and operate this thing at 3am. An algorithm your engineers can hold in their heads is an algorithm with fewer catastrophic bugs.</p>
+
+<div class="box story"><div class="box-tag">War story — Google's Chubby, and the gap between paper and production</div>
+<p>Google built Chubby (described in Mike Burrows' 2006 paper) as a company-wide lock service: a five-replica Paxos cluster exposing tiny files and locks. GFS used it to elect its master; Bigtable used it for master election and membership — thousands of Google systems outsourced their "who's the boss?" question to one battle-hardened service. Then the Chubby engineers wrote a second, brutally honest paper, "Paxos Made Live" (2007), about actually implementing Paxos: the algorithm fits on a page, but the production system needed thousands of lines of C++ to handle disk corruption, membership changes, and snapshots — and they found that once you add all that, you've built a system the original proofs no longer cover. Their conclusion, from the team best positioned on Earth to implement consensus: the gap between the paper algorithm and a real fault-tolerant system is enormous. There's a delicious epilogue in Google's SRE book: Chubby's global cell became <em>so</em> reliable that teams started assuming it could never fail and wired it into paths that couldn't survive its absence. Chubby's SREs responded by deliberately taking Chubby down for planned outages, forcing dependent teams to fix their assumptions. When your lock service is so good you must break it on purpose to keep people honest, that's the strongest possible argument for renting one instead of writing one.</p>
+</div>
+
+<h2>Where consensus actually lives</h2>
+
+<p>You'll meet consensus in two packagings, and it's worth telling them apart out loud in an interview.</p>
+
+<p><strong>Standalone coordination services.</strong> ZooKeeper (born at Yahoo, runs a Paxos-family protocol called ZAB), etcd (Raft, the brain of Kubernetes), and Consul (Raft, popular for service discovery). Strip away the branding and each is the same product: a tiny, deliberately slow, extremely honest key-value store with three superpowers — atomic compare-and-swap, watches (get notified when a key changes), and keys that expire when their owner dies. That's the whole product. It's enough to build leader election, service discovery, distributed locks, and config distribution — which is why nearly every serious infrastructure project has one of these underneath.</p>
+
+<p><strong>Consensus embedded inside data systems.</strong> CockroachDB and TiKV run a Raft group per shard of data, so every write is replicated by consensus before it's acknowledged. And Kafka spent fifteen years leaning on ZooKeeper before replacing it with KRaft — its own built-in Raft quorum for cluster metadata; Kafka 4.0 (March 2025) removed ZooKeeper support entirely. Notice what Kafka did there: a team of world-class distributed-systems engineers took a multi-year, multi-KIP project to replace one consensus implementation with another. That's the size of this undertaking when professionals do it deliberately.</p>
+
+<p>Which sets up the sentence that should come out of your mouth at the whiteboard: <strong>"I'd use etcd for this. The guarantee I'm buying is a linearizable compare-and-swap on a small key-value store, with leases and watches — and I'll hang leader election off that."</strong> Naming the tool <em>and the guarantee</em> is the senior move. Proposing to implement Raft inside your service is the wrong answer — not because you couldn't sketch it, but because judgment is the thing being graded, and the judgment here is that consensus is a solved, rentable primitive with a decade of hardening (Jepsen, the industry's distributed-systems torture-testing project, has humbled plenty of homegrown attempts). You don't smelt your own steel to build a shelf.</p>
+
+<h2>Leader election with a lease</h2>
+
+<p>So how does your payment service actually use one of these stores to pick a boss? With a <strong>lease</strong>: a lock that expires unless renewed.</p>
+
+<p>In etcd: every candidate tries to create the same key — <code>/election/payments-primary</code> — with "create only if it doesn't exist." One wins. The key is attached to a lease with a TTL (time-to-live), say 10 seconds, and the winner heartbeats a keep-alive to renew it. If the leader dies, renewals stop, the lease expires, the key vanishes, and the watchers — every standby was watching that key — race to create it again. New leader, no human involved, no watchdog guessing.</p>
+
+<p>ZooKeeper does the same dance with <strong>ephemeral nodes</strong>: keys tied to a client's session that vanish automatically when the session dies. The polished version, <strong>ephemeral-sequential</strong> nodes, appends an auto-incrementing number to each candidate's node; lowest number leads, and each candidate watches only the node just ahead of it, so a leader's death wakes exactly one successor instead of stampeding the whole herd.</p>
+
+<p>Why a TTL at all? Because of the first section: you can't tell dead from slow. The lease converts that unanswerable question into a contract — "you're the boss for 10 seconds at a time, and silence forfeits the crown." Elegant. Robust. And it contains a trap that has become <em>the</em> classic senior-interview probe, so let's walk into it slowly, eyes open.</p>
+
+<h2>The lease that lied</h2>
+
+<p>Your job scheduler must never run the same job twice, so a worker takes the lock, gets the lease, and starts processing. Somewhere mid-job, the JVM decides it's time for a stop-the-world garbage collection pause. Not a normal one — a bad one. The heap is huge, the pause runs 40 seconds. (Multi-second GC pauses are routine at scale; multi-minute ones are documented. The same freeze also arrives as VM migration stalls, page-in from swap, or a laptop-lid-close in dev.)</p>
+
+<p>During those 40 seconds the worker sends no keep-alives, so from etcd's view it went silent, and the lease correctly expires. Worker 2 acquires the lock — correctly. Worker 2 starts writing — correctly. Then worker 1's GC finishes. Here's the horror: <strong>a paused process has no idea it was paused.</strong> Its next instruction after the freeze is exactly the one it was about to execute — a write. It checked the lease before the pause; it has no reason to check again. It writes. Two workers are now writing under the same lock, and every guarantee in your design just quietly evaporated. This isn't hypothetical: Martin Kleppmann's write-up of this failure cites a real HBase bug where exactly this sequence — GC pause, expired ZooKeeper lease, awakened client — corrupted files in HDFS.</p>
+
+<p>Sit with the uncomfortable part: <em>no lock service can fix this alone.</em> Longer TTLs just delay failover. Checking the lease "right before" the write doesn't help — the pause can land between the check and the write. The process cannot detect its own freeze before its next instruction. Any protocol that relies on the old holder gracefully stepping aside relies on code that may be frozen.</p>
+
+<p>The fix moves the enforcement to the only party guaranteed to be awake: the thing being written to. It's called a <strong>fencing token</strong>. Every time the lock is granted, the lock service issues a number that only ever increases — grant 33, then 34, then 35. Every write carries its token, and the storage system keeps the highest token it has seen and <strong>rejects anything lower</strong>. Now replay the disaster: worker 2 writes with token 34; storage records 34; worker 1 wakes and writes with token 33; storage compares 33 against 34 and refuses. The stale writer is fenced off — hence the name.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 345" role="img" aria-label="Timeline showing client 1 pausing for GC, its lease expiring, client 2 acquiring token 34, and client 1's stale token 33 write being rejected by storage">
+  <text class="dg-txt" x="14" y="76">Client 1</text>
+  <line class="dg-edge" x1="110" y1="72" x2="690" y2="72"/>
+  <text class="dg-txt" x="14" y="166">Client 2</text>
+  <line class="dg-edge" x1="110" y1="162" x2="690" y2="162"/>
+  <text class="dg-txt" x="14" y="271">Storage</text>
+  <line class="dg-edge" x1="110" y1="267" x2="690" y2="267"/>
+  <text class="dg-txt-s" x="122" y="52">lock granted, token 33</text>
+  <rect class="dg-zone" x="240" y="50" width="230" height="44" rx="8"/>
+  <text class="dg-txt-s" x="262" y="78">stop-the-world GC pause</text>
+  <text class="dg-bad" x="300" y="122">lease expires</text>
+  <line class="dg-bad" x1="330" y1="80" x2="330" y2="105"/>
+  <text class="dg-txt-s" x="356" y="146">lock granted, token 34</text>
+  <line class="dg-edge" x1="430" y1="162" x2="430" y2="252" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="440" y="205">write, token 34</text>
+  <text class="dg-good" x="392" y="292">accepted — highest seen: 34</text>
+  <text class="dg-txt-s" x="482" y="52">wakes, still "holds" lock</text>
+  <line class="dg-bad" x1="610" y1="72" x2="610" y2="252" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="620" y="205">write, token 33</text>
+  <text class="dg-bad" x="560" y="316">rejected — 33 is stale</text>
+</svg>
+<figcaption>The money diagram. The pause happens between the lease check and the write, so the client can't save itself — only token-checking storage can.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Hotels stopped using brass keys for a reason. With a brass key, checkout requires physically retrieving the key — and a guest who wanders off with one can still open the door next week. With keycards, the hotel doesn't chase anyone: issuing a new card for the room silently invalidates every older card, and the enforcement lives in the <em>door</em>, which checks each card against the latest issue. The old guest can wave their card all day; the door doesn't argue, it just doesn't open. Fencing tokens are keycards, and your storage system is the door. The analogy's one gap: hotel doors check "is this the current card," while fencing compares numbers — which also lets storage keep accepting the <em>current</em> holder's writes if a new grant hasn't happened yet.</p>
+</div>
+
+<p>Two practical notes that read very senior when volunteered. First, you rarely have to build the token counter: ZooKeeper's ephemeral-sequential node number and etcd's <code>mod_revision</code> on the lock key are monotonically increasing integers handed to you at grant time — the fencing token is free; the work is making your storage <em>check</em> it (a token column plus a conditional update usually suffices). Second, look back at Raft's terms. A term number is a fencing token — a monotonic epoch that unmasks stale leaders. It's the same idea at two altitudes, and interviewers light up when a candidate connects them. If your resource is too dumb to check anything — a plain file write, a third-party API — you can't fence it, and the honest answer is to make the operation idempotent (p2c02) so a duplicate is harmless, or route the writes through something that can check.</p>
+
+<h2>Redlock, honestly: efficiency locks vs correctness locks</h2>
+
+<p>Sooner or later someone on your team proposes distributed locking with Redis, because Redis is already deployed and <code>SET lock_key holder_id NX PX 30000</code> is one line. For multi-node safety, Redis documents an algorithm called <strong>Redlock</strong>: acquire the lock, with TTLs, on a majority of five independent Redis nodes. In 2016 Martin Kleppmann published a famous critique ("How to do distributed locking"), Redis creator Salvatore Sanfilippo (antirez) published a famous rebuttal ("Is Redlock safe?"), and engineers have been throwing the two links at each other ever since. Here's the honest summary you should carry into an interview.</p>
+
+<p>Kleppmann's two objections: Redlock issues no fencing tokens, so the GC-pause disaster above goes undetected; and its safety leans on timing assumptions — bounded clock drift, bounded pauses, bounded network delay — that real systems violate (clocks jump when NTP corrects them; pauses are unbounded, as we just saw). Antirez countered that the timing assumptions are reasonable in practice and that many uses don't need fencing. Both are right, because they're talking about different kinds of locks — and <em>that distinction</em>, not the drama, is the senior takeaway:</p>
+
+<table>
+<thead><tr><th></th><th>Efficiency lock</th><th>Correctness lock</th></tr></thead>
+<tbody>
+<tr><td>Purpose</td><td>Avoid duplicate work</td><td>Prevent corruption</td></tr>
+<tr><td>If two holders happen</td><td>Wasted CPU, a duplicate email, an annoyed user</td><td>Corrupted data, double-charged money, a violated invariant</td></tr>
+<tr><td>Acceptable tool</td><td>Single Redis <code>SET NX PX</code> — Redlock is already overkill</td><td>Consensus-backed lock (etcd/ZooKeeper) <em>plus</em> fencing tokens checked at the resource</td></tr>
+<tr><td>Test to apply</td><td colspan="2">Ask "what exactly happens if two clients hold this at once?" — the answer sorts every lock into one column or the other</td></tr>
+</tbody>
+</table>
+
+<p>So the committed answer sounds like: "This lock only dedupes thumbnail generation — worst case we render one twice, so a single Redis lock with a TTL is right, and Redlock would be complexity for nothing. But the settlement writer is a correctness lock — two holders means double-paying merchants — so that one lives in etcd, and the ledger table checks the fencing token on every write." One test, two locks, two different answers, each justified by its failure cost. That's the whole skill.</p>
+
+<h2>Control plane vs data plane: keep consensus off the hot path</h2>
+
+<p>One more senior distinction, and it's the one that stops you from misusing everything above. Every system splits into a <strong>control plane</strong> — the part that decides who leads, where shards live, which config is active; it changes rarely — and a <strong>data plane</strong> — the part that serves every single user request. Consensus belongs in the control plane, and the reason is arithmetic, not taste.</p>
+
+<p>Every consensus write is a network round trip to a majority plus a disk flush on each: single-digit milliseconds in one datacenter, and an intercontinental round trip — 80 to 150 milliseconds — if your quorum spans regions. Every write also serializes through one leader, which caps a healthy etcd cluster at a few tens of thousands of small writes per second, total, no sharding. Wonderful for elections and config. Hopeless in front of 500,000 requests per second — put etcd in your per-request path and you've installed a latency floor and a throughput ceiling in one move.</p>
+
+<p>The correct wiring: the data plane <em>watches</em> the control plane and caches. Your app servers hold the shard map, the feature flags, and the current leader's address in local memory, refreshed by etcd watch notifications within milliseconds of a change. Requests never block on etcd. And when etcd goes down? The data plane keeps serving from its last-known-good cache. You temporarily lose the ability to <em>change</em> things — fail over a leader, ship a config — but not the ability to serve. Say that failure mode unprompted and you sound like someone who has operated this.</p>
+
+<p>(The nuance worth one sentence at the whiteboard: databases like CockroachDB and TiKV deliberately put Raft in the write path — one small Raft group per shard, replicas placed close — accepting the majority round trip as the honest price of serializable SQL. Renting that trade from a database company is fine; rebuilding it by accident with etcd in your request loop is not.)</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 310" role="img" aria-label="Control plane with etcd holding leases and shard map, data plane serving requests, connected only by watch-and-cache">
+  <rect class="dg-zone" x="30" y="20" width="660" height="102" rx="10"/>
+  <text class="dg-txt" x="46" y="44">Control plane — etcd (3 or 5 nodes), consensus inside</text>
+  <rect class="dg-node" x="60" y="58" width="150" height="44" rx="8"/>
+  <text class="dg-txt-s" x="78" y="85">leader leases</text>
+  <rect class="dg-node" x="250" y="58" width="150" height="44" rx="8"/>
+  <text class="dg-txt-s" x="278" y="85">shard map</text>
+  <rect class="dg-node" x="440" y="58" width="150" height="44" rx="8"/>
+  <text class="dg-txt-s" x="482" y="85">config</text>
+  <line class="dg-edge" x1="370" y1="180" x2="370" y2="126" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="384" y="158">watch + cache locally (rare)</text>
+  <rect class="dg-zone" x="30" y="180" width="660" height="106" rx="10"/>
+  <text class="dg-txt" x="46" y="204">Data plane — every request</text>
+  <rect class="dg-node" x="60" y="222" width="110" height="44" rx="8"/>
+  <text class="dg-txt-s" x="86" y="249">clients</text>
+  <rect class="dg-node" x="230" y="222" width="90" height="44" rx="8"/>
+  <text class="dg-txt-s" x="256" y="249">LB</text>
+  <rect class="dg-node-alt" x="380" y="222" width="130" height="44" rx="8"/>
+  <text class="dg-txt-s" x="392" y="249">app servers</text>
+  <rect class="dg-node" x="570" y="222" width="90" height="44" rx="8"/>
+  <text class="dg-txt-s" x="596" y="249">DB</text>
+  <line class="dg-edge" x1="170" y1="244" x2="230" y2="244" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="320" y1="244" x2="380" y2="244" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="510" y1="244" x2="570" y2="244" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="46" y="302">Requests never wait on consensus. etcd down = can't change things, can still serve.</text>
+</svg>
+<figcaption>Consensus coordinates; it doesn't serve. The only wire between the planes is watch-and-cache.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — Pinterest unplugs itself from ZooKeeper</div>
+<p>Pinterest wired ZooKeeper deep into its data plane: service discovery and application config flowed through it, with thousands of application servers holding live ZooKeeper connections. On paper that's safe — ZooKeeper is itself a replicated quorum system, not one machine. In practice, Pinterest's engineers wrote publicly that ZooKeeper had become a single point of failure for the site: a distributed service, but still one dependency, with failure modes (overload, session storms, its own outages) that were hard to prepare for — and when it had a bad day, the outage propagated to the whole site, because every service needed ZooKeeper answering to keep working. Their fix was not a better ZooKeeper. They decoupled: a small daemon on every host mirrors the needed ZooKeeper data to local disk, and applications read only the local copy. If ZooKeeper disappears, everything keeps running on last-known-good data; only the ability to push changes pauses. They later open-sourced the approach (as part of KingPin), running it across roughly 20,000 hosts with config updates delivered in seconds. The lesson is exactly this section: the coordination service belongs in the control plane, and the data plane must be able to survive its absence.</p>
+</div>
+
+<h2>How deep do interviews actually go?</h2>
+
+<p>This chapter can feel bottomless — Raft alone has a PhD dissertation behind it — so here's the calibration. The L5 bar is <em>fluent use of consensus as a primitive, plus its famous failure mode</em>. It is not algorithm internals.</p>
+
+<table>
+<thead><tr><th>You must volunteer (L5)</th><th>Garnish (nice, but staff-level or optional)</th></tr></thead>
+<tbody>
+<tr><td>"I'd use etcd/ZooKeeper here" with the guarantee named: linearizable compare-and-swap, leases, watches</td><td>Raft internals: log matching, snapshotting, joint-consensus membership changes</td></tr>
+<tr><td>Quorum math on demand: 2f+1 tolerates f; 3→1, 5→2; even sizes waste a node</td><td>Paxos variants (Multi-Paxos, EPaxos), flexible quorums</td></tr>
+<tr><td>Lease-based election mechanics: TTL, heartbeat renewal, ephemeral nodes</td><td>Byzantine fault tolerance — nodes that lie, blockchain territory; irrelevant unless asked</td></tr>
+<tr><td>The GC-pause/fencing failure, <em>unprompted</em>, the moment you propose any distributed lock</td><td>Deriving why randomized election timeouts prevent split votes forever</td></tr>
+<tr><td>Consensus off the request path, with the numbers: majority round trip per write, tens of thousands of writes/sec ceiling</td><td>Designing a lease protocol's exact clock-skew margins</td></tr>
+<tr><td>Efficiency vs correctness locks whenever Redis locks come up</td><td>Reciting the Redlock debate blow by blow</td></tr>
+</tbody>
+</table>
+
+<p>And three answers that actively read as red flags: "I'll implement Raft in the service" (buys risk to reinvent a rentable primitive); "the lock service guarantees only one holder, so we're safe" (ignores pauses — no lock service can promise that alone); and "ZooKeeper means split brain can't happen" (ZooKeeper prevents split brain <em>in the election</em>; your stale ex-leader can still write unless something fences it).</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Consensus rarely arrives as its own question at L5. It ambushes you from inside another design: a job scheduler, a failover story, a "how does the cluster know who's primary?" follow-up. A passing answer rents the primitive, states its guarantee, and raises the fencing failure before the interviewer does. Expect these probes, nearly verbatim:</p>
+<ul>
+<li>"Your scheduler must run each job exactly once. Two workers grab the same job — walk me through what prevents a double run, end to end." (They're fishing for fencing or idempotency at the resource, not just "there's a lock.")</li>
+<li>"You put leader election in ZooKeeper. ZooKeeper is down — what happens to user requests?" (They want the control-plane/data-plane split: serving continues on cached state; only changes pause.)</li>
+<li>"Why five etcd nodes and not six?" (Ten-second quorum math; even sizes add failure probability without adding tolerance.)</li>
+<li>"What happens if your leader stalls for 40 seconds and comes back?" (The whole GC-pause story, compressed. If you drew a fencing token before they asked, you've already won this exchange.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p2c03-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, why a distributed lock with a timeout isn't enough to guarantee only one writer — and what a fencing token adds.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>The lock has a timeout because a holder might die, and we can't tell a dead process from a slow one. But that timeout creates a trap: a process can freeze — say a long garbage-collection pause — hold the lock past its expiry, and then wake up with no idea any time has passed, so its very next instruction is a write it still believes is protected. Meanwhile the lock has legitimately moved to someone else, so two processes write at once. No check inside the frozen process can catch this, because the freeze can land between the check and the write. A fencing token fixes it by moving enforcement to the storage side: every lock grant comes with a number that only goes up, every write carries its number, and storage rejects any write with a number lower than the newest it has seen. The stale writer's own token betrays it — just like an old hotel keycard that stops working the moment the front desk issues a new one.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>You're placing a 5-node etcd cluster across datacenters. Option A: 2 nodes in DC-East, 2 in DC-West, 1 in DC-Central. Option B: 3 in DC-East, 2 in DC-West. For each option, which single-datacenter failure stops the cluster from accepting writes? Which placement do you commit to?</p></div>
+<details><summary>Answer</summary><p>Quorum is 3 of 5. Option A: lose East (2 nodes) → 3 survive, writes continue; lose West (2) → 3 survive, fine; lose Central (1) → 4 survive, fine. No single DC failure halts you. Option B: lose West → 3 survive, fine; but lose East and only 2 survive — no quorum, writes halt. Commit to A: it's the only placement where no single datacenter is load-bearing. The general rule: spread the cluster so that no failure domain contains a quorum-breaking number of nodes — which is why three failure domains is the magic minimum, and why two-datacenter consensus deployments are always quietly betting on one of the two.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Sketch leader election for a cron service ("run the nightly settlement job on exactly one of three schedulers") using etcd, including how you prevent a stalled ex-leader from double-running the job. Name the specific etcd features you'd use.</p></div>
+<details><summary>Answer</summary><p>Each scheduler tries to create <code>/election/settlement</code> with a compare-and-swap ("create if absent"), attached to a ~10s lease it renews with keep-alives; losers watch the key and retry when it vanishes. The winner reads the lock key's <code>mod_revision</code> — a monotonically increasing number — and uses it as its fencing token. Every write the job makes to the settlement table carries that token, and the table enforces it: a token column plus a conditional update that rejects any write bearing a lower token than the highest recorded. Now the killer scenario is handled: leader 1 stalls 40 seconds, its lease expires, leader 2 elects with a higher revision and starts writing; when leader 1 wakes and writes, its stale token is rejected by the database, not by any code inside the frozen process. Bonus senior point: settlement writes should also be idempotent (p2c02), so even a rejected-then-retried run can't double-pay.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A teammate proposes reading feature flags from etcd on every request "so flags update instantly." The service does 30,000 requests/sec. What breaks, roughly when, and what do you build instead?</p></div>
+<details><summary>Answer</summary><p>Two things break. Throughput: 30K reads/sec lands near a small etcd cluster's comfortable ceiling all by itself — before any other consumer — because linearizable reads involve the leader, and everything funnels through one Raft group. Latency: you've added a network hop with etcd's tail latency to every single request, and when etcd degrades (compaction, leader election, a slow disk), your entire service degrades with it — you've wired the control plane into the data plane. Build watch-and-cache instead: each app server loads flags at boot, holds them in memory (nanosecond reads), and subscribes to an etcd watch that pushes changes within milliseconds — "instant updates" was never actually the trade-off. If etcd goes down, servers keep running on last-known-good flags; you lose the ability to flip flags, not the ability to serve. That failure mode, stated unprompted, is the senior finish.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Classify each lock as efficiency or correctness, then commit to a tool for each: (a) "only one worker should send the weekly digest email batch", (b) "only one process may apply ledger postings for account 4471", (c) "only one node should refresh the shared cache entry when it expires."</p></div>
+<details><summary>Answer</summary><p>(a) Efficiency. Two holders means some users get a duplicate email — embarrassing, not corrupting. A single Redis <code>SET NX PX</code> with a sane TTL is right; anything more is ceremony. (Even better: make sends idempotent per user-week, and the lock becomes pure optimization.) (b) Correctness. Two holders can double-post money — this is the fencing chapter in miniature: etcd/ZooKeeper election, fencing token from <code>mod_revision</code> or a sequential node, ledger table rejects stale tokens. (c) Efficiency — it's a cache stampede guard (p1c06); worst case two nodes recompute one value. Redis lock or even a local per-process guard suffices. The senior signal isn't the classifications alone — it's applying one test ("what happens with two holders?") three times and accepting three different amounts of machinery.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Over a network you cannot distinguish dead from slow, so any single observer promoting a new leader on a timeout is guessing — and wrong guesses are split brain.</li>
+<li>Quorums fix this with arithmetic: any two majorities of 2f+1 nodes overlap, so elections can't fork and committed decisions can't be forgotten; f failures are tolerated.</li>
+<li>Even-sized clusters waste a node — 4 tolerates the same one failure as 3 with a slower quorum — so run 3 or 5.</li>
+<li>Raft (terms, majority elections, majority-committed logs) won over Paxos on understandability; even Google's Chubby team reported that real Paxos diverges enormously from the paper.</li>
+<li>Consensus is a primitive you rent — etcd, ZooKeeper, Consul, or embedded as in CockroachDB and Kafka's KRaft — and the senior sentence names the tool and the guarantee it's buying.</li>
+<li>Lease-based locks fail under pauses: an expired holder wakes and writes, so correctness requires fencing tokens — monotonic grant numbers that the storage itself checks and rejects when stale.</li>
+<li>Sort every lock by asking what two simultaneous holders would cost: efficiency locks can live in a single Redis key; correctness locks need consensus plus fencing — the honest core of the Redlock debate.</li>
+<li>Keep consensus in the control plane: watch-and-cache from the data plane, never a per-request dependency, so an etcd outage pauses changes without pausing service.</li>
+</ul>
+</div>
