@@ -1,0 +1,225 @@
+<p>Rohan and Priya prepped together for three months. Same books, same mock interviews, same 45-minute skeleton from the last chapter. Rohan interviewed at Google and walked out with an L5 offer. Priya took the identical preparation to Palantir a week later — and got quietly dismantled in a round neither of them had ever heard of. No load balancers. No scale numbers. Just an interviewer saying: <em>"An infection is spreading through a city. Help us track it."</em> Priya started drawing boxes and arrows. The interviewer let her finish, then asked one question: "Who looks at this system, and what do they do with what they see?" She had no answer. She'd designed a machine for a problem nobody had defined.</p>
+
+<p>Meanwhile their friend Arjun, interviewing at Anthropic, hit a different wall. His design round wasn't "design Instagram" at all. It was "design the serving system behind a chat assistant" — and within ten minutes the interviewer was asking about GPU memory and what happens to latency when someone pastes a 200-page document into the chat. Arjun knew feeds and fanout cold. He'd never once thought about what a language model costs to run.</p>
+
+<p>The skill you started building in chapter 1 transfers everywhere. The <em>exam</em> does not. Each of these four companies has spent years evolving its design round into a distinct instrument, tuned to detect a specific kind of engineer. Walk into the wrong exam with the right skill and generic prep, and you can still lose.</p>
+
+<p>This chapter is the field guide: what each loop looks like in 2024–2026, what each one grades hardest, and how to point your preparation at the exam you'll actually sit.</p>
+
+<h2>Same skill, four different exams</h2>
+
+<p>Everything from chapter 1 still holds — scope the problem, find the crux, commit with reasons, finish the loop, end with operations. Think of that as your fitness base. What changes per company is which muscle gets tested to failure. Meta tests speed and iteration under pressure. Google tests depth and arithmetic. Palantir tests whether you can find the problem at all. Anthropic tests whether you can design for a workload — large language model serving — that most engineers have never operated.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Four exam boards, one subject. Board one runs a rapid-fire viva: confident answers, numbers from memory, and the examiner interrupts to change the question mid-answer (Meta). Board two wants a long written derivation — full working shown, every figure justified (Google). Board three hands you a word problem with no numbers in it at all and grades whether you ask the right questions before computing anything (Palantir). Board four is a lab practical on equipment you have to learn before exam day (Anthropic). Same physics. A student who only ever practiced one format walks into the others underprepared — not for lack of knowledge, but for lack of the format's reflexes. The analogy breaks in one place: unlike school, you get to choose which boards to sit, so choose with your eyes open.</p>
+</div>
+
+<h2>Meta E5: one round, two flavors, and a level on the line</h2>
+
+<p>A Meta E5 loop has multiple coding rounds and a behavioral round, but only <strong>one design round</strong>. One conversation, roughly 45 minutes, carrying enormous weight — because at Meta the design round is the primary <em>leveler</em>. Meta rarely rejects a strong candidate for a wobbly design round; it down-levels them. Strong coding, strong behavioral, unconvincing design is the classic recipe for an E4 offer when you interviewed for E5. Everything else being equal, this single round is often the difference in level, scope, and a very large amount of money.</p>
+
+<p>Here's the part most candidates discover too late: there are <strong>two different design rounds</strong>, and a role tag chosen when you apply — not on interview day — decides which one you sit.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Meta role tag forks into System Design or Product Architecture rounds">
+  <rect class="dg-node" x="235" y="16" width="250" height="52" rx="8"/>
+  <text class="dg-txt" x="258" y="38">Role tag on application</text>
+  <text class="dg-txt-s" x="258" y="56">decided before the loop starts</text>
+  <line class="dg-edge" x1="300" y1="68" x2="185" y2="120" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="68" x2="535" y2="120" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="30" y="124" width="310" height="102" rx="8"/>
+  <text class="dg-txt" x="48" y="150">System Design</text>
+  <text class="dg-txt-s" x="48" y="170">backend machinery, no UI</text>
+  <text class="dg-txt-s" x="48" y="188">distributed queue, cache, web crawler,</text>
+  <text class="dg-txt-s" x="48" y="206">top-K trending, rate limiter</text>
+  <rect class="dg-node-alt" x="380" y="124" width="310" height="102" rx="8"/>
+  <text class="dg-txt" x="398" y="150">Product Architecture</text>
+  <text class="dg-txt-s" x="398" y="170">user-facing products, client included</text>
+  <text class="dg-txt-s" x="398" y="188">news feed, Messenger, Stories —</text>
+  <text class="dg-txt-s" x="398" y="206">API design, data model, live updates</text>
+</svg>
+<figcaption>Meta's fork. You choose the exam weeks before you sit it — choose the room where you have scars.</figcaption>
+</figure>
+
+<p><strong>System Design</strong> is the backend-guts exam: design a distributed message queue, a web crawler, a top-K trending system, a rate limiter. Servers talking to servers. <strong>Product Architecture</strong> is the user-product exam: design the news feed, design Messenger, design Instagram Stories. It looks friendlier — everyone has used Messenger — but it grades things System Design barely touches: the client-server interaction (what exactly travels over the wire, and when), API design (pagination contracts, idempotency, versioning), the data model, and live updates (how a new message appears on your friend's phone in under a second — persistent connections, reconnect logic, what the client does when it comes back from a tunnel). Backend engineers who pick Product Architecture because "feed questions look easier" routinely get shredded on client details they've never operated.</p>
+
+<p>Whichever flavor you sit, Meta grades four competencies: <strong>problem navigation</strong> (can you scope the vague prompt and find the hard part), <strong>solution design</strong> (a complete, reasonable architecture), <strong>technical excellence</strong> (at E5 this means real depth in <em>at least one</em> area — one component where you clearly know more than the diagram shows), and <strong>communication</strong> (can the interviewer follow you without effort).</p>
+
+<p>Two style notes that define the Meta room. First, <strong>iteration is the format</strong>. Meta interviewers deliberately push a working design until it breaks — "and what if you had 100x the users?" — and grade how you evolve it. The chapter 1 war story of a candidate redesigning their sharding three times in one round was a Meta round; candidates report this experience again and again. Expect your design to break twice. That's the exam working.</p>
+
+<p>Second, <strong>numbers and opinions are expected from memory</strong>. Meta rounds move fast, and stopping to hedge reads badly. "Why Redis over Memcached?" is a real, recurring probe — and the passing answer names a mechanism ("I need sorted sets and persistence here"), not popularity. The latency numbers below should be reflex, because they justify choices in one sentence: "that's a disk seek per request, ten milliseconds, so this must come from memory."</p>
+
+<table>
+<thead><tr><th>Number</th><th>Rough value</th><th>The decision it drives</th></tr></thead>
+<tbody>
+<tr><td>RAM access</td><td>~100 ns</td><td>Cache hits are effectively free</td></tr>
+<tr><td>SSD random read</td><td>~100 µs</td><td>SSD-backed stores can serve reads directly</td></tr>
+<tr><td>Spinning-disk seek</td><td>~10 ms</td><td>Random reads on HDD cap you near ~200/sec/disk</td></tr>
+<tr><td>Round trip, same datacenter</td><td>~0.5 ms</td><td>A few internal hops per request are fine; twenty are not</td></tr>
+<tr><td>Round trip, cross-continent</td><td>~70–150 ms</td><td>Geo-replication can't hide in a 200 ms budget</td></tr>
+<tr><td>One Redis node</td><td>~100K ops/sec</td><td>One node carries a lot before you shard the cache</td></tr>
+<tr><td>One relational DB node (writes)</td><td>a few thousand/sec, safe planning figure</td><td>Past this, you're talking queues, batching, or sharding</td></tr>
+</tbody>
+</table>
+
+<div class="box story"><div class="box-tag">War story — the E4 offer nobody wanted</div>
+<p>The most consistently retold Meta outcome isn't a rejection — it's the down-level. The pattern shows up over and over in candidate reports from senior loops: coding rounds strong, behavioral strong, design round "fine but shallow" — complete architecture, no deep area, iteration handled hesitantly. The result is an offer, but at E4, with recruiters telling candidates more or less openly that the design round is what separates the two levels. One widely-echoed retelling describes finishing the loop confident, then hearing the recruiter say the design interviewer "didn't see E5 depth" — a phrase that maps exactly to the technical-excellence competency: at E5, breadth plus one genuinely deep area is the bar, and a round with no deep dive can't clear it no matter how tidy the boxes are. The practical lesson: at Meta, plan <em>before the interview</em> which component you'll take deep, because the level rides on that one round more than on any other.</p>
+</div>
+
+<h2>Google L5: the vague prompt and the silent interviewer</h2>
+
+<p>Google's design prompt is vague <em>on purpose</em>, and often narrower than you expect: not "design Google Docs" but "design the commenting system in Google Docs." The narrowness is a gift — it points at where they want depth — but the vagueness is the first test. The interviewer will not run the meeting for you. Google interviewers are famously quiet: they prompt, take notes, and watch. Many candidates read the silence as disapproval and start flailing. It isn't disapproval. It's the format. <strong>You drive, or nobody does.</strong></p>
+
+<p>A strong Google 45 minutes has a distinctive shape — much less time on requirements than you'd guess, much more on depth:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 190" role="img" aria-label="Google design round pacing: 3 minutes requirements, 10 high-level, 25 deep dive, 7 trade-offs">
+  <rect class="dg-node" x="10" y="60" width="80" height="52" rx="8"/>
+  <text class="dg-txt" x="20" y="82">Reqs</text>
+  <text class="dg-txt-s" x="20" y="99">~3 min</text>
+  <rect class="dg-node" x="110" y="60" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="124" y="82">High-level</text>
+  <text class="dg-txt-s" x="124" y="99">~10 min</text>
+  <rect class="dg-node-alt" x="270" y="40" width="290" height="72" rx="8"/>
+  <text class="dg-txt" x="288" y="70">Deep dive</text>
+  <text class="dg-txt-s" x="288" y="87">~25 min — where L5 is decided</text>
+  <text class="dg-txt-s" x="288" y="102">concrete math, unprompted</text>
+  <rect class="dg-node" x="580" y="60" width="130" height="52" rx="8"/>
+  <text class="dg-txt" x="594" y="82">Trade-offs</text>
+  <text class="dg-txt-s" x="594" y="99">~7 min</text>
+  <line class="dg-edge" x1="90" y1="86" x2="110" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="250" y1="86" x2="270" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="560" y1="86" x2="580" y2="86" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="10" y="150">More than half the interview is depth. An L4 answer spends this time adding breadth; an L5 answer digs.</text>
+</svg>
+<figcaption>The Google shape: three minutes of scoping, then earn the level in the 25-minute middle.</figcaption>
+</figure>
+
+<p>The deep dive is explicitly what separates L5 from L4. An L4 performance completes a sensible design and answers follow-ups competently. An L5 performance picks two or three components — <em>unprompted</em> — and goes to the floor of them: what's stored, in what layout, what a single request costs, what breaks first, and the numbers behind each claim.</p>
+
+<h3>NALSD: no hand-wavy boxes</h3>
+
+<p>Which brings us to the most Google-specific thing in this chapter. <strong>NALSD</strong> — Non-Abstract Large System Design — is a discipline that came out of Google's SRE organization (the Site Reliability Engineers who run Google's production systems), and its whole idea fits in one sentence: <em>a design isn't real until it has numbers on it.</em> Not "we'll add a caching layer" — how many gigabytes of cache, holding what, at what hit rate? Not "we'll scale horizontally" — how many machines, and what resource on each machine runs out first?</p>
+
+<p>The NALSD method: design the system for one machine first, then scale it up with arithmetic at every step. QPS (queries per second — request rate), bytes stored, IOPS (input/output operations per second — how many reads/writes a disk can physically do), machine counts. Here's the flavor: "100,000 reads per second, each one a random disk read. A spinning disk does about 200 random reads per second, so that's 500 disks doing nothing but serving reads — clearly wrong. An SSD does about 100,000 random reads per second, so a handful of SSDs cover it — or, better, the hot set is 40 GB, which fits in RAM on one big machine, replicated three times for redundancy." Four sentences, and the architecture chose itself. That's what "non-abstract" means.</p>
+
+<div class="box story"><div class="box-tag">War story — Google publishes its own answer key</div>
+<p>Google did something rare for the interview world: it published the method. The Site Reliability Workbook — Google's own book on running production systems — contains a chapter introducing NALSD, and it walks through a worked example in exactly the style of the interview: designing a system that joins ad-click logs with search-query logs to compute click-through rates. The chapter starts with a design that fits on one machine, shows with arithmetic why one machine can't keep up — the log rate exceeds what one disk can write and seek through — and then scales up step by step: sharding the logs, computing how many disks the IOPS demand, how many machines the disks imply, and what the failure of any one of them does. Google's SREs use this method for real capacity planning, and the interview is a compressed version of the same exercise. If you want to know what the Google grader is trained to look for, the training material is sitting in public: every design claim is followed by the arithmetic that earns it.</p>
+</div>
+
+<p>The other Google signature: decisions tied to <strong>SLOs</strong>. An SLO — service level objective — is a promised target, like "99.9% of reads complete in under 100 ms." Google-calibrated candidates use the SLO as the arbiter of design arguments: "at 99.9% availability I can serve this from one region and eat the occasional blip; if you want 99.99%, that's under an hour of downtime a year, and now I need multi-zone redundancy and automated failover, which is why I'm asking which one we're promising." The SLO turns a taste argument into an engineering argument. Ask for the target early, and spend from it like a budget.</p>
+
+<h2>Palantir: the decomp round</h2>
+
+<p>Palantir invented a round the rest of the industry doesn't have, and it's the one that ended Priya's loop in the cold open. The <strong>decomposition interview</strong> — "decomp" — hands you a vague <em>operational</em> problem, not a software prompt. Real examples candidates report: track the spread of an infection through a contact network. Assign airline gates at a hub airport. Plan the response to a flood. There is no clean answer, no expected architecture, and — this is the part that disorients people — often no explicit request to build software at all.</p>
+
+<p>What's graded is everything that happens <em>before</em> architecture: <strong>requirements discovery</strong> (what actually matters here? what does "track" even mean?), <strong>stakeholder identification</strong> (who touches this system — nurses entering cases, epidemiologists querying clusters, an operations center making quarantine calls?), <strong>data modeling</strong> (what are the entities and relationships — people, contacts, test results, time — and how do they change?), and <strong>v1 prioritization</strong> (of everything you could build, what's the smallest version that helps someone tomorrow?).</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A villager tells you: "People keep drowning crossing the river." A junior engineer hears "build a bridge" and starts computing beam loads. A senior engineer asks: who crosses, when, carrying what? Maybe the answer is a bridge. Maybe it's a ferry, a rope line, or moving the market so nobody needs to cross at dawn when the current is worst. The decomp round grades the questions, not the bridge — because Palantir's actual business is being dropped into a hospital or a factory with exactly this kind of problem statement. The analogy breaks in one way: in the interview you do eventually design something. But the design is graded on how well it fits the problem you uncovered, not on its architecture.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — the round that eats LeetCode champions</div>
+<p>The decomp's reputation comes from a specific, repeatedly-told failure pattern: candidates with elite algorithmic backgrounds bombing it. The retellings rhyme. One candidate, given the infection-tracking prompt, recognized a graph problem immediately — contact network, nodes and edges — and spent forty minutes on an elegant traversal-and-clustering approach. Technically flawless. The interviewer's closing questions: who enters the contact data? (Nurses, by hand, mid-crisis — so the real bottleneck is a data-entry flow that works in ninety seconds.) How fresh is it? (Days stale — so real-time graph analytics computes precise answers to outdated questions.) What does v1 look like? (Silence.) The candidate had solved a problem nobody defined and prioritized nothing. Palantir keeps the round precisely because it's uncorrelated with algorithmic skill — it predicts something different: whether you can walk into a mess and find the problem worth solving. Candidates who pass tend to describe spending the first third of the interview asking questions and the interviewer visibly relaxing as they did.</p>
+</div>
+
+<p>Two variations to know. Most loops pair the decomp with a <strong>learning interview</strong>: you're dropped into something unfamiliar — typically a small codebase or a proprietary library, documentation included — and graded on how fast you orient yourself and build something real with it, because the job is permanent unfamiliar territory. The <strong>FDSE track</strong> (Forward Deployed Software Engineer — the ones embedded at customer sites) adds two more: a prototype exercise against genuinely messy data (think inconsistent, half-broken CSVs — the grading is on pragmatism, not polish), and a pitch to a deliberately skeptical "client," where the grade rides on whether you communicate honestly under pushback — admitting what your prototype can't do without collapsing.</p>
+
+<h2>Anthropic: the practical loop with a values round</h2>
+
+<p>Anthropic's loop, as candidates consistently describe it in 2024–2026: a recruiter conversation; a <strong>90-minute practical coding screen</strong> (CodeSignal-style, in-browser); a hiring-manager deep dive on your background; then a roughly four-hour virtual onsite — <strong>two coding rounds</strong> (at least one usually touching concurrency: threads, locks, race conditions), <strong>one system design round</strong>, and <strong>one values round</strong>.</p>
+
+<p>The screen deserves a warning label: it is explicitly <em>not</em> LeetCode. No dynamic-programming riddles. It's a practical build — implement a small working system against a spec that keeps extending — and it grades speed plus code that bends without breaking: can you ship a clean working version of part one fast enough to survive parts two, three, and four stacking requirements on top? Candidates who prepared with algorithm grinding report running out of time; candidates who write straightforward, extendable code report the opposite. The values round is also real, not a formality: Anthropic is an AI-safety company, and the round expects you to think out loud about AI risk and why this work matters — articulately and genuinely. Rehearsed slogans read worse than honest, considered uncertainty.</p>
+
+<p>But the round to retool for is system design, because the flavor is <strong>infrastructure and LLM serving</strong>, not consumer products. Reported prompts: design the serving system behind a Claude-style chat product; design an LLM inference API; design search over a billion documents at high queries-per-second; design rate limiting for an LLM API. To play on this field you need a vocabulary most feed-and-fanout veterans lack:</p>
+
+<ul>
+<li><strong>TTFT — time to first token.</strong> How long from hitting enter until the first word of the response appears. This is the latency users feel; a reply can stream for 20 seconds as long as it <em>starts</em> in under one.</li>
+<li><strong>Continuous batching.</strong> A GPU serves many requests at once for efficiency. Old-style batching waits for the whole batch to finish before admitting new work; continuous batching lets new requests join at every token step, as others finish. It's the single biggest throughput lever in modern inference serving.</li>
+<li><strong>KV cache.</strong> As a model generates a reply, it keeps the attention state (keys and values) for every token of the conversation so far, so it doesn't recompute the entire context for each new token. That state lives in GPU memory and grows with context length. This is the number-one surprise for newcomers: <em>memory, not compute, is usually what caps how many conversations one GPU can hold.</em></li>
+<li><strong>GPU scheduling.</strong> Which requests run on which GPUs, when — deciding admission, preemption, and how to pack long and short requests together without the long ones starving the short ones.</li>
+<li><strong>Token-based rate limiting.</strong> An LLM's cost is proportional to tokens processed, not requests served. A 100-token request and a 100,000-token request differ in cost by a factor of a thousand — so "60 requests per minute" is a meaningless limit. Real LLM APIs limit <em>tokens</em> per minute, debiting a budget as tokens are consumed.</li>
+</ul>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A GPU serving chat requests is a restaurant where the constraint isn't the kitchen — it's the tables. Each conversation occupies a table (KV-cache memory) for its entire meal, and a long conversation is a camper who sits for three hours nursing one coffee. The kitchen (compute) could cook for a hundred diners, but if forty campers hold every table, new guests queue at the door — that queue is your TTFT going bad. Continuous batching is the maître d' seating new guests the moment any table frees up, instead of waiting for the whole dining room to empty. The analogy is honest about the core point — memory occupancy, not cooking speed, caps the restaurant — but it breaks at the edges: real schedulers can evict a camper mid-meal and re-seat them later (recomputing their state), which no restaurant survives.</p>
+</div>
+
+<p>Grading in the Anthropic design round leans on three axes. <strong>Cost</strong> — GPUs are staggeringly expensive, so "how many GPUs, and what does a million tokens cost us?" is a live question; a design that doubles utilization is worth real money and the interviewer knows the numbers. <strong>Latency percentiles</strong> — not "is it fast" but "what's the p99 TTFT, and what happens to it when a giant prompt lands in the batch?" (p99 = the time the slowest 1 in 100 requests sees — the tail your unluckiest users live in). <strong>Failure modes</strong> — a GPU dies mid-generation: is the conversation lost? A traffic spike arrives: who gets queued, who gets shed, does your rate limiter protect the p99 for everyone else?</p>
+
+<h2>The four loops, side by side</h2>
+
+<table>
+<thead><tr><th>Company</th><th>Design round shape</th><th>Prompt style</th><th>Graded hardest</th><th>The trap</th></tr></thead>
+<tbody>
+<tr><td>Meta E5</td><td>One round; role tag picks System Design or Product Architecture</td><td>"Design a web crawler" / "Design Messenger"</td><td>Iteration under 100x pushes; one deep area; numbers and opinions from memory</td><td>Complete-but-shallow → E4 down-level</td></tr>
+<tr><td>Google L5</td><td>Candidate-driven; ~3/10/25/7 pacing; quiet interviewer</td><td>Deliberately vague slice: "Docs commenting"</td><td>The 25-min unprompted deep dive; NALSD math; SLO-tied choices</td><td>Reading silence as failure; hand-wavy boxes with no arithmetic</td></tr>
+<tr><td>Palantir</td><td>Decomp round (+ learning interview; FDSE: messy-data prototype, skeptical-client pitch)</td><td>Vague operational problem, maybe not even software</td><td>Requirements discovery, stakeholders, data model, v1 prioritization</td><td>Jumping to algorithms or architecture before defining the problem</td></tr>
+<tr><td>Anthropic</td><td>90-min practical screen; onsite: 2 coding (concurrency), 1 design, 1 values</td><td>Infra/LLM serving: inference API, 1B-doc search, token rate limits</td><td>Cost, latency percentiles, failure modes; LLM-serving mechanics</td><td>Consumer-product prep; LeetCode grinding; slogan answers in the values round</td></tr>
+</tbody>
+</table>
+
+<h2>Your prep plan, per company</h2>
+
+<p>First, the Meta fork, because it's the decision people most often get wrong. The rule: <strong>pick the room where you have scars.</strong> If your production life has been pipelines, storage, queues, and infrastructure, pick System Design — you have real depth to deploy when the technical-excellence competency comes calling. If you've built product surfaces — APIs consumed by real clients, mobile or web apps, anything real-time — pick Product Architecture, because you can speak from experience about pagination contracts, reconnect logic, and what clients do when the network flakes. Do not pick Product Architecture because feeds feel more familiar than crawlers as a <em>user</em>. Familiarity as a user is worth nothing; the round grades the parts users never see.</p>
+
+<p>Then point the drills at the exam:</p>
+
+<ul>
+<li><strong>Meta:</strong> drill the numbers table above until it's reflex. Practice mocks where a friend interrupts every five minutes with "now 100x that" — the skill is evolving a design calmly, twice, without starting over. Rehearse one-sentence opinionated choices ("Redis, because sorted sets and persistence — Memcached wins only if this were flat key-value"). Decide in advance which component of each classic problem you'll take deep.</li>
+<li><strong>Google:</strong> practice 25-minute deep dives where nobody prompts you — set a timer, pick a component, and narrate to the floor of it. Drill napkin math until QPS-to-machine-count conversions are automatic. Start every practice run by inventing an SLO and spending from it. Practice being comfortable with silence.</li>
+<li><strong>Palantir:</strong> practice on problems with no architecture in them: pick a messy operational situation from the news and spend 15 minutes producing only a stakeholder list, a data model, and a one-sentence v1. Train the reflex of asking "who uses this and what do they decide with it?" before drawing anything.</li>
+<li><strong>Anthropic:</strong> learn inference serving properly — TTFT, continuous batching, KV-cache memory math, token-based limits (this book's LLM-serving chapter goes deep). Practice building small working systems fast against extending specs, and dust off concurrency fundamentals. And spend real time forming your own views on AI risk; the values round detects borrowed opinions.</li>
+</ul>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Each company's senior probe has a signature sound. Learn to recognize which exam you're in from the question alone:</p>
+<ul>
+<li>Meta: "OK, that works. Now 100x the users — what breaks first?" (They want calm, ordered iteration, not a defense of the current design.)</li>
+<li>Google: "You said we shard the index. How many machines is that? Walk me through the math." (Hand-waving here is the whole failure mode NALSD exists to catch.)</li>
+<li>Palantir: "Who looks at this screen at 7am, and what decision do they make with it?" (If you can't answer, you designed before you discovered.)</li>
+<li>Anthropic: "A user pastes a 200K-token document. What happens to everyone else's p99 TTFT, and what does your scheduler do about it?" (They want batching mechanics and a policy, with the cost trade-off named.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p0c02-f1">
+<p class="fey-prompt">A junior friend says: "System design is system design — why would I prep differently for Meta versus Palantir?" Set them straight in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>The core skill transfers, but each company tests a different edge of it to failure. Meta gives you one design round that decides your level, pushes your design until it breaks with "now 100x users," and expects numbers and opinions from memory — so you drill speed and iteration. Google goes the other way: a quiet interviewer, a vague prompt, and more than half the time in one deep dive where every claim needs arithmetic — machines, disks, QPS — so you drill depth and math. Palantir barely asks about architecture at all: they hand you a messy real-world problem and grade whether you find out who needs what before building anything — a round that famously fails brilliant algorithm people. And Anthropic's design round is about serving language models — GPU memory, time-to-first-token, cost per million tokens — a domain with its own vocabulary you have to learn first. Same muscles, four different sports.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>A friend has 6 years of experience: Kafka pipelines, a sharded MySQL fleet, an internal metrics system. She's also built a couple of GraphQL APIs "on the side" and once shipped a small React dashboard. She's applying to Meta E5 and asks: System Design or Product Architecture? Make the call and justify it in three sentences.</p></div>
+<details><summary>Answer</summary><p>System Design, without hesitation. The round's technical-excellence competency demands at least one area of genuine E5 depth, and her scars — pipelines, sharding, metrics — all live on the backend exam; on that terrain she can deep-dive from experience, not from reading. Product Architecture would grade client-server contracts, live-update mechanics, and client failure handling — areas where two side projects give her breadth but no depth, and depth is exactly what decides E5 versus E4. Choose the exam where the hardest question lands on your strongest ground.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>NALSD drill. A log-ingestion service receives 50,000 writes/sec, each 1 KB. It must also serve 20,000 random reads/sec of recent entries. You have machines with spinning disks (~200 random IOPS each, ~150 MB/s sequential) and 128 GB RAM. Do the arithmetic: what handles the writes, what handles the reads, and roughly how many machines before replication?</p></div>
+<details><summary>Answer</summary><p>Writes: 50K × 1 KB = 50 MB/s — sequential appends, so a single disk's ~150 MB/s absorbs it comfortably; writes are not the problem. Reads: 20,000 random reads/sec ÷ 200 IOPS = 100 spinning disks doing nothing but seeking — clearly the wrong tool. So compute the hot set instead: if reads target the last hour, that's 50 MB/s × 3600 s = 180 GB — too big for one 128 GB machine, but two machines (or one, if reads skew to the last ~40 minutes) hold it in RAM, where 20K reads/sec is trivial. Answer: ~2 machines serving reads from memory, appending to disk for durability, ×3 for replication ≈ 6 machines. The senior signal is the pivot: the IOPS math didn't produce a disk count to buy — it proved disks were the wrong medium and redirected the design to RAM.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Decomp drill. Prompt: "A hub airport keeps having gate-assignment chaos when flights are delayed. Help." Spend 10 minutes producing only three artifacts: a stakeholder list, a rough data model, and a one-sentence v1. No architecture allowed.</p></div>
+<details><summary>Answer</summary><p>One good shape. Stakeholders: gate agents (need tonight's assignments and changes, on their feet, on a phone), airline ops controllers (make the reassignment decisions), ground crews (fuel, baggage — need lead time before a gate change), pilots (need the gate before descent), passengers (downstream, via displays). Data model: flights (id, aircraft type, scheduled/estimated times), gates (id, size class, which aircraft fit, adjacency), assignments (flight→gate, time window, status), constraints (international flights need customs-adjacent gates; wide-bodies need large gates), delay events (flight, new estimate, timestamp). v1: a live board showing current assignments with conflicts highlighted the moment a delay lands — no optimizer, no auto-assignment, just making the collision visible ten minutes sooner than the phone calls do. The trap this avoids: leaping to "gate assignment is a scheduling optimization problem" and building a solver for controllers who first need to <em>see</em> the conflict — the exact algorithm-first mistake the round is designed to catch.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Anthropic drill. Your LLM API limits each org to 60 requests/minute. An org sends 60 requests of ~100K tokens each; another sends 60 of ~200 tokens. Explain concretely why this limiter fails, then sketch the replacement in 3–4 sentences with numbers.</p></div>
+<details><summary>Answer</summary><p>The failure: both orgs are "at their limit," but the first is consuming ~6M tokens/minute of GPU time and the second ~12K — a 500x difference the limiter can't see. The heavy org can saturate your GPUs, wrecking p99 TTFT for everyone, while remaining fully compliant. Replacement: a token-per-minute budget per org — say 1M tokens/min — implemented as a token bucket refilling at ~16.7K tokens/sec; on each request, debit the known prompt tokens plus the request's max_tokens cap up front (the honest worst case, since completion length is unknown at admission time), then refund the unused portion when generation finishes. Requests that would overdraw the bucket queue or get a 429 with a retry-after. Now the limit measures what actually costs money and GPU time — tokens — and one org's giant prompts can't eat the tail latency of everyone else's.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>The chapter 1 skill transfers across all four companies; what changes is which behavior each loop tests to failure, so prep must be aimed, not generic.</li>
+<li>Meta E5 has one design round that acts as the leveler — a complete-but-shallow performance typically produces an E4 offer, not a rejection.</li>
+<li>Meta's role tag forks you into System Design (backend machinery) or Product Architecture (user products: API design, data model, client-server, live updates) — pick the room where you have production scars.</li>
+<li>Meta grades four competencies and expects iteration under "100x" pushes, plus latency numbers and opinionated tool choices delivered from memory.</li>
+<li>Google is candidate-driven with a quiet interviewer; the ~25-minute unprompted deep dive separates L5 from L4, and NALSD means every claim carries arithmetic — QPS, IOPS, machine counts — tied to an SLO.</li>
+<li>Palantir's decomp round grades what happens before architecture — requirements discovery, stakeholders, data modeling, v1 prioritization — and it reliably fails algorithm-first candidates who solve undefined problems.</li>
+<li>Anthropic's loop is practical end to end: a 90-minute extendable-code screen, concurrency-flavored coding, a values round expecting genuine AI-risk thinking, and a design round in LLM-serving territory — TTFT, continuous batching, KV-cache memory, token-based rate limits.</li>
+<li>Anthropic grades designs on cost, latency percentiles, and failure modes — and in LLM serving, GPU memory (the KV cache), not compute, is usually the binding constraint.</li>
+</ul>
+</div>

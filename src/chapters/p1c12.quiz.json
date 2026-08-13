@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c12",
+  "items": [
+    {
+      "id": "p1c12-q01", "level": 1, "type": "mcq", "tag": "why-limit",
+      "q": "According to this chapter, the traffic that most often actually melts production APIs comes from:",
+      "options": [
+        {"t": "Legitimate customers' bugs — retry loops, runaway scripts, careless polling", "correct": true,
+         "why": "Right. Malice is rare; bugs are constant. A retry loop with no sleep is a tiny DoS attack with valid credentials — and that's the everyday threat rate limits exist for."},
+        {"t": "Sophisticated attackers running deliberate, distributed denial-of-service campaigns", "correct": false,
+         "why": "Attacks happen, but they're the rare case. If you only design limits for villains, the customer's midnight cron job with a broken retry loop will get you first."},
+        {"t": "Search engine crawlers", "correct": false,
+         "why": "Crawlers are mostly well-behaved (they honor robots.txt and back off). They're background noise, not the thing that 40x-es your traffic at midnight."},
+        {"t": "Marketing campaigns driving real user spikes", "correct": false,
+         "why": "Real viral spikes are a capacity problem, and limits help contain them — but the day-to-day API killer is one client doing illegitimate volumes with legitimate credentials."}
+      ]
+    },
+    {
+      "id": "p1c12-q02", "level": 1, "type": "mcq", "tag": "token-bucket",
+      "q": "In a token bucket, what do the two parameters — refill rate and bucket capacity — control?",
+      "options": [
+        {"t": "Refill rate caps the long-term average; capacity caps the burst size", "correct": true,
+         "why": "Exactly. Over time a client can't exceed the refill rate, because that's all the tokens that exist. But a quiet client accumulates up to a full bucket, so it can burst that many requests at once. Two knobs, both meaningful."},
+        {"t": "Refill rate caps the burst; capacity caps the average", "correct": false,
+         "why": "Backwards. The burst comes from spending saved-up tokens — and you can save at most one bucketful (capacity). The steady drip (refill rate) is what bounds the average."},
+        {"t": "Both control the same thing with different units", "correct": false,
+         "why": "They're independent: you can allow big bursts with a low average (large bucket, slow refill) or small bursts with a high average (small bucket, fast refill). That independence is why the algorithm is so flexible."},
+        {"t": "Refill rate is for reads, capacity is for writes", "correct": false,
+         "why": "Nothing about token bucket distinguishes reads from writes. If you want different read and write limits, you run two buckets — the parameters within one bucket are average (refill) and burst (capacity)."}
+      ]
+    },
+    {
+      "id": "p1c12-q03", "level": 1, "type": "mcq", "tag": "leaky-bucket",
+      "q": "What's the defining property of a leaky bucket that token bucket doesn't have?",
+      "options": [
+        {"t": "Its output is a smooth, constant-rate stream no matter how bursty the input", "correct": true,
+         "why": "Yes. Requests queue in the bucket and leak out at a fixed rate, like a metronome. That's traffic shaping — used when whatever's downstream can't tolerate bursts. Token bucket, by contrast, deliberately lets bursts through."},
+        {"t": "It uses far less memory, since it never stores per-client token counts", "correct": false,
+         "why": "If anything the opposite — a leaky bucket holds a queue of waiting requests, while a token bucket stores just two numbers. Memory isn't the differentiator; output smoothness is."},
+        {"t": "It never rejects requests", "correct": false,
+         "why": "It still rejects: when the queue (bucket) is full, new arrivals overflow and are dropped. What it adds is a waiting room before the no — which converts some rejections into delays."},
+        {"t": "It's exact while token bucket is approximate", "correct": false,
+         "why": "Both are exact about their own rules. The sliding window counter is the approximate one. Leaky vs token bucket is about whether bursts pass through (token) or get smoothed flat (leaky)."}
+      ]
+    },
+    {
+      "id": "p1c12-q04", "level": 1, "type": "mcq", "tag": "fixed-window",
+      "q": "A fixed-window limiter allows 100 requests/minute. What's the worst a client can legally do at a window boundary?",
+      "options": [
+        {"t": "About 200 requests in roughly two seconds — 100 at the end of one window, 100 at the start of the next", "correct": true,
+         "why": "Right — the boundary burst. Each window's counter is individually satisfied (100/100, then a fresh 0), but the seam between them leaks up to double the limit in a moment. This 2x hole is fixed windows' famous flaw."},
+        {"t": "Nothing — the counter guarantees 100/minute is enforced at every possible instant", "correct": false,
+         "why": "That's what a sliding window guarantees, not a fixed one. Fixed windows only count within their own boundaries; they have no memory of what happened seconds ago in the previous window."},
+        {"t": "Unlimited requests, because counters can be reset by the client", "correct": false,
+         "why": "Clients can't reset server-side counters. The hole is subtler: the counter resets itself on schedule at the window boundary, and a burst timed around that reset gets 2x through."},
+        {"t": "About 150 requests, because windows overlap by half", "correct": false,
+         "why": "Fixed windows don't overlap at all — that's exactly the problem. Overlapping (sliding) is the fix, not the default behavior."}
+      ]
+    },
+    {
+      "id": "p1c12-q05", "level": 1, "type": "mcq", "tag": "sliding-log",
+      "q": "The sliding window log algorithm is perfectly accurate. Why isn't it the default choice?",
+      "options": [
+        {"t": "It stores a timestamp for every single request, which becomes gigabytes of memory at scale", "correct": true,
+         "why": "Yes. A 1,000/hour limit across 10M keys is up to 80 GB of raw timestamps before data-structure overhead — spent distinguishing '103 requests' from '97.' Rate limits are guardrails, not billing; that precision buys nothing."},
+        {"t": "It has the boundary burst problem", "correct": false,
+         "why": "It's the one algorithm with no boundary problem at all — the window slides continuously with the clock. Its weakness is cost, not correctness."},
+        {"t": "It can't handle more than one key", "correct": false,
+         "why": "It handles any number of keys — one sorted set per key. That's precisely the problem: per-key cost is huge, and it multiplies across millions of keys."},
+        {"t": "Timestamps drift under heavy load, making the counts unreliable when it matters most", "correct": false,
+         "why": "Timestamps stay accurate; nothing about load corrupts them. The objection is economic — memory and per-request work — not a correctness failure."}
+      ]
+    },
+    {
+      "id": "p1c12-q06", "level": 1, "type": "mcq", "tag": "sliding-counter",
+      "q": "How does the sliding window counter estimate the count for the last 60 seconds?",
+      "options": [
+        {"t": "Current window's counter plus the previous window's, weighted by its remaining overlap", "correct": true,
+         "why": "Right. At 15 seconds into the current minute: current + previous × 0.75. It assumes last window's requests were evenly spread — false in detail, roughly true in aggregate, and it closes the boundary hole with just two counters per key."},
+        {"t": "It keeps a rolling average of request counts across the last ten windows", "correct": false,
+         "why": "Only two windows are involved — current and previous. Averaging ten would need ten counters and would react sluggishly to bursts. The trick is the overlap weighting, not a long average."},
+        {"t": "It samples 1% of requests and extrapolates", "correct": false,
+         "why": "No sampling — every request increments a counter. The approximation is in assuming even spread within the previous window, not in ignoring requests."},
+        {"t": "It keeps timestamps but compresses them", "correct": false,
+         "why": "That would still be a log with extra steps. The counter approach throws timestamps away entirely — two integers per key is the whole state, which is why it scales."}
+      ]
+    },
+    {
+      "id": "p1c12-q07", "level": 1, "type": "mcq", "tag": "headers",
+      "q": "Which response tells a client 'you're being rate limited, and here's exactly when to come back'?",
+      "options": [
+        {"t": "429 Too Many Requests with a retry-after header", "correct": true,
+         "why": "Yes. 429 names the problem precisely (your fault, specifically: too fast), and retry-after converts client guesswork into instruction. The x-ratelimit-* family adds budget visibility on every response."},
+        {"t": "500 Internal Server Error with a message body", "correct": false,
+         "why": "500 means 'our fault' — it invites clients to retry aggressively, the exact opposite of what you want. Miscoding rate limits as 500s also pollutes your own error-rate alerts."},
+        {"t": "403 Forbidden", "correct": false,
+         "why": "403 says 'you may never do this' — a permissions statement. Rate limiting is 'not this fast, try later.' Clients handle the two very differently, so the distinction matters."},
+        {"t": "Silently dropping the connection", "correct": false,
+         "why": "The worst option: the client can't distinguish you from a network failure, so it retries — often harder. Silence converts one over-limit request into a retry loop plus a support ticket."}
+      ]
+    },
+    {
+      "id": "p1c12-q08", "level": 1, "type": "mcq", "tag": "jitter",
+      "q": "Why does a retry loop need jitter (randomness) on top of exponential backoff?",
+      "options": [
+        {"t": "A shared failure synchronizes clients — without randomness they all retry at the same instants", "correct": true,
+         "why": "Exactly. An outage is a synchronizing event: 10,000 clients fail together, then retry together at t=1s, then t=3s — a marching army re-DDoSing the recovering server. random() dissolves the waves back into a spread-out crowd."},
+        {"t": "Jitter reduces total retry volume by making each individual client retry less often", "correct": false,
+         "why": "Backoff controls how often; jitter controls when relative to everyone else. A single client gains nothing from jitter — the benefit only exists across the population of clients."},
+        {"t": "It prevents the client from being identified as a bot", "correct": false,
+         "why": "Jitter isn't camouflage. It's a load-spreading mechanism that protects the server you're retrying against — which is ultimately self-interest, since a flattened server helps nobody."},
+        {"t": "Exponential backoff overflows integer timers without it", "correct": false,
+         "why": "Overflow is handled by the cap (min(cap, base × 2^attempt)), not by jitter. Jitter's job is purely desynchronization."}
+      ]
+    },
+    {
+      "id": "p1c12-q09", "level": 1, "type": "mcq", "tag": "gateway",
+      "q": "Which of these does NOT belong in an API gateway?",
+      "options": [
+        {"t": "Business logic, like validating that an order's line items sum to its total", "correct": true,
+         "why": "Right — that's product logic and belongs in the orders service. A gateway handles cross-cutting concerns only (TLS, auth, limits, routing). Product logic in the gateway rebuilds the enterprise service bus: a chokepoint every team must coordinate to change."},
+        {"t": "Terminating TLS for incoming HTTPS connections", "correct": false,
+         "why": "This is core gateway work: decrypt HTTPS once at the edge so backends never juggle certificates. It's the same for every service, which is exactly what makes it a gateway concern."},
+        {"t": "Authenticating callers and enforcing rate limits before requests reach backends", "correct": false,
+         "why": "Both are classic gateway duties — check identity once, stamp it on the request, count against the right limit before anything expensive runs. Every service behind the gateway gets to trust the result."},
+        {"t": "Routing requests to the right backend service", "correct": false,
+         "why": "Routing is the gateway's most basic job — it's the front desk telling you your room. Without it, clients would need to know your internal service topology."}
+      ]
+    },
+    {
+      "id": "p1c12-q10", "level": 2, "type": "mcq", "tag": "token-bucket",
+      "q": "Your mobile app makes 8 API calls in one burst when it opens, then goes quiet for minutes. You want to cap sustained abuse without punishing this pattern. Best fit?",
+      "options": [
+        {"t": "Token bucket with capacity around 10 and a modest refill rate", "correct": true,
+         "why": "This is the pattern token bucket was born for: the quiet period fills the bucket, so the 8-call burst sails through, while the refill rate still caps any sustained hammering. Bounded average, bursts forgiven."},
+        {"t": "Leaky bucket draining at 1 request/second", "correct": false,
+         "why": "Leaky bucket would smooth the burst flat — the app's 8th call waits ~8 seconds while the home screen spins. Smoothing is for fragile downstreams, not for clients whose bursts are legitimate."},
+        {"t": "Hard limit of 1 request/second, no exceptions", "correct": false,
+         "why": "This rejects or delays calls 2 through 8 of a completely normal app launch. A rate with no burst allowance punishes exactly the traffic shape you said you wanted to permit."},
+        {"t": "No limit — mobile apps are trusted clients", "correct": false,
+         "why": "The cold-open lesson: trusted clients ship bugs. One bad app update with a retry loop and your 'trusted' fleet is a DDoS. Every client class gets a limit; trusted ones just get generous numbers."}
+      ]
+    },
+    {
+      "id": "p1c12-q11", "level": 2, "type": "mcq", "tag": "leaky-bucket",
+      "q": "You call a third-party partner API that contractually accepts a flat 50 requests/second and errors hard on bursts. Your internal producers are spiky. What goes between you and them?",
+      "options": [
+        {"t": "A leaky bucket: queue your spiky traffic and release it at a steady 50/sec", "correct": true,
+         "why": "Textbook traffic shaping. The queue absorbs your bursts and the constant-rate leak matches their contract exactly. The cost — queued requests wait — is the right price when the downstream genuinely can't take spikes."},
+        {"t": "A token bucket with capacity 500", "correct": false,
+         "why": "A big token bucket permits 500-request bursts — precisely what the partner errors on. Token bucket bounds volume but deliberately lets bursts through; here bursts are the problem itself."},
+        {"t": "Nothing — just retry with exponential backoff whenever the partner rejects you", "correct": false,
+         "why": "This treats the partner as your rate limiter and burns your error budget (and goodwill) discovering the limit repeatedly. Shaping traffic before it leaves your system is cheaper for both sides than being bounced."},
+        {"t": "A fixed window of 3,000 per minute", "correct": false,
+         "why": "3,000/min averages to 50/sec but permits all 3,000 in the first second of the window — a violent burst by their standards. Averages aren't shapes; the partner cares about the shape."}
+      ]
+    },
+    {
+      "id": "p1c12-q12", "level": 2, "type": "mcq", "tag": "sliding-counter",
+      "q": "Limit: 100/min, sliding window counter. Previous minute's counter: 80. We're 30 seconds into the current minute with 50 so far. A request arrives. What happens?",
+      "options": [
+        {"t": "Rejected: at 30 seconds in, 50 requests means the client is on pace to hit 100, so the limiter throttles proactively", "correct": false,
+         "why": "Rate limiters count what happened, not what might happen — there's no extrapolation of 'pace.' A client who bursts early and then stops is fine. The check is purely: does the weighted count (90) exceed the limit (100)? It doesn't."},
+        {"t": "Allowed: estimate = 50 + 80 × 0.5 = 90, which is under 100", "correct": true,
+         "why": "Right. Half the previous window still overlaps the sliding 60 seconds, so half its count (40) is charged against the budget alongside the current 50. 90 < 100 — allowed, with 10 in the tank."},
+        {"t": "Allowed: only the current window counts, and 50 < 100", "correct": false,
+         "why": "Ignoring the previous window entirely is fixed-window thinking — the very hole this algorithm exists to close. The weighted tail of the last window is the memory that stops boundary bursts."},
+        {"t": "Rejected: 80 + 50 = 130 exceeds 100", "correct": false,
+         "why": "Summing both windows fully counts 30-to-60-second-old requests at full weight even though the window has slid past half of them — that would over-punish and effectively halve everyone's real limit. The overlap weighting is the whole idea."}
+      ]
+    },
+    {
+      "id": "p1c12-q13", "level": 2, "type": "mcq", "tag": "keying",
+      "q": "You're adding rate limiting to a login endpoint to stop credential stuffing. What do you key on?",
+      "options": [
+        {"t": "IP address AND attempted username, as two layered limits", "correct": true,
+         "why": "Right. Pre-auth there's no user ID to key on. Per-IP catches single-source floods; per-attempted-username catches attacks distributed across thousands of IPs targeting one account — which IP limits miss entirely. Each layer covers the other's blind spot."},
+        {"t": "User ID, like the rest of the API", "correct": false,
+         "why": "The caller isn't authenticated yet — that's the whole situation. There is no verified user ID until login succeeds; keying on the claimed identity alone is the per-username half, and it needs the IP layer beside it."},
+        {"t": "IP address alone, with tight limits to catch high-volume sources", "correct": false,
+         "why": "Two failures: tight per-IP limits punish thousands of innocent users behind one carrier NAT, and attackers with rotating proxies sail under any per-IP threshold. IP alone is both too harsh and too weak."},
+        {"t": "API key of the mobile app", "correct": false,
+         "why": "Every user of your app shares that key — one attacker would exhaust the limit for your entire user base, turning your own limiter into a denial-of-service lever against you."}
+      ]
+    },
+    {
+      "id": "p1c12-q14", "level": 2, "type": "mcq", "tag": "headers",
+      "q": "Your client library just received: 429, retry-after: 30. The correct client behavior is:",
+      "options": [
+        {"t": "Wait at least 30 seconds plus a little jitter, then retry — and start watching x-ratelimit-remaining", "correct": true,
+         "why": "Full etiquette: honor the server's explicit instruction, add jitter so you don't sync with every other client that got the same 429, and use the budget headers to self-throttle so the next 429 never happens."},
+        {"t": "Retry immediately — the request might succeed on a different server", "correct": false,
+         "why": "The limit is counted centrally (that's the point of shared counters), so every server gives the same answer. Immediate retry just burns another request against a spent budget and adds load — the cold-open bug in miniature."},
+        {"t": "Treat it as an error, log it, and surface the failure to the user so they can retry manually", "correct": false,
+         "why": "429 is a flow-control signal, not a failure — the server literally told you when the request will work. Surfacing it as a hard error wastes recoverable requests and trains users to hammer the retry button."},
+        {"t": "Rotate to a backup API key and resend the request immediately", "correct": false,
+         "why": "Key rotation to dodge limits is abuse — it's the exact behavior secondary limits (GitHub-style) exist to catch, and providers ban for it. The limit is the contract; the fix is pacing, not identity-shuffling."}
+      ]
+    },
+    {
+      "id": "p1c12-q15", "level": 2, "type": "mcq", "tag": "distributed",
+      "q": "Twenty gateway instances share a limit of 100/min via naive code: read count from Redis, check < 100, write count+1. Under load, ~110 requests get through. Why?",
+      "options": [
+        {"t": "Read-modify-write race: two instances read 99 simultaneously, both check 99 < 100, both allow and write 100", "correct": true,
+         "why": "Exactly. Read, check, and write are three separate steps, and other instances dive through the gaps between them. The fix is making count-and-decide one atomic step where the data lives: Redis INCR, or a Lua script for bucket logic."},
+        {"t": "Redis is eventually consistent, so instances read stale counts and admit extra requests", "correct": false,
+         "why": "A single Redis node is strongly consistent — commands execute one at a time in order. The bug is in the client's multi-step pattern leaving gaps between commands, not in Redis's consistency."},
+        {"t": "Clock skew between gateway instances", "correct": false,
+         "why": "No timestamps are involved in this counter at all. Clock skew matters for window boundaries and token refill math, but the overshoot here comes purely from non-atomic read-modify-write."},
+        {"t": "The load balancer duplicates some requests", "correct": false,
+         "why": "Load balancers don't duplicate requests. Blaming infrastructure for what is a textbook concurrency bug in your own code is a pattern worth training yourself out of — the race is fully explained by the three-step counter."}
+      ]
+    },
+    {
+      "id": "p1c12-q16", "level": 2, "type": "mcq", "tag": "distributed",
+      "q": "Adding centralized Redis counting costs ~1ms per request. Your API's p99 latency budget is 200ms. An engineer proposes building local-counting-with-async-sync instead to save the millisecond. Your call?",
+      "options": [
+        {"t": "Keep central Redis: 1ms against a 200ms budget is noise, and local-sync trades it for real complexity", "correct": true,
+         "why": "Right — run the numbers before the architecture. 0.5% of budget for exact, simple, atomic counting is a bargain. Local counting with sync is a legitimate technique at edge scale (Cloudflare territory), but adopting it here is complexity without a driver."},
+        {"t": "Build the local-sync system — shaving latency off every single request is always worth it", "correct": false,
+         "why": "'Always' is the tell. Latency work is judged against the budget, and 1ms of 200ms is invisible to users. Spending engineering weeks plus permanent operational complexity to save it reads as optimizing for the resume."},
+        {"t": "Skip counting entirely on the hot path; sample 1 in 10 requests", "correct": false,
+         "why": "Sampling makes limits probabilistic — a fast abuser gets 10x the limit before the samples notice. You'd trade a millisecond for holes in the guardrail."},
+        {"t": "Move rate limiting into each backend service to avoid the extra hop", "correct": false,
+         "why": "The hop doesn't disappear — every service still needs shared counters, so it's the same Redis round trip, now implemented N times. And limits enforced after routing waste the work the limiter exists to prevent."}
+      ]
+    },
+    {
+      "id": "p1c12-q17", "level": 2, "type": "mcq", "tag": "spof",
+      "q": "A reviewer objects: 'Your API gateway is a single point of failure — everything flows through it.' The strongest response:",
+      "options": [
+        {"t": "It's a stateless fleet behind a load balancer — counters live in Redis, so instances are disposable; the real risk is config, so changes get canaried", "correct": true,
+         "why": "This answers both halves: statelessness makes hardware failure a non-event (add/kill instances freely), and it names the genuine SPOF — a bad rule pushed to every instance at once, Cloudflare's 2019 regex lesson — with its mitigation."},
+        {"t": "Correct — we should remove the gateway and have clients call services directly, eliminating the shared dependency", "correct": false,
+         "why": "This trades a managed, replicated front door for auth, limiting, and TLS re-implemented in every service — twenty chances to get security wrong instead of one place to get it right. The objection deserves an answer, not a surrender."},
+        {"t": "We run the gateway on very reliable hardware with a hot standby that takes over automatically if the primary fails", "correct": false,
+         "why": "A two-box active-passive setup still fails as a unit (bad config hits both) and caps your scale at one machine. Statelessness plus horizontal fleet is strictly stronger than making one box precious."},
+        {"t": "Gateways from major vendors don't fail", "correct": false,
+         "why": "Everything fails — the senior posture is designing for it, not vouching for vendors. And the dominant gateway failure mode isn't the software crashing; it's a human pushing a bad rule to every instance simultaneously."}
+      ]
+    },
+    {
+      "id": "p1c12-q18", "level": 2, "type": "mcq", "tag": "keying",
+      "q": "A customer stays under their 5,000/hour limit but runs 300 concurrent slow search queries, degrading the platform for everyone. What's missing?",
+      "options": [
+        {"t": "A concurrency limit (cap on in-flight requests) and/or tighter per-endpoint limits on expensive routes", "correct": true,
+         "why": "Right. Requests-per-hour measures volume over time; it's blind to 300 expensive queries running simultaneously. This is why Stripe runs a separate concurrent-request limiter and GitHub added secondary limits — real APIs layer limits because each one has a blind spot."},
+        {"t": "A lower hourly limit for everyone, so no customer can afford to run that many queries", "correct": false,
+         "why": "Punishes every well-behaved customer while barely touching the problem — 300 concurrent slow queries fit easily inside even a small hourly budget. The dimension being abused is concurrency, and that's the dimension to limit."},
+        {"t": "Better database indexes so searches run faster", "correct": false,
+         "why": "Worth doing, but it's capacity work, not protection. Faster queries raise the ceiling; they don't stop one customer from monopolizing whatever the new ceiling is. You need both, and only one of them is a limit."},
+        {"t": "Blocking that customer's account", "correct": false,
+         "why": "They broke no stated rule — your limit contract simply had a hole. Banning customers for gaps in your own enforcement is a support fire and a churn generator; fix the contract instead."}
+      ]
+    },
+    {
+      "id": "p1c12-q19", "level": 3, "type": "mcq", "tag": "fail-open",
+      "q": "2 a.m.: the Redis cluster holding all rate-limit counters dies. Commit to a gateway behavior.",
+      "options": [
+        {"t": "Fail open for traffic limits, with a circuit breaker and a page — but fail closed on security-critical limits like login attempts", "correct": true,
+         "why": "The committed, differentiated answer. Traffic limiting is protection, not correctness — failing closed converts a Redis outage into a self-inflicted 100% API outage. But for login/payment limits the counter IS the security control, so those reject. Deciding per limit, in advance, is the senior signature."},
+        {"t": "Fail closed everywhere — if you can't count requests you can't guarantee safety, so reject until Redis is back", "correct": false,
+         "why": "The safety system just crashed the plane: every legitimate request now fails because a protective accessory died. Unprotected for ten minutes is a risk; down for ten minutes is a certainty. Uniform fail-closed confuses the guardrail with the road."},
+        {"t": "Fail open everywhere — availability always comes first", "correct": false,
+         "why": "Half right, and the half matters: failing open on login limits hands attackers an uncounted credential-stuffing window precisely when your systems are degraded. 'Always' in either direction skips the judgment the question is testing."},
+        {"t": "Have each gateway retry Redis synchronously until it answers", "correct": false,
+         "why": "Now every request blocks on a dead dependency — you've built a latency amplifier that turns a counter outage into timeouts across the whole API, plus a retry storm against Redis as it tries to recover. Circuit-break instead: stop calling what you know is down."}
+      ]
+    },
+    {
+      "id": "p1c12-q20", "level": 3, "type": "mcq", "tag": "10x",
+      "q": "Your gateway design (stateless fleet + one shared Redis for counters) must handle 10x traffic next quarter. What breaks first, and what's the fix?",
+      "options": [
+        {"t": "The Redis counter path — a single node saturates around ~100K ops/sec; shard counters by key and plan for hot keys", "correct": true,
+         "why": "Right, including the second-order problem: sharding by key spreads aggregate load, but one giant customer's key still lands on one shard — atomicity requires it. Naming the hot key unprompted, with a fix (N sub-counters summed on read, or local batching with bounded overshoot), is what 10x questions fish for."},
+        {"t": "The gateway instances — CPU will run out", "correct": false,
+         "why": "Stateless instances are the one part that scales trivially: add more boxes. That's why the design pushed all state into Redis. The bottleneck at 10x is the stateful thing everyone shares, not the disposable things you can multiply."},
+        {"t": "Nothing — Redis handles hundreds of thousands of ops per second, so 10x is comfortably within reach", "correct": false,
+         "why": "'It's fast' isn't a capacity plan. Every request costs Redis an atomic op; multiply current ops/sec by 10 and compare to ~100K/node — at meaningful scale that math fails. Answers without arithmetic are the junior tell here."},
+        {"t": "The load balancer — replace it with DNS round-robin", "correct": false,
+         "why": "Managed load balancers absorb enormous traffic; they're the least likely casualty. And DNS round-robin is a downgrade — no health checks, cached-resolver stickiness, slow failover. This swaps a non-problem for a real one."}
+      ]
+    },
+    {
+      "id": "p1c12-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'How would you rate limit your public API?' Which opening reads most senior?",
+      "options": [
+        {"t": "\"Token bucket per API key, enforced at the gateway, counters in Redis via a Lua script — bursts are normal client behavior and I want them forgiven. Cost: a ~1ms Redis hop, and I'll need a fail-open story. Happy to compare algorithms if useful.\"", "correct": true,
+         "why": "Commits with a workload-based reason, places the mechanism concretely, names the price and the failure question unprompted, and offers breadth without hiding behind it. That's ownership in four sentences."},
+        {"t": "\"There are five main algorithms: token bucket, leaky bucket, fixed window, sliding window log, and sliding window counter. Each has trade-offs. Which would you like me to use?\"", "correct": false,
+         "why": "A correct taxonomy and zero judgment — option-listing ending in handing the decision back. The interviewer learns you've read about limiters, not that you can own one. Survey briefly if you like, then decide."},
+        {"t": "\"Sliding window log, because exact counting means no disputes with customers.\"", "correct": false,
+         "why": "A commitment — good — but it ignores the number that kills it: per-request timestamps across millions of keys is gigabytes of state on the hottest path, for precision a guardrail doesn't need. Committing without the arithmetic is confidence, not judgment."},
+        {"t": "\"Whatever nginx or the cloud provider does by default — this is a solved problem.\"", "correct": false,
+         "why": "Defaults are often fine operationally, but in an interview this declines the question. And real defaults still demand your decisions: keyed on what? What limits? Fail open or closed? 'Solved problem' skips exactly the parts that page you at 2 a.m."}
+      ]
+    },
+    {
+      "id": "p1c12-q22", "level": 3, "type": "mcq", "tag": "retry-storm",
+      "q": "Your service crashed under a spike. Each time you bring it back, it's flattened again within seconds, even though the original spike ended minutes ago. What's happening, and what do you do?",
+      "options": [
+        {"t": "Synchronized client retries are sustaining the outage; shed load cheaply at the gateway (429/503 + retry-after) while pushing jittered backoff to clients", "correct": true,
+         "why": "This is the metastable failure shape — DynamoDB 2015: the outage synchronized every client into retry waves that outlive the original cause. Recovery needs the server to say no cheaply (or admit a trickle) until the herd disperses; the durable fix is backoff+jitter in clients. AWS literally had to rate limit its own metadata service to recover."},
+        {"t": "The spike must still be ongoing — provision 5x capacity permanently so the fleet can absorb it", "correct": false,
+         "why": "The load you're seeing is an echo, not the original event — retries manufacturing load from failure itself. Permanent 5x capacity to absorb your own retry storm is buying servers to fight your clients' for-loops; the cure is flow control, not fleet size."},
+        {"t": "Restart with far more instances at once, so the fleet is big enough to survive the initial reconnection wave", "correct": false,
+         "why": "Sometimes part of a recovery, but alone it's racing the herd: the wave scales with your synchronized client count, not your fleet size, and every failed comeback re-synchronizes them harder. Without shedding or admission control you're feeding servers into the same wood-chipper."},
+        {"t": "Block all traffic for an hour so clients give up entirely", "correct": false,
+         "why": "Direction's right — starve the storm — but a full hour of self-imposed outage is overkill and many clients (crons, SDKs) never 'give up.' Admission control does this properly: let a fraction through, serve them well, expand as the herd thins."}
+      ]
+    },
+    {
+      "id": "p1c12-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "One enterprise customer (20% of revenue) keeps hitting their rate limit and demands it be removed entirely. Commit to a response.",
+      "options": [
+        {"t": "Keep a limit but negotiate: raise their tier against measured capacity, offer burst headroom, and share usage dashboards", "correct": true,
+         "why": "The limit protects them too — from their own runaway scripts — and protects every other customer from noisy-neighbor starvation. Raising numbers deliberately, against capacity math, keeps the fuse in the circuit while solving their real problem. 'Big customers get bigger fuses, not no fuse.'"},
+        {"t": "Remove it — 20% of revenue outranks an engineering preference", "correct": false,
+         "why": "Rate limits aren't a preference; they're the mechanism keeping one customer's midnight bug from taking down the other 80% of revenue. The first time their intern's script loops, the unlimited account becomes your platform-wide outage — and their outage too."},
+        {"t": "Keep the limit exactly as is — exceptions for loud customers set a precedent you can't walk back", "correct": false,
+         "why": "Rigidity isn't judgment either. Limits are capacity contracts, and contracts get renegotiated when the relationship changes. If your biggest customer legitimately needs more throughput, that's a pricing-and-capacity conversation, not a refusal."},
+        {"t": "Silently raise the limit 100x without telling anyone", "correct": false,
+         "why": "Now you've made an unexamined capacity promise — is there headroom for their 100x plus everyone else's peak? — and set a precedent invisible to your own team. Limit changes are capacity decisions; they deserve the same math and visibility as adding a shard."}
+      ]
+    },
+    {
+      "id": "p1c12-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A teammate proposes per-user rate limit state kept in each gateway instance's memory ('Redis is an extra moving part — local maps are simpler'). You run 12 gateway instances behind a load balancer. What's the strongest critique?",
+      "options": [
+        {"t": "The limit silently becomes ~12x (each instance counts alone), drifts with autoscaling, and resets on every deploy", "correct": true,
+         "why": "The trap is that it works perfectly on one instance and in every unit test. In production, a client sprayed across 12 instances gets ~12x the limit, the multiplier changes whenever autoscaling does, and rolling deploys wipe all counters. Naming concretely how the simple version fails beats vaguely defending Redis."},
+        {"t": "Local memory is too slow for rate limiting", "correct": false,
+         "why": "Backwards — local memory is nanoseconds, thousands of times faster than the Redis hop. Speed is the one genuine advantage of the proposal; the failure is correctness across instances, and critiquing the wrong axis loses the argument."},
+        {"t": "Redis is the industry standard, so we should use it", "correct": false,
+         "why": "Appeal to convention isn't an engineering argument, and the teammate's simplicity instinct deserves a real answer. The reason Redis wins here is specific: shared, atomic counting that survives instance churn. Say the mechanism, not the fashion."},
+        {"t": "It would work if the load balancer used sticky sessions to pin each user to one instance — propose that fix", "correct": false,
+         "why": "Stickiness patches the counting at real cost: uneven load, broken failover (a dying instance takes its users' state with it), and limits still reset on deploy. Adding infrastructure complexity to rescue the 'simple' design concedes the point — shared counters were the simpler system all along."}
+      ]
+    },
+    {
+      "id": "p1c12-q25", "level": 3, "type": "mcq", "tag": "gateway",
+      "q": "Your platform team wants to add order-discount validation into the API gateway 'since every order request already passes through it.' Commit to a position.",
+      "options": [
+        {"t": "No — the gateway stays thin (cross-cutting concerns only); discount rules live in the orders service, where product changes don't need a gateway deploy", "correct": true,
+         "why": "This is the ESB lesson: a shared chokepoint that accumulates business logic becomes the org-wide coordination bottleneck, and its blast radius is total — recall that gateway config errors already take down everything at once. Convenience of placement is not an architecture argument."},
+        {"t": "Yes — enforcement at the single point every order already passes through can never be bypassed", "correct": false,
+         "why": "Tempting, but centrality is exactly the danger: the gateway now needs product-domain knowledge (discount tables, order schemas), redeploys on product cadence, and its bugs break checkout AND search AND login. Non-bypassability is achievable inside the orders service's own boundary."},
+        {"t": "Implement it in both the gateway and the orders service, so there's defense in depth if one check regresses", "correct": false,
+         "why": "Duplicated business rules drift — and when the two copies disagree, you get the worst bug class: intermittent, environment-dependent order failures. Defense in depth is for security layers with different jobs, not two copies of the same discount table."},
+        {"t": "Yes, but only for the enterprise tier's orders", "correct": false,
+         "why": "A scope reduction of the same mistake — the gateway still learns product logic, now with an extra branch per tier. Small wrong turns compound; the thin-gateway line is worth holding while it's cheap to hold."}
+      ]
+    }
+  ]
+}

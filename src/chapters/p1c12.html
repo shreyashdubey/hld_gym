@@ -1,0 +1,296 @@
+<p>11:58 p.m. on a Tuesday. Your API has been boringly healthy for months. Then the dashboard turns red: traffic just jumped 40x in ninety seconds. You brace for the exciting explanation — front page of Reddit, or an attack. The truth is dumber. One of your customers shipped a nightly sync job with a bug: when a request fails, it retries immediately, in a loop, with no delay. At midnight their 200,000 installed apps all woke up, hit one broken endpoint, and started hammering.</p>
+
+<p>Your database saturates. Requests from your <em>other</em> customers start timing out. And here's the cruel part: every timeout looks like a failure to the buggy clients, so they retry harder. The more your system struggles, the more load it receives. Nobody attacked you. A for-loop with no sleep in it took down your platform, and it will keep it down until someone's phone rings.</p>
+
+<p>Now rewind the night and add one small thing: a rule at your front door — "each customer gets at most 100 requests per minute; past that, we answer instantly with 'slow down' and touch nothing expensive." The buggy fleet still goes berserk at midnight, and your system shrugs. Bad requests bounce off the front door in microseconds; every other customer has a normal night. You read about the whole event in a graph the next morning, with coffee, instead of at 3 a.m., with dread.</p>
+
+<p>That rule is a rate limiter, and the front door it lives in is an API gateway. This chapter is about both: the algorithms that decide "yes or no," the etiquette of saying no politely, the surprisingly tricky problem of counting when you have many servers, and the piece of infrastructure that ties it all together.</p>
+
+<h2>The threat model is your own users</h2>
+
+<p>Engineers new to rate limiting picture hackers. Wrong picture. The traffic that actually melts APIs, day after day, is almost always <em>legitimate credentials doing illegitimate volumes</em>: a retry loop with no delay, a script that polls every 50 milliseconds, a data team "just backfilling one table" against production. Malice is rare; bugs and thoughtlessness are constant.</p>
+
+<p>So limits exist for four reasons, and only one of them is abuse:</p>
+
+<ul>
+<li><strong>Protection from bugs.</strong> Runaway scripts and retry storms are a matter of when, not if. A limit turns "their bug becomes your outage" into "their bug becomes their 429s" — 429 being the HTTP status code for "too many requests, slow down."</li>
+<li><strong>Fairness.</strong> Your capacity is shared; without limits, one greedy client silently eats what a thousand polite clients were relying on — the noisy-neighbor problem.</li>
+<li><strong>Cost.</strong> Every request costs compute, and some requests cost real money — an SMS sent, an LLM invoked, a third-party API billed per call. An unlimited endpoint is an unlimited invoice.</li>
+<li><strong>Abuse.</strong> Credential stuffing (bots trying millions of stolen username-password pairs) on your login endpoint, scrapers on your search endpoint. Limits don't stop determined attackers alone, but they raise the price of every attack.</li>
+</ul>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A rate limiter is the fuse box in your house. The fuse doesn't exist because your appliances are evil — it exists because one day a heater will short-circuit, and without the fuse, that one bad appliance burns down the whole house. With it, one circuit clicks off and everything else keeps running. Note where the analogy is honest: blowing the fuse is <em>supposed</em> to happen occasionally. A rate limit that no one ever hits is either protecting nothing or set too high to matter.</p>
+</div>
+
+<p>Fine — you're convinced you need a limit like "100 requests per minute per customer." Now the real question: what exactly does "per minute" mean? It turns out there are five reasonable answers, and the differences between them decide whether your limiter has holes in it.</p>
+
+<h2>Token bucket: the industry default</h2>
+
+<p>Imagine each customer has a bucket that holds up to 10 tokens. Tokens drip into the bucket at a steady rate — say 5 per second — and the bucket simply overflows when full; extra tokens are wasted. Every request must take one token to pass. Token available? Allowed. Bucket empty? Rejected. That's the entire algorithm.</p>
+
+<p>Look at what those two numbers give you. The <strong>refill rate</strong> caps the long-term average: over any long stretch, a client cannot exceed 5 requests per second, because that's all the tokens that exist. The <strong>bucket capacity</strong> allows short bursts: a client that was quiet for a while has a full bucket and may fire 10 requests back-to-back. That combination — bounded average, bursts forgiven — matches how real clients behave. A mobile app opens and makes 8 calls at once to render its home screen, then goes quiet for a minute. Token bucket says: fine. A hard "5 per second, ever" limit would punish that completely normal burst.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Token bucket: tokens refill at a steady rate; requests take a token to pass or get a 429 when the bucket is empty">
+  <text class="dg-txt-s" x="252" y="30">refill: r tokens/sec (capacity B, overflow wasted)</text>
+  <line class="dg-edge" x1="340" y1="38" x2="340" y2="66" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="250" y="70" width="180" height="120" rx="10"/>
+  <circle class="dg-good" cx="288" cy="112" r="10"/>
+  <circle class="dg-good" cx="323" cy="112" r="10"/>
+  <circle class="dg-good" cx="358" cy="112" r="10"/>
+  <circle class="dg-good" cx="393" cy="112" r="10"/>
+  <circle class="dg-good" cx="305" cy="152" r="10"/>
+  <circle class="dg-good" cx="340" cy="152" r="10"/>
+  <text class="dg-txt-s" x="252" y="210">bucket: 6 of 10 tokens left</text>
+  <rect class="dg-node" x="20" y="104" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="34" y="126">Request</text>
+  <text class="dg-txt-s" x="34" y="143">arrives</text>
+  <line class="dg-edge" x1="160" y1="130" x2="250" y2="130" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="430" y1="105" x2="520" y2="100" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="438" y="92">takes 1 token</text>
+  <rect class="dg-node" x="520" y="74" width="180" height="52" rx="8"/>
+  <text class="dg-txt" x="534" y="96">Allowed</text>
+  <text class="dg-txt-s" x="534" y="113">request proceeds</text>
+  <line class="dg-bad" x1="430" y1="165" x2="520" y2="185" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="430" y="152">bucket empty</text>
+  <rect class="dg-node" x="520" y="164" width="180" height="52" rx="8"/>
+  <text class="dg-txt" x="534" y="186">429</text>
+  <text class="dg-txt-s" x="534" y="203">Too Many Requests</text>
+</svg>
+<figcaption>Token bucket. Refill rate bounds the average; bucket capacity bounds the burst. Two knobs, both meaningful.</figcaption>
+</figure>
+
+<p>The implementation is delightfully cheap. You do not run a timer dripping tokens into millions of buckets. You store two numbers per customer — current token count and the timestamp of the last update — and do the refill lazily, only when a request arrives:</p>
+
+<pre><code>elapsed = now - last_update
+tokens  = min(capacity, tokens + elapsed * refill_rate)
+if tokens &gt;= 1:
+    tokens -= 1
+    last_update = now
+    allow
+else:
+    reject   # and tell them when to come back</code></pre>
+
+<p>Two numbers per key, a few arithmetic operations per request. This is why token bucket is the industry default. AWS documents its EC2 API throttling as exactly this — Describe* calls draw from a shared bucket of about 100 tokens refilled at roughly 20 per second. Stripe has published their design too: a token bucket per user, state in Redis, guarding every request — alongside a separate limiter on <em>concurrent</em> requests and load shedders that protect critical traffic when the fleet is stressed. When the two most imitated API companies both reach for the same algorithm, that's a strong prior.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A token bucket is a prepaid arcade card that auto-tops-up: the arcade adds one credit every few seconds, the card holds at most ten. Show up after a quiet afternoon and you can play ten games in a burst; stay all day and you're held to the top-up rate no matter what. The card overflowing at ten is the part people forget — being polite for a week doesn't entitle you to a thousand-request rampage on Friday. Your savings are capped at one bucket.</p>
+</div>
+
+<h2>Leaky bucket: when the thing behind you hates bursts</h2>
+
+<p>Token bucket <em>permits</em> bursts. Sometimes that's exactly wrong. Suppose behind your API sits a fragile legacy system, or a third-party partner who contractually accepts 50 requests per second, flat. A 200-request burst — perfectly legal under a token bucket — would knock them over.</p>
+
+<p>Flip the metaphor. Requests pour into a bucket with a small hole in the bottom. The bucket is a queue; the hole leaks requests out at a perfectly constant rate — 50 per second, like a metronome. Arrive faster than the leak and you wait in the bucket; fill the bucket completely and new arrivals are rejected. The output is the point: no matter how spiky the input, what comes out the bottom is a smooth, fixed-rate stream. This is a <em>traffic shaper</em>, not just a limiter — nginx's <code>limit_req</code> module is a leaky bucket under the hood, and network routers have shaped packets this way for decades.</p>
+
+<p>The trade-off is the queue itself. Queued requests sit there aging — you've converted "rejected" into "slow," which is sometimes worse: a user staring at a spinner may prefer an honest, instant no. Choose leaky bucket when the <em>downstream</em> needs smoothness; choose token bucket when you just need to bound a client's appetite.</p>
+
+<h2>Fixed window: simple, with a hole at the seam</h2>
+
+<p>The version everyone invents first: divide time into fixed windows — 12:00:00 to 12:00:59, 12:01:00 to 12:01:59 — and keep one counter per customer per window. Limit 100 per minute? Increment the counter keyed by <code>(customer, current_minute)</code>; reject at 100; counters die with their window. In Redis this is one <code>INCR</code> and one expiry. It's the cheapest possible limiter, and plenty of internal systems run it happily.</p>
+
+<p>But it has a hole exactly where the windows meet. A client sends 100 requests at 12:00:59 — window one says fine, 100 of 100. Two seconds later, at 12:01:01, they send 100 more — window two just reset to zero and says fine again. Result: <strong>200 requests in two seconds</strong>, from a client who never technically broke the "100 per minute" rule. A fixed window admits up to double your limit in a burst straddling the boundary — and clients find this seam, sometimes accidentally (cron jobs fire at :00 sharp), sometimes on purpose.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 220" role="img" aria-label="Fixed window boundary problem: 100 requests at the end of one window and 100 at the start of the next means 200 requests in two seconds">
+  <rect class="dg-zone" x="40" y="60" width="310" height="80" rx="8"/>
+  <text class="dg-txt-s" x="52" y="84">window 1 · 12:00:00–:59</text>
+  <text class="dg-txt-s" x="52" y="102">counter: 100 / 100 ✓</text>
+  <rect class="dg-zone" x="360" y="60" width="310" height="80" rx="8"/>
+  <text class="dg-txt-s" x="500" y="84">window 2 · 12:01:00–:59</text>
+  <text class="dg-txt-s" x="500" y="102">counter resets to 0 ✓</text>
+  <line class="dg-edge" x1="40" y1="170" x2="670" y2="170" marker-end="url(#arrow)"/>
+  <rect class="dg-bad" x="300" y="118" width="48" height="18" rx="4"/>
+  <text class="dg-txt-s" x="240" y="160">100 reqs at :59</text>
+  <rect class="dg-bad" x="364" y="118" width="48" height="18" rx="4"/>
+  <text class="dg-txt-s" x="380" y="160">100 reqs at :01</text>
+  <text class="dg-txt" x="200" y="205">200 requests in 2 seconds — the "100/min" limit never triggered</text>
+</svg>
+<figcaption>The boundary burst. Each window is individually legal; the seam between them leaks up to 2x the limit.</figcaption>
+</figure>
+
+<h2>Sliding window log: exact, at a price</h2>
+
+<p>The exact fix: stop bucketing time at all. Keep a log of the timestamp of every request per customer (a Redis sorted set works). On each new request, delete entries older than 60 seconds, count what's left, and compare against the limit. The "window" now slides continuously with the clock — there is no seam, no boundary trick, ever. The count is perfectly correct at every instant.</p>
+
+<p>Now run the numbers, because the numbers kill it. Limit of 1,000 requests per hour, 10 million active keys, 8 bytes per timestamp: up to 10M × 1,000 × 8B = <strong>80 GB</strong> of raw timestamps — and sorted-set overhead multiplies that several times, with a multi-step data-structure operation replacing one increment on your hottest path. You're spending gigabytes and latency to distinguish "103 requests this minute" from "97." Rate limits are guardrails, not billing — that precision buys nothing. Keep the log for the rare case where exactness is the point (a hard legal or contractual cap). For everything else, there's a compromise so good it became the default at the biggest edge network on the internet.</p>
+
+<h2>Sliding window counter: the practical compromise</h2>
+
+<p>Keep fixed windows — but keep <em>two</em> counters per key: the current window's and the previous window's. To estimate the count in the true sliding window, take the current counter plus a weighted slice of the previous one, weighted by how much of the previous window still overlaps. Say the limit is 100/minute and you're 15 seconds into the current minute: the sliding window covers the last 45 seconds of the previous minute, so <code>estimate = current + previous × 0.75</code>. The assumption baked in: last window's requests were spread evenly across it. That's false in detail, roughly true in aggregate — and it completely closes the boundary hole, because the previous window's burst still counts against you for a while after the seam.</p>
+
+<p>Cost: two small integers per key, one increment per request. Accuracy: approximate — but how approximate?</p>
+
+<div class="box story"><div class="box-tag">War story — Cloudflare</div>
+<p>When Cloudflare built rate limiting as a product, the constraint was brutal: it had to work for millions of customer domains, enforced across every edge server they run, without melting memory. A timestamp log per visitor per domain was arithmetic suicide at that scale, so they went with the sliding window counter — two counters per key and the weighted-overlap estimate. Then they did the responsible thing: measured how wrong the approximation actually is. They analyzed 400 million requests from 270,000 distinct sources and found the estimator made the wrong call on just 0.003% of requests, with the estimated rate differing from the true rate by about 6% on average — and none of the wrongly-allowed traffic got through at anywhere near abusive volume. In their write-up they note the pleasant irony: the approximation's smoothing across window boundaries isn't a bug, it's the feature — it's exactly what defeats the boundary-burst trick. That analysis is why "sliding window counter" is the answer most senior engineers give by default: near-exact behavior at fixed-window prices, validated at internet scale.</p>
+</div>
+
+<table>
+<thead><tr><th>Algorithm</th><th>Allows bursts?</th><th>State per key</th><th>Accuracy</th><th>Reach for it when</th></tr></thead>
+<tbody>
+<tr><td>Token bucket</td><td>Yes, up to capacity</td><td>2 numbers</td><td>Exact (for its own rules)</td><td>Default for client-facing API limits; bursty clients are normal</td></tr>
+<tr><td>Leaky bucket</td><td>No — output is smoothed</td><td>Queue (or 2 numbers)</td><td>Exact</td><td>Downstream demands a steady rate; shaping, not just limiting</td></tr>
+<tr><td>Fixed window</td><td>Up to 2x at the seam</td><td>1 counter</td><td>Leaky at boundaries</td><td>Rough internal guardrails where 2x briefly is fine</td></tr>
+<tr><td>Sliding window log</td><td>No</td><td>One timestamp per request</td><td>Perfect</td><td>Small scale, or exactness is legally the point</td></tr>
+<tr><td>Sliding window counter</td><td>Slight, bounded</td><td>2 counters</td><td>~exact (0.003% error at Cloudflare)</td><td>High-scale general-purpose limiting</td></tr>
+</tbody>
+</table>
+
+<h2>What to key on — and why one key is never enough</h2>
+
+<p>An algorithm needs a key: limit 100 per minute <em>per what</em>? The candidates: <strong>API key</strong> (the natural unit for a paid API — it maps to the entity you made promises to), <strong>user ID</strong> (for logged-in product traffic), <strong>IP address</strong> (the only handle you have before authentication), and <strong>endpoint</strong> (a search query can cost 100x a profile fetch; expensive routes deserve their own, tighter budgets).</p>
+
+<p>Each key alone has a famous failure. Key only on IP and you punish the innocent: thousands of users behind one university NAT or one mobile carrier's gateway share an address, while a real attacker rotates through cheap proxies. Key only on user and your login endpoint is defenseless — the attacker doing credential stuffing isn't logged in yet, so there's no user to count against. Key only on API key with one global number and a customer's report-generation batch job starves their own production traffic.</p>
+
+<p>So mature APIs layer limits: a generous per-IP ceiling as a crude pre-auth safety net; a per-key limit as the fairness contract; tighter per-key-per-endpoint limits on expensive routes; and often a cap on <em>concurrent</em> in-flight requests, because 50 slow queries running at once can hurt more than 500 fast ones spread over a minute. GitHub's public API shows the layering in the wild: 60 requests per hour unauthenticated (keyed by IP), 5,000 per hour authenticated (keyed by account), and — added later, after watching real abuse — "secondary" limits that trigger on rapid-fire bursts, concurrency, and expensive mutations even when the hourly budget still has room. The evolution is the lesson: they started with one simple number and reality kept adding layers.</p>
+
+<h2>Saying no is an API, too</h2>
+
+<p>A limiter that silently drops requests or returns a vague 500 creates a support ticket and a confused, retrying client. The polite refusal is standardized and you should treat it as part of your API contract:</p>
+
+<pre><code>HTTP/1.1 429 Too Many Requests
+retry-after: 30
+x-ratelimit-limit: 5000
+x-ratelimit-remaining: 0
+x-ratelimit-reset: 1755088800</code></pre>
+
+<p><code>429</code> says "your fault, and specifically: too fast" — distinct from 403 (forbidden) and 500 (our fault). <code>retry-after</code> tells the client exactly how long to wait; it converts guesswork into instruction. The <code>x-ratelimit-*</code> family — used by GitHub, Stripe, and nearly every serious API — rides along on <em>successful</em> responses too, telling clients their budget, what's left, and when it resets. That last part is quietly the most valuable: well-built clients watch <code>remaining</code> and slow themselves down <em>before</em> hitting the wall. The cheapest 429 is the one you never have to send.</p>
+
+<h3>Client etiquette: backoff, and the jitter that actually matters</h3>
+
+<p>Now the client side, because you will write clients too, and bad clients are how this chapter's cold open happened. The naive retry — fail, retry immediately — is a tiny denial-of-service attack. The textbook fix is <strong>exponential backoff</strong>: wait 1 second, then 2, 4, 8, capped somewhere sane, so a struggling server sees pressure fall off exponentially.</p>
+
+<p>Except there's a trap hiding in the textbook version. Picture 10,000 clients that all failed at the same instant — which is exactly what happens when a server blips, because the failure itself synchronizes them. With pure exponential backoff they all retry at t=1s. Together. Then all at t=3s. Together. You've turned a crowd into a marching army: waves of 10,000 simultaneous requests in lockstep, each wave as punishing as the original spike. The server gets re-DDoSed by its own well-behaved clients.</p>
+
+<p>The fix is <strong>jitter</strong> — randomness. Instead of sleeping exactly <code>base × 2^attempt</code>, sleep a <em>random</em> amount: <code>random(0, min(cap, base × 2^attempt))</code>, the variant known as full jitter. Randomness breaks the synchronization; the army dissolves back into a crowd, arrivals spread evenly instead of clumping. AWS's architecture blog ran the simulations that made this famous: full jitter finished the same workload with dramatically fewer total calls and less client waiting than plain exponential backoff. One call to <code>random()</code> is the highest-leverage line in any retry loop.</p>
+
+<div class="box story"><div class="box-tag">War story — Amazon DynamoDB, 2015</div>
+<p>On September 20, 2015, DynamoDB — the database under a huge slice of AWS itself — went down in us-east-1 for around five hours, and the amplifier was retries. Inside DynamoDB, storage servers periodically fetch their "membership" — the list of partitions they're responsible for — from an internal metadata service. A recently popular feature (global secondary indexes) had quietly grown those membership payloads, pushing fetches close to their timeout. Then a brief network disruption caused a batch of storage servers to miss their renewals. They all re-requested at once; the now-heavier responses overwhelmed the metadata service; servers that couldn't confirm membership took themselves out of service and kept retrying — every failure creating more load on the thing that was failing. The load was so relentless that AWS engineers couldn't even add capacity, and recovery required an almost comic step: deliberately blocking requests to their own metadata service — rate limiting it, after the fact — just so it could breathe while they scaled it up. The collateral damage spread to SQS, CloudWatch, and EC2 auto-scaling. The postmortem's fixes are this chapter in production form: more headroom, stricter limits on how aggressively clients re-request, and honest capacity math on the payload growth. If retries-without-limits can do that to AWS, they can do it to you.</p>
+</div>
+
+<h2>Counting together: the distributed part</h2>
+
+<p>Everything so far assumed someone can count. On one server, trivial — a hashmap. But you don't run one server. You run twenty gateway instances behind a load balancer, and a customer's requests land on all of them. If each instance keeps its own local counter, a "100 per minute" limit quietly becomes "100 per minute <em>per instance</em>" — 2,000 per minute, drifting every time you autoscale. The counter has to be shared.</p>
+
+<p>And shared counting has a classic bug. The obvious code — read the count, check it, write count+1 — is a <strong>read-modify-write race</strong>. Two instances read "99" at the same moment; both check 99 &lt; 100; both allow; both write 100. Two requests passed through slot number 100 — and under a burst from twenty instances, far more, because the read and the write are separate steps with a gap other servers dive through.</p>
+
+<p>The fix is to make the count-and-decide a single atomic step, done where the data lives. Redis is the standard tool: <code>INCR</code> is atomic — Redis executes commands one at a time, so "increment and return the new value" happens with no gap for anyone to dive through. Each gateway calls <code>INCR</code> and checks the returned value; the race is gone. For token buckets, where the update is "read two numbers, compute a refill, conditionally decrement," you wrap the logic in a small Lua script — Redis runs a script as one uninterruptible unit, giving you an atomic token bucket in five lines. That's Stripe's design, verbatim.</p>
+
+<p>The price is a network hop: every request now pays a round trip to Redis — call it 0.5–1 ms inside a datacenter — and Redis becomes infrastructure you must scale (a single node handles on the order of 100K ops/sec; beyond that you shard counters across nodes by key). For most APIs, 1 ms against a 200 ms budget is noise, and the simple central counter is the right answer. At true edge scale you relax precision instead: count locally, sync in the background, accept a few percent of overshoot.</p>
+
+<h3>When the counter dies: fail open or fail closed?</h3>
+
+<p>Here's the judgment call interviewers use to sort seniors from algorithm-memorizers. It's 2 a.m. and your Redis cluster — the one holding all the counters — goes down. Every gateway instance now faces a choice on every request: it cannot count, so does it <strong>fail closed</strong> (reject everything, stay "safe") or <strong>fail open</strong> (allow everything, stay up)?</p>
+
+<p>Fail closed sounds cautious and is usually catastrophic: your protection mechanism just converted a Redis outage into a 100% outage of your entire API. The safety system crashed the plane. For general rate limiting, the senior default is <strong>fail open, loudly</strong>: allow traffic, trip a circuit breaker so you stop paying timeouts on a dead Redis, page someone, and optionally fall back to crude local per-instance limits as a stopgap. The reasoning: the limiter is protection, not correctness — being unprotected for ten minutes is a risk; being down for ten minutes is a certainty.</p>
+
+<p>But say the second half too: <em>some limits must fail closed</em>, because for them the limit is the product. Password-attempt limits (failing open hands attackers a free credential-stuffing window), SMS-sending caps (failing open spends real money), fraud and payout velocity checks. The senior answer is never one policy; it's "fail open for traffic protection, fail closed where the counter is a security or financial control — and we decide per limit, in advance, not at 2 a.m."</p>
+
+<h2>The API gateway: one front door</h2>
+
+<p>Step back and look at what we've accumulated: authenticate the caller, find the right limit, count atomically, reject with proper headers, forward to the right backend. Should every one of your services implement all that? Twenty services, twenty limiter implementations, twenty places to update when the auth scheme changes? No. You put one component in front of everything and give it the job. That's the <strong>API gateway</strong>: the single front door through which every external request enters your system.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A gateway is a hotel front desk. Guests don't knock on random doors: the desk checks your ID once (authentication), tells you your room (routing), stops the person trying to visit all 400 rooms in an hour (rate limiting), and answers common questions itself (aggregation). Housekeeping and the kitchen — your backend services — get to assume anyone who reaches them was already checked. Where the analogy breaks: a hotel has one desk and survives; you will need several desks with identical behavior, because one desk is a single point of failure.</p>
+</div>
+
+<p>The gateway's core duties, in the order a request meets them: <strong>TLS termination</strong> — decrypt HTTPS once at the edge, so backends never touch certificates. <strong>Authentication</strong> — validate the API key or JWT (a signed token proving who the caller is) once, then stamp the request with a verified identity header that everything downstream simply trusts. <strong>Rate limiting</strong> — which must come <em>after</em> auth, because the limit is keyed on who you are, and must come <em>before</em> anything expensive, because the whole point is that a 429 costs microseconds, not a database query. <strong>Routing</strong> — map <code>/orders/*</code> to the orders service, <code>/search</code> to search. And often <strong>aggregation</strong>: a mobile home screen needs data from four services; rather than make a phone do four round trips over flaky cellular, the gateway fans out over fast datacenter links and returns one response. Plus the unglamorous duty that pays daily: one consistent access log and metrics stream for every request entering the company.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="Gateway placement: clients pass a load balancer to a stateless gateway fleet which authenticates, rate limits via shared Redis, and routes to backend services">
+  <rect class="dg-node" x="15" y="120" width="105" height="52" rx="8"/>
+  <text class="dg-txt" x="29" y="142">Clients</text>
+  <text class="dg-txt-s" x="29" y="159">HTTPS</text>
+  <line class="dg-edge" x1="120" y1="146" x2="160" y2="146" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="160" y="120" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="174" y="142">Load</text>
+  <text class="dg-txt-s" x="174" y="159">balancer</text>
+  <line class="dg-edge" x1="270" y1="146" x2="320" y2="146" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="320" y="30" width="180" height="205" rx="10"/>
+  <text class="dg-txt-s" x="332" y="50">Gateway fleet — stateless</text>
+  <rect class="dg-node-alt" x="340" y="60" width="140" height="44" rx="8"/>
+  <text class="dg-txt" x="354" y="87">gateway</text>
+  <rect class="dg-node-alt" x="340" y="118" width="140" height="44" rx="8"/>
+  <text class="dg-txt" x="354" y="145">gateway</text>
+  <rect class="dg-node-alt" x="340" y="176" width="140" height="44" rx="8"/>
+  <text class="dg-txt" x="354" y="203">gateway</text>
+  <text class="dg-txt-s" x="322" y="253">TLS · auth · rate limit · route</text>
+  <line class="dg-edge" x1="410" y1="235" x2="410" y2="264" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="330" y="266" width="160" height="44" rx="8"/>
+  <text class="dg-txt" x="344" y="286">Redis</text>
+  <text class="dg-txt-s" x="344" y="302">shared counters</text>
+  <line class="dg-edge" x1="500" y1="90" x2="560" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="500" y1="146" x2="560" y2="136" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="500" y1="200" x2="560" y2="206" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="560" y="44" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="574" y="72">Users svc</text>
+  <rect class="dg-node" x="560" y="114" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="574" y="142">Orders svc</text>
+  <rect class="dg-node" x="560" y="184" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="574" y="212">Search svc</text>
+</svg>
+<figcaption>Gateway placement. The fleet is stateless — identical boxes you can add or kill freely — because all counting state lives in Redis. Backends never face raw internet traffic.</figcaption>
+</figure>
+
+<p>"Everything passes through it" should make you twitch: isn't that a single point of failure? Only if you build it as a single anything. The design above is deliberate: the gateway holds <em>no per-request state</em> — counters live in Redis, sessions in tokens — so it's a fleet of identical, disposable instances behind a load balancer: one dies, nobody notices. The real SPOF risk in a gateway isn't hardware, it's <em>configuration</em>: one bad rule deployed to every instance takes down every route at once — a lesson Cloudflare learned publicly in 2019, when a single bad regex in their web application firewall pinned CPUs across their global edge and took down every site behind them for half an hour. So gateway config gets the most paranoid rollout in your stack: canary to one instance, watch, then spread. And keep the gateway <em>thin</em> — cross-cutting concerns only. The moment product logic ("validate order totals") sneaks in, you're rebuilding the enterprise service bus, a 2000s architecture that died of exactly this: a shared chokepoint that every team must coordinate to change.</p>
+
+<p>One honest preview before we close: everything here counted within one region, one Redis's reach. Serve from twelve regions and "count atomically in one place" collides with the speed of light — a Sydney request can't afford a round trip to a counter in Virginia. The real answers (per-region budgets, async counter merging, bounded overshoot) are a genuinely hard problem with their own chapter (p3c10). Within a region, this chapter is the full playbook.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Rate limiting appears two ways: as a component drop-in during any design ("limiting at the gateway — token bucket per API key, counters in Redis"), and as a full deep-dive ("design a rate limiter"). A passing senior answer commits to an algorithm with a reason, keys it on the right identity, writes the 429 contract unasked, and volunteers the two failure conversations: the read-modify-write race (fixed by atomic INCR/Lua) and fail-open versus fail-closed (judged per limit type). Probes to expect:</p>
+<ul>
+<li>"Your limit is 100/min. A client sends 150 in the first second — walk me through what each algorithm does." (They're checking you know the mechanics, not the names.)</li>
+<li>"The Redis holding your counters just died. What does your gateway do on the next request?" (Fail-open judgment — and whether you distinguish traffic limits from security limits.)</li>
+<li>"How would you rate limit the login endpoint specifically?" (Pre-auth means no user to key on — do you reach for IP + attempted-username, tight limits, fail-closed leaning?)</li>
+<li>"Why is there a random() in your retry code?" (Thundering herds — they want the synchronized-waves story, not just the word 'jitter.')</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c12-f1">
+<p class="fey-prompt">A junior asks: "Why would we rate limit our own paying customers? And what actually happens when a request comes in?" Answer in five or six sentences, including how a token bucket decides.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>We limit customers because the biggest threat to our API is not hackers — it's our own customers' bugs: one broken retry loop can send us 40x normal traffic and take down the platform for everyone, so a limit turns their bug into their error messages instead of our outage. It's also fairness (capacity is shared, and one greedy script shouldn't starve a thousand polite apps) and cost (every request costs money). When a request arrives, the gateway checks the customer's token bucket: tokens drip in at a steady rate — that caps their long-term average — and the bucket holds a maximum, which is the burst we'll forgive after quiet periods. If a token is there, we take it and the request proceeds; if the bucket is empty, we instantly return 429 with a retry-after header telling them exactly when to come back, without touching the database at all. The counting happens in Redis with atomic operations, because twenty gateway servers incrementing a shared counter the naive way would race each other and let extra requests slip through. And if Redis itself dies, we let traffic through rather than block everything — the limiter is a seatbelt, not the engine.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimation drill: you serve 10 million active API keys with a limit of 1,000 requests/hour each. Compare the memory for a sliding window log (Redis sorted set, ~8 bytes per timestamp, assume ~4x structure overhead) versus a sliding window counter. Which do you pick, and what did the numbers just decide for you?</p></div>
+<details><summary>Answer</summary><p>Log worst case: 10M keys × 1,000 timestamps × 8B = 80 GB raw; with ~4x sorted-set overhead, ~320 GB — a multi-node Redis cluster existing purely to remember timestamps. Counter: 2 counters ≈ 16B per key plus key-name overhead (say ~50B total) × 10M ≈ 0.5 GB — one modest Redis node. The numbers just decided the architecture: ~600x memory difference to gain precision you don't need (Cloudflare measured the counter's error at 0.003% of requests). Senior move: state the comparison in one breath and pick the counter — reaching for the log at this scale signals you didn't run the math.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your fixed-window limiter allows 600 requests/minute. What's the worst burst a client can legally push through in two seconds, and how exactly do they do it? Then explain what a sliding window counter would say to the same client at the same moment.</p></div>
+<details><summary>Answer</summary><p>1,200 requests — double the limit. Send 600 at 12:00:59 (window one: 600/600, legal), then 600 at 12:01:01 (window two just reset: 600/600, legal again). Two seconds, 1,200 requests, zero rejections. The sliding window counter at 12:01:01 sees it differently: estimate = current count + previous window (600) × ~0.98 overlap ≈ 588 before the new burst even starts — the budget is already almost spent, so essentially the entire second burst gets rejected. The weighted tail of the previous window is precisely the memory that fixed windows lack at the seam.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A service goes down for 30 seconds. It has 50,000 clients that poll every 5 seconds and, on failure, retry after exactly 1 second (no backoff, no jitter). Describe the traffic the service faces when it tries to come back up, roughly quantified. Then fix the client policy and describe the new picture.</p></div>
+<details><summary>Answer</summary><p>The outage synchronizes everyone: within seconds, all 50,000 clients are in the 1-second retry loop, so the recovering service faces a wall of ~50,000 requests <em>per second</em> — likely 10-50x its normal load — arriving in synchronized waves. It comes up, gets flattened, falls over, repeats: a metastable failure where the outage sustains itself (this is the DynamoDB-2015 shape). Fix: exponential backoff with full jitter — sleep random(0, min(cap, base × 2^attempt)). Backoff drops the retry volume exponentially over time; jitter is the crucial part here, dissolving the synchronized waves into a smooth spread the service can absorb while recovering. Server side, you'd also shed load early: answer 429/503 with retry-after cheaply at the gateway rather than letting half-finished work saturate the backend.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Sketch the rate limiting for a login endpoint. What do you key on, what algorithm, what numbers, and — the judgment question — does this limiter fail open or fail closed when Redis dies?</p></div>
+<details><summary>Answer</summary><p>You can't key on user ID — the caller isn't authenticated yet. Layer two keys: per-IP (catches single-source floods; keep it generous — carrier NATs put thousands of humans behind one address) and per-attempted-username (catches distributed credential stuffing against one account, which IP limits miss entirely). Token bucket with a tiny capacity — say 5 attempts, refilling 1 per minute per username — because a human's legitimate "burst" is fat-fingering a password a few times, not fifty. Numbers stay small because the cost asymmetry is extreme: a 429 costs you nothing; a compromised account costs everything. And this is the classic fail-<em>closed</em> case: if Redis dies, failing open would hand attackers an uncounted credential-stuffing window exactly when your systems are shaky. Reject (or heavily CAPTCHA) logins during the outage; briefly inconveniencing legitimate users beats silently disabling a security control. Saying "fail open for traffic limits, fail closed here, decided per limit" is the senior answer in one sentence.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks first if your gateway's traffic grows 10x? Walk the request path — load balancer, gateway fleet, Redis counters, backends — and find the weakest link and its fix.</p></div>
+<details><summary>Answer</summary><p>The gateway fleet itself is fine — it's stateless, so 10x traffic means adding instances, which autoscaling does without drama. The load balancer is managed infrastructure with enormous headroom. The weak link is the shared Redis: every request costs it an atomic operation, and a single node saturates around ~100K ops/sec — 10x may blow past that. Worse, sharding counters across Redis nodes by key fixes the aggregate but not the hot key: one giant customer's API key still hammers a single shard (all counting for one key must land on one node — that's what makes it atomic). Fixes, in escalation order: shard counters by key across a Redis cluster; for hot keys, split each counter into N sub-counters incremented round-robin and summed on read; or move to local counting with async sync, accepting a few percent overshoot. Naming the hot-key problem unprompted — not just "add more Redis" — is what the 10x question is fishing for.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Rate limits exist mostly to protect you from your own users' bugs — plus fairness, cost, and abuse — and a limit nobody ever hits is protecting nothing.</li>
+<li>Token bucket is the industry default (AWS, Stripe) because its two knobs match reality: refill rate caps the average, bucket capacity forgives the bursts real clients naturally produce.</li>
+<li>Fixed windows leak up to 2x the limit at window seams; the sliding window counter closes that hole with just two counters per key, and Cloudflare measured its error at 0.003% of 400M requests.</li>
+<li>Key limits in layers — IP before auth, API key for fairness, endpoint for cost, concurrency for slow queries — because every single key has a famous blind spot.</li>
+<li>Rejection is part of your API contract: 429 plus retry-after plus x-ratelimit-* headers turns confused retry loops into clients that throttle themselves before hitting the wall.</li>
+<li>Retries without jitter turn synchronized clients into a marching army that re-DDoSes a recovering service — one random() call in the backoff formula dissolves the waves, and DynamoDB's 2015 outage shows what happens without it.</li>
+<li>Distributed counting must be atomic (Redis INCR or a Lua script), because naive read-modify-write races let requests slip through the gaps between servers.</li>
+<li>When the counter store dies: fail open for traffic protection, fail closed for security and money limits — and decide per limit in advance, not at 2 a.m.</li>
+<li>The gateway is one thin front door — TLS, auth, limits, routing — kept stateless so it scales as a disposable fleet; its real SPOF is a bad config pushed everywhere at once, so canary every change.</li>
+</ul>
+</div>

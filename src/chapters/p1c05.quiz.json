@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c05",
+  "items": [
+    {
+      "id": "p1c05-q01", "level": 1, "type": "mcq", "tag": "scaling-basics",
+      "q": "What's the difference between vertical and horizontal scaling?",
+      "options": [
+        {"t": "Vertical = a stronger machine; horizontal = more machines sharing the work", "correct": true,
+         "why": "Right. Scale up (bigger box) or scale out (more boxes) — every architecture is some combination of these two moves. Vertical adds zero new problems; horizontal buys distributed-systems problems along with its capacity."},
+        {"t": "Vertical = scaling the database; horizontal = scaling the app servers", "correct": false,
+         "why": "Both tiers can scale either way. A database can go vertical (bigger box, very common) or horizontal (sharding); app servers likewise. The axis is about how, not about which component."},
+        {"t": "Vertical = scaling reads; horizontal = scaling writes", "correct": false,
+         "why": "Tempting because cloning (one horizontal move) does mainly scale reads — but that's the X-axis specifically. The vertical/horizontal split is about one machine vs many, not reads vs writes."},
+        {"t": "Vertical is on-premises; horizontal is cloud", "correct": false,
+         "why": "Both exist everywhere. Clouds happily sell you a single 20TB-RAM monster (vertical) or 200 small VMs (horizontal); Stack Overflow scaled vertically on-prem for a decade."}
+      ]
+    },
+    {
+      "id": "p1c05-q02", "level": 1, "type": "mcq", "tag": "statelessness",
+      "q": "Why must app servers be stateless before you can scale out behind a load balancer?",
+      "options": [
+        {"t": "Because consecutive requests from one user can land on different servers, so no server can privately hold data the next request needs", "correct": true,
+         "why": "Exactly. If server A keeps the session in its own memory, the user's next request to server B finds nothing — random logouts. State moves into signed tokens or a shared store so any server can handle any request."},
+        {"t": "Because stateless servers use less memory", "correct": false,
+         "why": "Memory savings are incidental. The state doesn't vanish — it relocates to Redis or a cookie. The point is interchangeability of servers, not thrift."},
+        {"t": "Because load balancers are only able to forward requests to servers that keep no state between requests", "correct": false,
+         "why": "LBs happily forward anything — they can't even tell whether your app hoards state. That's exactly why the bug bites: the LB spreads requests obliviously, and the app breaks."},
+        {"t": "Because stateful servers can't be monitored properly", "correct": false,
+         "why": "You can monitor stateful servers fine. The problem is correctness (lost sessions) and operability (can't kill or replace a server without losing its hoard), not observability."}
+      ]
+    },
+    {
+      "id": "p1c05-q03", "level": 1, "type": "mcq", "tag": "l4-vs-l7",
+      "q": "What can a layer 4 load balancer see when deciding where to send traffic?",
+      "options": [
+        {"t": "Source and destination IP addresses and ports — never the URL, headers, or cookies", "correct": true,
+         "why": "Right. L4 reads the envelope, not the letter. It picks a backend when the TCP connection opens and forwards packets blind to their content — which is exactly why it's so fast and cheap per connection."},
+        {"t": "The full HTTP request, including path and headers", "correct": false,
+         "why": "That's layer 7. To read the HTTP request the balancer must terminate the connection (and usually TLS) — real work per request, which is the price L7 pays for its routing brains."},
+        {"t": "Only the client's geographic location", "correct": false,
+         "why": "Geo-awareness is a separate feature (usually DNS- or anycast-based). L4's raw material is the packet's addressing fields, from which geography can only be crudely inferred."},
+        {"t": "The response time of each backend server", "correct": false,
+         "why": "Backend latency is knowledge about servers, not about the packet — and it feeds the algorithm choice (like least-connections), which both L4 and L7 balancers can use. The L4/L7 split is about what's visible in the traffic itself."}
+      ]
+    },
+    {
+      "id": "p1c05-q04", "level": 1, "type": "mcq", "tag": "algorithms",
+      "q": "When is plain round robin a perfectly good load-balancing algorithm?",
+      "options": [
+        {"t": "When servers are identical and requests cost roughly the same", "correct": true,
+         "why": "Yes. For a stateless API of short, similar requests on a uniform fleet, dealing requests in rotation is simple, even, and hard to beat. Fancier algorithms earn their keep only when those assumptions break."},
+        {"t": "Never — least connections is always strictly better", "correct": false,
+         "why": "Least connections wins when request durations vary, but it costs tracking, and naive versions can herd traffic onto one briefly-idle server. When requests are uniform, round robin's simplicity is the senior choice."},
+        {"t": "When you need users to always hit the same server", "correct": false,
+         "why": "That's the opposite of round robin — rotation guarantees users bounce between servers. Same-server affinity needs IP-hash or cookie stickiness."},
+        {"t": "Only for very small fleets of two or three servers", "correct": false,
+         "why": "Fleet size isn't the criterion. Round robin deals evenly across 3 or 300 servers; what matters is whether the requests themselves are uniform enough that even dealing means even load."}
+      ]
+    },
+    {
+      "id": "p1c05-q05", "level": 1, "type": "mcq", "tag": "health-checks",
+      "q": "What's the difference between active and passive health checks?",
+      "options": [
+        {"t": "Active = the LB probes a health endpoint on a schedule; passive = the LB watches real requests for errors", "correct": true,
+         "why": "Right. Active checks poll (say GET /healthz every 5s, down after 3 failures); passive checks eject a server the moment real traffic starts failing. Production LBs run both: passive reacts fastest, active confirms recovery."},
+        {"t": "Active = checks that restart an unhealthy server automatically; passive = checks that only report the problem", "correct": false,
+         "why": "Restarting is an orchestrator's job (like Kubernetes liveness), not the LB's. Both LB check types only decide whether the server stays in the routing rotation."},
+        {"t": "Active = checking the database; passive = checking the app process", "correct": false,
+         "why": "That's the shallow-vs-deep axis — what the check inspects — and it's an important but different question. Active/passive is about how the LB learns: probing vs observing real traffic."},
+        {"t": "Active checks are for L7 balancers, passive for L4", "correct": false,
+         "why": "Both kinds of balancer can do both kinds of check. An L4 balancer can probe a TCP port actively and watch connection failures passively."}
+      ]
+    },
+    {
+      "id": "p1c05-q06", "level": 1, "type": "mcq", "tag": "draining",
+      "q": "What does connection draining do when you remove a server from the pool?",
+      "options": [
+        {"t": "Stops sending it new requests but lets in-flight ones finish, with a deadline", "correct": true,
+         "why": "Exactly. Drain = no new work, finish current work (typically a 30–300s deadline for stragglers). It's the mechanism that makes deploys and scale-downs invisible to users."},
+        {"t": "Slowly reduces the server's traffic share over several minutes", "correct": false,
+         "why": "Close cousin, wrong direction — gradually ramping traffic is slow start, used when adding a cold server. Draining is a clean cut for new work: zero new requests, immediately."},
+        {"t": "Copies the server's open connections to another server", "correct": false,
+         "why": "TCP connections can't be teleported between machines in a standard setup. That impossibility is exactly why draining exists: since you can't move in-flight work, you politely wait for it to finish."},
+        {"t": "Flushes the server's cache before shutdown", "correct": false,
+         "why": "Draining is about requests, not caches. (Warming caches matters on the way in — that's why slow start exists — but drain concerns letting current requests complete gracefully.)"}
+      ]
+    },
+    {
+      "id": "p1c05-q07", "level": 1, "type": "mcq", "tag": "sticky-sessions",
+      "q": "What is a sticky session?",
+      "options": [
+        {"t": "The load balancer routes all of one user's requests to the same backend server", "correct": true,
+         "why": "Right — session affinity, usually via an LB-set cookie recording which backend served you. It lets stateful servers limp along behind an LB, at the cost of skewed load and painful deploys: statefulness in a load balancer costume."},
+        {"t": "A session that never expires", "correct": false,
+         "why": "Session lifetime is an auth concern, unrelated to routing. Stickiness is about which server sees the requests, not how long the login lasts."},
+        {"t": "Storing the session in Redis so all servers share it", "correct": false,
+         "why": "That's the opposite move — externalizing state is how you avoid needing stickiness. Sticky sessions keep state in one server's memory and bend the routing around it."},
+        {"t": "Caching the user's last response at the load balancer", "correct": false,
+         "why": "Response caching is a real L7 feature but a different one. Stickiness pins the user to a server; it doesn't store any response content."}
+      ]
+    },
+    {
+      "id": "p1c05-q08", "level": 1, "type": "mcq", "tag": "lb-ha",
+      "q": "In an active-passive load balancer pair using VRRP, how does failover actually happen?",
+      "options": [
+        {"t": "The standby stops hearing heartbeats, claims the shared virtual IP, and announces it to the network — clients keep using the same address", "correct": true,
+         "why": "Right. The VIP floats: active LB heartbeats ~every second; after ~3 missed beats the standby broadcasts 'this IP now lives at my hardware address' (gratuitous ARP) and takes traffic within seconds. No DNS change, no client involvement."},
+        {"t": "The pair's DNS record is updated so that clients start resolving the name to the standby's own IP address", "correct": false,
+         "why": "That's DNS failover — a different, slower layer (minutes, thanks to caching and TTL-ignoring resolvers). VRRP's entire appeal is that the IP itself moves, so nothing anywhere needs re-resolving."},
+        {"t": "Clients detect the failure and retry against a backup address", "correct": false,
+         "why": "Client-side failover exists in some RPC systems, but VRRP requires zero client cooperation — clients keep dialing the same VIP and never learn anything happened."},
+        {"t": "The standby was already serving half the traffic and simply absorbs the rest", "correct": false,
+         "why": "That's an active-active setup. In active-passive VRRP, the standby serves nothing until it claims the VIP — it's the theater understudy watching from the wings."}
+      ]
+    },
+    {
+      "id": "p1c05-q09", "level": 1, "type": "mcq", "tag": "anycast",
+      "q": "What is anycast, as used by CDN-style edge networks?",
+      "options": [
+        {"t": "The same IP address is announced from many locations, and internet routing delivers each client to the nearest one", "correct": true,
+         "why": "Right. BGP routing takes each packet to the topologically nearest site announcing that address. A failed site stops announcing and the internet re-routes around it in seconds — global failover with no DNS change at all."},
+        {"t": "DNS inspects where each query comes from and returns a different IP address for each client's region", "correct": false,
+         "why": "That's GeoDNS — a real technique, but it lives in DNS and inherits DNS's caching delays. Anycast works below DNS: one address, many places, routing does the steering."},
+        {"t": "The client sends each request to every server and uses the fastest reply", "correct": false,
+         "why": "Sending to all and racing replies would multiply traffic enormously. With anycast the client sends one packet to one address; the network picks which site receives it."},
+        {"t": "A protocol for broadcasting content to many users at once", "correct": false,
+         "why": "That's closer to multicast. Anycast is one-to-nearest-one: many sites share an address, each client reaches exactly one of them."}
+      ]
+    },
+    {
+      "id": "p1c05-q10", "level": 2, "type": "mcq", "tag": "statelessness",
+      "q": "You add a second app server behind a load balancer. Immediately, users report being randomly logged out every few clicks. Most likely cause?",
+      "options": [
+        {"t": "Sessions live in each server's memory, and the LB is spreading one user's requests across both servers", "correct": true,
+         "why": "The classic day-one symptom of scaling a stateful app. Requests landing on server B can't find sessions created on server A. Fix: signed tokens the client carries, or a shared session store — make the servers stateless."},
+        {"t": "The load balancer is dropping cookies from requests", "correct": false,
+         "why": "Standard LBs pass cookies through untouched — silently eating headers would break half the internet. The cookie arrives fine; it's the server-side lookup behind it that fails on the 'wrong' machine."},
+        {"t": "The second server's clock is out of sync, expiring tokens early", "correct": false,
+         "why": "Clock skew can cause token weirdness, but it wouldn't produce the every-few-clicks alternating pattern — and 'logged out roughly half the time, randomly' right after adding a server points straight at per-server memory."},
+        {"t": "The session table in the database is overloaded by the extra server", "correct": false,
+         "why": "If sessions were in a shared database, both servers would see them — that architecture doesn't produce this bug. The symptom exists precisely because sessions are NOT shared."}
+      ]
+    },
+    {
+      "id": "p1c05-q11", "level": 2, "type": "mcq", "tag": "algorithms",
+      "q": "Your service mixes 50ms API calls with file uploads that take 30–120 seconds. Under round robin, some servers periodically melt while others idle. Best fix at the LB?",
+      "options": [
+        {"t": "Least connections — servers stuck with slow uploads naturally stop receiving new work", "correct": true,
+         "why": "This is the textbook least-connections workload: high variance in request duration. Open-connection count is a live proxy for busyness, so the algorithm self-corrects the pileups round robin creates. (Even better long-term: split uploads onto their own pool via L7 path routing.)"},
+        {"t": "Weighted round robin with higher weights on the bigger servers", "correct": false,
+         "why": "Weights fix heterogeneous servers, not heterogeneous requests. The melt happens because rotation ignores what each server is currently stuck with — static weights can't see that either."},
+        {"t": "IP hash, so upload-heavy users stay on their own servers", "correct": false,
+         "why": "This concentrates the problem instead of spreading it: an upload-heavy user now hammers one specific server forever, and a NAT full of users behind one IP makes it worse."},
+        {"t": "Add more servers until round robin's unevenness stops mattering", "correct": false,
+         "why": "Capacity can mask an algorithm mismatch, but you're paying for idle servers to absorb bad routing. Matching the algorithm to the workload's variance is free."}
+      ]
+    },
+    {
+      "id": "p1c05-q12", "level": 2, "type": "mcq", "tag": "l4-vs-l7",
+      "q": "You need to route /video/* requests to a GPU transcoding pool and everything else to the general fleet — and terminate TLS in one place. What must sit at that decision point?",
+      "options": [
+        {"t": "A layer 7 load balancer — it terminates TLS, reads the request path, and routes by content", "correct": true,
+         "why": "Path-based routing requires reading the HTTP request, and reading the request requires terminating the connection and TLS. That's the definition of an L7 balancer's job: NGINX, Envoy, HAProxy, ALB."},
+        {"t": "A layer 4 load balancer — it's faster, and speed matters for video", "correct": false,
+         "why": "An L4 balancer never sees the URL — the path is inside encrypted content it can't open. It's physically unable to make this routing decision, no matter how fast it forwards packets."},
+        {"t": "DNS — give video.example.com its own IP pointing at the GPU pool", "correct": false,
+         "why": "Workable only if you can change every client to use the new hostname, and it splits your TLS story across entry points. The question as posed — route by path, one TLS termination — is squarely L7."},
+        {"t": "The app servers — have them redirect video requests to the GPU pool", "correct": false,
+         "why": "This costs an extra round trip per video request and burns general-fleet capacity as a redirect layer. Content routing is exactly the work an L7 balancer exists to do at the front door."}
+      ]
+    },
+    {
+      "id": "p1c05-q13", "level": 2, "type": "mcq", "tag": "health-checks",
+      "q": "During a 15-second database blip, your load balancer marked all 12 app servers unhealthy and served errors for a full minute — even though cached reads would have worked. What was the design mistake?",
+      "options": [
+        {"t": "The LB's health check was deep — it pinged the database — so a dependency blip made the whole fleet look dead", "correct": true,
+         "why": "Right. Deep checks fail simultaneously fleet-wide when a shared dependency hiccups, converting a partial degradation into a self-inflicted total outage. LB checks should be shallow (process up, can serve), with dependency failures handled per-request, plus fail-open when 'everyone' looks down."},
+        {"t": "The probe interval was too long — faster probes would have fixed this", "correct": false,
+         "why": "Faster probes would have taken the fleet down faster. The timing isn't the flaw; checking a shared dependency in the fleet-removal path is."},
+        {"t": "There were too few servers — more would have kept some healthy", "correct": false,
+         "why": "Every server's deep check pings the same database, so 12 or 200, they all fail together. Correlated failure doesn't dilute with fleet size — that's exactly what makes deep checks dangerous."},
+        {"t": "The health endpoint should have been cached for 60 seconds", "correct": false,
+         "why": "Caching health responses just delays truth in both directions — slow to detect real death, slow to confirm recovery. The fix is checking the right thing, not checking a stale copy of the wrong thing."}
+      ]
+    },
+    {
+      "id": "p1c05-q14", "level": 2, "type": "mcq", "tag": "draining",
+      "q": "Every deploy, a burst of users see failed requests at the moment each server restarts. Which sequence eliminates this?",
+      "options": [
+        {"t": "Make the server fail its own health check, wait for the LB to stop sending traffic and in-flight requests to finish, then deploy, then let checks readmit it with slow start", "correct": true,
+         "why": "The full zero-downtime recipe: drain via deliberately failing the check, deadline the stragglers, deploy, ramp back in warm. Each mechanism is standard LB configuration — the skill is the sequence."},
+        {"t": "Deploy at 3am when traffic is lowest", "correct": false,
+         "why": "Fewer victims is not zero victims — and it institutionalizes 3am work and slow release cadence. The mechanical fix costs nothing and works at noon."},
+        {"t": "Speed up the restart so the error window is under a second", "correct": false,
+         "why": "A shorter window still kills every request in flight during it, and at thousands of req/s that's real users every deploy. Draining makes the window's length irrelevant."},
+        {"t": "Have clients retry failed requests automatically", "correct": false,
+         "why": "Retries are a good safety net, but as the primary mechanism they mask the wound: non-idempotent requests can't be blindly retried (chapter 2.2), and you're shipping errors on purpose. Fix the cause at the LB."}
+      ]
+    },
+    {
+      "id": "p1c05-q15", "level": 2, "type": "mcq", "tag": "algorithms",
+      "q": "After enabling IP-hash affinity, one server runs at 90% CPU while the rest idle. Traffic logs show a huge share of requests from a single IP address. What's happening?",
+      "options": [
+        {"t": "Thousands of users behind one NAT gateway (carrier or campus) share that IP, so they all hash to the same server", "correct": true,
+         "why": "The classic IP-hash failure. NAT makes one IP represent an entire mobile carrier region or office; hashing on it lumps that whole crowd onto one backend. Fix: cookie-based stickiness (distinguishes users behind shared IPs) or drop affinity and externalize the state."},
+        {"t": "A DDoS attack from that IP", "correct": false,
+         "why": "Worth ruling out, but a NAT'd user population shows normal, well-formed, logged-in traffic patterns — organic requests from many accounts. An attack profile looks different, and the load appearing exactly when you enabled IP-hash is the giveaway."},
+        {"t": "The hash function is biased toward that server", "correct": false,
+         "why": "A biased hash would skew traffic from many IPs, not concentrate one enormous IP. The hash is doing its job — same input, same server — the input is just carrying a hidden crowd."},
+        {"t": "That server advertises a higher weight to the balancer", "correct": false,
+         "why": "Weights would draw proportionally more traffic from all sources, not a flood from one address. The single-IP signature points at NAT lumping, not configuration."}
+      ]
+    },
+    {
+      "id": "p1c05-q16", "level": 2, "type": "mcq", "tag": "lb-ha",
+      "q": "Your two data centers fail over via DNS with a 60-second TTL. In a real failover, some users stayed broken for 20+ minutes. Why?",
+      "options": [
+        {"t": "Resolvers and applications cached the old answer beyond the TTL — many ignore your TTL entirely", "correct": true,
+         "why": "The dirty secret of DNS failover: you set the TTL, but ISP resolvers, OS caches, and long-lived app processes (like JVMs with default settings) may hold stale answers for minutes to hours. DNS failover is disaster recovery measured in minutes, never high availability measured in seconds."},
+        {"t": "60 seconds is too long a TTL — 5 seconds would fix it", "correct": false,
+         "why": "A shorter TTL trims the honest resolvers' delay (at the cost of far more DNS query load) but does nothing about the dishonest ones — the TTL-ignoring caches are exactly who kept those users broken for 20 minutes."},
+        {"t": "DNS can only point at one IP address at a time", "correct": false,
+         "why": "DNS happily returns multiple records and health-checked answers (that's how Route 53 failover works). The problem isn't expressiveness — it's that cached answers live on beyond your control."},
+        {"t": "The users' browsers didn't support DNS failover", "correct": false,
+         "why": "There's no browser feature to support — failover happens in the resolution chain. The stale-cache problem lives in resolvers and OS caches, which is precisely why it's outside anyone's quick control."}
+      ]
+    },
+    {
+      "id": "p1c05-q17", "level": 2, "type": "mcq", "tag": "slow-start",
+      "q": "Autoscaling adds three servers during a spike. Each new server immediately tanks: 5-second latencies for its first minute, then fine. What's the missing mechanism?",
+      "options": [
+        {"t": "Slow start — ramp new servers from a trickle to a full traffic share while their caches and pools warm up", "correct": true,
+         "why": "A cold server (empty local cache, unwarmed runtime, empty connection pools) can't take a full share in its first seconds. Slow start at the LB ramps it up over a window; pre-warming critical caches before passing the health check helps too. It's the mirror image of draining."},
+        {"t": "Bigger instances, so cold servers have more headroom", "correct": false,
+         "why": "A bigger cold server is still cold — the first requests miss every cache and open every connection fresh regardless of core count. You'd pay permanently for a problem that lasts sixty seconds."},
+        {"t": "Sticky sessions, so new servers only get new users", "correct": false,
+         "why": "Stickiness does accidentally shelter new servers (only new users land there), but it inflicts skewed load and hostile deploys permanently to soften one minute of warm-up. Slow start does the sheltering surgically."},
+        {"t": "Scale up earlier so servers are warm before the spike", "correct": false,
+         "why": "Predictive scaling is a genuinely useful complement for known patterns (the 9pm surge), but spikes you can't predict still arrive — the fleet must be able to admit a cold server gracefully at any time."}
+      ]
+    },
+    {
+      "id": "p1c05-q18", "level": 2, "type": "mcq", "tag": "sticky-sessions",
+      "q": "A legacy app keeps shopping carts in server memory and can't be rewritten this quarter. It must scale to four servers now. Most defensible immediate setup?",
+      "options": [
+        {"t": "Cookie-based sticky sessions at the L7 balancer, acknowledged as temporary debt, with cart externalization on the roadmap", "correct": true,
+         "why": "Stickiness is exactly the pragmatic bridge for un-rewritable stateful apps — that's its legitimate use case. The senior part is naming the costs you're accepting (skewed load, deploys log users out of one server's carts, a crash wipes carts) and the exit plan."},
+        {"t": "IP-hash affinity — no cookies needed", "correct": false,
+         "why": "IP-hash gives crude affinity but breaks for the NAT crowd and for users whose IP changes mid-session (mobile users switching networks lose their carts). Cookie stickiness identifies the actual user; if you must be sticky, be sticky precisely."},
+        {"t": "Round robin, accepting occasional cart loss until the rewrite", "correct": false,
+         "why": "Round robin makes carts vanish on nearly every click, not occasionally — each request lands on a random server holding a different (mostly empty) cart. That's shipping a broken product, not accepting a trade-off."},
+        {"t": "Refuse to scale until carts move to Redis", "correct": false,
+         "why": "Directionally right about the end state, but 'no capacity until the rewrite lands' fails the business now. Senior judgment ships the bridge (stickiness), names its debt, and schedules the payoff."}
+      ]
+    },
+    {
+      "id": "p1c05-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interview: 'Design the backend for a B2B analytics dashboard — 5,000 companies, about 1,200 requests/second at peak.' A candidate opens with a 15-microservice Kubernetes architecture across three regions. What does the senior version of this answer look like?",
+      "options": [
+        {"t": "\"1,200 req/s fits comfortably on a few stateless app servers behind one L7 balancer, LB in a VRRP pair, one solid Postgres with a replica. Here's the specific growth signal that would change this.\"", "correct": true,
+         "why": "The numbers say this is a small system — Stack Overflow served a top-100 site with nine underworked web servers. Committing to the simple design, making the LB redundant (the actual SPOF), and naming the escalation trigger reads as judgment. Complexity without numbers behind it reads as insecurity."},
+        {"t": "The microservices answer is right — B2B customers demand enterprise-grade architecture, and building it early avoids a painful migration when the client list grows", "correct": false,
+         "why": "'Enterprise-grade' is a label, not a load number. Fifteen services means fifteen deploy pipelines and network hops in exchange for solving no problem this workload has — interviewers read unjustified complexity as inexperience with its costs."},
+        {"t": "Split the difference: five microservices and one region", "correct": false,
+         "why": "Negotiating complexity downward without a reason is still architecture by vibes. The senior move derives the design from the numbers, and 1,200 req/s doesn't demand service decomposition at all."},
+        {"t": "Ask the interviewer whether they would rather see a microservices design or a simple one before committing either way", "correct": false,
+         "why": "The numbers already answered the design question — outsourcing it back is the waiting-to-be-led pattern. If you want to hedge, do it by naming the trigger that would change your answer, which shows range without abandoning the commitment."}
+      ]
+    },
+    {
+      "id": "p1c05-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your stateless web tier autoscales beautifully. Traffic grows 10x over six months. What most likely breaks first, and what does the senior answer sound like?",
+      "options": [
+        {"t": "The shared stateful tiers — the database and the session store — because cloning app servers multiplies the load funneled into them; the answer names that and reaches for caching, replicas, then sharding", "correct": true,
+         "why": "The X-axis scales compute and reads, never writes or data size. Every clone opens more connections and sends more queries to the same stateful backends — the bottleneck doesn't disappear, it migrates downstream. Seniors track where it lands next; that's the forward pointer to caching (1.6), replication (1.8), and sharding (1.9)."},
+        {"t": "Nothing — stateless app servers plus autoscaling is precisely the design that absorbs 10x traffic; handling growth without redesign is the whole point of building it this way", "correct": false,
+         "why": "'It autoscales' is a claim about one tier. The interviewer's 10x push exists precisely to see whether you know cloning app servers just aims a bigger firehose at the shared state behind them."},
+        {"t": "The load balancer — 10x traffic will overwhelm it", "correct": false,
+         "why": "A plausible-sounding guess, but LBs are the sturdiest tier here: L7 boxes handle tens of thousands of req/s each and scale out behind L4/anycast fronts. At 10x, the database is screaming long before the LB sweats."},
+        {"t": "The autoscaler itself — it can't add servers fast enough", "correct": false,
+         "why": "Scaling lag is a real operational wrinkle (mitigated by headroom and predictive scaling), but it's a speed bump, not the structural wall. The wall is that no number of clones scales the write path."}
+      ]
+    },
+    {
+      "id": "p1c05-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'You've drawn one load balancer. It's a single point of failure — fix it.' Which answer earns the senior grade?",
+      "options": [
+        {"t": "\"Inside the site: an active-passive pair sharing a virtual IP via VRRP — failover in seconds, clients keep the same address. Across sites: anycast or DNS failover, and I'd tell you honestly that DNS failover takes minutes because resolvers ignore TTLs.\"", "correct": true,
+         "why": "Layers plus time scales plus an honest limitation — that's the complete answer. It shows you know the VIP mechanism, what it protects (a box, not a building), and what the next layer up costs. Precision about failover time is what separates recall from operation."},
+        {"t": "\"Add a second load balancer, publish both addresses in DNS round robin, and let clients spread themselves across the pair.\"", "correct": false,
+         "why": "Half a mechanism: DNS round robin spreads load but doesn't detect death — clients keep receiving the dead LB's IP until caches expire, so roughly half of requests fail for minutes. Without health-checked DNS or a floating VIP, this doesn't remove the SPOF, it duplicates it."},
+        {"t": "\"Use a managed cloud load balancer — AWS runs it replicated across zones, so redundancy becomes the provider's problem instead of mine.\"", "correct": false,
+         "why": "Correct as a practical deployment choice, and worth saying — but stopping there dodges the question being asked, which is whether you understand the mechanism. Say 'managed LBs are redundant internally — here's how that works: VIP failover within a zone, anycast across zones.'"},
+        {"t": "\"Load balancers basically never fail — they're simple and battle-tested.\"", "correct": false,
+         "why": "Everything fails: hardware dies, configs get fat-fingered, kernels panic. Waving off a named SPOF is the single fastest way to fail a senior round — the entire question exists to check whether you take failure seriously."}
+      ]
+    },
+    {
+      "id": "p1c05-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A teammate proposes sticky sessions so each user's requests hit a server with their data already in local cache — 'it cut p50 latency 40% in testing.' What's the senior evaluation?",
+      "options": [
+        {"t": "Accept affinity only as an optimization: landing on the 'wrong' server must still work via the shared cache tier — and weigh the 40% against skewed load and harder deploys before shipping", "correct": true,
+         "why": "The line that matters: affinity for performance (miss = slower) is defensible; affinity for correctness (miss = broken) is statefulness sneaking back in. Insisting on the graceful-degradation path, and treating the deploy/skew costs as part of the price, is the judgment being tested."},
+        {"t": "Reject it — this book says sticky sessions are always wrong", "correct": false,
+         "why": "Rules-lawyering the heuristic misses its reason. The prohibition targets correctness-critical stickiness; cache-locality affinity with a working fallback is a legitimate optimization pattern (it's how affinity-aware routing works in serious systems). Absolute rules read junior; reasons read senior."},
+        {"t": "Accept it — a measured 40% latency win settles the argument", "correct": false,
+         "why": "A p50 benchmark from testing doesn't capture the operational bill: load skew under real traffic mixes, deploys that dump sessions, autoscaling that only feeds new servers. Benchmarks are evidence, not verdicts — the senior weighs the whole ledger."},
+        {"t": "Counter-propose replicating every user's cache entries to every server", "correct": false,
+         "why": "Full replication trades the problem for a worse one: N copies of everything caps your cache's effective size at one server's RAM and multiplies invalidation traffic. The shared cache tier (chapter 1.6) exists precisely to avoid both extremes."}
+      ]
+    },
+    {
+      "id": "p1c05-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Design review: a proposed /healthz for app servers checks the process, the database, Redis, and two internal services, and the LB removes any server failing it. The author says 'we should never route to a server that can't fully serve.' Your call?",
+      "options": [
+        {"t": "Veto the deep check in the LB path: shallow check for routing, dependency handling per-request with fallbacks, fail-open above an unhealthy-fraction threshold — and monitor the deep signals separately", "correct": true,
+         "why": "The author's principle sounds rigorous but has a fleet-wide failure mode: any shared dependency blip fails every server's check simultaneously and the LB removes everything — a self-inflicted total outage where cached reads could have survived. Deep signals belong in monitoring and readiness for rollouts, not in the traffic-removal path."},
+        {"t": "Approve — never routing to a server that can't fully serve is exactly the rigor that protects users from degraded, half-working responses", "correct": false,
+         "why": "The hidden assumption is that failures are independent per-server. Dependency failures are correlated across the whole fleet, so this policy's real behavior is 'when the database blinks, serve nothing to anyone.' Degraded service beats no service."},
+        {"t": "Approve, but lengthen the probe interval so blips get absorbed", "correct": false,
+         "why": "Tuning timing on a structurally wrong check trades one failure for another: long intervals absorb blips but leave genuinely dead servers receiving traffic for ages. The problem is what the check measures, not how often."},
+        {"t": "Compromise: deep-check half the fleet, shallow-check the other half", "correct": false,
+         "why": "Now a database blip removes exactly half your capacity at the worst moment, and you've doubled the configs to reason about during an incident. Split-brain policies are complexity with no principle behind them."}
+      ]
+    },
+    {
+      "id": "p1c05-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your CTO wants to 'do microservices this year' for a monolith serving 800 req/s with a healthy database, citing scale. Applying the scale cube honestly, what's the senior counsel?",
+      "options": [
+        {"t": "\"Traffic-wise we're fine on the X-axis — clones behind the LB have headroom for years. The honest case for Y-splitting is organizational: if teams are blocking each other on deploys, split along those seams. Let's name which problem we're solving.\"", "correct": true,
+         "why": "The scale cube's real teaching: X handles raw traffic cheaply; Y's primary payoff is team autonomy, not throughput; Z is for when data outgrows a box. Naming which axis solves which problem — and refusing to buy operational complexity for a problem you don't have — is exactly the judgment the cube encodes. Pinterest's retro is the canonical evidence."},
+        {"t": "Support it — microservices are how serious companies scale, and preparing early avoids a painful migration later", "correct": false,
+         "why": "Pinterest scaled to tens of millions of users on cloned web servers and sharded MySQL with a handful of engineers. 'Preparing early' for scale you may never see means paying the distributed-systems tax (network failures, tracing, deploy orchestration) every day starting now."},
+        {"t": "Refuse — monoliths should never be split; microservices are a fad the industry is already walking back", "correct": false,
+         "why": "The mirror-image dogma. Y-axis splits are the right call when deploy contention or team coupling is the real bottleneck — the failure is splitting for a reason you don't have, not splitting ever."},
+        {"t": "Propose sharding the database instead — it delivers real scalability without touching the application's architecture", "correct": false,
+         "why": "That's the Z-axis, which solves data-size and write-throughput problems — and 'a healthy database' means you don't have one. Swapping an unneeded Y move for an unneeded Z move is trading complexity for complexity."}
+      ]
+    },
+    {
+      "id": "p1c05-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Black Friday postmortem: at 10x normal traffic, autoscaling worked, but every scale-out event caused a 30-second latency spike, and one LB config push at peak dropped 2% of requests for a minute. Which remediation list reads senior?",
+      "options": [
+        {"t": "\"Enable slow start so cold servers ramp instead of taking full share; pre-warm critical caches before servers pass health checks; treat LB config changes as deploys — canary them, never push at peak; add queue-depth and per-server p99 alerts so we see the next one early.\"", "correct": true,
+         "why": "Each item maps a symptom to its mechanism: cold-server spikes → slow start and warming; the config drop → change management for the LB itself (the most under-respected deploy surface in production); plus the observability to catch recurrence. Specific, mechanical, operational — the senior signature."},
+        {"t": "\"Increase the minimum fleet size and keep standing headroom so autoscaling rarely needs to trigger during peak season at all.\"", "correct": false,
+         "why": "Paying for idle servers year-round to avoid fixing a 30-second warm-up is treating the bill as the cure. It also leaves the real finding — you can't admit a cold server gracefully — unfixed for the day the fleet must grow anyway."},
+        {"t": "\"Move everything to a bigger managed LB tier and trust the provider.\"", "correct": false,
+         "why": "The incidents were about your fleet's warm-up behavior and your config process — neither moves to the provider with the hardware. Vendor-shifting without a mechanism naming what changes is the buzzword reflex."},
+        {"t": "\"Freeze all changes during peak season so nothing can break while traffic is high.\"", "correct": false,
+         "why": "Change freezes have their place, but as the whole answer they concede you can't operate safely — and the cold-server spikes weren't even change-induced; they were organic scaling. Fix the mechanics; then freezes become a choice, not a crutch."}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,328 @@
+<p>A user taps <strong>Place Order</strong> in your shop. Your handler gets to work: charge the card (300 ms), write the order row (20 ms), call the email provider for a confirmation (800 ms), render a PDF invoice (2 seconds), ping the warehouse (300 ms), update analytics (100 ms). Then, finally: "Order confirmed!" About 3.5 seconds of spinner. Your users grumble, but they cope.</p>
+
+<p>Then one Tuesday your email provider has a bad day. Their API slows to 30 seconds, then starts timing out. And suddenly <em>checkout is down</em>. Cards are charging fine. Your database is bored. But every order request dies waiting on a confirmation email — a thing nobody on Earth needs within the next second — and the user sees a red error banner over an order that mostly succeeded. You are losing real money because a courtesy email is slow.</p>
+
+<p>Look at what you actually built: you made the user wait for work they can't see, and you chained your availability to your flakiest dependency. The fix is one of the oldest moves in system design: do what must happen now, promise the rest, and keep that promise a few seconds later. The machine that holds the promise is a message queue, and this chapter is about using one like an adult — including the sharp edges the marketing pages skip.</p>
+
+<h2>The only question that matters: what does the response depend on?</h2>
+
+<p>Every piece of work in a handler is either <strong>synchronous</strong> — the user's response depends on its result — or <strong>asynchronous</strong> — it must happen, but not before you reply. The test: <em>if this step silently took ten minutes, would the response I just sent become a lie?</em></p>
+
+<ul>
+<li><strong>Charge the card:</strong> yes — "confirmed" while the charge might fail is a lie. Sync.</li>
+<li><strong>Write the order:</strong> yes — confirming an unrecorded order is a lie. Sync.</li>
+<li><strong>Confirmation email:</strong> no — two minutes late harms nobody. Async.</li>
+<li><strong>Invoice PDF, warehouse ping, analytics:</strong> no, no, no. Async, async, async.</li>
+</ul>
+
+<p>So the handler becomes: charge, write, drop four small job messages onto a queue, reply. The user waits ~350 ms instead of 3.5 s. And when the email provider melts, checkout doesn't notice — the email jobs just sit in the queue until it recovers.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 310" role="img" aria-label="Timeline comparing synchronous checkout to asynchronous checkout with a queue">
+  <text class="dg-txt" x="10" y="28">Synchronous — everything on the user's clock</text>
+  <rect class="dg-node" x="10" y="45" width="110" height="44" rx="6"/>
+  <text class="dg-txt-s" x="20" y="63">Charge card</text>
+  <text class="dg-txt-s" x="20" y="80">300 ms</text>
+  <rect class="dg-node" x="140" y="45" width="95" height="44" rx="6"/>
+  <text class="dg-txt-s" x="150" y="63">Write order</text>
+  <text class="dg-txt-s" x="150" y="80">20 ms</text>
+  <rect class="dg-node" x="255" y="45" width="100" height="44" rx="6"/>
+  <text class="dg-txt-s" x="265" y="63">Send email</text>
+  <text class="dg-txt-s" x="265" y="80">800 ms</text>
+  <rect class="dg-node" x="375" y="45" width="105" height="44" rx="6"/>
+  <text class="dg-txt-s" x="385" y="63">Invoice PDF</text>
+  <text class="dg-txt-s" x="385" y="80">2 s</text>
+  <rect class="dg-node" x="500" y="45" width="100" height="44" rx="6"/>
+  <text class="dg-txt-s" x="510" y="63">Warehouse</text>
+  <text class="dg-txt-s" x="510" y="80">300 ms</text>
+  <rect class="dg-bad" x="620" y="45" width="90" height="44" rx="6"/>
+  <text class="dg-txt-s" x="630" y="63">Reply at</text>
+  <text class="dg-txt-s" x="630" y="80">~3.5 s</text>
+  <line class="dg-edge" x1="120" y1="67" x2="140" y2="67" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="235" y1="67" x2="255" y2="67" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="355" y1="67" x2="375" y2="67" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="480" y1="67" x2="500" y2="67" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="600" y1="67" x2="620" y2="67" marker-end="url(#arrow)"/>
+  <text class="dg-txt" x="10" y="145">Asynchronous — reply after the must-happen work</text>
+  <rect class="dg-node" x="10" y="162" width="110" height="44" rx="6"/>
+  <text class="dg-txt-s" x="20" y="180">Charge card</text>
+  <text class="dg-txt-s" x="20" y="197">300 ms</text>
+  <rect class="dg-node" x="140" y="162" width="95" height="44" rx="6"/>
+  <text class="dg-txt-s" x="150" y="180">Write order</text>
+  <text class="dg-txt-s" x="150" y="197">20 ms</text>
+  <rect class="dg-node" x="255" y="162" width="95" height="44" rx="6"/>
+  <text class="dg-txt-s" x="265" y="180">Enqueue 4</text>
+  <text class="dg-txt-s" x="265" y="197">jobs · 5 ms</text>
+  <rect class="dg-good" x="370" y="162" width="90" height="44" rx="6"/>
+  <text class="dg-txt-s" x="380" y="180">Reply at</text>
+  <text class="dg-txt-s" x="380" y="197">~350 ms</text>
+  <line class="dg-edge" x1="120" y1="184" x2="140" y2="184" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="235" y1="184" x2="255" y2="184" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="350" y1="184" x2="370" y2="184" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="480" y="140" width="230" height="160" rx="8"/>
+  <text class="dg-txt-s" x="495" y="160">later — off the user's clock</text>
+  <rect class="dg-node" x="495" y="175" width="80" height="40" rx="6"/>
+  <text class="dg-txt-s" x="510" y="199">Queue</text>
+  <rect class="dg-node" x="605" y="172" width="95" height="26" rx="6"/>
+  <text class="dg-txt-s" x="615" y="189">Email</text>
+  <rect class="dg-node" x="605" y="206" width="95" height="26" rx="6"/>
+  <text class="dg-txt-s" x="615" y="223">Invoice</text>
+  <rect class="dg-node" x="605" y="240" width="95" height="26" rx="6"/>
+  <text class="dg-txt-s" x="615" y="257">Warehouse</text>
+  <line class="dg-edge" x1="350" y1="200" x2="495" y2="200" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="575" y1="185" x2="605" y2="185" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="575" y1="195" x2="605" y2="217" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="575" y1="205" x2="605" y2="250" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Same work, different clock. The user waits only for work the response depends on; everything else drains from the queue afterward.</figcaption>
+</figure>
+
+<p>One caveat before we celebrate. "Async" means <em>eventual</em>, and eventual raises new questions: what if the email job fails? What if it runs twice? How do I even know it ran? The rest of this chapter is those answers — "throw it on a queue" is only the easy half.</p>
+
+<h2>Anatomy: producer, broker, consumer</h2>
+
+<p>A message queue has three roles. A <dfn>producer</dfn> writes a small message — "send confirmation for order 8213" — and moves on. A <dfn>broker</dfn> (the queue system itself) stores that message durably, on disk, usually replicated, so a crash doesn't eat it. A <dfn>consumer</dfn> (a worker) pulls messages and does the actual work at its own pace. Producer and consumer never talk directly, and that gap is the whole point.</p>
+
+<p>The gap buys three kinds of decoupling. <strong>Time:</strong> the consumer can be down for ten minutes and nothing is lost — messages wait. <strong>Rate:</strong> producers can burst at 50,000 messages a second while consumers steadily chew through 5,000; the queue holds the difference. <strong>Failure:</strong> a sick consumer no longer makes the producer's request fail — exactly what saved our checkout above.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A restaurant kitchen runs on a queue: the ticket rail. The waiter (producer) clips an order to the rail and goes straight back to the dining room — they don't stand at the stove until the biryani is done. Cooks (consumers) pull tickets at the pace the stove allows. When the 8pm rush hits, the rail fills instead of the kitchen collapsing; when a cook steps out, tickets wait instead of vanishing. Add a cook, and the rail drains faster — no waiter changes anything. Where the analogy breaks: a rail is small and visible, so overload is obvious. A real queue can silently grow to millions of messages — which is why monitoring queue depth becomes non-negotiable later in this chapter.</p>
+</div>
+
+<h2>One-to-one, or one-to-many: point-to-point vs pub/sub</h2>
+
+<p>Queues come in two shapes, and mixing them up causes real bugs.</p>
+
+<p><strong>Point-to-point</strong> (a work queue): many consumers may be attached, but each message is processed by <em>exactly one</em> of them — they compete for work, like cooks pulling from one rail. This is the shape for jobs: send this email, resize this image. Done once, by whoever's free.</p>
+
+<p><strong>Publish/subscribe</strong> (pub/sub): the producer publishes an <em>event</em> — "order 8213 was placed" — to a named topic, and <em>every</em> subscriber gets its own copy: email, warehouse, analytics each receive one. This is fan-out: one fact, many independent reactions.</p>
+
+<p>The deep difference is who knows what. In pub/sub, the producer doesn't know or care who's listening. Six months from now, the fraud team can subscribe to <code>order.placed</code> and start scoring orders — without a single line of the order service changing. You post facts on a bulletin board; teams you've never met build on them.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Pub/sub fan-out: one order-placed event copied to four subscribers">
+  <rect class="dg-node" x="20" y="100" width="130" height="50" rx="8"/>
+  <text class="dg-txt" x="34" y="122">Order service</text>
+  <text class="dg-txt-s" x="34" y="139">producer</text>
+  <rect class="dg-node-alt" x="230" y="100" width="160" height="50" rx="8"/>
+  <text class="dg-txt" x="244" y="122">Topic:</text>
+  <text class="dg-txt" x="244" y="139">order.placed</text>
+  <line class="dg-edge" x1="150" y1="125" x2="230" y2="125" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="158" y="115">publish once</text>
+  <rect class="dg-node" x="500" y="15" width="180" height="40" rx="8"/>
+  <text class="dg-txt" x="514" y="40">Email service</text>
+  <rect class="dg-node" x="500" y="70" width="180" height="40" rx="8"/>
+  <text class="dg-txt" x="514" y="95">Warehouse service</text>
+  <rect class="dg-node" x="500" y="125" width="180" height="40" rx="8"/>
+  <text class="dg-txt" x="514" y="150">Analytics</text>
+  <rect class="dg-zone" x="500" y="180" width="200" height="52" rx="8"/>
+  <text class="dg-txt" x="514" y="202">Fraud scoring</text>
+  <text class="dg-txt-s" x="514" y="220">added later — producer untouched</text>
+  <line class="dg-edge" x1="390" y1="110" x2="500" y2="38" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="120" x2="500" y2="90" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="132" x2="500" y2="143" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="142" x2="500" y2="202" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="230" y="175">every subscriber gets its own copy</text>
+</svg>
+<figcaption>Fan-out: the producer publishes one event; each subscriber consumes an independent copy at its own pace. New subscribers cost the producer nothing.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — LinkedIn invents Kafka</div>
+<p>Around 2010, LinkedIn's data plumbing was drowning in exactly the problem pub/sub solves. Activity data — page views, clicks, profile visits — and operational metrics had to flow from many source systems into many destinations: the warehouse, Hadoop, search indexes, monitoring, recommendations. Each connection was its own hand-built, point-to-point pipeline, so the pipeline count grew like sources × destinations, and every new destination meant another fragile custom feed. Jay Kreps, Neha Narkhede, and Jun Rao replaced the tangle with one idea: a distributed, partitioned, replicated <em>commit log</em>. Every event is appended once to a durable, ordered log; any consumer reads at its own pace, tracking its own position — even rewinding to replay history. Publish once, consume anywhere; the N×M mess became N+M. Open-sourced in 2011, and by 2019 LinkedIn's deployment carried around seven trillion messages a day. The name? Kreps had taken a lot of literature classes, and since it was "a system optimized for writing," he named it after a writer: Franz Kafka. Chapter 3.17 has you build a mini version yourself.</p>
+</div>
+
+<h2>Delivery guarantees: an honest conversation</h2>
+
+<p>Here's the question that separates people who've used queues from people who've read about them: <em>when a consumer crashes halfway through a message, what happens?</em></p>
+
+<p>Walk through the mechanics. A consumer pulls "send email for order 8213." It sends the email. Then, a millisecond before it tells the broker "done" — the machine dies. The broker now faces an unsolvable puzzle: did the consumer crash <em>before</em> the work, or <em>after</em> the work but before confirming? Both look identical from outside: a message went out, no confirmation came back. The broker must guess, and there are only two guesses:</p>
+
+<ul>
+<li><strong>At-most-once:</strong> assume the work happened; don't redeliver. If the consumer crashed first, the email is silently lost. No duplicates, possible drops.</li>
+<li><strong>At-least-once:</strong> assume it didn't happen; redeliver. If the email actually went out, the customer gets it twice. No drops, possible duplicates.</li>
+</ul>
+
+<p><strong>At-least-once is the default reality</strong> of every serious queue system, because for most work a duplicate is annoying but a silent loss is a bug you'll never find. Which forces the follow-up: what about <em>exactly-once</em>, the thing every broker's landing page advertises?</p>
+
+<p>The blunt truth: exactly-once <em>delivery</em> across a network is not achievable — the crashed-before-or-after puzzle has no answer, so duplicates (or drops) are always possible at the delivery layer. What actually works, and what honest "exactly-once" marketing means, is <strong>at-least-once delivery plus idempotent processing</strong>: handling the same message twice has the same effect as once. Check "did I already send email for order 8213?" before sending; use the message ID as a database key so a second insert bounces off. Kafka's genuine exactly-once feature is real but scoped — transactions <em>within</em> Kafka-to-Kafka pipelines; the moment your consumer touches the outside world (an email API, a card charge), you're back to needing idempotency. Chapter 2.2 builds that properly. For now, the senior reflex: <strong>assume every message can arrive twice, and make twice harmless.</strong></p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Inviting a friend to a party over a bad phone line. At-most-once: say it once, hang up — maybe they heard. At-least-once: repeat until they say "got it" — but if the line drops right after they heard you, you'll call back and they'll hear it twice. Exactly-once over a bad line is impossible to <em>guarantee</em> — silence could mean "didn't hear" or "heard, reply lost." So you make hearing it twice harmless: "Party, Saturday, invite #42" — your friend checks their list, sees #42 already noted, and just says "got it" again. That check is idempotency, and it's the real machinery behind every exactly-once promise.</p>
+</div>
+
+<h3>Acknowledgments and the visibility timeout</h3>
+
+<p>The confirmation a consumer sends is an <dfn>acknowledgment</dfn> (ack): "done, delete this message." At-least-once falls out of one rule — <em>ack only after the work is finished</em>. (Ack-before-work is how you accidentally build at-most-once.)</p>
+
+<p>But if a consumer takes a message and dies without acking, how long should the broker wait before concluding it's dead? That's the <dfn>visibility timeout</dfn>: a received message isn't deleted — it becomes invisible to other consumers for a window, say 60 seconds. Ack within the window and it's deleted for good; miss it and the message reappears for someone else to try. A library loan: the book is off the shelf while you have it, and if you never return it, the library declares it lost and orders another copy.</p>
+
+<p>Sizing this number is a real operational decision. Too short — 30 seconds on a 2-minute job — and the broker redelivers messages <em>still being processed</em>: two workers do the same job, duplicates manufactured out of thin air. Too long — 30 minutes — and a genuinely crashed consumer's message waits 30 minutes for a retry. Rule of thumb: comfortably above your slowest normal processing time, with the broker's heartbeat API extending the window for long jobs genuinely in progress.</p>
+
+<p>Kafka, being a log, does acks differently: consumers periodically commit an <dfn>offset</dfn> — a bookmark saying "everything up to position 4,181 is done." Crash, and you resume from the last committed bookmark, replaying whatever came after. Different mechanism, same honest guarantee: at-least-once, duplicates possible, idempotency required.</p>
+
+<h2>Poison messages and the dead-letter queue</h2>
+
+<p>Now a nastier failure. A message arrives with a malformed payload — a producer bug put a null where the email address should be. Your consumer pulls it and crashes. The visibility timeout expires, the message reappears, another consumer pulls it and crashes. Forever. This is a <dfn>poison message</dfn>, and left alone it's a tiny denial-of-service attack from inside your own system: it burns workers in a crash loop, and on a strictly-ordered queue it blocks everything behind it (head-of-line blocking) while it retries.</p>
+
+<p>The standard defense is a <dfn>dead-letter queue</dfn> (DLQ). The broker counts deliveries per message; after N failed attempts — five is a common default — it stops retrying and shunts the message to a separate holding queue. The main queue flows again, and the poison sits in quarantine with its delivery history, waiting for a human.</p>
+
+<p>Two operational habits make a DLQ actually useful, and both are senior signals. First, <strong>alert on it</strong>: a DLQ with no alarm is where messages go to be forgotten — page someone when its depth goes above zero. Second, <strong>have a redrive plan</strong>: after fixing the bug, replay DLQ messages into the main queue so those customers eventually get their emails. Dead-lettered messages are deferred work, not deleted work.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Dead-letter queue flow: retries on failure, quarantine after five attempts, alert and redrive">
+  <rect class="dg-node" x="20" y="60" width="130" height="50" rx="8"/>
+  <text class="dg-txt" x="34" y="82">Main queue</text>
+  <text class="dg-txt-s" x="34" y="99">order emails</text>
+  <rect class="dg-node" x="250" y="60" width="130" height="50" rx="8"/>
+  <text class="dg-txt" x="264" y="82">Consumer</text>
+  <text class="dg-txt-s" x="264" y="99">processes msg</text>
+  <line class="dg-edge" x1="150" y1="85" x2="250" y2="85" marker-end="url(#arrow)"/>
+  <rect class="dg-good" x="490" y="35" width="200" height="44" rx="8"/>
+  <text class="dg-txt-s" x="504" y="53">Success: ack →</text>
+  <text class="dg-txt-s" x="504" y="70">message deleted</text>
+  <line class="dg-edge" x1="380" y1="72" x2="490" y2="58" marker-end="url(#arrow)"/>
+  <path class="dg-edge" fill="none" d="M 300 110 C 280 150, 130 150, 90 112" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="140" y="160">crash / no ack → timeout expires,</text>
+  <text class="dg-txt-s" x="140" y="177">redelivered · receive count +1</text>
+  <line class="dg-edge" x1="85" y1="110" x2="85" y2="215" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="95" y="205">receive count &gt; 5</text>
+  <rect class="dg-bad" x="20" y="215" width="160" height="50" rx="8"/>
+  <text class="dg-txt" x="34" y="237">Dead-letter queue</text>
+  <text class="dg-txt-s" x="34" y="254">poison quarantined</text>
+  <rect class="dg-node" x="280" y="215" width="180" height="50" rx="8"/>
+  <text class="dg-txt-s" x="294" y="237">Alert fires → human</text>
+  <text class="dg-txt-s" x="294" y="254">inspects, fixes bug</text>
+  <line class="dg-edge" x1="180" y1="240" x2="280" y2="240" marker-end="url(#arrow)"/>
+  <path class="dg-edge" fill="none" d="M 460 235 C 560 220, 560 130, 155 95" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="520" y="175">redrive after fix</text>
+</svg>
+<figcaption>The DLQ loop: retry a few times, quarantine the poison so the queue keeps flowing, alert a human, and redrive after the fix. No alarm on the DLQ = silent data loss with extra steps.</figcaption>
+</figure>
+
+<h2>Ordering: cheap per key, ruinous globally</h2>
+
+<p>With many consumers in parallel, messages finish out of order — worker A gets message 1, worker B gets message 2, B finishes first. Usually nobody cares: it doesn't matter whose confirmation email sends first. But sometimes order is the whole point. A bank account that processes "withdraw 500" before "deposit 1,000" bounces a payment that should have cleared.</p>
+
+<p>Here's the trade to state crisply at a whiteboard: <strong>a total, global order means processing messages one at a time — one consumer, no parallelism.</strong> Global ordering and horizontal scaling are directly opposed. The escape is noticing that nobody actually needs global order. The bank needs order <em>per account</em>; a chat app, <em>per conversation</em>. Order within a key, stay parallel across keys.</p>
+
+<p>Kafka makes this concrete with <dfn>partitions</dfn>. A topic is split into partitions, each an independent ordered log. The producer hashes a key — <code>account_id</code>, say — to pick the partition, so every message for account 42 lands in the same partition, in order, while different accounts spread out and process in parallel. SQS FIFO queues offer the same idea as "message groups": strict order within a group, parallelism across groups — with the caveat that per-group throughput is limited to hundreds-to-thousands of messages a second, far below unordered queues. Ordering is never free; buy it only where a key genuinely needs it.</p>
+
+<h3>Consumer groups: how consumers scale</h3>
+
+<p>Scaling consumers on a work queue is beautifully boring: queue's too deep, add workers. Twenty workers pull from one queue, each message goes to exactly one of them, throughput scales almost linearly — then the autoscaled workers drain the 9pm spike and scale back down.</p>
+
+<p>On a partitioned log like Kafka, there's one crucial ceiling. Consumers join a named <dfn>consumer group</dfn>, and the broker assigns each partition to exactly one consumer in the group — that's what preserves per-partition order; two consumers on one partition would race. Twelve partitions feed at most twelve consumers; a thirteenth joins and sits idle. <strong>Partition count is your parallelism ceiling</strong>, chosen at design time — so provision with headroom (3–5x expected consumers), because repartitioning later is disruptive. And beware the skewed key: one account producing 40% of all messages makes its partition a hot partition one consumer must drain alone. That's the celebrity problem — Chapter 2.6.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Partitioned topic feeding a consumer group, one partition per consumer, extra consumer idle">
+  <rect class="dg-node" x="10" y="115" width="115" height="50" rx="8"/>
+  <text class="dg-txt" x="24" y="137">Payments</text>
+  <text class="dg-txt-s" x="24" y="154">producer</text>
+  <rect class="dg-zone" x="180" y="25" width="215" height="250" rx="8"/>
+  <text class="dg-txt-s" x="195" y="47">topic: transactions</text>
+  <rect class="dg-node" x="200" y="60" width="175" height="40" rx="6"/>
+  <text class="dg-txt-s" x="212" y="85">partition 0 · ordered log</text>
+  <rect class="dg-node-alt" x="200" y="120" width="175" height="40" rx="6"/>
+  <text class="dg-txt-s" x="212" y="145">partition 1 · acct 42 lives here</text>
+  <rect class="dg-node" x="200" y="180" width="175" height="40" rx="6"/>
+  <text class="dg-txt-s" x="212" y="205">partition 2 · ordered log</text>
+  <line class="dg-edge" x1="125" y1="140" x2="180" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="100" y="108">hash(acct_id)</text>
+  <rect class="dg-zone" x="460" y="25" width="245" height="250" rx="8"/>
+  <text class="dg-txt-s" x="475" y="47">consumer group: ledger</text>
+  <rect class="dg-node" x="490" y="60" width="150" height="40" rx="6"/>
+  <text class="dg-txt-s" x="504" y="85">consumer A</text>
+  <rect class="dg-node" x="490" y="120" width="150" height="40" rx="6"/>
+  <text class="dg-txt-s" x="504" y="145">consumer B</text>
+  <rect class="dg-node" x="490" y="180" width="150" height="40" rx="6"/>
+  <text class="dg-txt-s" x="504" y="205">consumer C</text>
+  <rect class="dg-bad" x="490" y="232" width="200" height="32" rx="6"/>
+  <text class="dg-txt-s" x="504" y="253">consumer D — idle, no partition</text>
+  <line class="dg-edge" x1="375" y1="80" x2="490" y2="80" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="375" y1="140" x2="490" y2="140" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="375" y1="200" x2="490" y2="200" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Each partition is owned by exactly one consumer in the group — that's what keeps per-key order. It also caps parallelism: three partitions can feed at most three consumers, and consumer D waits for someone to die.</figcaption>
+</figure>
+
+<h2>The backlog is a feature</h2>
+
+<p>Most components treat a pile-up as an emergency. A queue is the one place in your architecture where a pile-up is the design working. The classic example: marketing wants to push a notification to 10 million users at 9pm sharp. Done synchronously, that's a tidal wave — your notification service and every database it touches must survive an instantaneous 100x spike, meaning 100x hardware that idles 23.9 hours a day.</p>
+
+<p>With a queue: producers dump 10 million messages in a couple of minutes — cheap, since enqueueing is just a fast durable write — and consumers drain at a deliberately steady 5,000 a second. The backlog peaks in the millions and clears in about 33 minutes, while your databases see a flat, boring, survivable load the whole time. The queue converted a spike into a plateau. That shock absorber is the most common reason a queue box appears on a whiteboard: every bursty write path — notifications, feed fan-out, log ingestion, webhook delivery — wants one.</p>
+
+<p>But a backlog is only healthy if it <em>drains</em>. Watch two numbers: <strong>queue depth</strong> (messages waiting) and — more telling — <strong>oldest-message age</strong> (how long the head of the line has waited). A depth spike that drains by 9:35 is Tuesday. An age that climbs and keeps climbing means consumers are slower than producers <em>permanently</em> — not a spike, a capacity deficit, and no queue size fixes arithmetic. You must add consumers, make them faster, or slow the producers down. Deliberately pushing back on producers is called backpressure — Chapter 2.7. The queue bought time to react, not immunity.</p>
+
+<div class="box story"><div class="box-tag">War story — Shopify and the flash-sale firehose</div>
+<p>Shopify's platform hosts the internet's most violent traffic spikes: celebrity "drops," where a merchant releases limited stock and a fanbase descends in the same minute, and Black Friday/Cyber Monday, where the platform peaked around $4.2 million in sales <em>per minute</em> in 2023. Their survival strategy is queues at two layers. Inside the request path, Shopify pushes everything non-essential into background jobs — their job infrastructure routinely queues tens of thousands of jobs per second, handling webhooks, emails, fraud analysis, and analytics off the user's clock, so checkout stays fast while the backlog absorbs the surge. And for flash sales, they queue <em>the humans</em>: when a drop would overwhelm inventory, buyers land in a throttled checkout queue — a waiting room — admitted in batches sized to what the inventory database can survive, instead of a hundred thousand simultaneous purchases stampeding the same stock rows. Same principle at both layers: don't provision for the spike — absorb it, and drain at a rate you chose.</p>
+</div>
+
+<h2>Choosing a tool: Kafka vs RabbitMQ vs SQS</h2>
+
+<p>Three archetypes cover almost every real choice. Kafka is a <strong>log</strong>: messages append to a durable, ordered, partitioned log and are <em>kept for a retention window</em> whether or not anyone read them — consumers just move bookmarks, so five teams can read the same stream and you can replay history. RabbitMQ is a <strong>smart broker</strong>: it routes messages through exchanges to queues, tracks per-message acks, supports priorities, and deletes messages once consumed. SQS is a <strong>managed queue</strong>: fewer features, effectively unlimited scale, zero servers to operate.</p>
+
+<table>
+<thead><tr><th></th><th>Kafka</th><th>RabbitMQ</th><th>SQS</th></tr></thead>
+<tbody>
+<tr><td>What it is</td><td>Replicated append-only log, split into partitions</td><td>Broker with routing (exchanges → queues), per-message acks</td><td>Fully managed queue service (AWS)</td></tr>
+<tr><td>After consumption</td><td>Message kept until retention expires — replay and multiple readers are natural</td><td>Deleted once acked — gone</td><td>Deleted once acked — gone</td></tr>
+<tr><td>Ordering</td><td>Guaranteed per partition</td><td>Roughly per queue; weakens with retries and multiple consumers</td><td>None on standard queues; FIFO queues order per message group at limited throughput</td></tr>
+<tr><td>Throughput</td><td>Millions of msgs/sec per cluster</td><td>Tens of thousands/sec, comfortably</td><td>Standard: effectively unlimited; FIFO: capped per group</td></tr>
+<tr><td>Ops burden</td><td>Heaviest — a stateful cluster you run (or pay a managed service to run)</td><td>Moderate — a broker to run and tune</td><td>None — that's the product</td></tr>
+<tr><td>Pick it when</td><td>Event streaming, several consumers of the same data, replay/audit, analytics pipelines</td><td>Task queues with routing logic, priorities, low-latency delivery</td><td>You're on AWS and want a work queue that just works — the default until a requirement rules it out</td></tr>
+</tbody>
+</table>
+
+<p>The honest guidance, which is also the senior interview answer: <strong>for background jobs, the boring managed queue is the right default</strong> — reach for a log like Kafka when you actually have its requirements: multiple independent consumers of the same events, replayability, or six-figure messages per second. In an interview, say "a queue — SQS or equivalent" and move on to the <em>semantics</em>: acks, retries, DLQ, idempotency. Interviewers grade what you know about duplicates, not logos.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Queues surface in nearly every design question, and the senior signal is never the queue itself — it's volunteering the failure semantics unprompted. A passing answer sounds like: "Everything the response doesn't depend on goes through a queue — delivery is at-least-once, so consumers are idempotent on the message ID; failures retry five times then dead-letter, and I alert on DLQ depth and oldest-message age." Probes to expect:</p>
+<ul>
+<li>"Why a queue here instead of calling the notification service directly?" — they want time/rate/failure decoupling, stated with the spike numbers that justify it.</li>
+<li>"Your consumer processes a message and crashes before acking — then what?" — they're checking you know redelivery and duplicates are the default, and your consumer survives them.</li>
+<li>"Queue depth is growing and never draining — what do you do?" — they want spike-vs-capacity-deficit diagnosis, not "make the queue bigger."</li>
+<li>"Do you need message ordering here?" — the trap is "yes, globally, to be safe." Order per key, parallel across keys — or show most of this workload needs no ordering at all.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c11-f1">
+<p class="fey-prompt">A junior asks: "Why did we move the confirmation email to a queue, and why is there all this weird duplicate-checking code in the email worker?" Explain both, in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>The user only needs the card charged and the order saved before we can honestly say "confirmed" — the email can arrive a minute later, so making them wait on a slow email API was pure waste, and when that API went down it took checkout down with it. The queue fixes both: we drop a "send email for order X" message into a durable buffer and reply immediately; workers send emails at their own pace, catching up after outages. The catch is at-least-once delivery: if a worker sends the email but crashes before confirming, the broker can't tell whether the work happened, so it plays safe and delivers the message again. Every message can therefore show up twice, and the duplicate-check — "have I already sent the email for order X?" — is what makes the second delivery harmless. That's idempotency, and it's the other half of using a queue at all: the queue guarantees the work is never lost, and our code guarantees it's never done twice.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>A ride-hailing app's "book ride" endpoint does all of this before responding: (a) validate pickup/dropoff, (b) find and assign a driver, (c) charge a booking fee, (d) send the rider a confirmation push, (e) update the driver's earnings dashboard, (f) log to the analytics warehouse. Classify each as sync or async using the "does the response depend on it?" test.</p></div>
+<details><summary>Answer</summary><p>Sync: (a) validation — you can't accept an invalid booking; (b) driver assignment — "ride booked" without a driver is a lie the rider discovers in seconds; (c) the charge — confirming a booking that might fail payment is also a lie. Async: (d) the push — the rider is already staring at the confirmation screen; (e) the dashboard; (f) analytics. The interesting borderline is (b): real systems often return "finding your driver…" immediately and assign asynchronously — legitimate, but it changed the <em>product</em>: a pending state now exists in the UI. That's the key insight: async work either must not change the response's meaning, or the response must be redesigned with an honest pending state.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your video-processing workers pull transcode jobs from a queue with a 60-second visibility timeout. Most jobs take 30 seconds, but 4K videos take 4 minutes. Users report that some 4K videos appear in their library two or three times. Walk the mechanism, then fix it.</p></div>
+<details><summary>Answer</summary><p>Worker A pulls a 4K job; at 60 seconds the timeout expires while A is still happily transcoding; the broker assumes A is dead and redelivers to worker B; two workers finish the same video and both write results — duplicates manufactured by a config value, no crash required. With a max-receive-count policy, the job might even hit the DLQ <em>while succeeding</em>. Fixes: (1) heartbeat-extend the timeout while work is genuinely in progress; (2) raise the timeout above worst-case processing time — simple, but slows recovery from real crashes; (3) make the output write idempotent on video ID — do this <em>anyway</em>, since at-least-once means duplicates were always possible. The senior answer is 1 and 3 together: timeouts for liveness, idempotency for correctness.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Marketing will push a notification to 20 million users at 9pm. Workers each push 200 notifications/second; the downstream push gateway tolerates at most 8,000 requests/second. How many workers, how long to drain, and what do you tell marketing about "9pm sharp"?</p></div>
+<details><summary>Answer</summary><p>The gateway cap is the real constraint: 8,000/s ÷ 200/s per worker = 40 useful workers (a 41st just gets throttled). Drain time: 20,000,000 ÷ 8,000/s = 2,500 seconds ≈ 42 minutes. Honest message to marketing: sends <em>begin</em> at 9:00 and finish by roughly 9:42 — fine for a promo. The queue let you run 40 modest workers instead of a system that blasts 20M pushes instantly, and it protected the gateway from a spike it explicitly can't handle. Senior touch: this blast must not share a queue with time-critical notifications like OTP login codes — a 42-minute backlog in front of an OTP is an outage. Separate queues per priority class.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>An engineer proposes: "Payments must be reliable, so our payment-events pipeline will use one FIFO queue with strict global ordering — every event processed exactly in sequence." Traffic is 4,000 events/second across 2 million accounts. What breaks, and what do you propose instead?</p></div>
+<details><summary>Answer</summary><p>Global order means one consumer processing serially — at even 2 ms per event, a 500/second ceiling against 4,000/second of traffic: the backlog grows by 3,500 events every second, forever. It also adds head-of-line risk: one poison event stalls the company's payments. Fix: scope the ordering claim. No rule requires account A's events ordered against account B's — order matters <em>per account</em>. Partition by <code>account_id</code> (or FIFO message groups keyed on it): strict order within an account, parallelism across 2 million accounts. Then check skew: one giant marketplace account producing a big share of events makes its partition a hot lane one consumer drains alone — Chapter 2.6's problem, worth naming unprompted.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Split every handler's work with one test: if this step silently took ten minutes, would my response be a lie? Lies stay sync; everything else goes through a queue.</li>
+<li>A queue decouples producer from consumer in time, rate, and failure — a slow or dead consumer no longer breaks the user-facing request.</li>
+<li>Point-to-point delivers each message to exactly one competing worker; pub/sub copies each event to every subscriber, letting new consumers appear without touching the producer.</li>
+<li>At-least-once delivery is the default reality: a crash between doing the work and acking forces redelivery, so every consumer must treat duplicates as normal weather.</li>
+<li>"Exactly-once delivery" is marketing; the real mechanism is at-least-once plus idempotent consumers, which Chapter 2.2 builds properly.</li>
+<li>Poison messages retry forever without a dead-letter queue — and a DLQ without an alarm and a redrive plan is silent data loss with extra steps.</li>
+<li>Global ordering costs parallelism; order per key via partitions or FIFO groups, and remember partition count is your consumer-parallelism ceiling.</li>
+<li>A backlog is the queue absorbing a spike — a feature — but monitor oldest-message age: a backlog that never drains is a capacity deficit no queue size can fix; backpressure (Chapter 2.7) is the eventual answer.</li>
+</ul>
+</div>

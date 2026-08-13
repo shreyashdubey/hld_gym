@@ -1,0 +1,307 @@
+<p>It's 7:55pm on a Tuesday, and in five minutes your e-commerce app appears in a TV ad for the first time. You've load-tested the app servers and doubled the fleet behind the load balancer. You feel ready. At 8:01 the graphs go vertical — and by 8:04 the site is timing out, because the one machine you can't clone, the database, is pinned at 100% CPU.</p>
+
+<p>Afterwards you open the query log. Nothing exotic. The top query — by a mile — is the product page query. The <em>same</em> query, for the <em>same</em> two hundred trending products, thousands of times per second. Product 88871's page was assembled from scratch — four queries, some joins, a ratings average — 40,000 times in one hour. The answer changed maybe twice, when the stock count moved.</p>
+
+<p>Read that again, because it's the most expensive sentence in computing: <strong>the answer rarely changed, and you computed it every single time.</strong> The database didn't fail. It was asked to do the same homework forty thousand times, and it politely did.</p>
+
+<p>The fix is the highest-leverage box you will ever draw on a whiteboard: a cache. Compute the answer once, keep it somewhere fast, hand out the saved copy until it stops being true. Get this box right and most designs get easy. Get it wrong and you'll meet every failure mode in this chapter at 3am.</p>
+
+<h2>Why this one box does most of the work</h2>
+
+<p>Start with the physics, because the numbers are the whole argument:</p>
+
+<table>
+<thead><tr><th>Where the answer lives</th><th>Typical cost</th><th>Human scale</th></tr></thead>
+<tbody>
+<tr><td>Your process's own memory</td><td>~100 nanoseconds</td><td>Grabbing a pen off your desk</td></tr>
+<tr><td>Redis/Memcached, same datacenter</td><td>~0.5–1 millisecond</td><td>Walking to a colleague's desk (5,000–10,000× slower)</td></tr>
+<tr><td>Database, well-indexed query</td><td>~2–10 milliseconds</td><td>Going down to the archives room</td></tr>
+<tr><td>Database, joins/scans/aggregates</td><td>50–500+ milliseconds</td><td>Sending a clerk across town</td></tr>
+</tbody>
+</table>
+
+<p>A cache is a bet that questions repeat. On real workloads the bet pays absurdly well, because traffic is never uniform — a small fraction of items gets most of the reads. Cache those and a little RAM absorbs most of your traffic.</p>
+
+<p>Now the number that drives designs: the <strong>hit rate</strong> — the fraction of requests the cache answers without touching the database. At 10,000 requests per second (RPS) and 90% hits, the database sees 1,000 queries per second (QPS). At 99%, just 100. But flip it around, because seniors think in <em>misses</em>: slip from 99% to 98% — a dip that looks like rounding error — and database load <strong>doubles</strong>. The cache's job isn't "make things fast"; it's "absorb almost everything," and absorption is measured in misses. Hold that thought — it comes back with teeth at the end.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A cache is the front desk at a records office. The originals — the truth — live in the records room in the back (the database). The clerk keeps photocopies of the fifty documents people request constantly, so most visitors are served in seconds; only unusual requests send someone to the back. The catch is built in: the moment someone amends an original, the front-desk copy is quietly wrong, and the clerk has no way to know. Every hard problem in this chapter is a version of "how does the front desk find out?" — because photocopies don't update themselves.</p>
+</div>
+
+<h2>Caches are already everywhere</h2>
+
+<p>By the time a request reaches your code, it has already passed four or five caches. Caching isn't a component you add — it's a ladder your data descends, and you choose the rungs deliberately.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 210" role="img" aria-label="The cache ladder from browser to database buffer pool">
+  <text class="dg-txt-s" x="12" y="24">← closer to the user: faster, staler</text>
+  <text class="dg-txt-s" x="500" y="24">closer to the truth: slower, fresher →</text>
+  <rect class="dg-node" x="8" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt" x="20" y="83">Browser</text>
+  <text class="dg-txt-s" x="20" y="100">per-user</text>
+  <rect class="dg-node" x="128" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt" x="140" y="83">CDN edge</text>
+  <text class="dg-txt-s" x="140" y="100">static, shared</text>
+  <rect class="dg-node" x="248" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt" x="260" y="83">Gateway</text>
+  <text class="dg-txt-s" x="260" y="100">API responses</text>
+  <rect class="dg-node" x="368" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt" x="380" y="83">App (L1)</text>
+  <text class="dg-txt-s" x="380" y="100">in-process</text>
+  <rect class="dg-node-alt" x="488" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt" x="500" y="83">Redis</text>
+  <text class="dg-txt-s" x="500" y="100">shared, hot</text>
+  <rect class="dg-node" x="608" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt" x="620" y="83">DB buffer</text>
+  <text class="dg-txt-s" x="620" y="100">hot pages</text>
+  <line class="dg-edge" x1="112" y1="87" x2="128" y2="87" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="232" y1="87" x2="248" y2="87" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="352" y1="87" x2="368" y2="87" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="472" y1="87" x2="488" y2="87" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="592" y1="87" x2="608" y2="87" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="8" y="150">A request only travels rightward when the rung to its left can't answer.</text>
+  <text class="dg-txt-s" x="8" y="172">This chapter's main character: the shared distributed cache (highlighted). It's the rung you design.</text>
+</svg>
+<figcaption>The cache ladder. Every rung trades freshness for speed; the ones on the left are fastest and lie the most.</figcaption>
+</figure>
+
+<p>Quick tour: the <strong>browser</strong> caches per user (HTTP <code>Cache-Control</code>). The <strong>CDN</strong> caches shared static content on servers near users (all of p1c07). A <strong>gateway</strong> can cache whole responses. An <strong>in-process "L1"</strong> map is the fastest rung but duplicated per server. This chapter's star, the <strong>distributed cache</strong> — Redis or Memcached — is a shared fleet of RAM-filled machines: computed once, a hit for every app server. Underneath, the database's <strong>buffer pool</strong> caches hot disk pages in RAM — why a "database read" is often a RAM read that still pays the parsing and network toll.</p>
+
+<p>One rule organizes the ladder: <em>the closer to the user, the faster and the staler.</em> Each rung answers without asking the rung behind it, so each rung can be wrong for a while. Deciding <em>how wrong for how long</em> is the design skill.</p>
+
+<h2>Cache-aside: the default dance</h2>
+
+<p>The pattern you'll use 90% of the time is <strong>cache-aside</strong> (lazy loading): the cache is a passive bystander; your code does all the work. Every read does this dance:</p>
+
+<pre><code>value = cache.get("product:88871")
+if value is None:                      # 1. miss
+    value = db.query_product(88871)    # 2. compute the expensive answer
+    cache.set("product:88871", value, ttl=300)   # 3. fill for next time
+return value                           # hit path: one fast lookup, done</code></pre>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Cache-aside read path on a miss">
+  <rect class="dg-node" x="40" y="20" width="130" height="44" rx="8"/>
+  <text class="dg-txt" x="72" y="47">App</text>
+  <rect class="dg-node-alt" x="300" y="20" width="130" height="44" rx="8"/>
+  <text class="dg-txt" x="330" y="47">Cache</text>
+  <rect class="dg-node" x="560" y="20" width="130" height="44" rx="8"/>
+  <text class="dg-txt" x="600" y="47">DB</text>
+  <line class="dg-edge" x1="105" y1="64" x2="105" y2="235"/>
+  <line class="dg-edge" x1="365" y1="64" x2="365" y2="235"/>
+  <line class="dg-edge" x1="625" y1="64" x2="625" y2="235"/>
+  <line class="dg-edge" x1="105" y1="95" x2="365" y2="95" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="88">1. GET product:88871</text>
+  <line class="dg-edge" x1="365" y1="125" x2="105" y2="125" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="180" y="118">2. miss</text>
+  <line class="dg-edge" x1="105" y1="160" x2="625" y2="160" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="280" y="153">3. run the expensive queries</text>
+  <line class="dg-edge" x1="625" y1="190" x2="105" y2="190" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="300" y="183">4. rows</text>
+  <line class="dg-edge" x1="105" y1="222" x2="365" y2="222" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="140" y="215">5. SET product:88871, ttl 300s</text>
+</svg>
+<figcaption>The miss path: get, miss, compute, fill. On a hit, steps 2–5 vanish and the whole read is one round trip.</figcaption>
+</figure>
+
+<p>Why the default? Three reasons. It's <strong>resilient</strong>: if the cache dies, reads get slow but still work — the code falls through to the database. It's <strong>economical</strong>: only data someone asked for occupies RAM. It's <strong>universal</strong>: it works in front of anything — SQL, another service, a rendered fragment.</p>
+
+<p>Its costs: the first reader after every expiry pays the full slow path, and — the dirty secret — the miss path has races. Between steps 2 and 5 the world can change: another server updates the product and deletes the key, then your step 5 fills the cache with data that was true at step 2 and is stale now — and it sits there, wrong, until the TTL saves you. Park that; it's the heart of invalidation.</p>
+
+<h2>The rest of the pattern family</h2>
+
+<p><strong>Read-through</strong> is cache-aside with the dance moved inside the cache layer: on a miss the cache itself fetches from the database via a loader you configure. Same behavior, tidier code, one subtle gain — because the cache owns the miss, it can merge concurrent misses for the same key into one fetch (foreshadowing: stampedes).</p>
+
+<p><strong>Write-through</strong> changes the write path: every write goes to cache <em>and</em> database synchronously, so the cache is always fresh for written keys. The price: every write pays for two systems, and you cache data that may never be read. It earns its keep when read-after-write matters — a user who just edited their profile must see the edit.</p>
+
+<p><strong>Write-back</strong> (write-behind) is the fast, scary one: writes land in the cache only, flushed to the database later in batches. Writes become memory-speed, and a hundred increments to one counter flush as one row update. The terror is the gap: until the flush, the only copy lives in volatile RAM — a crash loses it. (Not exotic: your OS page cache and RAID controllers do exactly this.) The senior rule: write-back only for data you can afford to lose seconds of — view counts, likes, metrics, "last seen." Never money, never messages, never anything you promised the user you saved.</p>
+
+<table>
+<thead><tr><th>Pattern</th><th>Who fills the cache</th><th>Write path</th><th>Main risk</th><th>Reach for it when…</th></tr></thead>
+<tbody>
+<tr><td>Cache-aside</td><td>Your app, on miss</td><td>Write DB, then invalidate key</td><td>Miss races, stampedes</td><td>Default. Start here.</td></tr>
+<tr><td>Read-through</td><td>The cache itself</td><td>Same as aside</td><td>Same, hidden in a library</td><td>You want coalescing + tidy code</td></tr>
+<tr><td>Write-through</td><td>Every write</td><td>Cache + DB, synchronous</td><td>Slow writes, caching the unread</td><td>Read-your-own-write matters</td></tr>
+<tr><td>Write-back</td><td>Every write</td><td>Cache now, DB later</td><td>Data loss window</td><td>Loss-tolerant, high-rate writes (counters)</td></tr>
+</tbody>
+</table>
+
+<h2>TTL: the staleness contract</h2>
+
+<p>Every cached value should carry a <strong>TTL</strong> — time to live, the seconds after which the cache discards the copy and the next read recomputes it. Juniors treat TTL as a performance knob. It isn't: <strong>a TTL is a promise about maximum staleness</strong>. "Prices may be up to 5 minutes old" is a sentence a product manager can accept or veto — exactly who should weigh in. Stock tickers tolerate a second; your own profile, zero (invalidate on write instead); a "trending this week" list, an hour. Pick the TTL from the tolerance, not from vibes, and say the sentence out loud in interviews.</p>
+
+<p>Then add randomness. The trap: a 9:00am deploy restarts your servers, traffic refills 50,000 keys within a minute, all with <code>ttl=3600</code>. At 10:00am all 50,000 expire <em>in the same minute</em>, and your database — idle for an hour — takes the whole site's reads at once. Synchronized filling means synchronized expiry: a perfectly scheduled, self-inflicted traffic bomb. The fix costs one line — <strong>jitter</strong>: <code>ttl = 3600 + random(0, 360)</code> smears the cliff across ten minutes. Add it on day one; this bug hides until the worst moment.</p>
+
+<h2>Eviction: when the box is full</h2>
+
+<p>TTL discards what's <em>old</em>. Eviction discards what it must, because RAM is finite and a new value needs the space. The classic policy is <strong>LRU — Least Recently Used</strong>. Mental model: a stack of papers; every touched paper goes on top; need space, take from the bottom. It bets the recent past predicts the near future — usually true. Its blind spot: one big scan (an analytics job reading everything once) floods the top with junk and evicts your hot data. <strong>LFU — Least Frequently Used</strong> — counts touches instead, resisting scans but clinging to yesterday's viral post after tastes shift.</p>
+
+<p>The honest footnote most books skip: <strong>Redis does not implement true LRU.</strong> Real LRU means bookkeeping on every read, on the hottest path. So Redis approximates: at eviction time it samples a few random keys (5 by default) and evicts the least-recently-used <em>of the sample</em>. Statistically close, occasionally wrong in the tail — a key you use constantly can still, rarely, be evicted. If your design assumes "this key will definitely be cached," your design is wrong; a cache entry is a hint, never a guarantee. (Redis also offers approximated LFU and random eviction.) From production: Twitter's analysis of 153 of its cache clusters (OSDI 2020) found FIFO about as good as LRU on many workloads — TTLs mattered more. Spend your whiteboard minutes accordingly.</p>
+
+<h2>Invalidation: the famously hard thing</h2>
+
+<blockquote><p>"There are only two hard things in Computer Science: cache invalidation and naming things." — Phil Karlton</p></blockquote>
+
+<p>The joke lands because the problem sounds trivial — "when the data changes, update the cache" — and then you try to build it. The cache and the database are two systems with no transaction spanning them. Whatever you do, there's a window where they disagree; you only choose how wide, and at what cost. Three strategies, ascending effort:</p>
+
+<p><strong>1. TTL and accept it.</strong> Do nothing on writes; staleness is bounded by the TTL. Right more often than it feels: for a review count or trending list, 60 seconds stale costs nothing. Bounded staleness chosen on purpose isn't a bug — it's a spec. Say the bound out loud.</p>
+
+<p><strong>2. Invalidate on write.</strong> When your code writes the database, it also deletes the cache key; the next reader misses and refills fresh. Two senior details hide here. First: <em>delete</em>, don't <em>set</em>. Concurrent writers setting values can land out of order — the older value arrives last and sits there with a full TTL. Deletes can't lose that race; whoever reads next fetches current truth. Second: the cache-aside race survives — a reader that fetched just <em>before</em> your write can fill the cache just <em>after</em> your delete, resurrecting the old value. So keep a TTL backstop even when you invalidate (zombies die within minutes); fully closing the race needs the cache's help — exactly what Facebook built (below).</p>
+
+<p><strong>3. Event-driven invalidation.</strong> If many services write the same tables — or admins run SQL directly — "the app deletes on write" misses writes the app never saw. The robust version listens to the database itself: <strong>CDC, change data capture</strong> — tail the database's replication log, the stream of every committed change (tools like Debezium expose it), and turn each change into a cache delete via pub/sub. Invalidation now follows <em>every</em> write, whoever wrote. Cost: a pipeline to operate, and sub-second propagation delay.</p>
+
+<p>And a fourth trick that sidesteps invalidation entirely: <strong>versioned keys</strong>. Put a version in the key — <code>user:42:v7</code>, or a deploy hash in an asset name. On change, never touch the old entry; start reading a new key, and the old one expires from disuse. No invalidation messages, immune to the races above. The standard play for config, rendered fragments, and static assets.</p>
+
+<div class="box story"><div class="box-tag">War story — Facebook, September 23, 2010</div>
+<p>Facebook's worst outage in over four years — about two and a half hours down — was a cache invalidation system attacking its own database. An automated check validated a configuration value from cache; if the cached copy looked invalid, clients "fixed" it by querying the persistent store and repairing the cache. Sensible — until a change made the value in the persistent store <em>itself</em> invalid. Now every client, on every check, flagged the cache as bad, queried the databases, and wrote back a value that was still bad. Hundreds of thousands of repair queries per second buried the database cluster, and the loop couldn't self-heal — every fix attempt generated more queries. Engineers had to take the site offline entirely, stop all traffic to that cluster, and ease it back. The lesson: any automatic path that answers "the cache looks wrong" with "everyone go hit the source of truth" is a stampede with a mission statement. Repair paths need rate limits more than normal paths — they run exactly when the system is already in trouble.</p>
+</div>
+
+<h2>Stampedes: the thundering herd</h2>
+
+<p>Now the classic failure. One hot key — the homepage feed, 10,000 reads per second, TTL 60s, rebuilt by a 200ms query. The TTL expires. In the next 200 milliseconds, two thousand requests all miss and all run the expensive query <em>simultaneously</em>. The database, sized for a trickle of misses, gets a herd; queries slow, more pile up, and one expired key has taken down the read path. This is the <strong>cache stampede</strong> (thundering herd). Three mitigations, often combined:</p>
+
+<p><strong>1. Request coalescing — a lock on the miss.</strong> The first request to miss takes a short lock on the key (in Redis, <code>SET lock:key NX</code> — set if not exists) and rebuilds; the others retry the cache in a few milliseconds or — better — are served the just-expired stale value. One query instead of two thousand. This is what "leases" formalize, and what read-through libraries give you within one process.</p>
+
+<p><strong>2. Probabilistic early refresh.</strong> Never let the hot key truly expire: as the deadline nears, each reader rolls a die with rising odds; one volunteers to refresh early while everyone else keeps hitting the still-valid copy. The cliff becomes a slope. (The formal version is XFetch; the intuition is enough.)</p>
+
+<p><strong>3. Stale-while-revalidate.</strong> Make it policy: after the TTL, keep the stale value and serve it for a grace period while one background refresh runs. Users see slightly old data for seconds; the database sees one query. HTTP has this built in as the <code>stale-while-revalidate</code> directive — the pragmatic default wherever "5 seconds stale" is invisible, which is almost everywhere.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 270" role="img" aria-label="Stampede without protection versus with request coalescing">
+  <rect class="dg-zone" x="8" y="14" width="340" height="240" rx="10"/>
+  <text class="dg-txt" x="24" y="42">Key expires, no protection</text>
+  <rect class="dg-node" x="30" y="70" width="140" height="46" rx="8"/>
+  <text class="dg-txt" x="42" y="92">500 requests</text>
+  <text class="dg-txt-s" x="42" y="107">all miss at once</text>
+  <rect class="dg-bad" x="220" y="150" width="100" height="50" rx="8"/>
+  <text class="dg-txt" x="248" y="180">DB</text>
+  <line class="dg-edge dg-bad" x1="170" y1="80" x2="220" y2="158" marker-end="url(#arrow)"/>
+  <line class="dg-edge dg-bad" x1="170" y1="93" x2="220" y2="168" marker-end="url(#arrow)"/>
+  <line class="dg-edge dg-bad" x1="170" y1="106" x2="220" y2="180" marker-end="url(#arrow)"/>
+  <line class="dg-edge dg-bad" x1="150" y1="116" x2="230" y2="200" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="235">500 identical expensive queries</text>
+  <rect class="dg-zone" x="372" y="14" width="340" height="240" rx="10"/>
+  <text class="dg-txt" x="388" y="42">With coalescing + stale serve</text>
+  <rect class="dg-node" x="394" y="70" width="140" height="46" rx="8"/>
+  <text class="dg-txt" x="406" y="92">500 requests</text>
+  <rect class="dg-node-alt" x="394" y="150" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="406" y="172">1 holds the lock</text>
+  <rect class="dg-good" x="614" y="150" width="88" height="46" rx="8"/>
+  <text class="dg-txt" x="640" y="178">DB</text>
+  <line class="dg-edge" x1="464" y1="116" x2="464" y2="150" marker-end="url(#arrow)"/>
+  <line class="dg-edge dg-good" x1="544" y1="173" x2="614" y2="173" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="548" y="163">1 query</text>
+  <text class="dg-txt-s" x="394" y="225">499 get the stale copy, refreshed in ~50 ms</text>
+</svg>
+<figcaption>Same expiring key, two worlds. Coalescing turns "misses × concurrency" into "one miss, everyone else waits or eats stale."</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — Facebook's memcache leases</div>
+<p>Facebook's 2013 paper "Scaling Memcache at Facebook" describes a memcached fleet serving <em>billions</em> of reads per second over trillions of items, in front of MySQL — one of the largest caching tiers ever built. At that scale, two textbook races were daily emergencies: thundering herds when a hot key was invalidated, and "stale sets" — a slow reader refilling the cache with old data just after a fresh invalidation. Their fix is the <strong>lease</strong>: on a miss, memcached hands the client a token — permission to be the one who refills the key. Other clients missing the same key get no token (one per key per 10 seconds); they briefly wait or accept slightly stale data, so the herd collapses to one database query. And a fill is only accepted if its token is still valid — any invalidation voids outstanding tokens, so a stale set is simply refused. One mechanism, both races dead. Their measurement: a workload peaking at 17,000 database queries per second without leases dropped to 1,300 with them. The lesson: at scale the miss path, not the hit path, is where caches hurt you — and the cache itself must arbitrate who may fill it.</p>
+</div>
+
+<h2>Hot keys: when one key melts one machine</h2>
+
+<p>A distributed cache spreads keys across nodes — but each individual key lives on exactly one node. Now a celebrity posts, and <code>post:12345</code> draws a million reads per second. Sharding does nothing: every read goes to the one node owning the key, and no single box survives that. This is the <strong>hot key</strong> problem. Two standard treatments (p2c06 gives celebrities the full treatment): an <strong>L1 in-process cache</strong> — each app server keeps a tiny local copy of the hottest keys with a 1–2 second TTL, trading two seconds of staleness on a like count for a thousand-fold load drop. And <strong>key fan-out</strong> — write N copies (<code>post:12345#1</code> … <code>#16</code>), each reader picks one at random; load spreads across N nodes, at the cost of N invalidations per change.</p>
+
+<div class="box story"><div class="box-tag">War story — Instagram's Bieber problem</div>
+<p>In Instagram's early years, engineers had a name for a whole class of load spike: the Justin Bieber problem. When Bieber posted, millions of likes arrived within minutes, and the naive implementation — count the like rows when someone views the post — meant re-running an expensive count over rows being hammered with concurrent writes. Co-founder Mike Krieger has said he still remembers Bieber's user ID in the database — 6860189 — because that account was so often the source of the latest fire; spikes were reliably Bieber-shaped enough that checking his account was a legitimate first diagnostic. The fix is the pattern you now know: stop recomputing — keep a denormalized, cached like count, updated incrementally, and treat ultra-popular content as its own class. Real traffic is brutally skewed; a design that handles average keys but melts on the top ten isn't done.</p>
+</div>
+
+<h2>Negative caching: remember the "no" too</h2>
+
+<p>One miss-shaped hole remains. A request asks for <code>deleted_user_9</code>; the database says no such row; and since there's nothing to cache, <em>nothing gets cached</em> — every future request for that user hits the database, forever. A buggy client retrying a deleted resource, a crawler with an old sitemap, or an attacker probing random IDs gets a free path around your cache. The fix: <strong>negative caching</strong> — store the absence itself (<code>user:9 → NOT_FOUND</code>) with a short TTL, 30–60 seconds, so even the "no" is served from RAM. Short, because absence is the answer most likely to change — the user might be created a second later. DNS has cached "no such domain" since the 1990s; that's how old this trap is.</p>
+
+<h2>Redis vs Memcached: an honest comparison</h2>
+
+<p>Both are RAM-backed key-value stores with sub-millisecond reads. The difference is philosophy: Memcached is a cache and refuses to be anything else; Redis is a data-structure server often used as a cache.</p>
+
+<table>
+<thead><tr><th>Dimension</th><th>Memcached</th><th>Redis</th></tr></thead>
+<tbody>
+<tr><td>Values</td><td>Opaque bytes. That's it.</td><td>Strings, hashes, lists, sets, sorted sets, streams — with atomic operations (increment, add-to-set, top-N)</td></tr>
+<tr><td>Threading</td><td>Multithreaded — one big box uses all its cores</td><td>Single-threaded commands (I/O threads since 6.0) — scale by sharding; one slow command blocks the rest</td></tr>
+<tr><td>Durability</td><td>None. Restart = empty. Purely a cache.</td><td>Optional snapshots (RDB) and append-only log (AOF) — can refill itself after restart</td></tr>
+<tr><td>Replication / HA</td><td>None built in — clients shard across independent nodes</td><td>Built-in replication, Sentinel failover, Redis Cluster</td></tr>
+<tr><td>Operational feel</td><td>Boring in the best way; little to configure or get wrong</td><td>More capable, more knobs, more ways to hurt yourself (persistence stalls, big-key blocking)</td></tr>
+</tbody>
+</table>
+
+<p>The honest guidance: for a pure look-aside cache of flat values at enormous scale, Memcached's simplicity and multithreaded throughput are hard to beat — it's why Facebook built on it. For everyone else, Redis wins on versatility: the moment you need a leaderboard (sorted set), a rate limiter (atomic counter with expiry), a session store surviving restarts, or pub/sub for invalidation events, Redis does cache-plus-that, and one system beats two. In an interview, committing either way <em>with the reason attached</em> is the point; "Redis because everyone uses it" is the only losing answer.</p>
+
+<h2>The day the cache dies</h2>
+
+<p>Time to collect the debt from the hit-rate math. Your read path does 100,000 requests per second at 99% hit rate. The database sees 1,000 QPS, and that's what you've provisioned — why pay for capacity the cache makes unnecessary? Then the cache cluster goes down: a bad deploy, a partition, someone restarting it at peak "to clear a weird state." The database inherits all 100,000 QPS — <strong>a 100× overload in one second</strong> — and dies within the minute. The truth seniors design around: <em>a cache absorbing 99% of traffic is not an optimization — it's load-bearing infrastructure, and its failure is a database failure.</em></p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 210" role="img" aria-label="Database load with cache healthy versus cache down">
+  <text class="dg-txt" x="12" y="36">Normal day, 99% hit rate</text>
+  <rect class="dg-good" x="12" y="50" width="594" height="34" rx="6"/>
+  <text class="dg-txt" x="32" y="72">Cache absorbs 99,000 RPS</text>
+  <rect class="dg-node" x="610" y="50" width="12" height="34" rx="3"/>
+  <text class="dg-txt-s" x="630" y="72">DB: 1,000 QPS</text>
+  <text class="dg-txt" x="12" y="128">Cache down</text>
+  <rect class="dg-bad" x="12" y="142" width="610" height="34" rx="6"/>
+  <text class="dg-txt" x="32" y="164">DB: 100,000 QPS — provisioned for 1,000</text>
+  <text class="dg-txt-s" x="12" y="200">The database is sized for the misses. Lose the cache and it inherits the hits — 100x, instantly.</text>
+</svg>
+<figcaption>The outage math. The better your hit rate, the more catastrophic losing the cache becomes — success creates the fragility.</figcaption>
+</figure>
+
+<p>So a senior design says, unprompted, what happens on that day. The playbook: <strong>degrade, shed, warm.</strong> Degrade — expensive features switch to defaults, so the core product survives on the database alone. Shed — rate-limit at the gateway so the database gets load it can survive; 30% of users served beats 100% timing out. Warm — never point full traffic at an empty cache; refill gradually, or the refill itself is a stampede. And the habits that avoid the day: cache replicas, deploy-level ceremony for restarts, and the <strong>hit rate on a dashboard with an alert</strong> — a slow decline from 99% to 96% is a silent 4× creep in database load, the outage announcing itself to anyone watching the misses.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A high-hit-rate cache is a dam upstream of a village. On a normal day the village sees only the small regulated stream the dam lets through, so everyone builds close to the banks — why not? The better the dam works, the more water it holds back, and the more the village quietly assumes it always will. The day it fails, the village doesn't get "somewhat more water" — it gets every accumulated assumption at once. Dam operators drill for failure and watch the level daily; watch your hit rate the same way. Unlike a real dam, you can rehearse the flood: test degraded mode before the failure picks the date.</p>
+</div>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Caching appears in every design round, and at the senior bar it's probed through failure, not vocabulary. A passing answer names the pattern, the TTL <em>with its staleness contract</em>, the stampede protection, and what happens when the cache dies — before being asked. Probes to expect:</p>
+<ul>
+<li>"What's your hit rate — and what happens to the database if it drops five points?" (Do you think in misses, and did you size the DB for cache failure?)</li>
+<li>"Walk me through a write. When does the cache find out, and what can a user see in between?" (Delete-vs-set reasoning and the honest race window — not "it stays in sync.")</li>
+<li>"This key just expired and 5,000 requests arrive in the same 50 milliseconds. What happens?" (Stampede. Coalescing, early refresh, or stale-while-revalidate — commit to one.)</li>
+<li>"Redis or Memcached here, and why?" (Any committed answer with a mechanism passes; hedging fails.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c06-f1">
+<p class="fey-prompt">A junior asks: "Why is cache invalidation called hard? Just update the cache when you update the database." Straighten them out in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>The cache and the database are two separate systems, and no transaction updates both at once — so between any two steps, another server can interleave or one system can fail. That's why we delete the cache key on write instead of setting the new value: two writers setting values can land out of order and park an old value with a fresh TTL, but a delete can't lose that race — the next reader refetches the truth. Even then, a reader that fetched old data just before your write can refill the cache just after your delete. So we keep a TTL on everything as a backstop — any zombie dies within minutes — and at Facebook scale they made the cache itself referee who may fill it (leases). The real skill isn't eliminating staleness; it's choosing and stating the bound: "at most N seconds stale, and here's the mechanism that guarantees it."</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your read path serves 20,000 requests per second through a cache. The database is comfortable up to 500 QPS. (a) What hit rate do you need? (b) Ops reports "hit rate dipped from 98% to 95% overnight — probably fine?" Is it? (c) What dashboard line would have made this a non-event?</p></div>
+<details><summary>Answer</summary><p>(a) Misses must stay under 500 of 20,000: you need ≥ 97.5%. (b) Not fine — an incident in slow motion. At 98%, misses = 400 QPS, near the line; at 95%, misses = 1,000 QPS, double the comfort zone. A "3-point dip" was a 2.5× jump in database load; the percentage framing hides it. (c) Absolute <em>miss QPS</em> with an alert near 400 — the miss line is in the same units as the database's capacity.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks: a nightly job at 3:00am pre-warms all 5 million user profiles, TTL 6 hours, no jitter. The app sends its daily push notification at 8:55am. Walk the timeline to the incident, then fix it two ways.</p></div>
+<details><summary>Answer</summary><p>3:00am — 5M keys filled in minutes; expiries all land ~9:00am. 8:55am — push fires, peak begins, cache still warm. 9:00–9:05am — nearly every key expires <em>during</em> the day's busiest minutes; hit rate cliffs; the database takes peak traffic uncached. Cruelest part: it looks like the push's fault, but the cause fired six hours earlier. Fix one: jitter — <code>ttl = 6h + random(0, 1h)</code>. Fix two: stale-while-revalidate, so expiry means "refresh in background," never "everyone misses at once." (Bonus: question whether pre-warming 5M is needed — cache-aside warms the actives organically.)</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Commit and justify: the PM wants view counts on videos, ~100,000 increments per second at peak. One teammate proposes writing each view to the database ("source of truth"); another proposes write-back through Redis. Pick one, name the loss scenario, and defend it.</p></div>
+<details><summary>Answer</summary><p>Write-back, committed: <code>INCR video:{id}:views</code> in Redis (atomic, memory-speed), flush aggregated deltas every few seconds. Per-view DB writes at 100K/s means heavy infrastructure to perfect a number nobody needs perfect. Loss scenario: a Redis node dies between flushes and a few seconds of increments vanish — invisible, harmless, because a view count carries no promise. The moment a promise appears — a paid view, a "watched" marker — write-back is forbidden: durable storage before acknowledgment. Write-back is a durability decision disguised as a performance pattern.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Spot the bug: server A reads user 42 from the DB (gets v1), then stalls on a GC pause. Server B updates user 42 to v2 and deletes <code>user:42</code> from the cache. Server A wakes and runs <code>cache.set("user:42", v1)</code>. What state results, for how long, and what are two real fixes?</p></div>
+<details><summary>Answer</summary><p>The cache holds v1 — stale — with a fresh full TTL, while the database holds v2; every reader sees the old profile until the TTL expires. This is the "stale set" race: delete-on-write happened and did <em>not</em> prevent it. Fixes: (1) leases / conditional fill — the cache issues a fill token on miss, B's delete voids A's token, A's late set is refused (Facebook's solution; compare-and-set on a version field also works); (2) modest TTLs even on invalidated keys — not prevention, but a ceiling on the damage. (Versioned keys sidestep it entirely — A writes to a key nobody reads anymore.)</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>A cache converts "the answer rarely changes" into 100–10,000× cheaper reads, and skewed traffic lets a small cache absorb most of the load.</li>
+<li>Think in misses, not hits: a hit rate slipping from 99% to 98% doubles database load — monitor absolute miss QPS with an alert.</li>
+<li>Cache-aside is the default; write-through buys read-after-write freshness with slower writes; write-back is memory-speed writes with a loss window — counters yes, money never.</li>
+<li>A TTL is a staleness promise, not a performance knob — set it from product tolerance, and always add jitter so synchronized fills don't become expiry bombs.</li>
+<li>Invalidate by deleting keys (sets lose races), keep a TTL backstop anyway, use CDC events when many writers touch the data, and use versioned keys to sidestep invalidation entirely.</li>
+<li>The miss path is the dangerous path: hot-key expiry needs coalescing, early refresh, or stale-while-revalidate — and repair loops without rate limits are self-inflicted stampedes (Facebook, 2010).</li>
+<li>Redis is a data-structure server with persistence and replication; Memcached is a simpler, multithreaded pure cache — commit with the mechanism that decided it.</li>
+<li>A 99%-hit-rate cache is load-bearing infrastructure: the database is sized for the misses, so plan the cache-down day — degrade, shed, warm — before it plans itself.</li>
+</ul>
+</div>

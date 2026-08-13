@@ -1,0 +1,330 @@
+<p>Your photo app has survived everything the last few chapters threw at it. A cache absorbs most reads (chapter 1.6). Replicas mean a dying machine no longer takes you down, and read traffic spreads across the copies (chapter 1.8). Then one morning you look at a graph nobody set an alert on: total database size. 6 terabytes. Growing 400 GB a month.</p>
+
+<p>Here's the part that surprises people: replication cannot help you. Every replica holds a <em>complete copy</em> of the data — five replicas is five machines running out of disk together, in perfect sync. And every write still lands on the one primary; replicas absorb reads, never writes. So you rent a bigger machine. It works. Eight months later you rent an even bigger one, at triple the price. The cloud sells monsters — machines with 24 TB of RAM exist — but the price climbs faster than the spec sheet, and one day you're on the biggest box money rents while your growth curve keeps going. There is no bigger box.</p>
+
+<p>The only move left is the one this chapter is about: stop holding all the data in one place. Cut it into pieces, put the pieces on different machines. The cutting is called <strong>sharding</strong>, and the cut itself takes one line of code. Everything around the cut is the hard part: which row goes where? Who remembers where each row went? What about queries that need rows from six machines? What happens when you add machine number seven? Each question has a famous wrong answer that has burned real companies. Let's walk through them in order.</p>
+
+<h2>Two directions to cut</h2>
+
+<p>There are two ways to slice a database, and they're not equals.</p>
+
+<p><strong>Vertical partitioning</strong> cuts by table (or column): <code>users</code> to one machine, <code>photos</code> to another, <code>likes</code> to a third. Companies do this first because it's easy — no routing logic. But look at what it buys: your biggest table still lives on one machine. In your photo app, <code>photos</code> IS the 6 TB monster. Vertical partitioning moved the monster into its own room; it didn't make it smaller. It buys months, not years — and it quietly kills SQL joins between the tables you separated.</p>
+
+<p><strong>Horizontal partitioning</strong> — sharding — cuts by <em>row</em>. Every machine gets the same schema but a different slice of the rows. Add machines, each slice shrinks. This is the cut that scales without a ceiling, and it's what the rest of this chapter is about.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 240" role="img" aria-label="Vertical partitioning splits by table, horizontal partitioning splits rows of one table across shards">
+  <rect class="dg-zone" x="10" y="14" width="340" height="212" rx="8"/>
+  <text class="dg-txt" x="24" y="36">Vertical: split by table</text>
+  <rect class="dg-node" x="30" y="52" width="110" height="150" rx="8"/>
+  <text class="dg-txt" x="42" y="76">one DB</text>
+  <text class="dg-txt-s" x="42" y="100">users</text>
+  <text class="dg-txt-s" x="42" y="120">photos</text>
+  <text class="dg-txt-s" x="42" y="140">likes</text>
+  <text class="dg-txt-s" x="42" y="168">6 TB total</text>
+  <rect class="dg-node" x="220" y="52" width="110" height="38" rx="8"/>
+  <text class="dg-txt" x="232" y="76">users DB</text>
+  <rect class="dg-node" x="220" y="104" width="110" height="38" rx="8"/>
+  <text class="dg-txt" x="232" y="128">photos DB</text>
+  <rect class="dg-node" x="220" y="156" width="110" height="38" rx="8"/>
+  <text class="dg-txt" x="232" y="180">likes DB</text>
+  <line class="dg-edge" x1="140" y1="71" x2="220" y2="71" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="140" y1="123" x2="220" y2="123" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="140" y1="175" x2="220" y2="175" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="370" y="14" width="340" height="212" rx="8"/>
+  <text class="dg-txt" x="384" y="36">Horizontal: split by row (sharding)</text>
+  <rect class="dg-node" x="390" y="52" width="120" height="150" rx="8"/>
+  <text class="dg-txt" x="402" y="76">photos table</text>
+  <text class="dg-txt-s" x="402" y="100">row: photo 1</text>
+  <text class="dg-txt-s" x="402" y="120">row: photo 2</text>
+  <text class="dg-txt-s" x="402" y="140">row: photo 3</text>
+  <text class="dg-txt-s" x="402" y="168">…billions more</text>
+  <rect class="dg-node-alt" x="580" y="52" width="118" height="38" rx="8"/>
+  <text class="dg-txt" x="592" y="70">shard 1</text>
+  <text class="dg-txt-s" x="592" y="84">⅓ of the rows</text>
+  <rect class="dg-node-alt" x="580" y="104" width="118" height="38" rx="8"/>
+  <text class="dg-txt" x="592" y="122">shard 2</text>
+  <text class="dg-txt-s" x="592" y="136">⅓ of the rows</text>
+  <rect class="dg-node-alt" x="580" y="156" width="118" height="38" rx="8"/>
+  <text class="dg-txt" x="592" y="174">shard 3</text>
+  <text class="dg-txt-s" x="592" y="188">⅓ of the rows</text>
+  <line class="dg-edge" x1="510" y1="71" x2="580" y2="71" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="510" y1="123" x2="580" y2="123" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="510" y1="175" x2="580" y2="175" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Vertical partitioning gives each table its own machine — the big table is still whole. Horizontal partitioning slices the big table itself.</figcaption>
+</figure>
+
+<h2>The shard key: the one decision everything depends on</h2>
+
+<p>To slice rows across machines you need a rule: <em>this row goes to that shard</em>. The rule is based on one column (or a few) called the <strong>shard key</strong> — and picking it decides, in one stroke, which queries will be fast and which will be miserable, forever. Any query that <em>includes</em> the shard key routes to exactly one shard: cheap, fast. Any query that <em>doesn't</em> can't be routed — the row could be anywhere, so you must ask every shard. Watch what different choices do to your photo app:</p>
+
+<ul>
+<li><strong>Shard by <code>user_id</code>:</strong> all of one user's photos live together. "Load user 42's profile" hits one shard. But "fetch photo 987" (you only have the photo ID) could be anywhere.</li>
+<li><strong>Shard by <code>photo_id</code>:</strong> "fetch photo 987" hits one shard. But a user's photos are now sprinkled across every shard, so their profile page queries all of them.</li>
+<li><strong>Shard by upload date:</strong> looks innocent, is a catastrophe. Hold that thought for two sections.</li>
+</ul>
+
+<p>A good shard key has three properties. <strong>High cardinality</strong> — many distinct values, so there's something to spread (a <code>country</code> column with 20 values can never spread across 100 machines). <strong>Even spread of load</strong> — not just row counts; if one value gets most of the traffic, its shard burns while the rest idle. And it must <strong>appear in your dominant queries</strong>. For most consumer apps that's the entity users act on — <code>user_id</code>, <code>conversation_id</code>, <code>tenant_id</code> — because most requests are "show me <em>my</em> stuff."</p>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>The shard key is close to irreversible: changing it means re-deciding where every row lives and moving terabytes while serving live traffic — a months-long migration (chapter 2.11). So when an interviewer asks "how would you shard this?", they're really asking "do you know your dominant access pattern?" Answer that out loud — "reads are 95% 'load this user's data', so I shard by user_id" — and the choice is defensible. Name the key without the access pattern and it's a guess wearing a suit.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Instagram's IDs that know their shard</div>
+<p>In 2011 Instagram was a tiny engineering team with over 10 million users, sharding PostgreSQL. They needed photo IDs that were 64-bit (compact for indexes), sortable by time (feeds show newest first), and generated without new infrastructure — they rejected Twitter's Snowflake ID service because it required running ZooKeeper, more moving parts than their team wanted. Their scheme packed everything into 64 bits: 41 bits of milliseconds since their epoch (January 1, 2011), 13 bits of logical shard ID, 10 bits of a per-shard sequence wrapping at 1,024. IDs are minted <em>inside Postgres itself</em> by a PL/PGSQL function used as the column default — no ID service, and each shard can issue 1,024 IDs per millisecond. The elegant part: every ID carries its own routing — a bit-shift on any photo ID tells you which shard holds it. And their thousands of logical shards (Postgres schemas) mapped onto far fewer physical machines, so growing meant moving whole schemas, never re-cutting rows. Two lessons that generalize: bake the shard into the ID, and create far more logical shards than machines.</p>
+</div>
+
+<h2>Range or hash: how the rule slices</h2>
+
+<p>You've picked the key. Now: how does a key value map to a shard? Two families.</p>
+
+<p><strong>Range sharding</strong> keeps keys sorted and cuts the line into contiguous ranges: keys A–F on shard 1, G–N on shard 2. HBase and Google's Bigtable work this way; MongoDB offers it. The superpower is <strong>range queries</strong>: "all events between March 1 and March 7" lands on one shard and reads sequentially. The curse is <strong>hot ranges</strong>. If your key correlates with time — auto-increment IDs, timestamps — every new write targets the <em>last</em> range. One shard sprints while the others sit there like museums of old data. You bought ten machines and got the write throughput of one.</p>
+
+<p><strong>Hash sharding</strong> runs the key through a hash function — which turns any input into an effectively random but repeatable number — and uses that to pick the shard. Neighboring keys scatter to opposite ends of the cluster, which is the point: load spreads evenly no matter what the keys look like. The price: ranges are gone. "Photos from last week" means asking everyone, because last week's photos are deliberately everywhere.</p>
+
+<table>
+<thead><tr><th></th><th>Range sharding</th><th>Hash sharding</th></tr></thead>
+<tbody>
+<tr><td>Range scans ("March 1–7")</td><td>One shard, sequential read</td><td>Every shard — the ordering was destroyed on purpose</td></tr>
+<tr><td>Load spread</td><td>Only as even as your key distribution — time-based keys create one hot shard</td><td>Statistically even across shards (per-key hotspots still exist)</td></tr>
+<tr><td>Adding shards</td><td>Split a range in place</td><td>Depends on the scheme — this is the next section's drama</td></tr>
+<tr><td>Used by</td><td>Bigtable, HBase, MongoDB (optional)</td><td>Cassandra, DynamoDB, Redis Cluster, most hand-rolled app sharding</td></tr>
+</tbody>
+</table>
+
+<p>The move seniors reach for is the <strong>compound key</strong>: hash on the entity, range on time <em>within</em> it. Cassandra formalizes this — a partition key (hashed, picks the machine) plus clustering columns (sorted, order rows on that machine). Messages keyed by <code>(conversation_id, sent_at)</code> spread conversations evenly across the cluster, yet one conversation's history is a single sorted run. Both superpowers, one design.</p>
+
+<p>So: hash the key, take it modulo the number of servers — <code>shard = hash(user_id) % 4</code> — and route. Clean, stateless, one line. Six months later you add a fifth server, and this one line detonates.</p>
+
+<h2>The mod-N disaster</h2>
+
+<p>Change <code>% 4</code> to <code>% 5</code> and recompute where every key belongs. How many keys keep their old home? A key stays only if its hash gives the same answer under both moduli — for 4 to 5 servers, that's about 1 in 5 keys. <strong>Eighty percent of your data just changed address.</strong> Not because 80% needed to move — the new server only needs a fifth of the data — but because the formula bakes N into every single placement, so changing N invalidates almost everything.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Going from 3 to 4 servers with mod-N reassigns 9 of 12 keys">
+  <text class="dg-txt" x="30" y="32">Before: 3 servers, shard = hash % 3</text>
+  <rect class="dg-node" x="30" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="53" y="60" text-anchor="middle">h=0</text><text class="dg-txt" x="53" y="80" text-anchor="middle">A</text>
+  <rect class="dg-node" x="84" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="107" y="60" text-anchor="middle">h=1</text><text class="dg-txt" x="107" y="80" text-anchor="middle">B</text>
+  <rect class="dg-node" x="138" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="161" y="60" text-anchor="middle">h=2</text><text class="dg-txt" x="161" y="80" text-anchor="middle">C</text>
+  <rect class="dg-node" x="192" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="215" y="60" text-anchor="middle">h=3</text><text class="dg-txt" x="215" y="80" text-anchor="middle">A</text>
+  <rect class="dg-node" x="246" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="269" y="60" text-anchor="middle">h=4</text><text class="dg-txt" x="269" y="80" text-anchor="middle">B</text>
+  <rect class="dg-node" x="300" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="323" y="60" text-anchor="middle">h=5</text><text class="dg-txt" x="323" y="80" text-anchor="middle">C</text>
+  <rect class="dg-node" x="354" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="377" y="60" text-anchor="middle">h=6</text><text class="dg-txt" x="377" y="80" text-anchor="middle">A</text>
+  <rect class="dg-node" x="408" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="431" y="60" text-anchor="middle">h=7</text><text class="dg-txt" x="431" y="80" text-anchor="middle">B</text>
+  <rect class="dg-node" x="462" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="485" y="60" text-anchor="middle">h=8</text><text class="dg-txt" x="485" y="80" text-anchor="middle">C</text>
+  <rect class="dg-node" x="516" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="539" y="60" text-anchor="middle">h=9</text><text class="dg-txt" x="539" y="80" text-anchor="middle">A</text>
+  <rect class="dg-node" x="570" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="593" y="60" text-anchor="middle">h=10</text><text class="dg-txt" x="593" y="80" text-anchor="middle">B</text>
+  <rect class="dg-node" x="624" y="44" width="46" height="44" rx="6"/><text class="dg-txt-s" x="647" y="60" text-anchor="middle">h=11</text><text class="dg-txt" x="647" y="80" text-anchor="middle">C</text>
+  <text class="dg-txt" x="30" y="128">After: add 1 server, shard = hash % 4</text>
+  <rect class="dg-good" x="30" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="53" y="156" text-anchor="middle">h=0</text><text class="dg-txt" x="53" y="176" text-anchor="middle">A</text>
+  <rect class="dg-good" x="84" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="107" y="156" text-anchor="middle">h=1</text><text class="dg-txt" x="107" y="176" text-anchor="middle">B</text>
+  <rect class="dg-good" x="138" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="161" y="156" text-anchor="middle">h=2</text><text class="dg-txt" x="161" y="176" text-anchor="middle">C</text>
+  <rect class="dg-bad" x="192" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="215" y="156" text-anchor="middle">h=3</text><text class="dg-txt" x="215" y="176" text-anchor="middle">D</text>
+  <rect class="dg-bad" x="246" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="269" y="156" text-anchor="middle">h=4</text><text class="dg-txt" x="269" y="176" text-anchor="middle">A</text>
+  <rect class="dg-bad" x="300" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="323" y="156" text-anchor="middle">h=5</text><text class="dg-txt" x="323" y="176" text-anchor="middle">B</text>
+  <rect class="dg-bad" x="354" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="377" y="156" text-anchor="middle">h=6</text><text class="dg-txt" x="377" y="176" text-anchor="middle">C</text>
+  <rect class="dg-bad" x="408" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="431" y="156" text-anchor="middle">h=7</text><text class="dg-txt" x="431" y="176" text-anchor="middle">D</text>
+  <rect class="dg-bad" x="462" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="485" y="156" text-anchor="middle">h=8</text><text class="dg-txt" x="485" y="176" text-anchor="middle">A</text>
+  <rect class="dg-bad" x="516" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="539" y="156" text-anchor="middle">h=9</text><text class="dg-txt" x="539" y="176" text-anchor="middle">B</text>
+  <rect class="dg-bad" x="570" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="593" y="156" text-anchor="middle">h=10</text><text class="dg-txt" x="593" y="176" text-anchor="middle">C</text>
+  <rect class="dg-bad" x="624" y="140" width="46" height="44" rx="6"/><text class="dg-txt-s" x="647" y="156" text-anchor="middle">h=11</text><text class="dg-txt" x="647" y="176" text-anchor="middle">D</text>
+  <text class="dg-txt-s" x="30" y="218">Only h=0, 1, 2 stay. 9 of 12 keys (75%) move — yet the new server only needed 3.</text>
+</svg>
+<figcaption>The mod-N reshuffle. Adding one server invalidates the placement of almost every key, because N is baked into every answer.</figcaption>
+</figure>
+
+<p>What this does in production depends on what's behind the formula. If it's a <strong>cache cluster</strong>, 80% of lookups suddenly miss — the data is on the "wrong" node — and the misses stampede your database at once. You've DDoS'd yourself by scaling up. If it's a <strong>database</strong>, it's worse: cache misses refill themselves, but rows don't teleport. Eighty percent of your rows must physically move over the network before the formula gives correct answers again — and during the move, requests routed by the new formula find nothing at the destination. At terabyte scale, that's not an evening's maintenance window. It's a trap teams have lived in: growth demands a shard, adding a shard demands moving nearly everything, moving nearly everything is unthinkable, repeat.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Mod-N is a school assigning students to classrooms by roll number: room = roll % 3. The day a fourth classroom opens, the school recomputes, and nearly every student in the building switches rooms — even though the new room only needed a quarter of them. The rule looked elegant, but it encoded "3" into every assignment. What you want is a rule where opening a room moves only the students that room will hold.</p>
+</div>
+
+<p>So the question becomes precise: is there a placement rule where adding a server moves <em>only</em> the data that server takes over — and nothing else? There is, and it's one of the prettiest ideas in distributed systems.</p>
+
+<h2>Consistent hashing: the ring</h2>
+
+<p>The trick: stop hashing keys onto <em>servers</em> and start hashing keys and servers into the <em>same space</em>. Take your hash function's output range — say 0 to 2³²−1 — and bend the number line into a circle, so the maximum wraps to 0. Hash each <strong>server's name</strong> onto the circle. Hash each <strong>key</strong> onto the same circle. The rule: a key belongs to the first server you meet walking clockwise from the key's position.</p>
+
+<p>Now look at what adding a server does. Server D hashes onto the ring — say between A and B. D takes over exactly one thing: the arc of keys between A and D, which used to walk clockwise into B. Every other key still meets the same server it always did. With K keys and N servers, adding one moves about <strong>K/N keys — the theoretical minimum</strong>, because that's precisely the data the new server must hold to carry its share. Removal is just as tidy: the dead server's arc slides to its clockwise neighbor, and nobody else notices.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Picture a circular road of houses, like numbers on a clock face, with three pizza riders parked at 12, 4, and 8 o'clock. Each house is served by the next rider clockwise. A new rider parks at 2 — and the only houses that change riders are those between 12 and 2, which belonged to the rider at 4. Every other house keeps its rider. In the mod-N school, opening one classroom renumbered the whole city. The analogy's honest limit: real hash functions park the riders at <em>random</em> spots, not neatly spaced ones — and that randomness is the next problem.</p>
+</div>
+
+<p>Because hashing is random, the arcs are lumpy — with three servers, one can easily land owning half the circle. Worse, think about failure: a dead server's <em>entire arc</em> dumps onto one neighbor, the clockwise successor, which was already carrying a full load. Double load is exactly how one failure becomes two. And there's no way to say "this machine is twice as beefy, give it more."</p>
+
+<p>All three problems share one fix: <strong>virtual nodes</strong> (vnodes). Place each server on the ring not once but 100 or 1,000 times, at points like <code>hash("serverA-1")</code>, <code>hash("serverA-2")</code>, and so on. Each server now owns many small arcs scattered around the ring. The lumps average out — the same law of large numbers that makes a thousand coin flips come out near 50/50. When a server dies, its hundreds of little arcs are inherited by hundreds of different successors, so its load <em>sprinkles</em> across the cluster instead of crushing one neighbor. A machine with twice the capacity? Twice the vnodes. Cassandra shipped with 256 vnodes per node for years; Amazon's Dynamo paper — the design that popularized all this — used the same idea to keep partitions balanced.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 370" role="img" aria-label="Consistent hash ring: adding node D moves only one arc; virtual nodes scatter each server around the ring">
+  <text class="dg-txt" x="60" y="28">The ring: add node D</text>
+  <circle class="dg-edge" cx="175" cy="195" r="110" fill="none"/>
+  <path class="dg-edge" d="M 202 120 A 80 80 0 0 1 250 168" fill="none" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="150">clockwise</text>
+  <path class="dg-good" d="M 175 71 A 124 124 0 0 1 282 133 L 276 137 A 116 116 0 0 0 175 79 Z"/>
+  <circle class="dg-node" cx="175" cy="85" r="11"/>
+  <text class="dg-txt" x="165" y="70">A</text>
+  <circle class="dg-good" cx="270" cy="140" r="11"/>
+  <text class="dg-txt" x="286" y="140">D (new)</text>
+  <circle class="dg-node" cx="270" cy="250" r="11"/>
+  <text class="dg-txt" x="286" y="266">B</text>
+  <circle class="dg-node" cx="80" cy="250" r="11"/>
+  <text class="dg-txt" x="56" y="266">C</text>
+  <circle class="dg-bad" cx="203" cy="89" r="4"/>
+  <circle class="dg-bad" cx="246" cy="111" r="4"/>
+  <circle class="dg-edge-fill" cx="283" cy="214" r="4"/>
+  <circle class="dg-edge-fill" cx="230" cy="290" r="4"/>
+  <circle class="dg-edge-fill" cx="104" cy="279" r="4"/>
+  <circle class="dg-edge-fill" cx="75" cy="149" r="4"/>
+  <text class="dg-txt-s" x="20" y="360">Dots are keys. Only the two on the A→D arc move (they were B's).</text>
+  <text class="dg-txt" x="430" y="28">Same ring with virtual nodes</text>
+  <circle class="dg-edge" cx="545" cy="195" r="110" fill="none"/>
+  <circle class="dg-node" cx="545" cy="85" r="7"/><text class="dg-txt-s" x="541" y="71">A</text>
+  <circle class="dg-node" cx="600" cy="100" r="7"/><text class="dg-txt-s" x="608" y="88">B</text>
+  <circle class="dg-node" cx="640" cy="140" r="7"/><text class="dg-txt-s" x="654" y="136">C</text>
+  <circle class="dg-node" cx="655" cy="195" r="7"/><text class="dg-txt-s" x="670" y="199">A</text>
+  <circle class="dg-node" cx="640" cy="250" r="7"/><text class="dg-txt-s" x="654" y="262">C</text>
+  <circle class="dg-node" cx="600" cy="290" r="7"/><text class="dg-txt-s" x="608" y="306">B</text>
+  <circle class="dg-node" cx="545" cy="305" r="7"/><text class="dg-txt-s" x="541" y="327">A</text>
+  <circle class="dg-node" cx="490" cy="290" r="7"/><text class="dg-txt-s" x="472" y="306">C</text>
+  <circle class="dg-node" cx="450" cy="250" r="7"/><text class="dg-txt-s" x="428" y="262">B</text>
+  <circle class="dg-node" cx="435" cy="195" r="7"/><text class="dg-txt-s" x="414" y="199">A</text>
+  <circle class="dg-node" cx="450" cy="140" r="7"/><text class="dg-txt-s" x="430" y="136">B</text>
+  <circle class="dg-node" cx="490" cy="100" r="7"/><text class="dg-txt-s" x="474" y="88">C</text>
+  <text class="dg-txt-s" x="380" y="360">Vnodes: even arcs, and a dead node's load spreads.</text>
+</svg>
+<figcaption>Left: node D claims only the arc between A and itself; every other key stays. Right: with vnodes, each physical server owns many small arcs, so distribution evens out and a dead server's load sprinkles across everyone.</figcaption>
+</figure>
+
+<p>Consistent hashing is everywhere data must spread across a changing set of machines with no central brain: Cassandra and ScyllaDB, DynamoDB and Riak (descendants of the Dynamo paper), memcached client libraries (the Ketama algorithm, built in 2007 precisely so adding a cache node wouldn't flush the fleet), plus load balancers and CDNs. But notice what it optimizes for: <em>automatic, decentralized</em> placement. Some of the most successful sharded systems ever built looked at that property and said — no thanks. I want to know exactly where my data is, and I want moving it to be a decision, not an emergent behavior.</p>
+
+<h2>The directory: just write it down</h2>
+
+<p><strong>Directory-based sharding</strong> abandons formulas entirely. You keep a map — a plain lookup table in a small, strongly consistent store: user 42 → shard 7, tenant "acme" → shard 3, slots 0–511 → machine B. Every request consults the map (in practice a cached copy — the map is tiny and changes rarely) and routes accordingly.</p>
+
+<p>You lose elegance and gain a moving part: the directory must be highly available and never harmfully stale, because a wrong map means reading the wrong shard. What you buy is <strong>control</strong>. A tenant grows 100x? Edit one row of the map and move just them to a dedicated shard. Draining a machine for replacement? Migrate its entries gradually, at 3pm on a Tuesday, watching dashboards. The mapping is something a human can read, reason about, and fix at 3am — exactly why several famous companies chose it over cleverer schemes.</p>
+
+<p>Mature systems converge on a hybrid: <strong>fixed logical partitions plus a movable map</strong>. Hash the key into one of many logical buckets — the bucket count never changes, so the mod-N trap never springs — and keep a directory from buckets to machines. Redis Cluster hashes every key into exactly 16,384 slots and maps slots to nodes; resharding means reassigning slots, never re-cutting keys. Instagram's Postgres schemas, MongoDB's chunks with its config-server map, Vitess (the MySQL sharding layer born at YouTube), and Citus all follow the same shape. Rule of thumb: create 10–100x more logical shards than machines on day one. Logical shards are nearly free; re-splitting live data never is.</p>
+
+<div class="box story"><div class="box-tag">War story — Pinterest's map that a human edits</div>
+<p>Pinterest hit hypergrowth in 2011–2012, and their engineers later wrote up the sharding design that carried them through it — a monument to boring technology. They deliberately rejected the era's auto-rebalancing, cluster-managing databases, reasoning that when an opaque balancing algorithm misplaces your data during a failure, you can't fix what you can't understand. Instead: plain MySQL, cut into thousands of small "virtual shards" — each literally its own MySQL database — with the map from shard ranges to physical machines living in configuration, changed only when a human deliberately edits it. Scaling up meant replicating a busy machine, pointing half its shard entries at the replica, and dropping the duplicate halves — whole databases move, individual rows never do. Their 64-bit IDs carry the routing, Instagram-style: 16 bits of shard ID, 10 bits of object type, 36 bits of local ID. Each new user is pinned to a shard where their boards and pins live together, so everyday queries are single-shard local joins. No consistent hashing, no auto-balancer, no magic — and it scaled through one of the fastest growth curves in consumer internet history, run by a small team who could always answer "where is this user's data?" with a config lookup.</p>
+</div>
+
+<p>So you've sharded — by hash, ring, or directory. The data fits, writes spread, growth has a plan. Now the bill arrives, because every query that doesn't fit the sharding scheme just got expensive.</p>
+
+<h2>The bill: cross-shard everything</h2>
+
+<p>A query that includes the shard key goes to one shard. Everything else goes to <em>all</em> of them — ask every shard, merge the answers. This is <strong>scatter-gather</strong>, and its cost is sneakier than "N queries instead of one." The sneaky part is <strong>tail latency</strong>: your answer isn't ready until the <em>slowest</em> shard replies. Suppose each shard answers slowly (a garbage-collection pause, a disk hiccup) just 1% of the time — a respectable p99. Fan a query out to 100 shards and the odds that <em>at least one</em> is having its bad moment is 1 − 0.99¹⁰⁰ ≈ 63%. Most of your queries now experience somebody's worst 1%. Fan-out turns your shards' p99 into your users' median.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="A query without the shard key fans out to all four shards and waits for the slowest reply">
+  <text class="dg-txt-s" x="20" y="36">query: all photos tagged #sunset</text>
+  <text class="dg-txt-s" x="20" y="52">(tag is not the shard key)</text>
+  <rect class="dg-node" x="20" y="105" width="130" height="54" rx="8"/>
+  <text class="dg-txt" x="38" y="137">app server</text>
+  <rect class="dg-node" x="430" y="20" width="130" height="40" rx="8"/>
+  <text class="dg-txt" x="444" y="45">shard 1</text>
+  <rect class="dg-node" x="430" y="80" width="130" height="40" rx="8"/>
+  <text class="dg-txt" x="444" y="105">shard 2</text>
+  <rect class="dg-bad" x="430" y="140" width="130" height="40" rx="8"/>
+  <text class="dg-txt" x="444" y="165">shard 3</text>
+  <rect class="dg-node" x="430" y="200" width="130" height="40" rx="8"/>
+  <text class="dg-txt" x="444" y="225">shard 4</text>
+  <line class="dg-edge" x1="150" y1="125" x2="430" y2="40" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="150" y1="132" x2="430" y2="100" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="150" y1="140" x2="430" y2="160" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="150" y1="148" x2="430" y2="220" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="575" y="45">8 ms</text>
+  <text class="dg-txt-s" x="575" y="105">11 ms</text>
+  <text class="dg-txt-s" x="575" y="165">480 ms ← you wait</text>
+  <text class="dg-txt-s" x="575" y="225">9 ms</text>
+</svg>
+<figcaption>Scatter-gather: one user query becomes four shard queries, and the slowest shard sets the latency for the whole answer.</figcaption>
+</figure>
+
+<p>The senior mitigations, in order of preference: <strong>don't scatter</strong> — design so hot queries carry the shard key; <strong>build a lookup path</strong> — if users log in by email but you shard by <code>user_id</code>, keep a mapping table (<code>email → user_id</code>), itself sharded by email, so login is two single-shard hops instead of a broadcast (DynamoDB's global secondary indexes are this idea productized); and for the scatter you can't avoid, <strong>hedge</strong> — send a backup request to a replica when a shard is slow. Note what fell off the list: making shards faster. At 100-way fan-out, even great shards produce bad tails. You fix the fan-out, not the shards.</p>
+
+<p>Two more line items. <strong>Joins across shards</strong> effectively don't exist — you denormalize (store copies where they're read) or join in application code. <strong>Uniqueness</strong> gets weird: with users on 50 shards, "is this username taken?" has no single place to ask — unless you make one, a reservation table sharded by username itself. And the biggest item deserves its own paragraph.</p>
+
+<p><strong>Cross-shard transactions.</strong> Move ₹500 from account A on shard 1 to account B on shard 4. Debit A, commit. Before the credit lands, the app server crashes. The money is gone — not stolen, just <em>nowhere</em>: debited, never credited. Within one machine, the database's transaction machinery makes "both or neither" a guarantee. Across two machines, no single database can promise it, because no single database saw both writes. Solving this properly — two-phase commit, sagas, outboxes — is hard enough to be chapter 2.1. The sharding-level defense is to need it rarely: <strong>choose a shard key that keeps transactions single-shard</strong>. It's why Pinterest co-locates a user's data, and why financial systems obsess over what lives with what.</p>
+
+<h2>The key that's hot no matter what</h2>
+
+<p>One more failure mode — the one perfect hashing can't touch. Hashing spreads <em>keys</em> evenly. It does nothing about the load <em>per key</em>, and one key can be a hurricane: a celebrity's profile, a viral post, a Discord channel with 500,000 members, a B2B tenant 1,000x your median customer. Hash it beautifully; it still lands, whole, on one shard, and that shard melts while nineteen others nap.</p>
+
+<p>This is the <strong>hot partition</strong> (or hot key, or celebrity) problem, and it gets a full chapter (2.6). The preview: <strong>cache</strong> the hot thing in front of the shard, <strong>split the entity itself</strong> (append a suffix — <code>bieber-1</code> through <code>bieber-16</code> — spreading one giant key over many shards, at the cost of gathering on read), or <strong>isolate it</strong> — with a directory, moving the whale to its own shard is a one-line map edit, a big reason directories keep beating elegant math in real companies.</p>
+
+<div class="box story"><div class="box-tag">War story — Discord and the partitions that ran hot</div>
+<p>In 2017 Discord moved its messages to Cassandra, partitioned by <code>(channel_id, bucket)</code> — the bucket a ten-day time window, so one channel's history is chopped into slices of time rather than one endless partition. Sensible design. By 2022 the cluster held trillions of messages across 177 nodes and had become, in their own telling, an on-call nightmare — largely from hot partitions. When something big happened in a huge channel, traffic concentrated on the one partition holding that channel's current bucket; the node holding it fell behind, and latency rippled outward to unrelated channels on the same node, with Cassandra's JVM garbage-collection pauses amplifying every incident. The 2023 fix came in two parts. They migrated to ScyllaDB — a C++ rewrite of Cassandra, no garbage collector, shard-per-core — same data model, calmer engine. But the deeper fix was architectural: Rust-based "data services" between API and database doing <strong>request coalescing</strong> — a thousand users ask for the same hot message page, one query reaches the database, everyone shares the answer. A Rust migrator moved trillions of messages in about nine days; the fleet shrank from 177 nodes to 72, and message-read p99 fell from 40–125 ms to around 15 ms. The interview lesson: a hot key is not a sharding problem, so more shards can't fix it — you need coalescing, caching, or isolation <em>in front of</em> the shard.</p>
+</div>
+
+<h2>How real systems shard</h2>
+
+<p>Zoom out and the industry's choices form a pattern worth memorizing:</p>
+
+<table>
+<thead><tr><th>System</th><th>Scheme</th><th>Worth knowing</th></tr></thead>
+<tbody>
+<tr><td>Cassandra / ScyllaDB</td><td>Consistent hashing + vnodes</td><td>Compound keys: hashed partition key picks the node, clustering columns sort within it</td></tr>
+<tr><td>DynamoDB</td><td>Hash partitioning, automatic splits</td><td>Descends from the Dynamo paper; splits hot partitions adaptively</td></tr>
+<tr><td>MongoDB</td><td>Range or hash chunks + directory</td><td>Config servers hold the chunk map; a balancer migrates chunks between shards</td></tr>
+<tr><td>Redis Cluster</td><td>16,384 fixed hash slots + slot map</td><td>The fixed-logical-buckets pattern in its purest form</td></tr>
+<tr><td>Vitess / Citus</td><td>Logical shards + directory</td><td>Sharding layers over MySQL/Postgres; Vitess grew up inside YouTube</td></tr>
+<tr><td>Kafka</td><td><code>hash(key) % partitions</code></td><td>Literal mod-N! Partition count is meant to be fixed — adding partitions remaps keys and breaks per-key ordering, so teams over-provision partitions up front</td></tr>
+</tbody>
+</table>
+
+<p>Notice two things. First, nobody re-cuts rows: mature systems move <em>whole logical units</em> — vnodes, slots, chunks, schemas. Second, Kafka proves mod-N isn't evil, it's conditional: with a fixed N it's the simplest correct scheme there is. The disaster is only ever mod-<em>changing</em>-N.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Sharding is a favorite senior probe because the first answer is easy and every follow-up has teeth. A passing senior answer names the shard key <em>and</em> the dominant query that justifies it, then volunteers the costs — cross-shard queries, hot keys, resharding — before being asked. Expect these:</p>
+<ul>
+<li>"What's your shard key — and what query pattern makes that the right one?" (They're checking the key is derived from access patterns, not picked from habit.)</li>
+<li>"Walk me through adding a shard. What moves, and who serves reads while it moves?" (Mod-N answers fail here; logical-shards-plus-map answers shine.)</li>
+<li>"This query doesn't contain the shard key. Now what?" (They want scatter-gather named, its tail-latency cost quantified, and a lookup-table escape hatch.)</li>
+<li>"One user is 1,000x bigger than average. Show me the damage and your fix." (Hot key: cache, split the entity, or isolate via directory — chapter 2.6 depth wins here.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c09-f1">
+<p class="fey-prompt">Explain consistent hashing to a junior engineer in five or six sentences — including why plain <code>hash % N</code> fails and what virtual nodes are for.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>When you spread data across N servers with <code>hash(key) % N</code>, the number N is baked into every placement — so the moment you add one server, almost every key's answer changes and nearly all your data has to move. Consistent hashing fixes this by hashing both servers and keys onto the same circle of numbers, and giving each key to the first server clockwise from it. Now adding a server only claims the small arc between it and its neighbor — roughly 1/N of the keys move, which is the minimum possible, and nothing else is touched. One catch: random placement makes the arcs uneven, and a dead server dumps its whole arc on one neighbor. So each real server is placed on the ring hundreds of times as "virtual nodes" — the many small arcs average out to a fair share, and when a server dies its load sprinkles across everyone instead of crushing one machine. That's why Cassandra, DynamoDB, and most distributed caches use exactly this.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>You're sharding the messages table for a chat app (think WhatsApp: 1:1 and group chats). Candidate shard keys: <code>message_id</code>, <code>sender_id</code>, <code>conversation_id</code>. Pick one, justify it with the dominant query, and name the failure mode your choice keeps.</p></div>
+<details><summary>Answer</summary><p><code>conversation_id</code>. The dominant query is "load recent messages of this conversation" — every chat open, every scroll — and this key makes it one shard, one sequential read (add a time-ordered clustering column). <code>sender_id</code> scatters every conversation across shards; rendering one chat becomes a multi-machine merge-sort. <code>message_id</code> is worst: perfectly uniform, and every real query becomes scatter-gather. The kept failure mode: a mega-group is a hot partition on one shard — exactly Discord's problem — so you'd add time-bucketing to the key and request coalescing in front.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your memcached tier has 4 nodes addressed by <code>hash(key) % 4</code>, running at a 95% hit rate. You add a fifth node. Roughly what fraction of keys change nodes, what happens to the hit rate in the next minute, and who feels it? Then: same event with consistent hashing — what changes?</p></div>
+<details><summary>Answer</summary><p>With mod-N, a key keeps its node only when <code>h % 4 == h % 5</code> — about 1 in 5 keys — so ~80% change address and miss. Hit rate crashes from 95% toward ~20% instantly. Who feels it: the database, which was serving 5% of reads and suddenly serves ~80% — a 16x read spike you inflicted on yourself, possibly an outage. With consistent hashing, the new node takes ~1/5 of the keyspace; hit rate dips to ~76% and recovers as the node warms. This exact scenario — cache fleets flushing themselves on resize — is why Ketama was built for memcached in 2007.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A teammate proposes sharding a URL shortener's links table by <code>created_at</code> range: January's links on shard 1, February's on shard 2, and so on. "Range sharding, clean splits, easy to add shards." What breaks?</p></div>
+<details><summary>Answer</summary><p>Both hot spots at once. Writes: every new link has this month's timestamp, so 100% of inserts hammer the newest shard — N machines, one machine's write throughput. Reads too, because click traffic decays with link age: the newest shard takes nearly everything while old shards store cold history at full hardware cost. The correct move is hashing the short code — point lookup by exact code is the only query that matters, and range scans over creation time are worthless to users, so range sharding's price buys a superpower nobody uses. Time-correlated keys plus range sharding is the conveyor-belt trap: one worker at the end of the belt doing everything.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Capacity planning: your photos table is 6 TB, growing 400 GB/month, and you're comfortable running shards up to ~2 TB. How many shards do you create, and on how many machines? (Hint: the number of shards and the number of machines should not be the same number.)</p></div>
+<details><summary>Answer</summary><p>The junior answer is "3 shards, maybe 4 for growth" — which schedules the next painful reshard about a year out. The senior answer separates logical from physical: create ~64 logical shards on day one (each ~95 GB — small is fine, logical shards are nearly free) mapped onto 4 machines, 16 shards each at ~1.5 TB per machine. When a machine nears its limit, add a machine and <em>move whole logical shards</em> to it — bulk copy plus map update, no row-by-row re-cutting, ever. 64 logical shards buys headroom to 64 machines (~128 TB) before a true re-split. This is the Instagram/Pinterest/Redis-Cluster pattern: fix the bucket count high, move buckets.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Replication copies data for safety and read scale; sharding cuts data because one machine can't hold the rows or the writes — different problems, and you usually need both.</li>
+<li>The shard key is the decision everything downstream depends on: queries containing it hit one shard, queries without it hit all shards, and changing it later means moving every row.</li>
+<li>Range sharding keeps scans cheap but melts under time-correlated keys; hash sharding spreads load but destroys ranges — compound keys (hash the entity, sort within it) buy both.</li>
+<li>Naive <code>hash % N</code> moves ~all data when N changes; consistent hashing moves only ~K/N keys — the minimum — and virtual nodes fix its lumpy arcs and spread a dead node's load.</li>
+<li>Directory sharding (a lookup map over fixed logical shards) trades a moving part for control: move one hot tenant, drain one machine, always know where data lives.</li>
+<li>Cross-shard queries are scatter-gather, and fan-out turns shard p99s into user medians — fix the fan-out with lookup tables and denormalized indexes, not faster shards.</li>
+<li>Cross-shard transactions can strand money between machines; until chapter 2.1's machinery, the defense is a shard key that keeps transactions single-shard.</li>
+<li>Hashing spreads keys, not per-key load: a celebrity still lands whole on one shard — hot keys need caching, coalescing, or isolation in front (chapter 2.6).</li>
+</ul>
+</div>

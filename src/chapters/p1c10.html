@@ -1,0 +1,263 @@
+<p>It's the biggest sale night your e-commerce app has ever seen. You run two data centers — Mumbai and Singapore — each holding a full copy of the data, so that losing one building doesn't mean losing the company. At 11:52 pm, an ISP botches a router update, and the two data centers can no longer reach each other. Both are alive. Both are serving users. They just can't talk.</p>
+
+<p>At 11:53, a user named Priya taps "Add to cart" on a pair of headphones. Her request lands in Mumbai. Mumbai cannot check with Singapore, and cannot replicate the write to it. You have exactly two options, and your system will pick one in the next 200 milliseconds whether you designed for it or not. Option one: <strong>refuse</strong> — show Priya an error, because accepting a write Singapore can't see means the two copies of her cart now disagree. Option two: <strong>accept</strong> — take the write in Mumbai, let the copies disagree, and clean up the mess after the network heals.</p>
+
+<p>There is no third option. "Wait for the network to come back" is option one with extra steps — the request times out, Priya sees a spinner, and buys her headphones somewhere else. Every system that keeps copies of data in more than one place faces this exact fork. Everything in this chapter — CAP, consistency levels, quorums, conflict resolution — is machinery for choosing a side of that fork on purpose, instead of by accident at midnight.</p>
+
+<h2>The most misquoted theorem in software</h2>
+
+<p>You've probably seen the CAP triangle: Consistency, Availability, Partition tolerance — "pick any two!" — as if the three were flavors on a menu. That framing has confused a generation of engineers, because it suggests "partition tolerance" is optional, something you can trade away for the other two. It isn't. Let's define the words plainly first:</p>
+
+<ul>
+<li><strong>Consistency</strong> (in CAP): every read returns the most recent write, as if there were only one copy of the data. The formal name is <dfn>linearizability</dfn>. Note this is a different "C" from the one in ACID — that one means database constraints stay valid; this one means everyone sees the same latest value.</li>
+<li><strong>Availability</strong>: every request to a working node gets a real answer — not an error, not a timeout. The answer isn't guaranteed to be the latest data, just <em>an</em> answer.</li>
+<li><strong>Partition</strong>: the network splits, and some nodes can't reach others, even though the nodes themselves are healthy.</li>
+</ul>
+
+<p>Here's the fix for the misunderstanding: <strong>partitions are not a choice you make; they're a thing that happens to you.</strong> Switches die. Fiber gets cut by a backhoe. A garbage-collection pause freezes a node for ten seconds, and to everyone else that's indistinguishable from a partition. A routine config push blackholes traffic between racks. The first of the famous fallacies of distributed computing is "the network is reliable" — it's listed first because it's the one everyone falls for. If your data lives on more than one machine, a partition <em>will</em> occur.</p>
+
+<p>So the honest reading of CAP is: <strong>when a partition happens, you must choose between consistency and availability.</strong> That's it. Two options, chosen only during the partition:</p>
+
+<ul>
+<li><strong>CP (choose consistency):</strong> the side of the partition that can't guarantee it has the latest data refuses to serve writes (and often reads). Users on that side see errors, but no two copies ever disagree.</li>
+<li><strong>AP (choose availability):</strong> both sides keep accepting reads and writes. Users are happy in the moment, but the copies diverge, and you now owe the universe a reconciliation step when the network heals.</li>
+</ul>
+
+<p>What about "CA"? A system that is consistent and available but not partition-tolerant is a system where the network never splits — which means a single machine, or a fantasy. The moment you replicate across a network, "CA" stops being on the menu.</p>
+
+<p>One more correction that matters at the senior level: CP and AP are not zodiac signs for databases. The choice is made <em>per operation, during a partition</em>. The same system can refuse checkout writes (CP behavior) while happily serving slightly stale product pages (AP behavior). Hold that thought — it's the punchline of the whole chapter.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Two branches of a coffee shop share gift-card balances by phoning each other before every sale. One day the phone line dies. The CP branch says "sorry, card machine's down" — it refuses sales it can't verify, stays perfectly correct, and loses angry customers. The AP branch keeps swiping cards and jots sales in a paper ledger to reconcile tonight — customers are happy, but a clever one can now spend the same ₹500 balance at both branches. Refuse and stay right, or serve and clean up later: that's the entire theorem. Where the analogy breaks: real systems reconcile automatically and constantly, not once at closing time — and doing that reconciliation well is its own section below.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — GitHub, October 21, 2018</div>
+<p>During routine maintenance — replacing some failing optical equipment — GitHub lost connectivity between its US East Coast data center and its network hub for just <strong>43 seconds</strong>. That was enough. Orchestrator, their automated MySQL failover tool, saw the East Coast primaries vanish and did its job: it promoted replicas on the West Coast and pointed all write traffic there. But replication between coasts was asynchronous, and the East Coast primaries had accepted a few seconds of writes that had never made it West. When the 43-second partition healed, GitHub had two divergent primaries — a split brain: writes on the East that the West had never seen, and a growing pile of new writes on the West (applications wrote there for roughly 40 minutes before engineers fully understood the topology). There was no automatic way to merge them. GitHub chose consistency for the recovery: they degraded the site for more than 24 hours — pausing webhooks and Pages builds, restoring from backups, replaying replication, and reconciling the orphaned writes by hand. The sharpest lesson: their failover automation had silently made an AP choice across a boundary where the data could not tolerate divergence. Nobody had decided that; the tooling had. CAP doesn't care whether you made the choice deliberately — it only guarantees you made one.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="CP and AP behavior during a network partition">
+  <text class="dg-txt" x="16" y="34">CP: refuse the side that can't be sure</text>
+  <rect class="dg-node" x="120" y="52" width="170" height="48" rx="8"/>
+  <text class="dg-txt" x="136" y="73">Replica A</text>
+  <text class="dg-txt-s" x="136" y="90">majority side</text>
+  <rect class="dg-node" x="440" y="52" width="170" height="48" rx="8"/>
+  <text class="dg-txt" x="456" y="73">Replica B</text>
+  <text class="dg-txt-s" x="456" y="90">cut-off side</text>
+  <line class="dg-edge" x1="290" y1="76" x2="345" y2="76" stroke-dasharray="6 4"/>
+  <line class="dg-edge" x1="385" y1="76" x2="440" y2="76" stroke-dasharray="6 4"/>
+  <path class="dg-bad" fill="none" d="M355 64 L375 88 M375 64 L355 88"/>
+  <text class="dg-good" x="136" y="126">write → OK</text>
+  <text class="dg-bad" x="456" y="126">write → error 503</text>
+  <text class="dg-txt" x="16" y="192">AP: both sides accept, reconcile later</text>
+  <rect class="dg-node" x="120" y="210" width="170" height="48" rx="8"/>
+  <text class="dg-txt" x="136" y="231">Replica A</text>
+  <text class="dg-txt-s" x="136" y="248">cart = {headphones}</text>
+  <rect class="dg-node" x="440" y="210" width="170" height="48" rx="8"/>
+  <text class="dg-txt" x="456" y="231">Replica B</text>
+  <text class="dg-txt-s" x="456" y="248">cart = {charger}</text>
+  <line class="dg-edge" x1="290" y1="234" x2="345" y2="234" stroke-dasharray="6 4"/>
+  <line class="dg-edge" x1="385" y1="234" x2="440" y2="234" stroke-dasharray="6 4"/>
+  <path class="dg-bad" fill="none" d="M355 222 L375 246 M375 222 L355 246"/>
+  <text class="dg-good" x="136" y="284">write → OK</text>
+  <text class="dg-good" x="456" y="284">write → OK</text>
+  <text class="dg-txt-s" x="256" y="312">copies now disagree — someone must merge them</text>
+</svg>
+<figcaption>The only two honest behaviors during a partition. CP trades user-facing errors for agreement; AP trades agreement for uptime and inherits a merge problem.</figcaption>
+</figure>
+
+<h2>PACELC: the bill you pay every day</h2>
+
+<p>Here's the thing that makes CAP feel academic: real partitions are rare. A well-run network might see minutes of true partition per year. If the consistency trade-off only mattered during those minutes, you could almost ignore it. But there's a second trade-off hiding in plain sight, and you pay it on <em>every single request</em>. PACELC names it: if there's a <strong>P</strong>artition, choose <strong>A</strong>vailability or <strong>C</strong>onsistency — <strong>E</strong>lse, choose <strong>L</strong>atency or <strong>C</strong>onsistency.</p>
+
+<p>Why is there a choice even when the network is healthy? Physics. If your replicas are in Virginia and Frankfurt, a network round trip between them costs roughly 80–100 milliseconds — the speed of light doesn't negotiate. To be strongly consistent, a write must wait for far-away replicas to confirm before telling the user "saved." That's your write latency: local disk write plus a transatlantic round trip. Or you can acknowledge the write locally in 5 milliseconds and replicate in the background — fast, but now a reader in Frankfurt can see data that's a second stale. Strong consistency isn't just fragile during partitions; it's <em>slow every day</em>. That everyday tax, not the rare partition, is usually why teams relax consistency.</p>
+
+<p>The vocabulary is worth thirty seconds in an interview: DynamoDB and Cassandra are PA/EL systems — available during partitions, fast otherwise. Google Spanner is PC/EC — it refuses rather than diverge, and pays coordination latency on every transaction because Google decided its databases should never lie, and bought atomic clocks to keep the tax small. Neither is "better." They charge different bills to different customers.</p>
+
+<h2>Consistency levels, as bugs your users file</h2>
+
+<p>"Strong versus eventual" sounds like a binary. It's actually a staircase, and each step down buys latency and availability by permitting a specific, describable user-visible bug. The fastest way to internalize the levels is to learn each one as the bug report that arrives when it's missing.</p>
+
+<p><strong>Linearizable (strong):</strong> the system behaves as if there's one copy of the data. The instant a write completes, every reader everywhere sees it. No bug reports — just the latency and availability bill from the previous section. You buy this for money movement, inventory decrements, username uniqueness.</p>
+
+<p><strong>Eventual consistency:</strong> the default of the internet. The only promise: if writes stop, all replicas converge to the same value, eventually — usually within milliseconds to seconds. Meanwhile, any read may be stale. The bug report: "the like count says 41, I refresh, it says 40, I refresh, 41 again." For a like count, nobody files that bug. That's the point — for most data, eventual is fine and nobody notices.</p>
+
+<p><strong>Read-your-writes:</strong> a targeted upgrade — <em>you</em> always see <em>your own</em> writes; other people's may lag. The bug when it's missing is the most famous one in replication: Priya posts a comment, the write goes to the primary database, her next page load reads from a replica that's two seconds behind, and her comment is <em>gone</em>. She posts it again. Now there are two. Users don't file this as "replication lag" — they file it as "your app ate my comment," and they're right. Common fixes: pin a user's reads to the primary for a few seconds after they write, or have the client remember the version it wrote and demand at-least-that-fresh reads.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 230" role="img" aria-label="A read-your-writes violation caused by reading a lagging replica">
+  <rect class="dg-node" x="30" y="90" width="130" height="48" rx="8"/>
+  <text class="dg-txt" x="46" y="111">Priya's phone</text>
+  <rect class="dg-node-alt" x="300" y="28" width="150" height="48" rx="8"/>
+  <text class="dg-txt" x="316" y="49">Primary DB</text>
+  <text class="dg-txt-s" x="316" y="66">has the comment</text>
+  <rect class="dg-node" x="300" y="152" width="150" height="48" rx="8"/>
+  <text class="dg-txt" x="316" y="173">Read replica</text>
+  <text class="dg-txt-s" x="316" y="190">2s behind</text>
+  <line class="dg-edge" x1="160" y1="100" x2="300" y2="58" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="170" y="66">1. POST comment</text>
+  <line class="dg-edge" x1="375" y1="76" x2="375" y2="152" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="386" y="118">async replication</text>
+  <line class="dg-edge" x1="160" y1="128" x2="300" y2="170" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="170" y="160">2. GET comments</text>
+  <text class="dg-bad" x="470" y="180">→ "no comments yet"</text>
+</svg>
+<figcaption>The classic bug: write to the primary, immediately read a lagging replica. The user's own comment vanishes, so they post it twice.</figcaption>
+</figure>
+
+<p><strong>Monotonic reads:</strong> time never runs backwards for one reader. The bug when it's missing: Priya's first refresh hits a fresh replica and shows a friend's comment; her second refresh hits a <em>more stale</em> replica and the comment disappears again. Seeing data appear and then un-appear feels haunted. Fix: keep each session sticky to one replica, so a reader's view only ever moves forward.</p>
+
+<p><strong>Causal consistency:</strong> effects never appear before their causes — a reply never shows up before the message it answers. The bug when it's missing is genuinely damaging: in a group chat, Bob's "No, absolutely not!" gets replicated faster than Alice's question "Should I delete the production database?", and a third user sees the answer before the question. Reads make sense only in order. Causal consistency tracks the "happened because of" relationship and delivers writes in an order that respects it — noticeably cheaper than linearizability, because unrelated writes can still flow freely.</p>
+
+<table>
+<thead><tr><th>Level</th><th>The promise</th><th>Bug report when it's missing</th><th>Relative cost</th></tr></thead>
+<tbody>
+<tr><td>Linearizable</td><td>Everyone sees every write instantly, like one copy</td><td>—</td><td>Coordination on every operation; cross-region latency; reduced availability</td></tr>
+<tr><td>Causal</td><td>Effects never precede causes</td><td>"I saw the reply before the question"</td><td>Metadata to track what-caused-what</td></tr>
+<tr><td>Read-your-writes</td><td>You always see your own writes</td><td>"Your app ate my comment (so I posted it twice)"</td><td>Session stickiness or version tokens</td></tr>
+<tr><td>Monotonic reads</td><td>One reader's view never goes backwards</td><td>"The comment appeared, then vanished"</td><td>Sticky sessions</td></tr>
+<tr><td>Eventual</td><td>Replicas converge if writes stop</td><td>"The count flickers between 40 and 41"</td><td>Nearly free — the internet's default</td></tr>
+</tbody>
+</table>
+
+<p>Notice that read-your-writes and monotonic reads are cheap, targeted patches: they don't make the system globally consistent, they just kill the two most embarrassing bug reports. A senior answer names the level per feature instead of reaching for "strong everywhere" — because now you know what each level costs and exactly which bug each level prevents.</p>
+
+<h2>Quorums: the overlap trick</h2>
+
+<p>So far "replication" has been vague. Here's the concrete machine that lets you <em>tune</em> where you sit on the staircase. Say every piece of data is stored on <strong>N</strong> replicas (N=3 is the industry default). For a write, you wait for <strong>W</strong> replicas to confirm before telling the user "saved." For a read, you ask <strong>R</strong> replicas and take the answer with the newest version number. N, R, W are knobs you set.</p>
+
+<p>The magic inequality: <strong><code>R + W &gt; N</code></strong>. If the write touched W nodes and the read asks R nodes, and R+W exceeds N, then the two groups are too big to avoid each other — at least one node you're reading from <em>must</em> be one of the nodes that confirmed the latest write. Version numbers on each copy tell you which answer is the fresh one. It's pigeonhole arithmetic, nothing deeper.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>You keep your class notes in three notebooks held by three friends: Asha, Bilal, and Chen (N=3). You're too lazy to update all three, so your rule is: every update goes into any two notebooks (W=2), and before an exam you always check any two notebooks (R=2) and trust whichever page has the later date. Pick any two to write and any two to read — the groups must share at least one friend, because there are only three friends. You can never check two notebooks and have <em>both</em> be out of date. That's <code>R + W &gt; N</code>: 2+2&gt;3. The analogy breaks in one honest place: real replicas can fail mid-update, and the date-comparison has sharp edge cases — quorum overlap gets you "reads see the latest completed write" in the common case, not a full mathematical guarantee of linearizability. Databases layer extra machinery (like read repair) on top.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Quorum overlap with N equals 3, W equals 2, R equals 2">
+  <rect class="dg-zone" x="95" y="58" width="350" height="118" rx="10"/>
+  <text class="dg-txt-s" x="110" y="80">Write set (W=2)</text>
+  <rect class="dg-zone" x="285" y="92" width="350" height="118" rx="10"/>
+  <text class="dg-txt-s" x="510" y="198">Read set (R=2)</text>
+  <rect class="dg-node" x="110" y="108" width="130" height="48" rx="8"/>
+  <text class="dg-txt" x="126" y="129">Node A</text>
+  <text class="dg-txt-s" x="126" y="146">v7</text>
+  <rect class="dg-node-alt" x="300" y="108" width="130" height="48" rx="8"/>
+  <text class="dg-txt" x="316" y="129">Node B</text>
+  <text class="dg-txt-s" x="316" y="146">v7 — overlap</text>
+  <rect class="dg-node" x="490" y="108" width="130" height="48" rx="8"/>
+  <text class="dg-txt" x="506" y="129">Node C</text>
+  <text class="dg-txt-s" x="506" y="146">v6 (stale)</text>
+  <text class="dg-good" x="285" y="238">B is in both sets, so the read cannot miss v7</text>
+</svg>
+<figcaption>R+W&gt;N means the read set and the latest write set always share at least one node. Version numbers pick the winner: v7 beats C's stale v6.</figcaption>
+</figure>
+
+<p>The knobs let you buy exactly what you need:</p>
+
+<table>
+<thead><tr><th>N / W / R</th><th>What you bought</th><th>What you paid</th></tr></thead>
+<tbody>
+<tr><td>3 / 2 / 2</td><td>Overlap guarantee; tolerates one node down for both reads and writes</td><td>Every operation waits on two nodes — the balanced default</td></tr>
+<tr><td>3 / 3 / 1</td><td>Blazing one-node reads, still overlapping — great for read-heavy data</td><td>One dead node and <em>all writes fail</em></td></tr>
+<tr><td>3 / 1 / 3</td><td>Instant writes</td><td>Slow reads, and a write confirmed by one node can die with that node — durability risk</td></tr>
+<tr><td>3 / 1 / 1</td><td>Maximum speed and availability</td><td>R+W = 2 ≤ 3: no overlap, no freshness promise. This is eventual consistency, chosen honestly</td></tr>
+</tbody>
+</table>
+
+<p>One more twist. A <em>strict</em> quorum refuses a write when the data's designated home nodes are unreachable — CP behavior. A <strong>sloppy quorum</strong> says: if Priya's cart normally lives on nodes A, B, C and node C is unreachable, write to substitute node D instead, and attach a note — "this belongs to C; deliver it when C comes back." That note-and-return mechanism is called <strong>hinted handoff</strong>. Availability goes way up: writes succeed as long as <em>any</em> W nodes are alive, anywhere. The price: while the hint sits on D, your overlap math is broken — a read of A, B, C can miss the newest write because it's living at D's house. Sloppy quorums are an explicit AP move: never refuse the write, tolerate a window of missable data.</p>
+
+<h2>When both sides wrote: conflict resolution</h2>
+
+<p>Choose availability — or sloppy quorums, or async replication — and eventually the inevitable happens: two replicas accept <em>different</em> writes to the <em>same</em> key, and then meet. Both have version "8" of Priya's cart, and they disagree. Someone has to decide what the truth is. There are three honest strategies, and one of them is a trap painted like a strategy.</p>
+
+<p><strong>Last-writer-wins (LWW):</strong> stamp every write with a timestamp; when copies conflict, keep the latest stamp, discard the rest. It's simple, automatic, and let's say the quiet part loudly: <strong>LWW silently deletes data your system already acknowledged.</strong> The "losing" write was accepted, confirmed to a user, and is now gone — no error, no log line, no trace. Worse, the winner is chosen by server clocks, and server clocks disagree: even machines that sync over NTP (the internet's clock-synchronization protocol) commonly drift milliseconds apart, and badly configured ones drift seconds. A node with a fast clock wins conflicts with writes from the "future." Cassandra resolves conflicts this way by default, and Jepsen — an independent test project that tortures databases with induced partitions and publishes the wreckage — famously demonstrated it dropping acknowledged writes under contention. LWW is a fine choice when losing a conflicting write costs nothing — a device's "last seen location," a cache entry. It is a disaster for carts, counters, and documents, and choosing it there is choosing silent data loss.</p>
+
+<p><strong>Vector clocks:</strong> the diagnostic upgrade. Concept only, no math: each replica keeps a tally of how many writes it has seen from every replica, and each version of the data carries that tally. Comparing two versions' tallies answers one question: did one version already <em>know about</em> the other when it was written? If yes, the newer one safely supersedes it — no conflict, keep the descendant. If <em>neither</em> knew about the other, they're concurrent — a genuine conflict, and the system now <em>knows</em> it instead of guessing. That's the crucial difference from LWW: vector clocks detect conflicts honestly; they don't resolve them. Something still has to merge.</p>
+
+<p><strong>Application-level merge:</strong> the only resolver that knows what the data <em>means</em>. The database sees two mystery blobs; your application knows they're shopping carts, and that the sane merge of two carts is the union of their items. Two concurrent counter increments? Add them. Two edits to a document? That's the hard end — operational transforms and CRDTs (special data structures built so concurrent edits always merge to the same result) live there. Merge logic is real work, which is why it's reserved for data that deserves it.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="Two divergent cart versions merged at read time versus destroyed by last-writer-wins">
+  <rect class="dg-node" x="24" y="132" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="40" y="154">Cart v1</text>
+  <text class="dg-txt-s" x="40" y="171">{book}</text>
+  <rect class="dg-node" x="256" y="40" width="190" height="52" rx="8"/>
+  <text class="dg-txt" x="272" y="62">Mumbai: +headphones</text>
+  <text class="dg-txt-s" x="272" y="79">{book, headphones}</text>
+  <rect class="dg-node" x="256" y="228" width="190" height="52" rx="8"/>
+  <text class="dg-txt" x="272" y="250">Singapore: +charger</text>
+  <text class="dg-txt-s" x="272" y="267">{book, charger}</text>
+  <line class="dg-edge" x1="164" y1="146" x2="256" y2="76" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="164" y1="170" x2="256" y2="244" marker-end="url(#arrow)"/>
+  <path class="dg-bad" fill="none" d="M200 148 L220 172 M220 148 L200 172"/>
+  <text class="dg-txt-s" x="176" y="196">partition</text>
+  <rect class="dg-node-alt" x="530" y="128" width="176" height="64" rx="8"/>
+  <text class="dg-txt" x="546" y="150">Merge at read</text>
+  <text class="dg-txt-s" x="546" y="167">{book, headphones,</text>
+  <text class="dg-txt-s" x="546" y="182">charger}</text>
+  <line class="dg-edge" x1="446" y1="76" x2="530" y2="140" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="446" y1="244" x2="530" y2="180" marker-end="url(#arrow)"/>
+  <text class="dg-bad" x="256" y="310">LWW instead: keep one branch, silently discard the other</text>
+</svg>
+<figcaption>After a partition, two cart versions exist. An app-level union keeps every add. LWW would keep one branch and delete an acknowledged write with no trace.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — Amazon Dynamo: the paper that chose a side</div>
+<p>During the 2004 holiday shopping season, Amazon suffered a string of outages traced to pushing their Oracle-based infrastructure past its limits — clustering and replication on the leading commercial database of the day simply couldn't sustain the availability and scale the retail business demanded. The post-mortem question was blunt: what does the shopping cart actually <em>require</em>? Answer: it must <strong>always accept adds</strong>. Every refused "add to cart" during a partition is a customer walking away with their wallet — availability is literally revenue. So Amazon built Dynamo, a key-value store that inverted the traditional priorities: always-writable via sloppy quorums and hinted handoff, vector clocks to detect concurrent versions, and conflicts surfaced <em>at read time</em> for the application to merge — the cart merges by union of items. The paper is honest about the cost: after a merge, a deleted item can occasionally resurrect in your cart, and Amazon judged "a deleted item reappears (rarely)" a fair price for "adds never fail." The 2007 paper became one of the most influential systems papers ever written — Cassandra, Riak, and Voldemort are its direct descendants. And the epilogue completes this chapter's argument: DynamoDB, the 2012 managed service, offers <em>both</em> — eventually consistent reads by default at half the cost of strongly consistent ones, strong reads when you ask, and last-writer-wins for its cross-region global tables. Even the company that wrote the availability manifesto ended up selling consistency as a per-request checkbox.</p>
+</div>
+
+<h2>Choose per component, not per system</h2>
+
+<p>Now assemble the whole chapter into the sentence that separates senior candidates from everyone else. The junior move is picking a side: "I'd use an AP database because availability matters." The senior move recognizes that <em>one system contains many kinds of data, and each gets its own contract</em>. For an e-commerce site: the cart is AP with union-merge (a refused add costs a sale; a merge conflict costs nothing). Checkout and payment are CP behind a quorum (a duplicate charge or oversold last-item costs money and trust — better to show "please retry" for thirty seconds a year). Product pages are eventual with heavy caching (a price that's ninety seconds stale is fine; validate the real price at checkout). Order history gets read-your-writes (users must see the order they just placed). Same product, four consistency contracts — each one an explicit decision with a reason attached.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Consistency questions at the senior level are commitment traps: the interviewer offers you a chance to recite dogma, and grades you on refusing it. A passing answer sounds like: "During a partition, cart writes keep flowing — union-merge on read, worst case a deleted item resurfaces. Inventory decrement is quorum-backed and will refuse writes on the minority side; I'll show 'try again' there because overselling is worse than an error. And day-to-day the real trade is latency: I'll replicate to the second region async and accept a one-second staleness window, because 100ms synchronous writes would show up on every purchase." Probes to expect:</p>
+<ul>
+<li>"Is your design CP or AP?" — the trap itself. The answer is per component, with a reason per component; a one-word answer reads junior either way.</li>
+<li>"Your primary fails over mid-write — what does the user see, and can data be lost?" — they're checking you know async replication means acknowledged-but-unreplicated writes exist, GitHub-style.</li>
+<li>"You put a read replica in front of comments — what bug appears within a week?" — they want "users can't see their own comments" and a fix (session pinning or version tokens), not a recitation of the CAP triangle.</li>
+<li>"Two replicas accepted conflicting writes. Walk me through exactly what happens next." — LWW-and-hope is a failing answer for cart-like data; naming detect (vector clocks) and merge (app logic) passes.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c10-f1">
+<p class="fey-prompt">A junior teammate says "we should pick two of CAP's three letters — I vote consistency and availability." Correct them in five sentences, kindly.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Partitions aren't one of the choices — they're the weather; the network will split whether we vote or not. CAP really says that when a partition happens, each operation must pick one of two behaviors: refuse requests it can't verify (consistency) or answer anyway and reconcile the copies later (availability). "Consistent and available with no partitions" just describes a single machine, which is not what we're building. Even on healthy days there's a milder version of the same trade: waiting for far-away replicas makes every write consistent but slow, so latency versus consistency is the choice we actually pay daily. So instead of voting once for the whole system, we should decide per feature — refuse-and-retry for payments, accept-and-merge for the cart.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Four bug reports land in your queue. Name the missing consistency guarantee for each: (a) "I posted a review, refreshed, and it was gone — so I posted it twice." (b) "My friend's comment showed up, then disappeared on the next refresh, then came back." (c) "In the group chat I saw 'No, cancel it!' before I saw the question it was answering." (d) "The product's like count wobbles between 128 and 131."</p></div>
+<details><summary>Answer</summary><p>(a) Read-your-writes — her write went to the primary and her read hit a lagging replica; fix by pinning her reads to the primary briefly after a write. (b) Monotonic reads — successive reads hit replicas with different lag, so her view of time went backwards; fix with sticky sessions to one replica. (c) Causal consistency — the reply replicated faster than its cause; fix by tracking and respecting the happened-because-of order. (d) Just eventual-consistency staleness — different replicas at slightly different versions. This one is arguably not a bug worth fixing: the cost of making a like count linearizable exceeds anyone's benefit. Recognizing which report to close as "working as intended" is part of the skill.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>You run a metrics dashboard with N=5 replicas per shard: about 50,000 reads/sec and 500 writes/sec. Choose W and R. Then answer: what happens to reads and writes when two of the five nodes die?</p></div>
+<details><summary>Answer</summary><p>Read-heavy by 100:1, so make reads cheap: R=1, and keep the overlap by setting W=5? No — W=5 means one dead node kills all writes. The sweet spot is <strong>W=4, R=2</strong> (4+2&gt;5) or the balanced <strong>W=3, R=3</strong>. With W=4/R=2: reads touch just two nodes (cheap, and this system does 100x more reads), writes touch four (fine at only 500/sec). Now kill two nodes: three remain. Reads (R=2) still work. Writes need W=4 confirmations from three living nodes — <em>all writes fail</em>. If that's unacceptable, W=3/R=3 survives two dead nodes for both operations, at the price of reads costing three nodes each. The exercise's real lesson: R and W tune not just latency but <em>which failure you'll experience</em> — say the failure mode out loud when you pick the numbers.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your team stores collaborative to-do lists in a Dynamo-style store with LWW conflict resolution. App server clocks drift up to 30 seconds apart (someone misconfigured NTP on half the fleet). Two users edit the same list from different servers within the same minute. What exactly goes wrong, what does the user experience, and what are two fixes?</p></div>
+<details><summary>Answer</summary><p>Both edits are acknowledged. When the replicas reconcile, LWW compares timestamps — but the timestamps measure clock configuration, not reality. The server with the fast clock wins even if its write happened first in real time; the other user's acknowledged edit is silently discarded — no error, no log, just a to-do item that un-happens. The user experience: "I added 'buy milk,' the app said saved, and an hour later it's gone." These are the worst bugs to debug because nothing failed — the system did exactly what LWW specifies. Fix one: switch conflict handling to detect-and-merge — vector clocks to identify concurrent versions, union of list items as the merge (this is exactly the Dynamo cart design). Fix two (mitigation, not cure): fix NTP and monitor clock skew as a paged alert — but say plainly that better clocks shrink the window and never close it; two writes in the same millisecond still tie. For shared mutable data, LWW is the bug.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Sketch the consistency contract, component by component, for a food-delivery app: (a) restaurant menu pages, (b) the user's cart, (c) placing the order and charging the card, (d) live driver location on the map, (e) "your order status" screen. For each: level, CP-or-AP during a partition, and the one-line reason.</p></div>
+<details><summary>Answer</summary><p>(a) Menus: eventual, AP, cached hard — a menu 60 seconds stale hurts nobody; validate price at order time. (b) Cart: AP, always-writable with union merge — a refused add loses the sale; a merged cart is at worst mildly surprising. (c) Order + charge: CP, linearizable, quorum-backed — a double charge or an order accepted by a kitchen that never sees it costs real money and trust; "please retry" for a rare partition window is the cheaper harm. (d) Driver location: eventual with LWW — and here LWW is <em>correct</em>: each new ping fully supersedes the old one, so discarding a conflicting stale ping loses nothing. (e) Order status: read-your-writes — the user must see the order they just placed, or they'll place it again (which, combined with (c), is how double orders happen). The senior tell in this answer is (d): knowing when LWW is fine matters as much as knowing when it's a trap.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>CAP is not "pick two of three": partitions will happen, so the only real question is what each operation does during one — refuse (CP) or accept and reconcile (AP).</li>
+<li>PACELC names the trade you pay every day: even with a healthy network, strong consistency costs a round trip to far replicas on every write, so the daily choice is latency versus consistency.</li>
+<li>Consistency levels are best learned as the user-visible bug each one prevents: vanishing own-comments (read-your-writes), time running backwards (monotonic reads), replies before questions (causal), harmless flicker (eventual).</li>
+<li>Quorums make consistency tunable: with N replicas, W write-acks, and R read-replies, R+W&gt;N forces the read set to overlap the latest write set — and the specific values choose which failure mode you get.</li>
+<li>Sloppy quorums with hinted handoff trade the overlap guarantee for near-perfect write availability — an explicit AP move, not a free lunch.</li>
+<li>Last-writer-wins silently deletes acknowledged writes and lets clock skew pick the victim; it's fine for self-superseding data like location pings and a disaster for carts, counters, and documents.</li>
+<li>Vector clocks detect that two versions are concurrent; only application-level merge logic, which knows what the data means, can resolve them well — Amazon's cart merges by union.</li>
+<li>The senior answer is never "my system is CP" or "AP" — it's a per-component contract with a reason per component: cart AP with merge, payments CP behind a quorum, product pages eventual behind a cache.</li>
+</ul>
+</div>

@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c02",
+  "items": [
+    {
+      "id": "p1c02-q01", "level": 1, "type": "mcq", "tag": "http-methods",
+      "q": "Which HTTP method is NOT idempotent — meaning a blind retry after a timeout can cause damage?",
+      "options": [
+        {"t": "POST", "correct": true,
+         "why": "Right. POST creates or triggers something new each time — retry a 'charge card' POST and you may charge twice. That's exactly why idempotency keys exist: to make POST retryable by hand."},
+        {"t": "PUT", "correct": false,
+         "why": "PUT replaces the resource at a known URL — replacing with the same content twice leaves the same result as once. That's the definition of idempotent, so retries are safe."},
+        {"t": "DELETE", "correct": false,
+         "why": "Deleting something twice still leaves it deleted. The second call may return 404, but the world's state is the same — that's idempotent, and safe to retry."},
+        {"t": "GET", "correct": false,
+         "why": "GET is both safe (changes nothing) and idempotent. It's the most retry-friendly method there is — caches and proxies retry GETs freely for exactly this reason."}
+      ]
+    },
+    {
+      "id": "p1c02-q02", "level": 1, "type": "mcq", "tag": "status-codes",
+      "q": "Why is returning 200 OK with a body of {\"error\": \"not found\"} considered a serious design sin?",
+      "options": [
+        {"t": "Every machine in the chain reads the status code, and you just lied to all of them", "correct": true,
+         "why": "Exactly. Dashboards report 0% errors while users fail, CDNs cache the 'successful' error page, and client retry logic sees success and moves on. Status codes exist so machines can react without parsing your body."},
+        {"t": "It wastes bandwidth by sending a response body that an error doesn't need", "correct": false,
+         "why": "Byte count isn't the issue — error responses should carry a body. The sin is the mismatch: the code says 'success' while the body says 'failure', and machines only read the code."},
+        {"t": "It's fine as long as the error is documented", "correct": false,
+         "why": "Documentation doesn't help the CDN, the load balancer, or the monitoring system — none of them read your docs. The status-code contract exists precisely so intermediaries don't need to."},
+        {"t": "200 should only be used for GET requests", "correct": false,
+         "why": "200 is valid for any successful request regardless of method. The problem isn't the method — it's claiming success while delivering failure."}
+      ]
+    },
+    {
+      "id": "p1c02-q03", "level": 1, "type": "mcq", "tag": "pagination",
+      "q": "A user is scrolling a busy feed with offset pagination. A new post arrives between their page-1 and page-2 requests. What do they see?",
+      "options": [
+        {"t": "The last item of page 1 again, at the top of page 2", "correct": true,
+         "why": "Right. Offset counts rows from the top, and the insertion shifted every row down by one — so 'skip 3' now skips the new post plus only two of the three already seen. A deletion causes the mirror bug: a silently skipped item."},
+        {"t": "Nothing unusual — the new post appears on a later page", "correct": false,
+         "why": "That would be true if new posts were appended at the bottom. Feeds insert at the top, which shifts every existing row's position — and offset is nothing but a position count."},
+        {"t": "An error, because the page boundaries changed", "correct": false,
+         "why": "Kinder than reality. The database happily serves the shifted window with no idea anything is wrong — the duplicate is silent, which is what makes it so hard to reproduce."},
+        {"t": "The new post at the top of page 2", "correct": false,
+         "why": "The new post is at position 1, which page 2 (offset=3) skips past. What lands on page 2 is the row pushed down INTO the offset-3 window: the last item they already saw."}
+      ]
+    },
+    {
+      "id": "p1c02-q04", "level": 1, "type": "mcq", "tag": "idempotency",
+      "q": "What does an idempotency key fundamentally let a client do?",
+      "options": [
+        {"t": "Retry a non-idempotent request (like a payment POST) as many times as needed, guaranteed at most one execution", "correct": true,
+         "why": "Yes. The server executes at most once per key and stores the response; retries with the same key get the original response replayed. The timeout dilemma — 'did it land?' — stops mattering."},
+        {"t": "Skip authentication on retries to make them faster", "correct": false,
+         "why": "Idempotency keys have nothing to do with auth — every attempt is still fully authenticated. The key deduplicates executions; it never bypasses security."},
+        {"t": "Cancel a request that's already executing", "correct": false,
+         "why": "The key can't reach back and stop work in flight. It prevents a SECOND execution from starting — a duplicate arriving mid-flight gets a conflict error, not a cancellation of the first."},
+        {"t": "Encrypt the request body end to end", "correct": false,
+         "why": "The key is just a unique label (usually a UUID) in a header — it carries no cryptography. Transport encryption is TLS's job; the key's job is deduplication."}
+      ]
+    },
+    {
+      "id": "p1c02-q05", "level": 1, "type": "mcq", "tag": "status-codes",
+      "q": "A logged-in user requests a document they don't have permission to read. The precise status code is:",
+      "options": [
+        {"t": "403 Forbidden", "correct": true,
+         "why": "Right. 403 means 'we know exactly who you are, and the answer is no.' The distinction matters to clients: a 401 says 'go log in and retry', while a 403 says logging in again won't help."},
+        {"t": "401 Unauthorized", "correct": false,
+         "why": "Confusingly named, but 401 means 'we don't know who you are' — missing or invalid credentials. This user is fully authenticated; the identity isn't the problem, the permission is."},
+        {"t": "404 Not Found", "correct": false,
+         "why": "Sometimes chosen deliberately to hide a resource's existence — a legitimate security tactic — but as the semantically precise default, the answer is 403. Know the difference and say when you'd bend it."},
+        {"t": "400 Bad Request", "correct": false,
+         "why": "400 says the request itself is malformed — bad syntax, missing fields. This request is perfectly well-formed; the server just refuses to fulfill it for this identity."}
+      ]
+    },
+    {
+      "id": "p1c02-q06", "level": 1, "type": "mcq", "tag": "webhooks",
+      "q": "Webhook providers deliver events 'at-least-once.' What does that force every receiver to build?",
+      "options": [
+        {"t": "Deduplication by event ID, because duplicate deliveries are a promise, not an accident", "correct": true,
+         "why": "Right. Any missed or slow acknowledgment triggers a redelivery, so the same event WILL arrive more than once. Tracking processed event IDs and skipping repeats is mandatory plumbing, not defensive paranoia."},
+        {"t": "A faster network connection so events can't be missed", "correct": false,
+         "why": "Speed doesn't change delivery semantics. At-least-once means the provider retries until acknowledged — duplicates come from the protocol's design, not from slow pipes."},
+        {"t": "Nothing special — at-least-once means delivery is guaranteed", "correct": false,
+         "why": "It does roughly guarantee delivery, but the price of that guarantee is duplicates: the provider re-sends whenever it isn't sure. The guarantee is the reason you must dedupe, not a reason you can relax."},
+        {"t": "A queue on the provider's side to buffer events until the receiver can accept them", "correct": false,
+         "why": "The provider already has one — that's how it retries for days. The receiver's obligations are its own: verify the signature, ack fast, dedupe, and never trust arrival order."}
+      ]
+    },
+    {
+      "id": "p1c02-q07", "level": 1, "type": "mcq", "tag": "pagination",
+      "q": "In cursor pagination, what is the cursor?",
+      "options": [
+        {"t": "An opaque token encoding the exact position of the last item the client saw, in the current sort order", "correct": true,
+         "why": "Yes — typically a base64 wrapper around the last item's sort values, like (created_at, id). The server turns it into an index seek: 'give me rows after this exact position.' Opaque, so clients can't build their own and freeze your encoding into the contract."},
+        {"t": "A page number the server remembers for each client between requests", "correct": false,
+         "why": "That's offset pagination wearing a disguise — and it would also make the server stateful per client. A cursor names a position in the data itself, which is why insertions above it can't shift anything."},
+        {"t": "A session ID identifying the user's scroll state on the server", "correct": false,
+         "why": "No server-side state is involved — that's the beauty of it. All the position information travels in the token itself, so any server can resume the walk from just the cursor."},
+        {"t": "A database transaction held open between page requests so results stay consistent", "correct": false,
+         "why": "Holding transactions across user think-time would strangle the database. Cursors deliberately avoid any held resource: each page request is independent, positioned purely by the token's contents."}
+      ]
+    },
+    {
+      "id": "p1c02-q08", "level": 1, "type": "mcq", "tag": "rate-limits",
+      "q": "Your client gets a 429 with a Retry-After header. The correct behavior is:",
+      "options": [
+        {"t": "Wait at least the Retry-After duration, then retry with exponential backoff and jitter if it recurs", "correct": true,
+         "why": "Right. The server told you exactly when the quota refills — honor it. Jitter (randomizing retry delays) matters at scale: a thousand clients retrying at the same instant hit the server like a synchronized battering ram."},
+        {"t": "Retry immediately — 429s are transient, and the quota may already have refilled", "correct": false,
+         "why": "Instant retries against a rate limit are pouring petrol on it: each retry burns quota and earns another 429. This loop turns a polite refusal into an outage of your own making."},
+        {"t": "Treat it as a permanent failure and drop the request", "correct": false,
+         "why": "429 explicitly means 'temporarily over quota, come back later' — the Retry-After header is an invitation. Dropping the work turns a throttle into data loss."},
+        {"t": "Switch to a different API endpoint to route around the limit", "correct": false,
+         "why": "Limits are almost always per-client, not per-endpoint — and deliberately evading them is how API keys get revoked. The contract says back off, so back off."}
+      ]
+    },
+    {
+      "id": "p1c02-q09", "level": 1, "type": "mcq", "tag": "grpc",
+      "q": "What is the main reason teams choose gRPC over JSON/REST for internal service-to-service calls?",
+      "options": [
+        {"t": "Binary protobuf encoding plus HTTP/2 slash serialization cost and wire size, and generated typed clients catch mistakes at compile time", "correct": true,
+         "why": "Right. Nobody human reads internal payloads, so JSON's readability buys nothing while its parsing cost lands on the cloud bill. Schema-first .proto files add typed codegen and cross-language contracts for free."},
+        {"t": "gRPC is easier to debug with curl and a browser", "correct": false,
+         "why": "The opposite — losing curl-ability and easy browser access is gRPC's main cost (grpc-web needs a proxy). That's precisely why the rule of thumb is REST at the edge, gRPC inside."},
+        {"t": "gRPC automatically makes services horizontally scalable without architectural changes", "correct": false,
+         "why": "Scalability comes from architecture — stateless services, load balancing, sharding — not from the RPC framing. gRPC makes calls cheaper, not services magically scalable."},
+        {"t": "Protobuf messages are human-readable, making logs clearer", "correct": false,
+         "why": "Protobuf is compact binary — the opposite of human-readable. That's the trade: you give up eyeballing payloads to gain smaller, cheaper messages."}
+      ]
+    },
+    {
+      "id": "p1c02-q10", "level": 2, "type": "mcq", "tag": "idempotency",
+      "q": "Your checkout POST times out on mobile and the app auto-retries. Which design guarantees the customer is charged at most once?",
+      "options": [
+        {"t": "The app sends the same client-generated idempotency key on the original and every retry; the server executes once per key and replays the stored response", "correct": true,
+         "why": "The full mechanism. The key names the logical operation, so however many attempts the flaky network produces, the server collapses them into one execution — and lost responses are recovered by replay."},
+        {"t": "The app generates a fresh idempotency key for each retry attempt, so every request is uniquely identified", "correct": false,
+         "why": "The classic implementation bug. A fresh key per attempt makes every retry look like a brand-new checkout — the server dutifully executes each one. The key must identify the OPERATION, not the attempt."},
+        {"t": "The server checks whether an order with the same amount was created in the last minute and skips it if so", "correct": false,
+         "why": "Heuristic dedupe breaks both ways: it blocks a legitimate second ₹499 order (customer buying twice on purpose) and misses duplicates outside the window. Exact keys exist so you never have to guess intent."},
+        {"t": "The app simply never retries payment requests", "correct": false,
+         "why": "This trades double-charges for lost orders: when the response (not the request) was what got lost, the charge succeeded and the customer sees a failure with no receipt. Timeouts are ambiguous — refusing to retry doesn't resolve the ambiguity, it just picks the other bad outcome."}
+      ]
+    },
+    {
+      "id": "p1c02-q11", "level": 2, "type": "mcq", "tag": "pagination",
+      "q": "An internal admin export walks all 2M orders via ?page=N&per_page=100 and takes hours, with the database CPU climbing as it goes. Why, and what's the fix?",
+      "options": [
+        {"t": "Each page pays to scan and discard every row before it — switch to keyset/cursor pagination", "correct": true,
+         "why": "Right. OFFSET 1,999,900 walks nearly 2M index entries and throws them away, per request. A cursor query — WHERE (created_at, id) < last-seen — jumps straight to the position, so page 20,000 costs the same as page 1."},
+        {"t": "The database cache is cold; run the export twice and the second pass will be fast", "correct": false,
+         "why": "Caching can't fix an algorithmic problem. The scan-and-discard work is proportional to the offset regardless of what's in memory — the cost curve is built into how OFFSET works."},
+        {"t": "Add an index on the sort column so the database can locate each page directly", "correct": false,
+         "why": "Reasonable instinct, but OFFSET still walks the index from the start and discards N entries — an index changes what gets scanned, not how much. Only a seek predicate (keyset) eliminates the linear cost."},
+        {"t": "Increase per_page to 10,000 to reduce the number of requests", "correct": false,
+         "why": "This helps a little by cutting round trips, but each deep request still pays the full offset scan — and giant pages add memory pressure and timeout risk. It shrinks the constant, not the O(offset) shape."}
+      ]
+    },
+    {
+      "id": "p1c02-q12", "level": 2, "type": "mcq", "tag": "pagination",
+      "q": "You build cursor pagination sorted by created_at, and QA reports occasional duplicated and skipped comments at page boundaries. The likely cause:",
+      "options": [
+        {"t": "created_at has ties, so the cursor can't say which tied comment it stopped at — add a tie-breaker like (created_at, id)", "correct": true,
+         "why": "Exactly. A cursor pointing 'after 12:00:01' is ambiguous when five comments share that second — the resume point lands before or after some of them arbitrarily. The compound key makes every position unique and the walk exact."},
+        {"t": "The cursor should be encrypted, not just base64-encoded", "correct": false,
+         "why": "Opacity is about discouraging clients from parsing the token, not about secrecy — and neither encoding nor encryption changes which rows the query returns. The bug is in the sort key's ambiguity, not the token's wrapper."},
+        {"t": "Base64 encoding is corrupting the timestamp when the cursor round-trips through the client", "correct": false,
+         "why": "Base64 is lossless — it reproduces bytes exactly. Blaming the encoding is a common first suspicion, but the data comes back intact; it's the meaning of a tied timestamp that's ambiguous."},
+        {"t": "Cursor pagination can't handle high write volume; switch back to offset", "correct": false,
+         "why": "Backwards — handling concurrent writes is cursor pagination's core strength, and offset is strictly worse under churn. The implementation just needs a unique compound sort key to be correct."}
+      ]
+    },
+    {
+      "id": "p1c02-q13", "level": 2, "type": "mcq", "tag": "versioning",
+      "q": "Your public API's response field 'user_name' should have been 'username'. Thousands of integrations read it. The right move:",
+      "options": [
+        {"t": "Add 'username' alongside 'user_name', document the old one as deprecated, and plan to keep it effectively forever", "correct": true,
+         "why": "Additive evolution — the only change that breaks nobody. The aesthetic pain of two fields is real and it is vastly cheaper than breaking strangers' cron jobs. This is what 'v1 forever' means in practice."},
+        {"t": "Rename it and announce the change with 90 days' notice", "correct": false,
+         "why": "The 2019 cron job doesn't read email. Notice periods shift blame, not breakage — on day 91 you still break every integration whose maintainer moved on, including some of your biggest customers."},
+        {"t": "Rename it only in a new /v2/ and shut down /v1/ within a year", "correct": false,
+         "why": "The v2 half is fine; the shutdown half is fantasy. Old versions live approximately forever — announcing a v1 sunset is how you discover which critical integrations were built by contractors who left."},
+        {"t": "Rename it now — a field name is a trivial change", "correct": false,
+         "why": "To you it's a rename; to every client parsing the response it's a missing field and a production incident. There are no trivial changes to a published contract — that's the entire lesson of this chapter."}
+      ]
+    },
+    {
+      "id": "p1c02-q14", "level": 2, "type": "mcq", "tag": "status-codes",
+      "q": "Your API's database is briefly overloaded and queries are failing; recovery is expected in seconds. The most useful response to send:",
+      "options": [
+        {"t": "503 with a Retry-After header", "correct": true,
+         "why": "503 says 'temporarily unable — the request may be fine, try again shortly', and Retry-After tells well-behaved clients exactly how to behave. You've converted an outage into an orderly, machine-readable pause."},
+        {"t": "400, since the requests can't be processed", "correct": false,
+         "why": "400 blames the client and tells it never to retry the same request — the opposite of the truth here. Clients will surface permanent errors to users for what was a five-second blip."},
+        {"t": "200 with {\"status\": \"degraded\"} in the body so clients aren't alarmed", "correct": false,
+         "why": "The kindly-meant lie. Monitoring sees success, retry logic sees success, and callers treat garbage as good data. Alarming the machines is precisely the goal — that's what triggers their backoff behavior."},
+        {"t": "504 Gateway Timeout", "correct": false,
+         "why": "Close — 504 specifically means an upstream hop timed out while a gateway waited. If your own service is refusing work because a dependency is overloaded, 503 ('temporarily unavailable') is the precise signal, ideally with Retry-After attached."}
+      ]
+    },
+    {
+      "id": "p1c02-q15", "level": 2, "type": "mcq", "tag": "webhooks",
+      "q": "Your webhook endpoint processes each payment event inline (DB writes, email, invoice PDF) taking 8-15s. The provider times out at 10s. What happens over time?",
+      "options": [
+        {"t": "Timeouts turn into retries that repeat the heavy work on an already-slow endpoint — ack fast, queue, process async", "correct": true,
+         "why": "The self-built retry storm. Every timeout spawns a retry that repeats the expensive work on an already-slow system — a feedback loop. Acknowledging after a durable enqueue (milliseconds) starves the loop of fuel."},
+        {"t": "Nothing serious — the events that finish under 10 seconds complete, and the provider redelivers the rest", "correct": false,
+         "why": "The failing half get redelivered on top of live traffic, pushing more requests past the timeout, which triggers more retries. Feedback loops don't stay at half — they compound toward collapse."},
+        {"t": "Ask the provider to raise its timeout to 20 seconds", "correct": false,
+         "why": "Even where possible, this treats the symptom: any slow minute still starts the storm, just later. The structural fix is making acknowledgment independent of processing time — ack-then-queue."},
+        {"t": "Scale the endpoint horizontally so inline processing finishes faster", "correct": false,
+         "why": "Buying hardware to keep doing expensive work inside someone else's timeout window is fighting the architecture. More instances delay the storm; decoupling ack from processing eliminates it — and costs less."}
+      ]
+    },
+    {
+      "id": "p1c02-q16", "level": 2, "type": "mcq", "tag": "idempotency",
+      "q": "A request arrives with an idempotency key the server has seen before — but the request body is different this time. The server should:",
+      "options": [
+        {"t": "Reject it with an explicit error — same key with a different body means the client has a bug", "correct": true,
+         "why": "Right — this is Stripe's behavior too. Same key must mean same operation; a mismatched body means the client's key management is broken, and the kindest response is a loud, immediate error rather than a silent wrong answer."},
+        {"t": "Execute the new request — the newer body probably reflects updated intent", "correct": false,
+         "why": "Now the key guarantees nothing: the operation ran twice with different parameters under one identity. 'Probably' is doing fatal work here — the server cannot know intent, so it must refuse to guess."},
+        {"t": "Replay the stored response — the key matches, and that's what keys are for", "correct": false,
+         "why": "The client asked to transfer ₹900 and gets back a receipt for ₹500. Replaying a response to a different request hides the client's bug behind a plausible-looking success — the worst kind of failure to debug."},
+        {"t": "Merge the two bodies, preferring the newer fields, and execute the combined request", "correct": false,
+         "why": "Inventing a request neither version of the client actually sent is creative in the way 3am incidents are creative. Servers should never synthesize intent from conflicting inputs."}
+      ]
+    },
+    {
+      "id": "p1c02-q17", "level": 2, "type": "multi", "tag": "webhooks",
+      "q": "Which of these belong in every production webhook receiver? (Select all that apply.)",
+      "options": [
+        {"t": "Verify the provider's signature before trusting the payload", "correct": true,
+         "why": "The endpoint is a public URL — anyone can POST fake 'payment succeeded' events at it. The HMAC signature check is the trust boundary; skipping it means strangers can write to your business logic."},
+        {"t": "Return 2xx quickly, before heavy processing, once the event is durably queued", "correct": true,
+         "why": "Acknowledgment must decouple from processing, or slow work triggers provider timeouts and a retry storm. Enqueue durably, say 200, do the real work async."},
+        {"t": "Track processed event IDs and skip duplicates", "correct": true,
+         "why": "At-least-once delivery makes duplicates certain, not merely possible. Insert-if-absent on the event ID, atomic with the side effect, is what keeps 'payment succeeded' from being processed twice."},
+        {"t": "Trust the event payload's ordering, since providers send events in sequence", "correct": false,
+         "why": "Retries and parallel delivery reorder events routinely — order.shipped can arrive before order.created. The robust pattern treats events as doorbells and fetches current state from the API instead of replaying payloads in arrival order."}
+      ]
+    },
+    {
+      "id": "p1c02-q18", "level": 2, "type": "mcq", "tag": "api-shape",
+      "q": "Reviewing a teammate's design: POST /api/getOrdersList returning 200 always, with {\"success\": false, \"msg\": \"...\"} on failure. Your feedback targets the root issue:",
+      "options": [
+        {"t": "It reinvents what HTTP already provides — GET /orders with real status codes gets you caching, retries, and monitoring for free", "correct": true,
+         "why": "The root cause: tunneling everything through POST-plus-200 opts out of the entire HTTP machine. Reads become uncacheable and unretryable, errors become invisible to every dashboard, and each client must learn a bespoke envelope."},
+        {"t": "The URL should be /api/get-orders-list — kebab-case is the convention", "correct": false,
+         "why": "Casing bikeshed. The verb 'get' in the URL at all is the smell — resources are nouns, and the method already says what you're doing. Polishing the verb's spelling misses the design error."},
+        {"t": "It should return 500 instead of 200 on failure, so monitoring can finally see the errors", "correct": false,
+         "why": "Directionally right on one symptom, but which 4xx/5xx depends on the failure — and the POST-for-a-read and custom success envelope would still be there. Fix the shape, and precise codes follow naturally."},
+        {"t": "It's fine — many production APIs work this way", "correct": false,
+         "why": "Common, yes; fine, no. Every such API pays a permanent tax: no HTTP caching, blind monitoring, bespoke client error handling. Reviewing it as 'fine' waves the whole chapter's bill through."}
+      ]
+    },
+    {
+      "id": "p1c02-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'How would you version this public API?' Which answer reads senior?",
+      "options": [
+        {"t": "\"I'll design v1 to never need a v2: additive changes only, clients must ignore unknown fields, and names sweated up front because they're permanent. If a true break ever comes, I'd pin clients to dated versions, Stripe-style — but the real strategy is never needing it.\"", "correct": true,
+         "why": "This answer knows the deep truth: versioning strategy is mostly about avoiding versions. It commits to a mechanism, names the industry's best implementation, and puts the effort where it pays — contract discipline in v1."},
+        {"t": "\"URL versioning — /v1/, /v2/ — it's the most common approach and everyone understands it.\"", "correct": false,
+         "why": "Answers the syntax question and misses the design question. Popularity isn't a reason, and nothing here addresses the actual hard problem: what happens to v1's clients when v2 ships, and for how long you'll carry them."},
+        {"t": "\"I'd sidestep versioning entirely with GraphQL — clients select their own fields, so response shapes can evolve freely.\"", "correct": false,
+         "why": "GraphQL narrows some breaking changes (field selection) but doesn't eliminate the contract problem — removing or changing the meaning of a schema field breaks clients just the same. This reads as reaching for a technology instead of engaging the actual question."},
+        {"t": "\"We're pre-launch, so I'd skip versioning and iterate fast — add it when we have real API consumers.\"", "correct": false,
+         "why": "Half-wise: pre-launch churn is fine. But the interview question is about the public contract, and 'we'll figure it out later' defers exactly the judgment being probed. The compatibility rules must exist the day the first external consumer integrates."}
+      ]
+    },
+    {
+      "id": "p1c02-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your feed API uses offset pagination. Traffic and data grow 10x. What breaks first, and what's the honest migration story?",
+      "options": [
+        {"t": "Deep-page queries degrade the database and duplicate-item bugs multiply with insert rate; ship cursor pagination as the new contract, keep offset alive for existing clients while nudging them over", "correct": true,
+         "why": "Names both failure modes, ties each to the growth axis that drives it, and — the senior part — respects the existing contract. You can't hot-swap pagination semantics under integrated clients; you run both and migrate deliberately."},
+        {"t": "Nothing breaks — pagination cost is per-page, and pages are still small", "correct": false,
+         "why": "Page SIZE stays small; page DEPTH cost doesn't — OFFSET N scans N rows, and 10x data plus crawlers means 10x-deeper offsets hammering the DB. Missing the O(offset) scan is missing the mechanism."},
+        {"t": "Swap the offset implementation for cursors server-side; clients won't notice", "correct": false,
+         "why": "The API shape IS the contract — ?page=7 has no meaning in a cursor world, so clients absolutely notice. This answer treats a public interface change as an internal refactor, which is precisely how partners get broken."},
+        {"t": "Add read replicas to absorb the extra query load while leaving the API contract untouched", "correct": false,
+         "why": "Buys time on the performance failure while doing nothing for the correctness failure — duplicates and skips get WORSE with insert rate, and replicas don't change the algorithm. Hardware against an algorithmic problem is a rental, not a fix."}
+      ]
+    },
+    {
+      "id": "p1c02-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your mobile checkout hits a timeout. Walk me through making the retry safe.' The senior-complete answer covers:",
+      "options": [
+        {"t": "One key per logical operation reused across retries; server stores key with the response atomically with the charge; replay on completed keys, conflict on in-flight ones, reject on body mismatch; keys expire after ~24h", "correct": true,
+         "why": "The whole mechanism including its edges — the atomic commit (or a crash reopens the double-charge hole), the in-flight race, the mismatch case, and cleanup. That's the difference between knowing the header exists and having designed the system."},
+        {"t": "\"Send an idempotency key header with each request so the server can recognize and dedupe the retries\"", "correct": false,
+         "why": "Correct and two levels too shallow for the follow-ups you've invited: Stored where? Atomic with what? What if the original is still running? What if the body differs? At senior, the edge cases ARE the answer."},
+        {"t": "\"Make the client wait longer before timing out, so the ambiguity rarely happens\"", "correct": false,
+         "why": "Tuning timeouts shrinks the window; it cannot close it — mobile networks guarantee some requests die mid-flight. Designing around 'rarely' instead of 'never' on a payment path is the happy-path thinking the interview is screening for."},
+        {"t": "\"Payments should be idempotent server-side, so I'd have the payments team handle duplicate detection\"", "correct": false,
+         "why": "Delegation cosplaying as design. The interviewer asked YOU for the mechanism — 'another team handles it' produces no key lifecycle, no storage semantics, no race handling, and no senior signal."}
+      ]
+    },
+    {
+      "id": "p1c02-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A teammate proposes GraphQL for the API between your two backend services 'so we never have to change endpoints again.' The senior response:",
+      "options": [
+        {"t": "\"Two services with stable, known needs don't have the problem GraphQL solves — I'd use gRPC here and revisit if we ever have many diverse clients with fast-changing field needs.\"", "correct": true,
+         "why": "Matches the tool to the actual problem: GraphQL's payoff is client diversity, and its costs — cost-analysis rate limiting, resolver N+1s, broken HTTP caching — are real. Naming the condition that would change your mind is what keeps this from being mere conservatism."},
+        {"t": "\"Good idea — GraphQL is the modern standard, and having that flexibility in place early always pays off down the road.\"", "correct": false,
+         "why": "'Modern' and 'flexibility' are vibes, not reasons. Flexibility you don't need is complexity you pay for anyway — every query becomes a mini-program you must cost-analyze and secure, for two clients whose needs you already know."},
+        {"t": "\"GraphQL is only for frontend teams — it's inappropriate anywhere else.\"", "correct": false,
+         "why": "Right conclusion, junior reasoning. Categorical rules ('only for X') collapse under the first counterexample; the senior version reasons from the actual trade-off — client diversity versus operational cost — and so survives follow-up probing."},
+        {"t": "\"Let's run both GraphQL and gRPC side by side and see which the team prefers.\"", "correct": false,
+         "why": "Two API stacks means two sets of contracts, monitoring, auth, and expertise — doubling operational surface to avoid making one decision. Hedging by building everything is over-engineering's most expensive disguise."}
+      ]
+    },
+    {
+      "id": "p1c02-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Designing error responses for a payments API used by thousands of third parties. Which design commitment is right, and why?",
+      "options": [
+        {"t": "A consistent envelope with a stable machine-readable code, a freely-rewordable human message, and a request_id echoed in your logs — treating the code list as part of the versioned contract", "correct": true,
+         "why": "Each piece earns its place: clients branch on codes (so codes are contract), humans read messages (so messages stay flexible), and request_id turns support threads into one log query. Declaring codes contractual up front is the commitment juniors miss."},
+        {"t": "Return the HTTP status code alone — 402 says everything a payment failure needs to say", "correct": false,
+         "why": "Status codes carry the failure's CLASS, not its identity — 'card declined', 'expired', 'insufficient funds', and 'suspected fraud' all share a status but demand different client behavior. The body exists because a dozen codes can't name a thousand failures."},
+        {"t": "Return detailed internal diagnostics — stack trace, query, service name — to help integrators debug faster", "correct": false,
+         "why": "Generous instinct, security disclosure in practice: internals map your attack surface for anyone probing the API. Integrators need the request_id — which gives YOUR support team the full internal picture without publishing it."},
+        {"t": "Free-text messages only, so error descriptions can evolve without contract concerns", "correct": false,
+         "why": "With no stable code, clients regex-match your prose — and now the prose IS the contract, just an undeclared, unversioned one that breaks integrations on every reword. You don't escape the contract by refusing to declare it."}
+      ]
+    },
+    {
+      "id": "p1c02-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your webhook consumer handles 10x event volume fine on average, but provider retry storms during your deploys now cause hours of duplicate-processing incidents. The structural fix:",
+      "options": [
+        {"t": "Make acknowledgment trivial (verify, durably enqueue, 200) so deploys can't trigger timeouts, make processing idempotent via atomic event-ID dedupe, and page on queue depth as the early-warning signal", "correct": true,
+         "why": "Attacks the loop at both ends — storms can't start (ack no longer depends on processing) and can't hurt (duplicates become no-ops) — and adds the operational signal that says trouble is building before customers see it. Structure plus observability is the senior pair."},
+        {"t": "Pause deploys during business hours when event volume is high", "correct": false,
+         "why": "A process bandage on an architecture wound — the same storm fires on any slow minute: GC pause, DB failover, noisy neighbor. Scheduling around your own fragility instead of removing it reads as never having fixed one of these."},
+        {"t": "Have the provider disable retries for your endpoint since duplicates hurt you", "correct": false,
+         "why": "Retries are what guarantee delivery — disabling them trades duplicate processing (a bug you can fix) for silently lost payment events (a bug you can't even detect). At-least-once plus dedupe is the correct contract; keep it."},
+        {"t": "Add enough capacity that the consumer stays fast even during deploys, keeping acks inside the provider's timeout", "correct": false,
+         "why": "Capacity doesn't remove the coupling between ack latency and processing latency — it just raises the storm threshold you'll eventually cross again. And it leaves duplicate handling unfixed, which was the actual incident."}
+      ]
+    },
+    {
+      "id": "p1c02-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You're designing a platform with public third-party APIs, mobile apps, and ~40 internal microservices. Interviewer: 'REST everywhere, gRPC everywhere, or mixed?' The senior answer:",
+      "options": [
+        {"t": "\"Mixed, on a boundary rule: REST/JSON at the public edge where debuggability and universal clients win; gRPC inside where volume makes protobuf's efficiency, typed contracts, and deadline propagation pay. The cost is two stacks, contained by a gateway at the boundary.\"", "correct": true,
+         "why": "A committed rule with reasons on both sides of the boundary, an honestly named cost, and a containment plan. 'One decision per boundary' beats 'one technology everywhere' — and saying the trade-off out loud is what makes it read senior rather than hedged."},
+        {"t": "\"gRPC everywhere — it's faster, and one consistent stack across the whole platform beats everything else.\"", "correct": false,
+         "why": "Uniformity bought at the edge's expense: third-party developers lose curl-and-browser debuggability, browsers need proxy machinery, and adoption friction rises. 'Faster' where speed wasn't the binding constraint is optimizing the wrong boundary."},
+        {"t": "\"REST everywhere — gRPC is an optimization we can adopt later if profiling demands it.\"", "correct": false,
+         "why": "Sounds prudently lazy, but at 40 services the internal call volume is exactly where JSON's tax compounds — and 'later' means migrating 40 live contracts instead of choosing correctly at design time. Deferral has a price too; seniors weigh it."},
+        {"t": "\"Either works — I'd let each team pick per service.\"", "correct": false,
+         "why": "Reads as consensus-seeking, grades as no decision. Per-team choice yields a patchwork of serialization, auth, and tooling that every cross-service call pays for — the platform-level judgment the question asks for is precisely what this answer declines to exercise."}
+      ]
+    }
+  ]
+}

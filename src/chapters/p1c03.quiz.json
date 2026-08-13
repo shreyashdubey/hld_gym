@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c03",
+  "items": [
+    {
+      "id": "p1c03-q01", "level": 1, "type": "mcq", "tag": "normalization",
+      "q": "What problem does normalization primarily solve?",
+      "options": [
+        {"t": "A fact stored in several copies can drift when an update misses one", "correct": true,
+         "why": "Right — the update anomaly. Normalization means every fact lives in exactly one place and everything else points at it, so an update changes one row and the whole database agrees instantly."},
+        {"t": "It makes queries faster by shrinking the amount of data each one scans", "correct": false,
+         "why": "Often the opposite — normalized data needs joins to reassemble, which costs read time. Normalization buys correctness and cheap writes; speed for hot reads is what denormalization buys back."},
+        {"t": "It reduces the number of tables", "correct": false,
+         "why": "Normalizing usually increases the table count — you split repeated facts out into their own tables. Fewer tables isn't the goal; one home per fact is."},
+        {"t": "It encrypts sensitive columns", "correct": false,
+         "why": "Encryption is a separate concern entirely. Normalization is about where facts live, not how they're protected."}
+      ]
+    },
+    {
+      "id": "p1c03-q02", "level": 1, "type": "mcq", "tag": "btree",
+      "q": "Why can a B-tree index find one row among 100 million in a handful of page reads?",
+      "options": [
+        {"t": "Sorted pages holding hundreds of keys each keep the tree only 3–4 levels deep", "correct": true,
+         "why": "Exactly. Sorted data lets you jump instead of scan (the phone-book move), and a branching factor of hundreds makes the tree only 3–4 levels deep even at 100M+ rows — with the top levels cached in RAM."},
+        {"t": "The index keeps the whole table in RAM, so lookups never touch disk", "correct": false,
+         "why": "Indexes live on disk like tables do; only the hot upper pages tend to stay cached. The speed comes from the sorted tree shape, not from magically fitting everything in memory."},
+        {"t": "The database hashes the key to a bucket", "correct": false,
+         "why": "That's a hash index — real, but different. Hashes do exact lookups only; B-trees are the default because sorting also serves ranges and ORDER BY."},
+        {"t": "It scans the table in parallel with many threads", "correct": false,
+         "why": "Parallel scanning exists but it's still a scan — work proportional to table size. A B-tree does logarithmic work: the whole point is reading four pages instead of twenty million rows."}
+      ]
+    },
+    {
+      "id": "p1c03-q03", "level": 1, "type": "mcq", "tag": "composite-index",
+      "q": "You have an index on (city, created_at). Which query gets essentially NO help from it?",
+      "options": [
+        {"t": "WHERE created_at > '2026-01-01' with no city filter", "correct": true,
+         "why": "Right — the leftmost-prefix rule. The index sorts by city first, so recent dates are scattered through every city's block (the phone-book-Priya problem). Skip the leading column and the sort order can't localize your matches."},
+        {"t": "WHERE city = 'Delhi' AND created_at > '2026-01-01'", "correct": false,
+         "why": "This is the index's dream query: equality on the lead column jumps to the Delhi block, and the trailing column is sorted within it, ready for the range."},
+        {"t": "WHERE city = 'Delhi'", "correct": false,
+         "why": "A leading-column equality is exactly what the index serves — one contiguous block of Delhi entries. The leftmost prefix works on its own."},
+        {"t": "WHERE city = 'Delhi' ORDER BY created_at LIMIT 20", "correct": false,
+         "why": "Served beautifully — the Delhi block is already sorted by created_at, so the database reads 20 entries and stops. No sort step at all."}
+      ]
+    },
+    {
+      "id": "p1c03-q04", "level": 1, "type": "mcq", "tag": "composite-index",
+      "q": "Take two: the index is on (city, created_at). Why does WHERE created_at > '2026-01-01' (alone) get no help?",
+      "options": [
+        {"t": "Recent entries are scattered across every city's block in the index", "correct": true,
+         "why": "Right — the phone-book problem: you can't find everyone named Priya in a book sorted by surname. Without the leading column, matches are spread through the whole index, so the planner scans instead."},
+        {"t": "B-tree indexes serve exact matches only, and this is a range query", "correct": false,
+         "why": "Ranges use indexes constantly — that's a headline B-tree feature. The failure here is only that the range is on a non-leading column of a composite index."},
+        {"t": "The index only stores city values", "correct": false,
+         "why": "A composite index stores both columns in every entry. The problem isn't missing data — it's that entries are ordered by city first, so dates aren't contiguous."},
+        {"t": "Dates can't be indexed efficiently", "correct": false,
+         "why": "Dates index beautifully — they sort naturally. An index on (created_at) alone would serve this query perfectly; the issue is purely column order."}
+      ]
+    },
+    {
+      "id": "p1c03-q05", "level": 1, "type": "mcq", "tag": "covering-index",
+      "q": "What makes an index a 'covering' index for a query?",
+      "options": [
+        {"t": "It contains every column the query needs", "correct": true,
+         "why": "Yes — the normal second step (follow the index pointer to the table row) vanishes, giving an index-only scan. Postgres even lets you append non-searched columns with INCLUDE just for coverage."},
+        {"t": "It covers all rows in the table", "correct": false,
+         "why": "Regular indexes already cover all rows (partial indexes are the exception). 'Covering' is about columns relative to one query, not about row coverage."},
+        {"t": "It's the primary key index", "correct": false,
+         "why": "A primary key index covers only queries that need just the key columns. Any index can be covering — the term describes a relationship between an index and a specific query."},
+        {"t": "It includes every column of the table", "correct": false,
+         "why": "That would be a second copy of the table — a huge write tax. Covering is per-query: it only needs the columns that one query reads, which is usually two or three."}
+      ]
+    },
+    {
+      "id": "p1c03-q06", "level": 1, "type": "mcq", "tag": "write-tax",
+      "q": "A table has 4 secondary indexes. Roughly what happens on every INSERT?",
+      "options": [
+        {"t": "Five structures get written: the table plus each of the four B-trees", "correct": true,
+         "why": "Right. Each index is a sorted copy the database swore to keep in sync — every insert finds the right page in every tree, splitting pages when full. Indexes buy read speed with write speed as the currency."},
+        {"t": "Only the table is written; indexes update lazily overnight", "correct": false,
+         "why": "Indexes update synchronously inside the same operation — otherwise queries through the index would miss fresh rows. (Some systems batch internally, but the cost is still paid per write.)"},
+        {"t": "Nothing extra — indexes only cost disk space", "correct": false,
+         "why": "Disk is the smallest cost. The real taxes are write amplification on every insert/update and cache space stolen from data pages. This is why unused indexes should be dropped, not shrugged at."},
+        {"t": "Each index is rebuilt from scratch so it stays sorted", "correct": false,
+         "why": "That would make writes impossibly slow. B-trees take ordered single-entry insertions — cheap per write, but multiplied by every index on every write, forever."}
+      ]
+    },
+    {
+      "id": "p1c03-q07", "level": 1, "type": "mcq", "tag": "keys",
+      "q": "Why default to a surrogate primary key (auto-increment id) instead of a natural key like email?",
+      "options": [
+        {"t": "Natural keys can change, and a primary key must never change", "correct": true,
+         "why": "Right — people change emails, governments recycle IDs. A surrogate never changes because it never meant anything. Then enforce the natural uniqueness separately with a UNIQUE constraint: name and business rule, cleanly split."},
+        {"t": "Joins on compact integer ids always beat joins on strings like email", "correct": false,
+         "why": "Sometimes joins on compact bigints are faster than long strings, but that's a bonus, not the reason. The core argument is stability — primary keys are forever, and natural facts aren't."},
+        {"t": "Natural keys can't be indexed", "correct": false,
+         "why": "They index fine — you should absolutely put a unique index on email. The problem is using a changeable fact as the row's permanent name, not indexing it."},
+        {"t": "Databases require integer primary keys", "correct": false,
+         "why": "Databases happily accept text or composite primary keys. The surrogate-key default is a design judgment about change over time, not a technical requirement."}
+      ]
+    },
+    {
+      "id": "p1c03-q08", "level": 1, "type": "mcq", "tag": "n-plus-one",
+      "q": "What is the N+1 query problem?",
+      "options": [
+        {"t": "One query fetches N items, then one more query runs per item", "correct": true,
+         "why": "Yes — 50 posts, then 50 author lookups in a loop. Every query is fast; the page is slow, because 101 round trips at 1ms each is 100ms of pure back-and-forth. ORMs generate this silently."},
+        {"t": "A query that returns N+1 rows when you expected N", "correct": false,
+         "why": "That's an off-by-one or a join fanning out — a correctness bug. N+1 is a performance pattern: too many round trips, each individually innocent."},
+        {"t": "Having one more index than you have queries", "correct": false,
+         "why": "Unused indexes are a real problem (the write tax with no refund), but that's index hygiene. N+1 is about query counts per request exploding."},
+        {"t": "N servers overwhelming 1 database", "correct": false,
+         "why": "Connection saturation is real but different. N+1 happens with one app server and one database — the round trips themselves are the waste."}
+      ]
+    },
+    {
+      "id": "p1c03-q09", "level": 1, "type": "mcq", "tag": "acid",
+      "q": "Your transaction runs at read committed (the Postgres default). What does that guarantee?",
+      "options": [
+        {"t": "You never see another transaction's uncommitted data", "correct": true,
+         "why": "Right — and the senior half is knowing that's about ALL it promises. Two transactions can still both read the same state and act on it simultaneously — check-then-act races survive read committed completely."},
+        {"t": "Transactions execute as if one at a time", "correct": false,
+         "why": "That's serializable, the strongest level — it costs conflict detection and forced retries. Read committed is much weaker, which is exactly why the double-booking race exists at the default setting."},
+        {"t": "Once you read a row, it can't change until you commit", "correct": false,
+         "why": "Read committed takes no such lock — re-reading the same row later in your transaction can return different (newly committed) data. Holding reads stable is repeatable read's job."},
+        {"t": "Each statement's writes are flushed safely to disk the moment it runs", "correct": false,
+         "why": "That's durability, which applies at commit regardless of isolation level. Isolation levels are about what concurrent transactions see of each other, not about disk."}
+      ]
+    },
+    {
+      "id": "p1c03-q10", "level": 2, "type": "mcq", "tag": "composite-index",
+      "q": "Your orders page runs: WHERE customer_id = ? ORDER BY placed_at DESC LIMIT 20. It's slow at 50M rows. Best index?",
+      "options": [
+        {"t": "(customer_id, placed_at DESC)", "correct": true,
+         "why": "The rule applied: equality column first (jumps to one customer's contiguous block), sort column last (the block is pre-sorted, so the database reads 20 entries and stops). No sort step, near-zero work — this is how pagination should feel."},
+        {"t": "(placed_at DESC, customer_id)", "correct": false,
+         "why": "Backwards. With the range/sort column leading, one customer's orders are scattered through the global timeline — the database must crawl recent orders from ALL customers, filtering for yours. Equality first, sort second."},
+        {"t": "Two separate indexes: (customer_id) and (placed_at)", "correct": false,
+         "why": "The planner can sometimes combine indexes, but it can't get the 'already sorted within the block' property that makes LIMIT 20 nearly free. One composite index beats two singles for this exact shape."},
+        {"t": "(customer_id, placed_at, plus every displayed column)", "correct": false,
+         "why": "Over-covering. A covering index is a fine follow-up IF profiling shows heap fetches hurt — but stuffing many columns bloats the index and taxes every write. Start with the two-column composite; measure before widening."}
+      ]
+    },
+    {
+      "id": "p1c03-q11", "level": 2, "type": "mcq", "tag": "query-planner",
+      "q": "You add an index on status, but EXPLAIN shows a sequential scan for WHERE status = 'completed' — which matches 90% of rows. Why is the planner right?",
+      "options": [
+        {"t": "Pulling 90% of rows through the index costs more than one sequential read", "correct": true,
+         "why": "Exactly — selectivity is the key idea. Indexes win by eliminating most of the table. When a filter keeps nearly everything, the index adds a detour, and the planner's cost math correctly says 'just read the table in order.'"},
+        {"t": "The planner has a bug; force the index with a hint", "correct": false,
+         "why": "Forcing the index here makes the query slower. When the planner disagrees with you, the first hypothesis should be that its cost model knows something about your data distribution — check selectivity and stats before reaching for hints."},
+        {"t": "Text columns can't be indexed", "correct": false,
+         "why": "Text indexes fine. The issue is purely that 'completed' matches almost everything — index the rare value's query (e.g., a partial index WHERE status = 'pending') and the planner will pounce on it."},
+        {"t": "The index is bloated and needs a rebuild before the planner will trust it", "correct": false,
+         "why": "Rebuilds fix bloat, not this. The index is healthy; it's just useless for a filter that keeps 90% of the table. No amount of rebuilding changes the selectivity math."}
+      ]
+    },
+    {
+      "id": "p1c03-q12", "level": 2, "type": "mcq", "tag": "denormalization",
+      "q": "Your feed shows a like count per post, computed by COUNT(*) per post per page load, and it's melting the database. A teammate proposes a like_count column on posts. What must the design include to be senior-grade?",
+      "options": [
+        {"t": "A named writer for the counter plus a reconciliation job that repairs drift", "correct": true,
+         "why": "That's denormalizing like an adult: the fact now lives in two places, so drift is a 'when', not an 'if' — and the design owns both the sync path and the repair path. Counter for display, likes table for truth."},
+        {"t": "Just the column and an increment in the like endpoint — keep it simple", "correct": false,
+         "why": "One crash between insert and increment, one bug, one manual data fix — and the counter silently lies forever. Denormalization without a reconciliation story is a slow-motion data-corruption project."},
+        {"t": "Refuse — denormalization violates normal forms", "correct": false,
+         "why": "Purity isn't the goal; serving reads is. A hot read the normalized path measurably can't serve is exactly when you break the rule on purpose. The senior move is doing it with eyes open, not never doing it."},
+        {"t": "Move the likes table to a NoSQL store built for write-heavy loads", "correct": false,
+         "why": "A database migration to avoid one counter column is a crane to lift a teacup — new infra, new failure modes, same COUNT problem in a new dialect. Solve the read pattern, not the technology."}
+      ]
+    },
+    {
+      "id": "p1c03-q13", "level": 2, "type": "mcq", "tag": "foreign-keys",
+      "q": "Which is a legitimate reason a large shop drops foreign key ENFORCEMENT in the database?",
+      "options": [
+        {"t": "Shards, per-write locking overhead, and migration tools that don't support them", "correct": true,
+         "why": "All three are the real, named reasons. The integrity rule doesn't disappear — it moves into application code plus periodic orphan-hunting jobs. You trade an automatic guarantee for vigilance, consciously."},
+        {"t": "Foreign keys are deprecated in modern SQL", "correct": false,
+         "why": "Not remotely — they're standard, supported, and the right default for most systems forever. Shops that drop them do it at a specific scale for specific operational reasons, not because FKs are outdated."},
+        {"t": "They slow SELECTs by forcing every read to join through the parent table", "correct": false,
+         "why": "FK checks cost on writes (insert/update/delete), not reads. If someone claims FKs slow their SELECTs, the actual culprit is elsewhere — probably a missing index on the referencing column."},
+        {"t": "Application-level checks are more reliable than database constraints", "correct": false,
+         "why": "Backwards — the database constraint works even when app code forgets, which is precisely why it's valuable. App-level enforcement is the concession you make when constraints become operationally impossible, not an upgrade."}
+      ]
+    },
+    {
+      "id": "p1c03-q14", "level": 2, "type": "mcq", "tag": "transactions",
+      "q": "Your booking flow SELECTs to check a seat is free, then INSERTs. At read committed, a load test double-sells seats. The most robust single fix:",
+      "options": [
+        {"t": "A unique constraint on (show_id, seat_id) for active bookings", "correct": true,
+         "why": "The database becomes the referee. Check-then-act races are invisible to read committed, but a unique index physically cannot admit two active rows for the same seat — even from code paths you haven't written yet. It's the seatbelt that works when everyone forgets."},
+        {"t": "Add a second SELECT check right before the INSERT", "correct": false,
+         "why": "Shrinks the race window; doesn't close it. Two transactions can still pass the double-check in the same millisecond. Races are closed by locks or constraints, never by checking faster."},
+        {"t": "Wrap the SELECT and INSERT in a single transaction and retry on failure", "correct": false,
+         "why": "A transaction doesn't help because nothing fails — read committed lets both transactions see 'free', and both commits succeed. The seat sells twice, silently. You need something that makes the second write actually fail."},
+        {"t": "Cache seat availability in Redis to reduce database load", "correct": false,
+         "why": "A cache makes the read cheaper and the race worse — now buyers act on stale availability too. Display can come from cache; the booking decision must go through a constraint or a lock."}
+      ]
+    },
+    {
+      "id": "p1c03-q15", "level": 2, "type": "mcq", "tag": "n-plus-one",
+      "q": "A dashboard endpoint takes 900ms. Tracing shows 340 queries per request, each under 2ms, all hitting indexes. The fix is:",
+      "options": [
+        {"t": "Batch the lookups with a JOIN or WHERE id IN (…)", "correct": true,
+         "why": "Classic N+1: every query fast, the page slow, because round-trip latency times 340 dominates. ORMs call the fix eager loading. The tell was queries-per-request — a metric worth watching as closely as query latency."},
+        {"t": "Add more indexes to speed up the queries", "correct": false,
+         "why": "The queries are already 2ms on indexes — there's nothing left to win per query. The waste is the 340 round trips themselves; indexing harder optimizes the wrong term of the equation."},
+        {"t": "Scale up the database instance", "correct": false,
+         "why": "The database is barely working — it answers each tiny query instantly. Paying for hardware to compensate for a chatty access pattern is renting a bigger kitchen because you shop for one ingredient at a time."},
+        {"t": "Move the endpoint to a faster web framework", "correct": false,
+         "why": "Framework overhead is microseconds of this 900ms. The time is in network round trips to the database, and only restructuring the queries removes them."}
+      ]
+    },
+    {
+      "id": "p1c03-q16", "level": 2, "type": "mcq", "tag": "query-planner",
+      "q": "WHERE lower(email) = 'x@y.com' ignores your index on email. Why, and what's the fix?",
+      "options": [
+        {"t": "The index sorted raw emails — index the expression lower(email) instead", "correct": true,
+         "why": "Right. A B-tree can only jump through values it actually sorted. Wrapping the column in a function makes the stored order useless. Expression indexes fix it — or better, normalize on write and keep queries plain."},
+        {"t": "Functions in WHERE clauses disable all indexes for that query", "correct": false,
+         "why": "Only for the wrapped column — functions on the compared VALUE (or other columns) are fine. WHERE email = lower(:input) uses the plain index happily, because the column side is untouched."},
+        {"t": "The index is corrupted and needs rebuilding", "correct": false,
+         "why": "Nothing is broken — the planner is being logical. It has a sorted list of emails and you asked about a transformation of them; no rebuild changes what the index sorted."},
+        {"t": "Text comparisons can't use B-trees", "correct": false,
+         "why": "Text B-trees power every login-by-email lookup on the internet. The failure is specifically the function wrapping the indexed column, hiding it from the sorted structure."}
+      ]
+    },
+    {
+      "id": "p1c03-q17", "level": 2, "type": "mcq", "tag": "write-tax",
+      "q": "Insert latency on your events table has crept from 2ms to 30ms. The table has 11 indexes, added over two years by different teams. Senior first move:",
+      "options": [
+        {"t": "Pull per-index usage stats and drop the indexes nothing has touched in weeks", "correct": true,
+         "why": "Every insert is updating 12 structures — and history says several are freeloaders. Usage stats (pg_stat_user_indexes and friends) make it a measurement, not a guess. Auditing indexes like subscriptions is the habit that prevents this creep."},
+        {"t": "Move to a write-optimized NoSQL store", "correct": false,
+         "why": "A database migration to escape self-inflicted index debt carries the problem along in new clothes. The workload isn't too write-heavy for SQL — the table is over-indexed, which is fixable this afternoon."},
+        {"t": "Batch events into groups of a few hundred inserts to amortize the cost", "correct": false,
+         "why": "Batching is a real technique, but here it's a workaround that leaves the tax in place and adds latency semantics to reason about. Remove the dead weight first; batch later if still needed."},
+        {"t": "Indexes don't affect insert speed; look elsewhere", "correct": false,
+         "why": "They're one of the first suspects — each index is an ordered insertion into its own B-tree on every write, with page splits. Eleven indexes making inserts 15x slower is entirely plausible."}
+      ]
+    },
+    {
+      "id": "p1c03-q18", "level": 2, "type": "mcq", "tag": "keys",
+      "q": "A teammate wants random UUIDs (v4) as the primary key for a 500M-row, insert-heavy table. What's the honest concern?",
+      "options": [
+        {"t": "Random keys land at random index positions, so pages churn and split instead of appending", "correct": true,
+         "why": "Right. Sequential bigints (or time-ordered IDs like Instagram's 41-bit-timestamp scheme) keep inserts on a warm rightmost page. Random UUIDs spray writes across the whole tree — measurably slower writes and a colder cache at this scale."},
+        {"t": "UUIDs can collide, and a primary-key collision silently corrupts the table", "correct": false,
+         "why": "Collision odds on 122 random bits are astronomically negligible — that's not the issue. The issue is where in the sorted index each new key lands, and 'random' is the worst possible answer for locality."},
+        {"t": "UUIDs can't be primary keys in SQL databases", "correct": false,
+         "why": "They can and often are — many systems accept the trade for globally-generatable IDs. The senior move isn't 'never UUIDs'; it's knowing the write-locality cost and preferring time-ordered variants at scale."},
+        {"t": "UUIDs leak the row-creation order to users", "correct": false,
+         "why": "Backwards — random UUIDs hide creation order; it's sequential IDs that leak volume and order (the classic enumeration concern). Legitimate topic, but the opposite of this scaling question."}
+      ]
+    },
+    {
+      "id": "p1c03-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'SQL or NoSQL for this booking system?' Which answer reads most senior?",
+      "options": [
+        {"t": "\"Postgres. The core problem is not selling one seat twice, and a unique constraint on (show_id, seat_id) does that enforcement. Here's the schema and the three indexes.\"", "correct": true,
+         "why": "Commits, ties the choice to THIS system's crux (correctness under concurrency), shows depth with a concrete mechanism, and names the growth path. Depth in one database beats breadth across two categories — exactly the calibration the question probes."},
+        {"t": "\"SQL offers ACID and joins; NoSQL offers horizontal scalability and flexible schemas. Each has trade-offs depending on requirements.\"", "correct": false,
+         "why": "True, generic, and committed to nothing — the blog-post recitation that the 'pick one database and know it deeply' advice warns about. Broad comparisons without a decision read as never having operated either."},
+        {"t": "\"NoSQL — booking systems need web scale from day one, and relational databases famously can't handle that kind of traffic.\"", "correct": false,
+         "why": "A commitment justified by a false premise: Instagram carried years of hypergrowth on sharded Postgres with a tiny team. 'SQL doesn't scale' signals secondhand knowledge, and it also walks away from the constraint that solves this system's actual hard problem."},
+        {"t": "\"Both — Postgres for booking transactions, a document store for the movie catalog, and a sync pipeline between them so each side plays to its strength.\"", "correct": false,
+         "why": "Two databases plus a sync pipeline before any load number justifies one is over-engineering — every component is an on-call burden, and the sync is a new consistency problem you invented. Complexity needs a paying requirement."}
+      ]
+    },
+    {
+      "id": "p1c03-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your booking system handles normal load easily. A superstar concert goes on sale and traffic jumps 10x, all aimed at one show. What breaks first, and what's the senior response?",
+      "options": [
+        {"t": "Contention on that one show's rows — contain with short transactions and fast-fail, then queue admission for on-sale events", "correct": true,
+         "why": "The hot spot is logical, not physical — thousands of buyers fighting over the same few hundred rows. Naming the failure order (locks queue → latency climbs → connections exhaust) and answering with containment plus a structural fix is exactly the 10x-question rubric."},
+        {"t": "Shard the database by show_id so the load spreads across machines — 10x traffic needs horizontal scale", "correct": false,
+         "why": "Sharding spreads load across keys — but this load is all ONE key. The hot show lands on a single shard and melts it identically. Sharding is the reflex answer that reveals the hot-partition blind spot; interviewers set this trap deliberately."},
+        {"t": "Add read replicas to absorb the extra traffic", "correct": false,
+         "why": "Replicas absorb reads, and they'll help the seat-map display — but the fire is write contention on the booking path, which all still funnels to the primary. Right tool, wrong bottleneck."},
+        {"t": "Raise the connection pool limit so more requests get through", "correct": false,
+         "why": "More connections waiting on the same row locks means more memory burned and a deeper queue — you've widened the doorway into a jammed corridor. Fix the contention at the decision point, not the doorway."}
+      ]
+    },
+    {
+      "id": "p1c03-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "After the double-booking postmortem, a teammate proposes running the entire application at serializable isolation 'so races can't happen.' Your call?",
+      "options": [
+        {"t": "No — keep read committed and apply targeted force: the unique constraint plus FOR UPDATE on the booking path", "correct": true,
+         "why": "Serializable works by detecting conflicts and aborting transactions — every code path now needs retry handling, for a race only the booking flow has. Precision beats blanket force; system-wide maximum isolation as a first resort reads as not understanding what you're paying for."},
+        {"t": "Yes — correctness beats performance, and serializable is the only level that closes every race", "correct": false,
+         "why": "False dichotomy: the constraint delivers full correctness for the actual race at near-zero cost. 'Correctness over performance' sounds principled but here buys zero extra safety on the booking path while taxing every other transaction and adding abort-retry complexity everywhere."},
+        {"t": "Compromise on repeatable read everywhere", "correct": false,
+         "why": "Splitting the difference misses the mechanism: repeatable read holds your reads stable but still permits this check-then-insert race in most implementations. Isolation levels aren't a volume knob where 'more' fixes any given bug — match the mechanism to the race."},
+        {"t": "Yes, but only after load testing shows the overhead is acceptable", "correct": false,
+         "why": "Measuring before committing sounds rigorous, but it's rigor aimed at the wrong question — even at acceptable overhead you've added abort-retry semantics to every code path for no additional safety over the constraint. The design judgment fails before the benchmark starts."}
+      ]
+    },
+    {
+      "id": "p1c03-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You must add a column to a 600M-row MySQL table backing a 24/7 product. A teammate says 'just run ALTER TABLE at 3am.' The senior response:",
+      "options": [
+        {"t": "Use an online schema-change tool (gh-ost style): shadow copy, replay changes, atomic swap", "correct": true,
+         "why": "This is why GitHub built gh-ost: big ALTERs can lock or degrade a hot primary for hours, and '3am' just means fewer witnesses when it goes wrong. Turning a scary blocking operation into a supervised background migration is operational maturity in one answer."},
+        {"t": "Run the ALTER in the quietest traffic window with a maintenance banner and a tested rollback", "correct": false,
+         "why": "An ALTER on 600M rows can run for hours — your 'quiet window' becomes a morning-rush outage. And a global product has no 3am. Planned-downtime thinking for routine schema changes reads as never having operated a 24/7 system."},
+        {"t": "Never change the schema of large tables; add a side table instead", "correct": false,
+         "why": "Fear-driven workarounds accumulate into a join-riddled maze that punishes every future query. Schema evolution is a solved operational problem — the answer is better tooling, not schema paralysis."},
+        {"t": "Rebuild on a replica, then promote it to primary", "correct": false,
+         "why": "Closer — this is roughly what old-school migrations did — but the cutover is the hard 99%: catching up writes, repointing traffic, surviving a mid-promotion failure. GitHub's 2018 incident shows how sharp unplanned primary transitions are; purpose-built tools exist so you don't hand-roll one."}
+      ]
+    },
+    {
+      "id": "p1c03-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Six months after adding a denormalized seats_left counter, support reports shows displaying 'sold out' with empty seats. The senior diagnosis and fix:",
+      "options": [
+        {"t": "Drift was inevitable — the real gap is the missing reconciliation job and divergence alert", "correct": true,
+         "why": "The bug is normal; shipping a denormalized counter WITHOUT reconciliation was the real mistake. Fixing only today's path leaves the next drift undetected. Truth lives in the bookings table; the counter is display — and note the constraint still protected actual bookings throughout."},
+        {"t": "Hunt down the specific code path that skipped a decrement and fix it — the design is fine", "correct": false,
+         "why": "Treats a symptom. Every future writer — new endpoints, manual fixes, partial failures — can reintroduce drift, and you'll rediscover it via support tickets each time. A copy of a fact needs a repair loop, not just careful writers."},
+        {"t": "Remove the counter and go back to COUNT(*) — denormalization was a mistake", "correct": false,
+         "why": "Reverting re-melts the read path the counter existed to save. The design wasn't wrong; it was incomplete — denormalization is a contract with three clauses (writer, reconciliation, tolerance) and only the first was signed."},
+        {"t": "Wrap counter updates and bookings in distributed transactions to guarantee sync", "correct": false,
+         "why": "They're in the same database — a plain local transaction already covers the happy path, no 'distributed' machinery needed. And transactions can't stop a logically wrong writer from committing a wrong decrement. Heavier coordination is the wrong tool; reconciliation is."}
+      ]
+    },
+    {
+      "id": "p1c03-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Two candidates present schemas for the same booking design. A: five normalized tables, every column typed, discusses 3NF at length, no indexes mentioned until asked, then 'we'd index the foreign keys.' B: four tables sketched fast, then unprompted: 'the index that matters is unique (show_id, seat_id) — that's my double-booking defense — plus (user_id, created_at) for history reads; here's what each write costs.' Who reads senior?",
+      "options": [
+        {"t": "B — the schema is traced to the queries, the crux, and its costs", "correct": true,
+         "why": "B treats the schema as a machine for serving THIS system's queries and hard problem; A treats it as a modeling exercise. 'Index the foreign keys' when asked is a rule of thumb standing in for analysis — interviewers hear the difference instantly."},
+        {"t": "A — completeness and normalization rigor are the foundation", "correct": false,
+         "why": "A's rigor is real but aimed at the wrong grade sheet: theory recall over operational judgment. A schema with unexamined indexes is a design whose read paths and concurrency story are unexamined — the parts this interview exists to probe."},
+        {"t": "A, because B's four tables probably under-model the domain", "correct": false,
+         "why": "At the whiteboard, a sketch that nails the crux beats a complete model that misses it — you can always add a column; you can't retroactively demonstrate judgment. Interviews grade what you emphasized, not what you enumerated."},
+        {"t": "Both equal — they'd produce similar databases", "correct": false,
+         "why": "The artifact might converge; the signal doesn't. One showed derivation (queries → indexes → costs), the other recall. Interviews grade the reasoning on display, and only B displayed any about the part that decides the system's fate."}
+      ]
+    },
+    {
+      "id": "p1c03-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Day one of a new product, a teammate says: 'Skip foreign key constraints — big companies drop them for scale, and we'll be big.' Your call?",
+      "options": [
+        {"t": "Keep them — dropping FKs later, when a named reason arrives, is a one-day change", "correct": true,
+         "why": "Practices earn their place from constraints you actually have. Big shops drop FKs because of shards, gh-ost, and measured lock contention — none of which exist here. Cargo-culting the endpoint of someone else's journey means paying vigilance costs (orphan-hunting jobs, app-level checks) for zero benefit."},
+        {"t": "Agree — designing for scale from day one avoids a painful migration later", "correct": false,
+         "why": "This 'habit' is a cost, not a practice: you're volunteering to hand-enforce integrity that the database would guarantee for free, years before any force requires it. Premature scale mimicry is over-engineering wearing a humble costume."},
+        {"t": "Compromise: FKs on some tables, skipped on 'future-scale' ones", "correct": false,
+         "why": "Now integrity is inconsistent AND you're maintaining two mental models — worse than either pure position. Nobody can predict today which tables shard first; the split is a guess dressed as prudence."},
+        {"t": "Skip FKs but add nightly orphan-detection jobs to compensate", "correct": false,
+         "why": "You've reinvented the constraint as a batch job that catches corruption up to 24 hours late instead of preventing it instantly — strictly worse on every axis, plus a new job to own. This IS the at-scale concession; choosing it without at-scale pressure is all cost."}
+      ]
+    }
+  ]
+}

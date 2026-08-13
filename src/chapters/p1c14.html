@@ -1,0 +1,293 @@
+<p>Monday morning at your ticket-resale marketplace, and there are three bugs in the queue. Bug one: two customers opened support tickets with the <em>same order number</em>. You sharded the orders database last month — chapter 1.9's medicine — and now shard A and shard B are both happily counting 1, 2, 3 from their own auto-increment columns. Order 4,000,317 exists twice, and they're different orders.</p>
+
+<p>Bug two: search is timing out. Someone typed "taylor swift" into the search box, and the query — a <code>LIKE '%taylor swift%'</code> against ten million listings — took 40 seconds and pinned a database CPU. Fifty people searching at once during a ticket drop turned the whole database into a space heater.</p>
+
+<p>Bug three is the scary one. Your nightly refund job runs on a server. Last week you added a second server for redundancy. Both servers ran the job. A customer got refunded twice, and finance wants a word.</p>
+
+<p>Three unrelated-looking bugs, one shared diagnosis: these are all things a single server gave you for free. One machine hands out numbers in order, greps a small table fast enough, and runs a cron job exactly once. The moment you have many machines, all three guarantees quietly evaporate — and you need to rebuild each one deliberately. Unique IDs, search, and locks: the three utility belts that show up in almost every design interview, usually as a two-minute detour that separates people who've built systems from people who've read about them. Let's earn all three.</p>
+
+<h2>Problem one: who hands out the numbers?</h2>
+
+<p>On a single database, <code>AUTO_INCREMENT</code> (MySQL) or <code>SERIAL</code> (Postgres) is lovely. One counter, one machine, every insert gets the next integer. It's small (8 bytes), it's sortable, and new rows always land at the "end" of the primary-key index, which keeps inserts fast. Then you distribute, and three separate problems appear.</p>
+
+<ul>
+<li><strong>Coordination.</strong> A counter only works if everyone increments the <em>same</em> counter. Either every shard asks one central box for its next number — a network round trip and a single point of failure in the hottest path you have — or each shard counts independently and you get Monday's duplicate order numbers.</li>
+<li><strong>Guessable.</strong> Sequential IDs leak your business. If my order today is #4,000,317 and my order next Monday is #4,090,317, I know you do about 90,000 orders a week. This isn't hypothetical — it's the <strong>German Tank Problem</strong>. In World War II, Allied statisticians estimated German tank production from the sequential serial numbers on captured tanks. Their estimate: about 270 tanks a month. Conventional intelligence guessed 1,400. German records after the war showed the real number: 276. Sequential numbers on your gearboxes are a confession. Sequential IDs in your URLs are the same confession, plus an invitation to enumerate every order in your system with a for-loop.</li>
+<li><strong>Merge pain.</strong> Two shards, both counting from 1, can never be merged, joined across, or referenced unambiguously. "Order 4,000,317" isn't an identifier anymore; "order 4,000,317 <em>on shard A</em>" is, and now every foreign key and every log line needs the shard baked in.</li>
+</ul>
+
+<p>So distributed systems need IDs that are unique <em>without asking anyone</em>. The obvious first answer is randomness.</p>
+
+<h3>UUIDv4: freedom, with a hidden tax</h3>
+
+<p>A UUIDv4 is 128 bits, 122 of them random — the string that looks like <code>f47ac10b-58cc-4372-a567-0e02b2c3d479</code>. Any machine can mint one with zero coordination, and collisions are a non-issue in practice: you'd have to generate a billion UUIDs <em>per second</em> for about 85 years before you hit even a coin-flip chance of one collision. Uniqueness solved. Two new problems bought.</p>
+
+<p>First, size: 128 bits versus 64, and often stored as a 36-character string, which bloats every index and every foreign key that references it. Second — the one that bites at scale — <strong>index locality</strong>. Databases keep primary keys in a B-tree, which is a sorted structure. Sequential IDs always insert at the rightmost edge: the same few pages stay hot in memory, and writes are cheap appends. Random UUIDs insert <em>everywhere</em>: every write lands on a random page of a huge tree, forcing the database to drag cold pages from disk, split full pages, and dirty pages all over the file. Insert throughput sags as the table grows, and nobody can point at a slow query — the whole table just got heavier.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A B-tree primary key is a filing room with sorted cabinets. Sequential IDs are a clerk who only ever adds files to the last drawer — the drawer's already open, the stack is right there, it's one motion. Random UUIDs are a clerk who must file each new document in a different random cabinet across the room: walk over, unlock it, shuffle contents to make space, sometimes split a stuffed drawer into two. Same number of documents, dramatically more work per document. The analogy breaks in one way worth knowing: the real clerk gets tired, but the real database gets slower <em>and</em> writes more to disk — page splits mean write amplification, not just latency.</p>
+</div>
+
+<h3>UUIDv7: same freedom, ordered</h3>
+
+<p>The fix is almost embarrassingly direct: make the front of the ID a timestamp and keep the randomness at the back. That's <strong>UUIDv7</strong>, standardized in RFC 9562 in 2024 — a 48-bit Unix millisecond timestamp followed by random bits. IDs minted around the same time now sort near each other, so inserts land near the right edge of the B-tree again, like the sequential clerk. Still zero coordination, still effectively collision-proof. If you just need "a good ID" in 2026 and don't control every generator, UUIDv7 is the boring, correct default. Its costs: still 128 bits, and the timestamp prefix means an ID reveals roughly when the row was created — usually fine, occasionally a privacy consideration.</p>
+
+<p>But there's a design that gets you time-ordering, uniqueness, <em>and</em> a compact 64 bits — and it comes with the best origin story in this chapter.</p>
+
+<h3>Snowflake: 64 bits, budgeted like an engineer</h3>
+
+<div class="box story"><div class="box-tag">War story — Twitter builds Snowflake</div>
+<p>In 2010, Twitter was moving tweet storage off MySQL and onto Cassandra, and hit a wall: Cassandra, being a distributed database, has no auto-increment — there is no single counter to increment. Twitter needed tens of thousands of new tweet IDs per second, generated by many machines with no coordination, in under 2 milliseconds. And there was one requirement stricter than uniqueness: <strong>tweets had to sort by time</strong>. Timelines are "order by ID descending" — if IDs aren't roughly time-ordered, every timeline everywhere breaks. Fully random IDs were unusable. So they built a small service called Snowflake that packs a millisecond timestamp, a machine number, and a per-millisecond counter into one 64-bit integer — unique with zero runtime coordination, and sortable because the timestamp occupies the most significant bits. They open-sourced it, and the layout became the industry's default answer: Discord uses Snowflake IDs for every message and server, Instagram built a variant (coming up), and Sony published their own "Sonyflake." One honest caveat Twitter documented: the IDs are <em>roughly</em> sorted — two tweets in the same second may be slightly out of order across machines — which was fine, because timelines only need time-ordering at human resolution.</p>
+</div>
+
+<p>Here's the layout, and — more importantly — the reasoning behind every number:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 230" role="img" aria-label="Snowflake 64-bit ID layout: 1 sign bit, 41 timestamp bits, 10 worker bits, 12 sequence bits">
+  <text class="dg-txt" x="20" y="30">One 64-bit integer</text>
+  <rect class="dg-node" x="20" y="60" width="16" height="48" rx="4"/>
+  <rect class="dg-node-alt" x="36" y="60" width="428" height="48" rx="4"/>
+  <rect class="dg-node" x="464" y="60" width="106" height="48" rx="4"/>
+  <rect class="dg-node" x="570" y="60" width="130" height="48" rx="4"/>
+  <text class="dg-txt-s" x="120" y="52">41 bits — ms since custom epoch</text>
+  <text class="dg-txt-s" x="466" y="52">10 bits — worker</text>
+  <text class="dg-txt-s" x="576" y="52">12 bits — sequence</text>
+  <text class="dg-txt" x="180" y="90">timestamp</text>
+  <text class="dg-txt" x="478" y="90">worker</text>
+  <text class="dg-txt" x="584" y="90">sequence</text>
+  <line class="dg-edge" x1="28" y1="112" x2="28" y2="132"/>
+  <text class="dg-txt-s" x="20" y="148">1 sign bit, unused</text>
+  <text class="dg-txt-s" x="150" y="132">≈ 69 years of IDs · high bits → sorts by time</text>
+  <text class="dg-txt-s" x="440" y="148">1,024 machines</text>
+  <text class="dg-txt-s" x="520" y="165">4,096 IDs per ms per machine</text>
+  <text class="dg-txt-s" x="20" y="200">Same worker, same millisecond → sequence++. New millisecond → sequence resets. Sequence full → wait ~1ms.</text>
+</svg>
+<figcaption>The Snowflake bit budget. Timestamp in the high bits is what makes plain integer sorting equal time sorting.</figcaption>
+</figure>
+
+<ul>
+<li><strong>41 bits of timestamp</strong> — milliseconds since a custom epoch (Twitter picked late 2010, so the clock starts when the service did). 2^41 milliseconds is about 69 years of runway. It sits in the most significant bits <em>on purpose</em>: that's what makes a bigger ID mean a later ID, so <code>ORDER BY id</code> is a free time sort and B-tree inserts stay right-edge-hot.</li>
+<li><strong>10 bits of worker ID</strong> — 1,024 distinct generator machines. Each machine gets its number once, at startup (Twitter used ZooKeeper, a coordination service, to hand these out). This is the trick: coordinate <em>once per machine per boot</em>, not once per ID. After startup, generation is a purely local bit-shift — no network, microseconds.</li>
+<li><strong>12 bits of sequence</strong> — a counter that increments for each ID minted in the same millisecond and resets at the next millisecond. 4,096 per millisecond per worker is over <strong>4 million IDs per second per machine</strong>. If a worker ever exhausts the sequence inside one millisecond, it just spins until the clock ticks over — a sub-millisecond stall, essentially never observed unless you're benchmarking the generator itself.</li>
+</ul>
+
+<p>One failure mode a senior candidate names unprompted: <strong>the clock</strong>. The whole scheme trusts the machine's clock to move forward. If NTP (the network time-sync protocol) yanks a machine's clock backwards, the generator could re-mint timestamps it already used — and with the same worker ID and sequence, that's a duplicate ID. Real implementations detect time going backwards and refuse to generate until the clock catches up. Say that sentence in an interview and the interviewer relaxes: you've operated things.</p>
+
+<h3>Instagram: Snowflake without the extra service</h3>
+
+<p>In 2011 Instagram had a famously tiny engineering team and sharded Postgres. They needed sortable 64-bit IDs, looked at Snowflake, and balked — not at the design, but at the operations: running ZooKeeper plus a fleet of ID servers is real on-call surface for a team of a few people. So they folded the same idea <em>into the database</em>: a small PL/pgSQL function on each shard builds the ID at insert time — 41 bits of milliseconds, 13 bits of shard number, and 10 bits from a per-shard counter modulo 1024. Same bit-budget philosophy, zero new infrastructure, and the shard ID is embedded in every primary key, so given any photo ID you can compute which shard holds it. The lesson generalizes beautifully: <strong>the best version of a pattern is the one your team can operate.</strong> Snowflake-as-a-service and Snowflake-in-a-stored-procedure are the same idea wearing different operational costs.</p>
+
+<h3>Ticket servers: the centralized counter, done cheaply</h3>
+
+<div class="box story"><div class="box-tag">War story — Flickr's ticket servers</div>
+<p>Flickr hit this problem before Twitter did: they federated their MySQL database into many shards in the mid-2000s, needed globally unique photo IDs, and wrote the solution up in 2010. They considered GUIDs (UUIDs) and rejected them for exactly the index-locality and size reasons above — random 128-bit keys index badly in MySQL. Their solution was almost comically low-tech: a dedicated MySQL box whose only job is a one-row table with an auto-increment column. Issuing an ID is a single <code>REPLACE INTO</code> statement — a MySQL quirk that deletes and re-inserts the row, bumping the counter — then read the counter back. That's a "ticket server": the centralized counter, kept, but isolated on hardware whose only job is counting. One box is a single point of failure, so Flickr ran two: one configured to issue only odd numbers, the other only even (MySQL's <code>auto_increment_increment</code> and <code>auto_increment_offset</code> settings), with clients round-robining between them. Either box can die and the other keeps issuing, and they can never collide. The cost they accepted with open eyes: a network round trip per ID, and IDs that are only <em>roughly</em> ordered across the odd/even pair. It carried billions of Flickr photo IDs. Simple, boring, operable — very senior.</p>
+</div>
+
+<p>Here's the whole decision compressed:</p>
+
+<table>
+<thead><tr><th>Scheme</th><th>Coordination per ID</th><th>Time-sortable</th><th>Size</th><th>Reach for it when</th></tr></thead>
+<tbody>
+<tr><td>Auto-increment</td><td>Central (the DB)</td><td>Yes</td><td>8 bytes</td><td>One database, no shards — don't over-engineer past this</td></tr>
+<tr><td>UUIDv4</td><td>None</td><td>No</td><td>16 bytes</td><td>Uniqueness is all you need and insert volume is modest</td></tr>
+<tr><td>UUIDv7</td><td>None</td><td>Yes (ms prefix)</td><td>16 bytes</td><td>The modern default: no infrastructure, B-tree friendly</td></tr>
+<tr><td>Snowflake-style</td><td>Once per machine at boot</td><td>Yes (roughly)</td><td>8 bytes</td><td>Huge volume, compact sortable IDs, you can run (or embed) the generator</td></tr>
+<tr><td>Ticket server</td><td>Central, every ID</td><td>Roughly</td><td>8 bytes</td><td>Moderate volume, you want dead-simple and already run MySQL</td></tr>
+</tbody>
+</table>
+
+<p>IDs sorted. Next bug: the 40-second search query.</p>
+
+<h2>Problem two: finding the needle</h2>
+
+<p>Why did <code>LIKE '%taylor swift%'</code> take 40 seconds? Because of what an index fundamentally is. A B-tree index is a <em>sorted</em> list — sorted by the column's value from its first character. Sorted data answers prefix questions fast: "everything starting with tay" is one contiguous range, found by binary search. But a leading wildcard — "taylor swift appearing <em>anywhere</em> in the text" — has no prefix to search by. The sorted order is useless, so the database reads every row and checks each one. Ten million listings at ~100 bytes each is a gigabyte scanned per search. One query: seconds. Fifty concurrent searches during a ticket drop: the database stops being a database.</p>
+
+<p>You cannot index your way out of this with more B-trees. You need a different data structure — and you already own a copy of it, printed on paper.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The index at the back of a textbook. Nobody finds "sharding" in a 900-page book by reading pages 1 through 900 — that's the full table scan. You flip to the back, where someone has already inverted the book: for each important word, a sorted list of the pages it appears on. "Sharding: 212, 340, 585." One lookup, straight to the pages. A search engine's <strong>inverted index</strong> is exactly this, built for every word automatically: instead of <em>document → words</em>, store <em>word → list of documents</em>. The list attached to each word is called its <strong>posting list</strong>. The analogy is honest with one addition: a book index only covers chosen terms; a search index covers every token, and it also remembers enough to <em>rank</em> the pages, which the book index never does.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Three documents tokenized into an inverted index mapping each term to a posting list">
+  <rect class="dg-node" x="20" y="30" width="230" height="56" rx="8"/>
+  <text class="dg-txt" x="34" y="54">Doc 1</text>
+  <text class="dg-txt-s" x="34" y="72">"Cheap flights to Goa"</text>
+  <rect class="dg-node" x="20" y="110" width="230" height="56" rx="8"/>
+  <text class="dg-txt" x="34" y="134">Doc 2</text>
+  <text class="dg-txt-s" x="34" y="152">"Cheap Goa hotels"</text>
+  <rect class="dg-node" x="20" y="190" width="230" height="56" rx="8"/>
+  <text class="dg-txt" x="34" y="214">Doc 3</text>
+  <text class="dg-txt-s" x="34" y="232">"Flight deals today"</text>
+  <line class="dg-edge" x1="255" y1="138" x2="330" y2="138" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="248" y="122">tokenize,</text>
+  <text class="dg-txt-s" x="248" y="160">stem</text>
+  <rect class="dg-zone" x="340" y="24" width="360" height="252" rx="8"/>
+  <text class="dg-txt" x="356" y="52">Inverted index</text>
+  <text class="dg-txt-s" x="356" y="84">term</text>
+  <text class="dg-txt-s" x="530" y="84">posting list</text>
+  <text class="dg-txt" x="356" y="114">cheap</text>
+  <text class="dg-txt" x="530" y="114">→ [1, 2]</text>
+  <text class="dg-txt" x="356" y="142">flight</text>
+  <text class="dg-txt" x="530" y="142">→ [1, 3]</text>
+  <text class="dg-txt" x="356" y="170">goa</text>
+  <text class="dg-txt" x="530" y="170">→ [1, 2]</text>
+  <text class="dg-txt" x="356" y="198">hotel</text>
+  <text class="dg-txt" x="530" y="198">→ [2]</text>
+  <text class="dg-txt" x="356" y="226">deal</text>
+  <text class="dg-txt" x="530" y="226">→ [3]</text>
+  <text class="dg-txt" x="356" y="254">today</text>
+  <text class="dg-txt" x="530" y="254">→ [3]</text>
+</svg>
+<figcaption>Query "cheap flight" = intersect the posting lists for <em>cheap</em> [1,2] and <em>flight</em> [1,3] → Doc 1. Two list lookups and a merge — no document is read.</figcaption>
+</figure>
+
+<p>Two details turn this sketch into a real search engine.</p>
+
+<p><strong>Tokenization</strong> — deciding what counts as a "word." The text is lowercased and split; then a <em>stemmer</em> folds word forms together ("flights", "flight" → <code>flight</code>) so a search for one finds the other; and ultra-common glue words ("to", "the") may be dropped since their posting lists contain every document and discriminate nothing. Every one of these choices is a product decision wearing an engineering costume: stem too aggressively and "universal" matches "university."</p>
+
+<p><strong>Relevance</strong> — posting lists tell you <em>which</em> documents match; users need them <em>ranked</em>. The classic intuition is TF-IDF, and you can carry it entirely without formulas. Two signals: a document that mentions your term more often is probably more about it (term frequency), and a term that appears in <em>few</em> documents is more informative than one that appears everywhere (inverse document frequency — "goa" beats "cheap" because everything on a travel site is "cheap"). BM25, the default scoring function in modern engines, is this intuition plus two adult corrections: repeating a word has <em>diminishing returns</em> (saying "goa" fifty times shouldn't score ten times higher than saying it five times — hello, keyword spammers), and long documents don't win just for containing more words. That's the whole gist; interviewers want the intuition, never the math.</p>
+
+<h3>Elasticsearch is an index, not a database</h3>
+
+<p>You won't build this by hand — you'll deploy Elasticsearch (or OpenSearch, or a managed equivalent), which wraps the Lucene library's inverted indexes in a distributed, replicated service. And here is the architectural sentence that matters more than any feature: <strong>Elasticsearch is a search index over your data, not the home of your data.</strong> The system of record — the store you trust, back up, and can rebuild everything else from — stays your real database. Search gets a <em>derived copy</em>, rebuilt from truth whenever needed.</p>
+
+<div class="box story"><div class="box-tag">War story — when Elasticsearch was the only copy</div>
+<p>This rule was written in lost data. In 2014 and 2015, Kyle Kingsbury's Jepsen project — a famous test suite that tortures distributed databases with network partitions — showed that Elasticsearch could <em>lose acknowledged writes</em>: during a partition, two halves of a cluster could each elect a leader (a "split brain"), accept conflicting writes, and silently discard one side's data when the cluster healed. Elastic responded with unusual honesty: for years the company maintained a public "Elasticsearch Resiliency" status page listing known data-loss scenarios, and its own documentation advised keeping the authoritative copy of data in another store. Teams that skipped that advice — using ES as the primary store because "the data's already there, why run two databases?" — were the ones filing the data-loss reports. Elasticsearch 7 (2019) shipped a rebuilt cluster-coordination layer that fixed the known split-brain scenarios, and modern ES is far more robust. But the architecture lesson stands on its own: a search index is optimized for fast reads over derived data, not for being the last copy of anything. Design so that losing the index costs you a reindex, never the data.</p>
+</div>
+
+<p>If the database is the truth and Elasticsearch is a copy, something must ship changes from one to the other. The tempting answer is <strong>dual-write</strong>: the application writes to Postgres, then writes to Elasticsearch. Resist it. The two writes can't be made atomic — no transaction spans both systems — so the app crashing between them, or an ES timeout after a DB commit, leaves the copies silently disagreeing, forever, with no record of the drift. The robust pattern is <strong>CDC — change data capture</strong>: a small service (Debezium is the standard) tails the database's replication log — the append-only record of every committed change that the database already produces for its own replicas — and publishes each change to a queue, where an indexer consumes it and updates Elasticsearch. The database's own commit log is the source of events, so nothing committed can be missed, and if the indexer dies it resumes from where it stopped.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="CDC pipeline from Postgres through a queue into Elasticsearch, with dual-write shown as the wrong path">
+  <rect class="dg-node" x="20" y="40" width="100" height="52" rx="8"/>
+  <text class="dg-txt" x="42" y="70">App</text>
+  <rect class="dg-node-alt" x="160" y="40" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="174" y="62">Postgres</text>
+  <text class="dg-txt-s" x="174" y="80">source of truth</text>
+  <rect class="dg-node" x="320" y="40" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="334" y="62">CDC</text>
+  <text class="dg-txt-s" x="334" y="80">tails the log</text>
+  <rect class="dg-node" x="470" y="40" width="90" height="52" rx="8"/>
+  <text class="dg-txt" x="484" y="70">Queue</text>
+  <rect class="dg-node" x="600" y="40" width="100" height="52" rx="8"/>
+  <text class="dg-txt" x="614" y="62">Elastic-</text>
+  <text class="dg-txt" x="614" y="80">search</text>
+  <line class="dg-edge" x1="120" y1="66" x2="160" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="280" y1="66" x2="320" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="430" y1="66" x2="470" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="560" y1="66" x2="600" y2="66" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="600" y="170" width="100" height="46" rx="8"/>
+  <text class="dg-txt-s" x="610" y="197">search queries</text>
+  <line class="dg-edge" x1="650" y1="170" x2="650" y2="92" marker-end="url(#arrow)"/>
+  <path class="dg-bad" fill="none" d="M 70 92 C 70 200, 500 210, 596 130"/>
+  <text class="dg-txt-s" x="200" y="185">dual-write: no transaction spans both →</text>
+  <text class="dg-txt-s" x="200" y="203">one write fails, copies drift silently. Don't.</text>
+  <text class="dg-txt-s" x="470" y="30">index lags truth by ~seconds</text>
+</svg>
+<figcaption>CDC: the database's own commit log feeds the index, so the index can lag but never diverge. The curved path is the dual-write trap.</figcaption>
+</figure>
+
+<p>Notice the label on that pipeline: <em>seconds behind</em>. Between the commit, the log tail, the queue, the indexer, and Elasticsearch's own refresh cycle (by default it makes new documents searchable about once per second), your search index trails reality by a few seconds under normal load — and by minutes if the indexer falls behind during a spike. Senior candidates volunteer this instead of hiding it: "search will be eventually consistent, seconds behind the database; a just-posted listing may not be searchable instantly, and I'll re-check anything critical — like 'is this actually still for sale' — against Postgres at purchase time, not against the index." Staleness admitted and bounded is a design; staleness discovered by the interviewer is a hole.</p>
+
+<p>One neighbor to wave at: the search box that completes "tay" into "taylor swift tickets" as you type is <em>not</em> this machinery — typeahead has a 50ms budget and prefix-shaped queries, and gets its own purpose-built design in chapter 3.2. Full-text search and autocomplete are cousins, not twins.</p>
+
+<h2>Problem three: making sure only one of us does this</h2>
+
+<p>Back to the double refund. Two servers both ran the nightly job because nothing told them not to — each one checked "is it 2am? yes" and went to work. On one machine, you'd grab a mutex, a lock inside the process. Across machines there's no shared memory to put a mutex in, so the lock has to live somewhere all the workers can see: a <strong>distributed lock</strong>.</p>
+
+<p>The everyday pattern uses Redis, and it's one command:</p>
+
+<pre><code>SET lock:refund-job "worker-A-8f3d2c" NX PX 600000</code></pre>
+
+<p>Unpack it. <code>NX</code> means "only set if the key does <strong>N</strong>ot e<strong>X</strong>ist" — so if two workers race, exactly one SET succeeds, and Redis being single-threaded per key is what makes the check-and-set atomic. That winner holds the lock; the loser sees a failure and walks away. <code>PX 600000</code> attaches a 10-minute expiry (TTL — time to live), and this part is <em>not optional</em>: if the winner crashes mid-job, the key must eventually vanish on its own, or the lock is held by a ghost forever and no refund job ever runs again. The value — a random token unique to this worker — matters too: when releasing, the worker must delete the key <em>only if it still contains its own token</em> (a tiny Lua script makes the check-and-delete atomic). Delete blindly, and a slow worker can release a lock that has already expired and been acquired by someone else — freeing a lock it no longer owns.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A hotel-desk key for the only meeting room. Take the key, and everyone else who asks is told "occupied" — that's NX. The desk has a rule: keys not returned by checkout time are assumed lost, and the desk cuts a new key for the next guest — that's the TTL, and it's what keeps a guest who left town with the key in their pocket from sealing the room forever. But spot the flaw in the rule: it assumes nobody who <em>overstays</em> is still inside. If your meeting runs long and the desk hands a new key to the next group, two groups now believe they have the room. The desk never checks the room — it only tracks time. That flaw is exactly the bug that follows, and it isn't fixable by choosing a better checkout time.</p>
+</div>
+
+<h3>The TTL horror story</h3>
+
+<p>The TTL creates the lock's fundamental dilemma. Too short, and it expires while the work is still running. Too long, and a crashed holder blocks everyone for the whole duration. And "long enough" doesn't exist, because of pauses you don't control. The canonical villain: a <strong>garbage-collection pause</strong>. In many language runtimes (the JVM most famously), the runtime occasionally freezes the entire program — every thread — to reclaim memory. Usually milliseconds. Occasionally, on a bad day with a big heap: tens of seconds. The program does not know it was frozen. It experiences no gap. And clocks elsewhere kept moving.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 280" role="img" aria-label="Timeline showing worker A's lock expiring during a GC pause while worker B acquires it, producing two concurrent holders">
+  <text class="dg-txt" x="20" y="34">Worker A</text>
+  <rect class="dg-good" x="110" y="20" width="170" height="26" rx="4"/>
+  <text class="dg-txt-s" x="118" y="38">holds lock, working</text>
+  <rect class="dg-bad" x="280" y="20" width="180" height="26" rx="4"/>
+  <text class="dg-txt-s" x="292" y="38">GC pause — frozen</text>
+  <rect class="dg-bad" x="460" y="20" width="150" height="26" rx="4"/>
+  <text class="dg-txt-s" x="466" y="38">resumes, still writing</text>
+  <text class="dg-txt" x="20" y="114">Worker B</text>
+  <rect class="dg-good" x="400" y="100" width="210" height="26" rx="4"/>
+  <text class="dg-txt-s" x="408" y="118">acquires expired lock, writes</text>
+  <line class="dg-bad" x1="390" y1="10" x2="390" y2="160"/>
+  <text class="dg-txt-s" x="316" y="178">TTL expires here</text>
+  <rect class="dg-zone" x="460" y="6" width="150" height="150" rx="6"/>
+  <text class="dg-txt-s" x="470" y="172">two holders at once</text>
+  <line class="dg-edge" x1="20" y1="210" x2="700" y2="210" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="20" y="234">time →</text>
+  <text class="dg-txt-s" x="240" y="258">A never learns it lost the lock: from inside the pause, no time passed at all.</text>
+</svg>
+<figcaption>The lock did nothing wrong: it expired exactly on schedule. The <em>assumption</em> that expiry implies the holder stopped is what broke.</figcaption>
+</figure>
+
+<p>Walk the timeline. Worker A acquires the lock with a 30-second TTL and starts issuing refunds. At second 12, a GC pause freezes it for 25 seconds. At second 30, Redis — dutifully, correctly — expires the key. At second 31, worker B acquires the lock, checks the batch, starts refunding. At second 37, worker A thaws and continues <em>exactly where it left off</em>, believing completely that it holds the lock. Two workers, same refunds, and the double-refund bug is back — this time <em>with</em> a lock, which is somehow more embarrassing. GC is only the most famous freezer: page faults, virtual-machine migrations, an overloaded hypervisor, or a network hiccup between worker and Redis all produce the same shape. The uncomfortable truth generalizes: <strong>a lock with a timeout cannot, by itself, guarantee mutual exclusion</strong>, because the holder can never be sure in real time that it still holds it.</p>
+
+<h3>Redlock, and an honest paragraph about it</h3>
+
+<p>You might diagnose a different weakness first — "the lock lives in <em>one</em> Redis; what if Redis dies?" — and reach for Redlock, an algorithm by Redis's creator that acquires the lock on a majority of five independent Redis nodes, tolerating node failures. In 2016, Martin Kleppmann (of <em>Designing Data-Intensive Applications</em>) published a widely-read critique, antirez published a sharp rebuttal, and the exchange became the field's favorite argument. Kleppmann's core point survives contact with both essays, and it's the distinction to carry out of this chapter: decide whether your lock is for <strong>efficiency</strong> or for <strong>correctness</strong>. An efficiency lock prevents <em>wasted work</em> — two workers computing the same expensive report; if it rarely fails, you pay some duplicate compute and nobody is harmed, and a single Redis <code>SET NX PX</code> is the right amount of machinery (Redlock's five nodes buy little here). A correctness lock prevents <em>disaster</em> — double refunds, two nodes writing the same file. And for that job, Redlock still isn't enough, because more Redis nodes do nothing about the GC-pause timeline above: Redlock's safety quietly depends on assumptions about clocks and pause times that real machines violate. Kleppmann's verdict, roughly: fine for efficiency (though overkill), insufficient for correctness.</p>
+
+<p>So what <em>does</em> protect correctness? A preview, because chapter 2.3 finishes this properly: a <strong>fencing token</strong>. The lock service hands every holder a number that only increases — A gets token 33, and after A's lease expires, B gets 34. Every write carries its token, and the <em>storage being written</em> rejects any token older than the newest it has seen. When zombie A thaws and writes with 33 after B wrote with 34, storage refuses. Notice what moved: the enforcement left the lock and moved into the resource — the one place a frozen process can't lie to. Getting tokens that are guaranteed to only increase requires consensus (ZooKeeper, etcd), which is chapter 2.3's whole subject. Until then, the operational rule of thumb: single-Redis locks for efficiency, and for correctness make the operation <strong>idempotent</strong> — safe to run twice, chapter 2.2 — so that when the lock fails you anyway, nothing burns.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>These three tools are rarely a whole interview — they're the two-minute probes inside every design, and each has a trap the interviewer is watching for. IDs: the trap is hand-waving "I'll use UUIDs" without knowing the index cost, or naming Snowflake without the bit layout. Search: the trap is treating Elasticsearch as a magic database and never mentioning how it stays in sync. Locks: the trap is believing the TTL solves everything. Probes you should expect verbatim:</p>
+<ul>
+<li>"Your tweets need IDs. Walk me through exactly how you'd generate them — no black boxes." (They want bits, a sortability argument, and the clock-skew caveat.)</li>
+<li>"A seller deletes a listing but it still shows in search results for ten seconds. Is that a bug? Walk me through the pipeline." (They want CDC lag explained calmly, plus which operations must re-check the source of truth.)</li>
+<li>"Your worker holds the lock and gets a 40-second GC pause. What happens?" (They want the two-holders timeline, unprompted, and either fencing tokens or 'this is why the job is idempotent' as the ending.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c14-f1">
+<p class="fey-prompt">A junior asks: "We sharded the database and now IDs collide. Why not just keep one auto-increment table somewhere central?" Answer in five or six sentences, including what you'd use instead and why it's sortable.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A central counter works, but now every insert in the whole company waits on a network round trip to one box — it's a bottleneck and a single point of failure in your hottest path, and sequential numbers also let outsiders count our orders. The trick big systems use is to make IDs unique without asking anyone: pack a millisecond timestamp, a machine number, and a small per-millisecond counter into one 64-bit integer — Twitter's Snowflake layout. The timestamp lives in the high bits, so bigger ID means later ID, and sorting by ID sorts by time for free — which also keeps database inserts fast, because new keys always land at the end of the index. Each machine only coordinates once, at startup, to claim its machine number; after that it can mint about four million IDs per second locally. The one thing to respect is the clock: if it ever jumps backwards, stop generating until it catches up, or you can mint a duplicate. If we don't want to run any of this ourselves, UUIDv7 — a timestamp-fronted random ID — gets us most of the same benefits with zero infrastructure, at twice the byte size.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Bit-budget drill.</strong> Design a Snowflake-style 64-bit ID for a logging system: up to 4,000 collector machines, each bursting to 1 million events/second, and the scheme must last 40+ years. Allocate the bits and check each constraint.</p></div>
+<details><summary>Answer</summary><p>Work each requirement into bits. 4,000 machines needs 12 worker bits (2^12 = 4,096). 1M events/sec/machine = 1,000 per millisecond, so 10 sequence bits (1,024/ms ≈ 1.02M/sec) — barely; take 11 (2,048/ms ≈ 2M/sec) for burst headroom. That leaves 64 − 1 (sign) − 12 − 11 = 40 timestamp bits: 2^40 ms ≈ 35 years. Fails the 40-year constraint — and that's the real lesson: the bit budget is a negotiation. Either take the 10-bit sequence and let bursts briefly spin-wait into the next millisecond (41 bits ≈ 69 years, constraint met), or drop to 11 worker bits if you can cap the fleet at 2,048 machines. Any allocation is fine; knowing that the three fields trade against each other, and saying which constraint you relaxed and why, is the senior answer.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>What breaks and why.</strong> A team uses UUIDv4 primary keys in a MySQL table that's grown to 500M rows. Inserts have gradually slowed and disk I/O keeps climbing, though traffic is flat. Explain the mechanism and give two fixes with their costs.</p></div>
+<details><summary>Answer</summary><p>Mechanism: random keys insert at uniformly random positions in the primary-key B-tree. At 500M rows the tree is far bigger than RAM, so nearly every insert touches a cold page (a disk read), and full pages split (extra writes). Flat traffic, growing tree → each insert costs more I/O over time. Fixes: (1) switch new IDs to UUIDv7 or Snowflake-style so inserts return to the warm right edge — cheap to adopt, but the existing random keys keep the tree fragmented until data ages out or is migrated; (2) migrate the primary key entirely — the clean end state, but rewriting the clustered index of a 500M-row table is a serious online-migration project (chapter 2.11). Bonus senior point: keep the UUID as a secondary unique column for external use and cluster on an internal sequential key — many teams' actual landing spot.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>The staleness negotiation.</strong> Your PM says: "A sold-out event must NEVER appear as buyable in search. Zero tolerance." Search runs on Elasticsearch fed by CDC with ~5 seconds of lag. What do you build, and what do you tell the PM?</p></div>
+<details><summary>Answer</summary><p>Separate the two promises hiding in the sentence. Promise one — nobody ever <em>completes a purchase</em> of a sold-out ticket: build that with certainty, by re-checking availability against Postgres (the source of truth) at add-to-cart and again inside the purchase transaction. The index is never consulted for correctness. Promise two — sold-out events never even <em>render</em> in results: that's the 5-second CDC window, and true zero would mean re-checking every displayed result against the database on every search, turning your cheap index reads back into the database load ES existed to absorb. Tell the PM: "Purchases: guaranteed, always. Display: honestly a few seconds behind — same as every large marketplace — and I can shrink the window for the hot events with a targeted cache-check on the top results if it matters." Distinguishing display staleness from transactional correctness is exactly the judgment this question probes.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Lock post-mortem.</strong> A worker takes a Redis lock (TTL 30s) to process payout batches; batches occasionally take 3 minutes; last night two workers processed the same batch. Your teammate proposes "raise the TTL to 10 minutes." Write the post-mortem's 'fix' section properly.</p></div>
+<details><summary>Answer</summary><p>The 10-minute TTL fixes the <em>observed</em> incident (work outliving the lease) and creates a new one: a worker that crashes mid-batch now blocks all payouts for up to 10 minutes. Better layers: (1) a heartbeat — the worker extends the TTL every 10 seconds while alive, so the lease tracks liveness rather than a guess about duration; a crashed worker stops renewing and the lock frees in seconds. (2) Accept that even heartbeats lose to a long GC pause — the extension arrives after expiry — so make the payout idempotent: each payout row carries the batch ID with a unique constraint, so a second worker's inserts are rejected by the database itself. That last layer is the only one that actually prevents double payouts; the lock's honest job description shrinks to "make duplicates rare," while idempotency makes them harmless. TTL tuning alone is the junior answer; naming the layer that holds when the lock lies is the senior one.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Auto-increment dies with distribution three ways: every insert queues on one counter, sequential numbers leak business volume (the German Tank Problem), and independently-counting shards mint colliding IDs.</li>
+<li>UUIDv4 buys coordination-free uniqueness but scatters B-tree inserts across random cold pages; UUIDv7's timestamp prefix restores insert locality and is the zero-infrastructure default today.</li>
+<li>Snowflake packs timestamp, worker, and sequence into 64 bits — time-sortable because the timestamp takes the high bits, decentralized because machines coordinate once at boot, and good for 4M+ IDs/sec per worker; its Achilles' heel is a clock that jumps backwards.</li>
+<li>Instagram embedded the same layout in Postgres and Flickr ran odd/even MySQL ticket servers — the pattern bends to whatever your team can actually operate.</li>
+<li><code>LIKE '%x%'</code> forces a full scan because B-trees only answer prefix questions; an inverted index (term → posting list) makes search a few list intersections, ranked by the TF-IDF/BM25 intuition: rare terms count more, repetition has diminishing returns.</li>
+<li>Elasticsearch is a derived index, never the system of record: feed it via CDC from the database's log (not dual-writes), state its seconds-of-staleness out loud, and re-check anything money-critical against the source of truth.</li>
+<li>Redis <code>SET NX PX</code> with a random token is the standard lock, but a TTL plus a GC pause can produce two holders who both believe they're alone — so locks with timeouts can't alone guarantee mutual exclusion.</li>
+<li>Classify every lock as efficiency (duplicate work — single Redis is fine, Redlock is overkill) or correctness (disaster — you need fencing tokens and idempotency, chapters 2.2–2.3), and design for the lock failing anyway.</li>
+</ul>
+</div>

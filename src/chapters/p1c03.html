@@ -1,0 +1,313 @@
+<p>Launch night. Your movie-ticket side project has run quietly for months with a few hundred users. Tonight a real theatre chain switches on, traffic climbs, and your phone starts buzzing: the "my bookings" page is timing out. You SSH in, run the query by hand, and watch it hang. Nine seconds. Nine seconds to fetch one user's twelve bookings.</p>
+
+<p>The <code>bookings</code> table has 20 million rows now, and the database is doing the only thing it can do without help: reading every single row and asking, one by one, "does this belong to user 48213?" You type one line — <code>CREATE INDEX ON bookings (user_id);</code> — and the same query returns in 8 milliseconds. A thousand times faster. Nothing else changed.</p>
+
+<p>That line looks like magic. Interviewers know that most engineers treat it as magic — they've typed it, seen it work, and never once pictured what the database actually built. So this is where they dig. In Amazon HLD rounds and across India interview loops especially, the schema-and-index part of a design gets graded with unusual ferocity: exact tables, exact indexes, exact locking. Hand-waving here is the fastest way to lose a level. This chapter makes sure you never hand-wave here again: how requirements become tables, why we normalize and when we deliberately stop, how indexes really work under the hood, and what a transaction actually promises you.</p>
+
+<h2>From requirements to tables</h2>
+
+<p>Data modeling starts before any SQL. Read your requirements and underline two kinds of words. The <strong>nouns</strong> become entities — the things your system remembers: users, movies, shows, seats, bookings. The <strong>verbs</strong> become queries — the questions your system must answer fast: "show me tonight's shows for this movie", "is seat F7 taken?", "list my bookings, newest first."</p>
+
+<p>Entities give you tables. Verbs give you indexes and shape. A schema designed from nouns alone is a filing cabinet nobody can search; a schema designed from verbs alone is a pile of query-shaped caches with no source of truth. You need both, in that order: model the entities honestly, then check every important query has a fast path through them.</p>
+
+<p>Between entities sit <strong>relationships</strong>, and there are only three shapes. One-to-one (a user has one profile). One-to-many (a user has many bookings — the "many" side carries a <code>user_id</code> column pointing back). Many-to-many (a user attends many shows, a show has many users — you need a third table in the middle, one row per pairing; here, that middle table is <code>bookings</code> itself, and it's the most important table in the system).</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Entity diagram for a booking system: users, shows, seats, and the bookings table that connects them">
+  <rect class="dg-node" x="30" y="30" width="150" height="64" rx="8"/>
+  <text class="dg-txt" x="44" y="54">users</text>
+  <text class="dg-txt-s" x="44" y="76">id, email, name</text>
+  <rect class="dg-node" x="30" y="160" width="150" height="64" rx="8"/>
+  <text class="dg-txt" x="44" y="184">shows</text>
+  <text class="dg-txt-s" x="44" y="206">id, movie, starts_at</text>
+  <rect class="dg-node" x="260" y="160" width="150" height="64" rx="8"/>
+  <text class="dg-txt" x="274" y="184">seats</text>
+  <text class="dg-txt-s" x="274" y="206">id, theatre, label</text>
+  <rect class="dg-node-alt" x="480" y="70" width="210" height="96" rx="8"/>
+  <text class="dg-txt" x="494" y="96">bookings</text>
+  <text class="dg-txt-s" x="494" y="118">id, user_id, show_id,</text>
+  <text class="dg-txt-s" x="494" y="136">seat_id, status, created_at</text>
+  <line class="dg-edge" x1="180" y1="62" x2="480" y2="96" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="180" y1="192" x2="480" y2="140" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="410" y1="192" x2="480" y2="156" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="250" y="52">one user : many bookings</text>
+  <text class="dg-txt-s" x="220" y="242">one seat per show : at most one active booking</text>
+</svg>
+<figcaption>The bookings table is a many-to-many join table wearing a trench coat — and it's where all the hard problems live.</figcaption>
+</figure>
+
+<h2>Normalization: one fact, one home</h2>
+
+<p>Suppose you're lazy and store the movie title on every booking row. Twenty million bookings, each carrying <code>"Jawan"</code> as text. Then the studio renames the film. Now you must update millions of rows, and if your update misses even one — a crash halfway through, a code path you forgot — your database holds two different truths about the same fact. Which one is right? Nobody knows. That's called an <strong>update anomaly</strong>, and it is the disease normalization cures.</p>
+
+<p><dfn>Normalization</dfn> is one idea wearing academic clothing: <strong>every fact lives in exactly one place, and everything else points at it</strong>. The title lives in <code>movies</code>, once. Bookings store a <code>movie_id</code> — a pointer, not a copy. Rename the film: one row changes, and every booking is instantly, automatically right. You'll see textbooks enumerate "normal forms" (1NF, 2NF, 3NF…); in an interview and in practice, "no fact stored twice" gets you 95% of the value, and saying it that way sounds like experience rather than a course you took.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Normalization is keeping one contacts app instead of writing your friend's address on every envelope you might someday send. When she moves, you update one entry and every future letter goes to the right place. Denormalization is pre-printing a hundred address labels because you post something to her every day and can't be bothered opening the app each time — genuinely faster, but the day she moves, you'd better remember to throw away the old labels. The analogy is honest about the cost: pre-printed labels don't update themselves, and neither do denormalized columns.</p>
+</div>
+
+<h3>Strategic denormalization: when reads demand it</h3>
+
+<p>Normalized data is cheap to write and correct by construction — but some reads get expensive. "Show the like count on every post in the feed" done honestly is a <code>COUNT(*)</code> over a likes table, per post, per feed load. At Instagram scale that's counting millions of rows millions of times a day to display a number that changes rarely. So you break your own rule on purpose: add a <code>like_count</code> column on <code>posts</code>, increment it when a like arrives, and read it for free.</p>
+
+<p>You've now stored a fact in two places (the likes rows and the counter), which means they <em>will</em> drift — a crash between the insert and the increment, a bug, a manual fix. Denormalizing like an adult means accepting that and planning for it. The senior formula has three parts: <strong>denormalize only when a hot read measurably can't be served the normal way; name the writer that keeps the copy fresh; and name the reconciliation story</strong> — a periodic job that recomputes the truth and repairs drift. Denormalization without a reconciliation story isn't an optimization, it's a slow-motion data-corruption project.</p>
+
+<h2>Keys: how rows get their names</h2>
+
+<p>Every table needs a <strong>primary key</strong> — a value that uniquely names each row forever. You have two options. A <strong>natural key</strong> is a real-world attribute that happens to be unique: an email, a passport number, the pair <code>(show_id, seat_id)</code>. A <strong>surrogate key</strong> is a meaningless identifier the database invents: an auto-incrementing <code>bigint</code>, a UUID.</p>
+
+<p>Commit to surrogate keys as your default, and be ready to say why: natural keys look immutable until they aren't. People change emails. Countries reissue ID numbers. The moment a "permanent" natural key changes, every table that referenced it needs a coordinated multi-table update — the exact update anomaly you normalized to avoid. A surrogate key never changes because it never meant anything. Then — and this is the part that reads senior — <strong>still enforce the natural uniqueness with a unique constraint</strong>. <code>id</code> is the row's name; <code>UNIQUE (email)</code> is a business rule the database enforces at full speed with zero trust in your application code. In the bookings walkthrough below, one unique constraint turns out to be the correctness backbone of the entire system.</p>
+
+<p>One practical note when someone says "just use UUIDs": random UUIDs (v4) insert into random positions in the index, wrecking the tidy append-to-the-right pattern that sequential bigints give you, which costs cache locality and write speed on big tables. If you want globally unique IDs generated across many machines, use time-ordered schemes — which is precisely why Instagram built theirs the way they did (story below).</p>
+
+<h3>Foreign keys at scale: why some shops turn them off</h3>
+
+<p>A <strong>foreign key constraint</strong> tells the database: <code>bookings.user_id</code> must always point at a real row in <code>users</code>. The database checks it on every insert and blocks deleting a user who still has bookings. It's a free integrity guard, and for most systems, most of their lives, you should keep it — dropping foreign keys "because scale" on a system doing 200 writes/second is cargo-culting.</p>
+
+<p>But large shops do drop enforcement, for three concrete reasons worth knowing. First, every FK check is extra work on every write — a lookup into the parent table, plus locking on the parent row that can create surprising contention. Second, the big online schema-migration tools that let you alter huge tables without downtime don't play well with them — GitHub's gh-ost explicitly does not support foreign keys at all. Third, foreign keys can't cross shards: once <code>users</code> and <code>bookings</code> live on different machines, there is no database left that can see both sides of the constraint. At that point the rule moves into application code plus periodic integrity-check jobs that hunt for orphaned rows. That's the honest trade: you give up an automatic guarantee and buy it back with vigilance.</p>
+
+<div class="box story"><div class="box-tag">War story — GitHub and MySQL</div>
+<p>GitHub has run on MySQL since the beginning — Rails app, one primary accepting all writes, replicas fanning out reads. Their schema philosophy is deliberately conservative, and their tooling shows what "careful schema at scale" costs. Altering a table with hundreds of millions of rows in MySQL was so painful — the classic approaches use triggers that add load to an already-hot primary — that in 2016 GitHub built and open-sourced <strong>gh-ost</strong>: a tool that builds a ghost copy of the table, replays changes by tailing MySQL's replication log instead of using triggers, then swaps the tables atomically. A schema change on a giant table becomes a slow, throttleable, pausable background operation instead of a scary lock. Notably, gh-ost's own documentation lists foreign keys as unsupported — one reason GitHub's schemas avoid FK constraints and enforce integrity in the application. And the "single primary" part of the story has teeth too: in October 2018, just 43 seconds of lost connectivity between their East Coast data center and the rest of the network caused automated tooling to fail writes over to the West Coast — leaving seconds of writes stranded on the old primary and putting GitHub into degraded mode for roughly 24 hours while they reconciled the two histories. A single-writer design is beautifully simple right up until the moment the "single" part is disputed.</p>
+</div>
+
+<h2>Indexes: the sorted phone book</h2>
+
+<p>Back to the nine-second query. Without an index, the database's only move is a <strong>full table scan</strong> — read all 20 million rows, keep the matches. The fix is the same one humans invented for phone books: <em>keep a sorted copy, and search by jumping, not reading</em>.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A B-tree index is a phone book. Nobody finds "Sharma" by reading from page one — you open near the back, see "Patel", jump forward, see "Singh", step back, done: five glances instead of a hundred thousand entries, because <em>sorted data lets you halve the search space with every look</em>. And a composite index is exactly a phone book's sort order: last name, then first name. Finding "Sharma, Priya" is instant. Finding <em>everyone named Priya regardless of surname</em> is hopeless in the same book — Priyas are scattered across every surname. The book's order only helps if your question starts with the first column of the sort.</p>
+</div>
+
+<p>Concretely, a <strong>B-tree</strong> is a tree of fixed-size pages (blocks of ~8KB). The leaf pages at the bottom hold every indexed value in sorted order, each with a pointer to its actual row. The pages above are a thinning pyramid of signposts: "keys up to M are down-left, after M down-right." Because each page holds hundreds of keys, the tree is astonishingly shallow — <strong>three to four levels cover hundreds of millions of rows</strong>. A lookup walks root → branch → leaf → row: about four page reads, and the top levels are so hot they permanently live in RAM. That's the entire trick. Not magic — logarithms plus a sorted copy you paid to maintain.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="B-tree structure: a root page, branch pages, and sorted leaf pages pointing to rows">
+  <rect class="dg-node" x="290" y="20" width="140" height="44" rx="8"/>
+  <text class="dg-txt" x="306" y="47">root: A … Z</text>
+  <rect class="dg-node" x="90" y="110" width="140" height="44" rx="8"/>
+  <text class="dg-txt" x="122" y="137">A – H</text>
+  <rect class="dg-node" x="290" y="110" width="140" height="44" rx="8"/>
+  <text class="dg-txt" x="326" y="137">I – P</text>
+  <rect class="dg-node-alt" x="490" y="110" width="140" height="44" rx="8"/>
+  <text class="dg-txt" x="524" y="137">Q – Z</text>
+  <rect class="dg-node" x="60" y="210" width="180" height="48" rx="8"/>
+  <text class="dg-txt-s" x="76" y="230">Anand → row 4410</text>
+  <text class="dg-txt-s" x="76" y="248">Bose → row 812 …</text>
+  <rect class="dg-node-alt" x="470" y="210" width="190" height="48" rx="8"/>
+  <text class="dg-txt-s" x="486" y="230">Sharma → row 91442</text>
+  <text class="dg-txt-s" x="486" y="248">Singh → row 1207 …</text>
+  <line class="dg-edge" x1="330" y1="64" x2="180" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="360" y1="64" x2="360" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="64" x2="540" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="150" y1="154" x2="150" y2="210" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="560" y1="154" x2="560" y2="210" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="120" y="288">Each hop = one page read. 3–4 hops reach any row among 100M+; the top levels stay cached in RAM.</text>
+</svg>
+<figcaption>Finding "Sharma": root, branch, leaf, row. Four reads instead of twenty million.</figcaption>
+</figure>
+
+<h3>Composite indexes: column order is the whole game</h3>
+
+<p>An index on <code>(city, created_at)</code> sorts entries by city first, and by time <em>within</em> each city — exactly like last-name-then-first-name. So <code>WHERE city = 'Delhi' ORDER BY created_at</code> is a dream: jump to the Delhi block, read it in order, stop. Already sorted — no separate sort step at all. But <code>WHERE created_at &gt; '2026-01-01'</code> alone gets nothing from this index: recent rows are scattered through every city block, like Priyas across surnames.</p>
+
+<p>This gives you the <strong>leftmost-prefix rule</strong> — an index on <code>(a, b, c)</code> serves queries filtering on <code>a</code>, on <code>a, b</code>, or on <code>a, b, c</code>, but not on <code>b</code> or <code>c</code> alone — and one design rule worth memorizing: <strong>columns you match with equality go first; the column you range-scan or sort by goes last</strong>. Equality columns narrow you to one contiguous block; the trailing column is sorted within it, ready for your range or your <code>ORDER BY</code>.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="A composite index on city and created_at serves queries that lead with city, not queries on created_at alone">
+  <rect class="dg-zone" x="20" y="20" width="310" height="270" rx="8"/>
+  <text class="dg-txt" x="36" y="48">index on (city, created_at)</text>
+  <text class="dg-txt-s" x="44" y="84">(Chennai, Jan 03) → row</text>
+  <text class="dg-txt-s" x="44" y="108">(Chennai, Jan 09) → row</text>
+  <rect class="dg-good" fill="none" x="36" y="118" width="270" height="76" rx="6"/>
+  <text class="dg-txt-s" x="44" y="138">(Delhi, Jan 01) → row</text>
+  <text class="dg-txt-s" x="44" y="162">(Delhi, Jan 04) → row</text>
+  <text class="dg-txt-s" x="44" y="186">(Delhi, Jan 12) → row</text>
+  <text class="dg-txt-s" x="44" y="220">(Mumbai, Jan 02) → row</text>
+  <text class="dg-txt-s" x="44" y="244">(Mumbai, Jan 07) → row</text>
+  <rect class="dg-node" x="390" y="60" width="310" height="76" rx="8"/>
+  <text class="dg-txt-s" x="406" y="86">WHERE city = 'Delhi'</text>
+  <text class="dg-txt-s" x="406" y="106">ORDER BY created_at</text>
+  <text class="dg-txt-s dg-good" x="406" y="126">jumps straight to the Delhi block</text>
+  <rect class="dg-node" x="390" y="180" width="310" height="76" rx="8"/>
+  <text class="dg-txt-s" x="406" y="206">WHERE created_at &gt; Jan 01</text>
+  <text class="dg-txt-s" x="406" y="226">(no city given)</text>
+  <text class="dg-txt-s dg-bad" x="406" y="246">matches scattered — index useless</text>
+  <line class="dg-edge" x1="390" y1="98" x2="310" y2="150" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Equality on the leading column finds one contiguous, pre-sorted block. Skip the leading column and the sort order can't help you.</figcaption>
+</figure>
+
+<h3>Covering indexes: never touching the table</h3>
+
+<p>Normally a lookup is two steps: find the entry in the index, then follow the pointer to the table to fetch the other columns. But if the index itself contains every column the query needs, the second step vanishes — the database answers entirely from the index. This is a <strong>covering index</strong> (Postgres calls the result an index-only scan, and lets you append extra non-searchable columns with <code>INCLUDE</code>). For a red-hot query like "seat map for this show," an index on <code>(show_id, seat_id, status)</code> means the availability check never reads the table at all. It's the closest thing SQL has to a free lunch — except the lunch is paid for on the write side, which brings us to the tax.</p>
+
+<h3>The write tax: every index is a promise</h3>
+
+<p>An index is a sorted copy that the database swears to keep synchronized forever. So every <code>INSERT</code> into a table with four indexes performs roughly five writes: the row itself, plus an ordered insertion into four separate B-trees — finding the right page in each, splitting pages when they fill. Updates that touch indexed columns pay twice (delete the old entry, insert the new one). Indexes are not free speed; they are <strong>a purchase of read speed using write speed as currency</strong>, plus disk, plus cache space.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 230" role="img" aria-label="One insert into a table with three indexes updates four physical structures">
+  <rect class="dg-node-alt" x="30" y="88" width="200" height="54" rx="8"/>
+  <text class="dg-txt" x="46" y="112">INSERT INTO</text>
+  <text class="dg-txt" x="46" y="132">bookings …</text>
+  <rect class="dg-node" x="330" y="15" width="360" height="42" rx="8"/>
+  <text class="dg-txt-s" x="346" y="41">table heap — the rows themselves</text>
+  <rect class="dg-node" x="330" y="67" width="360" height="42" rx="8"/>
+  <text class="dg-txt-s" x="346" y="93">B-tree: (user_id, created_at)</text>
+  <rect class="dg-node" x="330" y="119" width="360" height="42" rx="8"/>
+  <text class="dg-txt-s" x="346" y="145">B-tree: unique (show_id, seat_id)</text>
+  <rect class="dg-node" x="330" y="171" width="360" height="42" rx="8"/>
+  <text class="dg-txt-s" x="346" y="197">B-tree: (status)</text>
+  <line class="dg-edge" x1="230" y1="100" x2="330" y2="36" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="230" y1="110" x2="330" y2="88" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="230" y1="120" x2="330" y2="140" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="230" y1="130" x2="330" y2="192" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>One logical write, four physical structures updated — each an ordered insertion into its own tree.</figcaption>
+</figure>
+
+<p>The operational habit that follows: <strong>audit your indexes like subscriptions</strong>. Every database tracks per-index usage stats (Postgres: <code>pg_stat_user_indexes</code>). An index nobody has read in a month is a pure tax — drop it. Saying this in an interview, unprompted, is a small sentence that signals years of operating real tables.</p>
+
+<h3>When the query planner ignores you</h3>
+
+<p>You built the index; the database refuses to use it. Before you rage, understand that the <strong>query planner</strong> — the component that picks how to execute each query, using statistics about your data — is usually right. The common cases:</p>
+
+<ul>
+<li><strong>Low selectivity.</strong> <code>WHERE status = 'completed'</code> matching 90% of rows: using the index means bouncing between index and table millions of times in random order. Reading the whole table sequentially is genuinely faster, and the planner knows it. Indexes shine when they eliminate most of the table, not a tenth of it.</li>
+<li><strong>Stale statistics.</strong> The planner estimates from sampled stats. After a huge bulk load, its picture of your table can be badly outdated until stats refresh (Postgres: <code>ANALYZE</code>) — and it will make confident wrong choices from old numbers.</li>
+<li><strong>You hid the column.</strong> <code>WHERE lower(email) = '…'</code> can't use a plain index on <code>email</code> — the index stores emails, not lowercased emails. You need an index on the expression itself. Same trap with type mismatches and leading-wildcard <code>LIKE '%gmail.com'</code> (the sorted order can't help when the prefix is unknown — Priyas again).</li>
+</ul>
+
+<p>The habit: never guess. <code>EXPLAIN ANALYZE</code> shows the actual plan and actual timings. Senior engineers state index designs with confidence and verify them with EXPLAIN; only one of those habits is optional.</p>
+
+<h2>The N+1 trap</h2>
+
+<p>Here's a slow page where every query is fast. Your feed code loads 50 posts (one query), then loops: fetch each post's author (50 queries), fetch each post's like count (50 more). 101 round trips. At a modest 1ms each, that's 100ms of pure back-and-forth — before any real work. This is the <strong>N+1 query problem</strong>, and ORMs (libraries that auto-generate SQL from object code) produce it silently, because a harmless-looking <code>post.author.name</code> inside a loop <em>is</em> a query.</p>
+
+<p>The fix is always some form of batching: a <code>JOIN</code> that brings authors along with posts, or two queries total — posts, then <code>WHERE id IN (…all 50 author ids…)</code>. ORMs call this eager loading. The senior habit is watching <strong>queries per request</strong> as a first-class metric: a request that's slow while every individual query is fast is N+1 until proven otherwise.</p>
+
+<h2>Transactions: what ACID actually buys you</h2>
+
+<p>A <strong>transaction</strong> groups several statements into one all-or-nothing unit. The guarantees travel under the acronym ACID, and at working depth they are: <strong>Atomicity</strong> — all of it happens or none of it does; a crash mid-transfer can't debit one account without crediting the other. <strong>Consistency</strong> — your declared rules (constraints, uniqueness) hold before and after. <strong>Durability</strong> — once the database says "committed," the data is on disk and survives a power cut; the promise is made before the acknowledgment, not after. And <strong>Isolation</strong> — concurrent transactions don't trample each other. Isolation is where the interview questions live, because it isn't one guarantee — it's a dial.</p>
+
+<p>Here's the reality most engineers learn the hard way: the default isolation level in Postgres (and most databases you'll touch — MySQL's InnoDB defaults slightly stronger) is <strong>read committed</strong>, and it promises only that you never see another transaction's <em>uncommitted</em> data. It does <strong>not</strong> stop two transactions from reading the same state and acting on it simultaneously. Watch it fail:</p>
+
+<pre><code>-- Two users, same seat, same instant. Both transactions run:
+SELECT status FROM bookings WHERE show_id = 99 AND seat_id = 7;
+-- both see: no booking exists. Both conclude: seat is free!
+INSERT INTO bookings (user_id, show_id, seat_id) VALUES (…);
+-- both inserts succeed. Seat F7 is sold twice.</code></pre>
+
+<p>Nothing "went wrong" by read committed's rules — neither transaction saw uncommitted data. The check-then-act race is simply not its job to prevent. You have two working-strength fixes. One: <strong>lock the moment of decision</strong> — <code>SELECT … FOR UPDATE</code> takes a row lock, so the second buyer's check waits until the first buyer's transaction commits, then sees the seat taken. Two, and better: <strong>make the database the referee</strong> — a unique constraint on <code>(show_id, seat_id)</code> means the second insert fails no matter what the application believed. The constraint is a seatbelt that works even when the code forgets to check; the strongest systems wear both, and treat the constraint as the backbone.</p>
+
+<p>Could you instead crank the dial to <strong>serializable</strong> — the level where the database guarantees the outcome equals <em>some</em> one-at-a-time ordering? Yes, and it genuinely closes these races — by detecting conflicts and aborting transactions, which your code must catch and retry. Committing to "serializable everywhere" in an interview sounds rigorous but reads as inexperience: you've volunteered retry loops and throughput costs across your whole system to fix a race that lives in one query. The senior answer runs read committed globally and applies targeted force — constraints and row locks — exactly where the money is.</p>
+
+<h2>Pick one database and know it deeply</h2>
+
+<p>Somewhere in most loops, someone asks: "SQL or NoSQL here?" There's a trap in the question. The answer interviewers dread is the blog-post recitation — "SQL gives ACID and joins, NoSQL scales horizontally…" — because it's what people say when they've read comparisons instead of operating databases. The advice from the Hello Interview guides is blunt and worth internalizing: <strong>pick one database and know it deeply — broad SQL-vs-NoSQL comparisons read as inexperience</strong>. The dichotomy is mostly dead anyway: Postgres handles JSON documents, full-text search, and replicates nicely; DynamoDB has transactions. What separates candidates is depth in <em>something</em>: "Postgres. Here's the schema, here are the three indexes and why, here's the unique constraint doing my concurrency work, here's what I'd watch in production." Specific beats broad, every single round.</p>
+
+<div class="box story"><div class="box-tag">War story — Instagram on Postgres</div>
+<p>When Facebook bought Instagram in April 2012 for a billion dollars, Instagram had about 30 million users and <strong>13 employees</strong> — and the backend was deliberately boring: Django, PostgreSQL, Memcached, Redis. Their engineering motto was literally "do the simple thing first." When one Postgres box could no longer hold the data, they didn't switch databases — they went deeper into the one they knew: several thousand <em>logical</em> shards (implemented as Postgres schemas) mapped onto a handful of physical machines, so future growth meant moving shards, not rewriting code. Needing unique IDs generated across all those shards without any central bottleneck, they built a 64-bit ID inside Postgres itself — a few lines of PL/pgSQL packing 41 bits of timestamp, 13 bits of shard ID, and a 10-bit per-shard sequence — after deciding that running extra ID-generation infrastructure wasn't worth the operational load for a tiny team. Years of hypergrowth, handled by one deeply-understood database and a simple schema. That's the strongest available counterexample to "you need NoSQL to scale."</p>
+</div>
+
+<h2>Putting it together: the bookings schema, end to end</h2>
+
+<p>Time to assemble everything into the schema you'd actually draw at the whiteboard. First the verbs — the queries that must be fast: book a seat (safely!), show my bookings newest-first, show the seat map for a show, list showtimes for a movie, log in by email. Now the schema that serves them:</p>
+
+<pre><code>CREATE TABLE users (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email      text NOT NULL UNIQUE,          -- natural uniqueness, enforced
+  name       text NOT NULL
+);
+
+CREATE TABLE shows (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  movie_id   bigint NOT NULL REFERENCES movies(id),
+  theatre_id bigint NOT NULL REFERENCES theatres(id),
+  starts_at  timestamptz NOT NULL
+);
+
+CREATE TABLE bookings (
+  id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id    bigint NOT NULL REFERENCES users(id),
+  show_id    bigint NOT NULL REFERENCES shows(id),
+  seat_id    bigint NOT NULL REFERENCES seats(id),
+  status     text   NOT NULL DEFAULT 'confirmed',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- THE correctness backbone: one active booking per seat per show.
+CREATE UNIQUE INDEX one_active_booking
+  ON bookings (show_id, seat_id)
+  WHERE status &lt;&gt; 'cancelled';
+
+-- Read paths:
+CREATE INDEX bookings_by_user ON bookings (user_id, created_at DESC);
+CREATE INDEX shows_by_movie   ON shows (movie_id, starts_at);</code></pre>
+
+<p>Every index has a name and a job — that's the standard to hold yourself to at the whiteboard:</p>
+
+<table>
+<thead><tr><th>Query</th><th>Served by</th><th>Why it's fast</th></tr></thead>
+<tbody>
+<tr><td>My bookings, newest first</td><td><code>(user_id, created_at DESC)</code></td><td>Equality on the lead column finds one block, already sorted by time — no sort step</td></tr>
+<tr><td>Book seat F7 for show 99</td><td>unique <code>(show_id, seat_id)</code></td><td>The insert either wins or fails — concurrency handled by the constraint, not by hope</td></tr>
+<tr><td>Seat map for a show</td><td>same unique index</td><td>One contiguous block of entries per show; add <code>status</code> via INCLUDE to make it covering</td></tr>
+<tr><td>Showtimes for a movie this week</td><td><code>(movie_id, starts_at)</code></td><td>Equality first, range second — the composite-order rule applied</td></tr>
+<tr><td>Login by email</td><td>unique <code>(email)</code></td><td>A business rule and a fast path in one object</td></tr>
+</tbody>
+</table>
+
+<p>Notice the shape of the whole chapter compressed into that table: entities from the nouns, indexes from the verbs, composite order chosen by the equality-then-range rule, uniqueness doing the concurrency work, and not one index without a paying customer. There's even a partial index up there — the <code>WHERE status &lt;&gt; 'cancelled'</code> clause means cancelled bookings don't occupy the seat, and the index stays smaller too. That's the schema conversation Amazon rounds want: every object justified, every hot query traced to its fast path.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Schema questions are where interviewers separate "has read about databases" from "has operated one" — and Amazon HLD rounds and India loops in particular will drill until they find the bottom of your knowledge. A passing senior answer names tables, keys, the two or three indexes with reasons, and the concurrency mechanism — unprompted. Expect these probes:</p>
+<ul>
+<li>"Walk me through your exact schema — tables, keys, and indexes. Why that column order in the index?" (They're checking the equality-then-range rule and whether you know the leftmost-prefix limitation.)</li>
+<li>"What stops two users booking the same seat at the same moment?" (Saying "transactions" without specifying the constraint or the row lock is the answer they're fishing to expose — read committed alone does not save you, and they know it.)</li>
+<li>"You added five indexes. What did that cost you?" (They want the write tax and an auditing habit, not "indexes make things fast.")</li>
+<li>"Would you denormalize here?" (They want a trigger condition, a named writer, and a reconciliation story — not "yes, for performance.")</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c03-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, what a database index is, why it makes reads fast, and why you shouldn't add ten of them.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>An index is a sorted copy of one or a few columns that the database maintains next to your table, like a phone book for your data. Because it's sorted, the database can find any value by jumping — a few page reads instead of scanning millions of rows — the same way you find a surname without reading the whole book. The catch is that the database must update every index on every insert and update, forever, so each index makes reads faster by making writes a bit slower and eating disk and cache. Ten indexes means every write updates eleven structures — and any index no query uses is pure tax with no refund. So add an index when a real query needs it, check with EXPLAIN that it's actually used, and drop the ones that sit idle.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Design the tables and indexes for a doctor-appointment app. Requirements: patients book slots with doctors; a slot can't be double-booked; patients see their upcoming appointments; doctors see their day's schedule. Write the queries first, then the schema. Ten minutes.</p></div>
+<details><summary>Answer</summary><p>Queries: book a slot (safely), my upcoming appointments, doctor's schedule for a day. Tables: <code>patients(id, email UNIQUE, name)</code>, <code>doctors(id, name, specialty)</code>, <code>appointments(id, patient_id, doctor_id, starts_at, status)</code>. The backbone: unique index on <code>(doctor_id, starts_at)</code> where status is active — the database referees double-booking, whatever the app code does. Read paths: <code>(patient_id, starts_at)</code> for "my upcoming" (equality then range — the composite rule), and the unique index already serves the doctor's-day query since equality on <code>doctor_id</code> plus a range on <code>starts_at</code> is its exact leftmost-prefix shape. Three indexes total, each with a paying query, and concurrency handled by a constraint. If you wrote more indexes than queries, revisit the write tax.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>You have an index on <code>(customer_id, order_date)</code>. For each query, will the index help? (a) <code>WHERE customer_id = 7 AND order_date &gt; '2026-01-01'</code>; (b) <code>WHERE order_date &gt; '2026-01-01'</code>; (c) <code>WHERE customer_id = 7 ORDER BY order_date DESC LIMIT 10</code>; (d) <code>WHERE upper(customer_id::text) = '7'</code>.</p></div>
+<details><summary>Answer</summary><p>(a) Yes — the ideal shape: equality on the lead column jumps to one block, then a range over the sorted trailing column. (b) No — without the leading column, matching dates are scattered through every customer's block (the Priya problem); the planner will scan. (c) Yes, beautifully — equality plus the trailing column's sort order means the database reads 10 entries from the block's end and stops; no sort, almost no work. This is how you paginate cheaply. (d) No — you wrapped the column in a function, so the stored sorted values no longer match what you're comparing; the index can't be used unless you index that expression itself.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your bookings system checks seat availability with a <code>SELECT</code>, then inserts if free. It runs at read committed. A load test with 200 concurrent buyers on one hot show sells several seats twice. Explain the exact interleaving that causes this, and give two fixes with their trade-offs.</p></div>
+<details><summary>Answer</summary><p>Interleaving: buyer A's SELECT sees no booking for seat F7; before A's INSERT commits, buyer B's SELECT runs and also sees no booking (A's insert is uncommitted, and read committed hides uncommitted data — which is exactly its job); both INSERTs then succeed. No isolation rule was violated — check-then-act is simply outside read committed's guarantees. Fix 1: unique constraint on <code>(show_id, seat_id)</code> for active bookings — B's insert now fails with a constraint error your code turns into "seat taken." Cheap, bulletproof, works even when future code forgets to check; the cost is handling the error path. Fix 2: <code>SELECT … FOR UPDATE</code> on the seat row — serializes buyers at the decision point, giving a cleaner "check saw the truth" flow; the cost is lock waits piling up on hot shows. Best answer: both — the lock for flow, the constraint as the seatbelt.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A teammate proposes adding <code>seats_left</code> to the <code>shows</code> table so the listings page stops running <code>COUNT(*)</code> over bookings. Argue for it like a senior: when is it justified, and what three things must the design include?</p></div>
+<details><summary>Answer</summary><p>Justified when the read is measurably hot (listings render on every visit; the COUNT scans a hot table thousands of times a minute) and the normalized path can't be made cheap enough with an index alone — check that first, since a covering index on <code>(show_id, status)</code> might make COUNT nearly free. If you proceed: (1) a named writer — decrement in the same transaction as the booking insert, so atomicity keeps counter and truth aligned on the happy path; (2) a reconciliation job — periodically recompute from bookings and repair drift, because drift is a when, not an if; (3) an honest tolerance — the listings count may be seconds stale, and that's fine, but the actual booking decision still goes through the unique constraint, never through the counter. Denormalized values are for display; constraints are for truth.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Model entities from the nouns, then design indexes from the verbs — every hot query needs a traced fast path, and every index needs a paying query.</li>
+<li>Normalization means every fact lives in exactly one place; denormalize only for a measurably hot read, and never without a writer and a reconciliation story.</li>
+<li>Default to surrogate primary keys, but enforce natural uniqueness with unique constraints — they're business rules the database enforces for free.</li>
+<li>Foreign key constraints are worth keeping until sharding, migration tooling, or measured write cost gives you a named reason to move integrity into code plus audit jobs.</li>
+<li>A B-tree is a sorted phone book: 3–4 page hops reach any row among hundreds of millions, and composite indexes only help queries that lead with their first column — equality columns first, range/sort column last.</li>
+<li>Every index taxes every write; audit usage stats and drop the freeloaders, and trust EXPLAIN over your intuition about what the planner will do.</li>
+<li>Read committed does not prevent check-then-act races — double-booking is solved by unique constraints and row locks at the decision point, not by cranking isolation everywhere.</li>
+<li>Commit to one database and demonstrate depth — schema, indexes, constraints, what you'd monitor. Broad SQL-vs-NoSQL comparisons read as inexperience.</li>
+</ul>
+</div>

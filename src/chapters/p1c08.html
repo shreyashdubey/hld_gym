@@ -1,0 +1,235 @@
+<p>It's 2:47am. Your phone lights up: <code>db-prod-1 unreachable</code>. You ssh in. Nothing. The machine that holds every user, every order, every password hash your company has ever stored is not answering, because its disk controller died somewhere between 2:41 and 2:43. There is exactly one copy of your data, and it is inside a metal box that no longer turns on.</p>
+
+<p>Maybe the disk is recoverable. Maybe your nightly backup restores cleanly — losing only everything since midnight. Maybe. You'll find out over the next six hours, in front of a status page turning red, doing arithmetic on how many signups happened since the last backup.</p>
+
+<p>Here's the math that makes this inevitable rather than unlucky. A server disk fails at roughly 1–2% per year — the annualized rate cloud storage companies like Backblaze publish from fleets of hundreds of thousands of drives. One disk, ignorable. Two hundred disks: <em>expect</em> two to four funerals a year. Ten thousand: disks die weekly, on schedule, forever. And disks are just the start — kernels panic, power supplies pop, whole data-center zones go dark. At any real scale, "a machine died" is not an incident. It's Tuesday.</p>
+
+<p>The only real defense is embarrassingly simple: keep more than one copy. That's <strong>replication</strong> — the same data, maintained on several machines, kept in sync automatically. Simple to say. The rest of this chapter is about why keeping copies in sync is one of the deepest problems in distributed systems, and how it bites users, engineers, and — in one famous case — all of GitHub.</p>
+
+<h2>Leader-follower: one boss, obedient copies</h2>
+
+<p>The most common design, behind almost every Postgres and MySQL deployment you'll ever touch, is <strong>leader-follower replication</strong> (also primary/replica, or the older master/slave). One machine is the <strong>leader</strong>: it accepts every write. The others are <strong>followers</strong>: full copies that typically serve reads but never accept a write directly from a client.</p>
+
+<p>How do followers stay in sync? Every time the leader commits a change, it appends a record of that change to an ordered, append-only file — Postgres calls it the write-ahead log (WAL), MySQL calls it the binlog. Followers hold an open connection to the leader, stream that log, and replay each entry in the exact order the leader wrote it. Same starting state, same changes, same order — each follower converges to a byte-for-byte copy. This is <strong>log shipping</strong>, and the log-of-ordered-changes idea will follow you through this whole book (it's also the soul of Kafka, Chapter 3.17).</p>
+
+<p>Why ship a log of <em>effects</em> instead of forwarding the SQL? Because SQL isn't deterministic: <code>NOW()</code> produces a different timestamp on every machine that runs it. The log records what actually changed — "row 4182, new value 02:47:03" — so every copy lands on identical bytes.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Leader-follower replication with log shipping to two followers">
+  <rect class="dg-node" x="14" y="120" width="110" height="56" rx="8"/>
+  <text class="dg-txt" x="30" y="144">Client</text>
+  <text class="dg-txt-s" x="30" y="162">app server</text>
+  <rect class="dg-node-alt" x="230" y="106" width="170" height="84" rx="8"/>
+  <text class="dg-txt" x="248" y="134">Leader</text>
+  <text class="dg-txt-s" x="248" y="152">all writes land here</text>
+  <text class="dg-txt-s" x="248" y="170">appends to WAL / binlog</text>
+  <rect class="dg-node" x="530" y="30" width="170" height="66" rx="8"/>
+  <text class="dg-txt" x="548" y="56">Follower A</text>
+  <text class="dg-txt-s" x="548" y="76">replays log, serves reads</text>
+  <rect class="dg-node" x="530" y="204" width="170" height="66" rx="8"/>
+  <text class="dg-txt" x="548" y="230">Follower B</text>
+  <text class="dg-txt-s" x="548" y="250">replays log, serves reads</text>
+  <line class="dg-edge" x1="124" y1="136" x2="230" y2="136" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="138" y="126">1. write</text>
+  <line class="dg-edge" x1="124" y1="166" x2="230" y2="166" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="132" y="186">4. ack "saved"</text>
+  <line class="dg-edge" x1="400" y1="122" x2="530" y2="70" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="422" y="82">2. stream log entries</text>
+  <line class="dg-edge" x1="400" y1="174" x2="530" y2="228" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="422" y="222">2. stream log entries</text>
+  <text class="dg-txt-s" x="440" y="290">3. each follower applies entries in log order</text>
+</svg>
+<figcaption>Log shipping: writes hit the leader, get appended to an ordered log, and every follower replays that log in order. Whether step 4 waits for step 3 is the whole sync-vs-async debate below.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The leader is the accountant who keeps the firm's official ledger. Two clerks sit nearby, each copying every new line into their own ledger, in order, as it's written. Anyone can answer "what's the balance?" from any clerk's book — but new entries go into the official ledger first, always. If the accountant's book burns, a clerk's copy saves the firm. The catch, and it's the catch this whole chapter turns on: a clerk is always a few lines behind the pen.</p>
+</div>
+
+<p>One thing this does <em>not</em> give you: write scaling. Every write still funnels through one leader, and — read this twice — <strong>every follower must also replay every write</strong> to stay a copy. Three replicas means the same write performed three times, not shared three ways. Replication buys survival and read capacity. Writes scale by <em>splitting</em> data, not copying it — sharding, Chapter 1.9.</p>
+
+<h2>Sync, async, semi-sync: choose what you're willing to lose</h2>
+
+<p>Look at the diagram again. The leader has written locally and is about to tell the client "saved." Does it wait for a follower to confirm first? That one decision defines what your database promises.</p>
+
+<p><strong>Synchronous replication:</strong> the leader waits until a follower confirms the write before acknowledging the client. The data provably exists on two machines before anyone was told it's safe — a leader death loses nothing acknowledged. The price: every commit pays a round trip to the follower — under a millisecond inside one data center, but 60–70ms between the US coasts and 150ms-plus to Asia. Worse: if the synchronous follower dies or hiccups, the leader must <em>stop accepting writes</em>. Fully synchronous to all followers means any one machine's bad day halts your database — which is why essentially nobody runs that.</p>
+
+<p><strong>Asynchronous replication:</strong> the leader acknowledges immediately and ships the log in the background. Fast, smooth, the default almost everywhere. The price is a small, sharp lie: there is always a tail of writes — milliseconds' worth, sometimes seconds' — that the leader has acknowledged but no follower has yet. If the leader dies right then, that tail is gone. You told the user "saved." It wasn't. For a like, who cares. For a payment, careers end.</p>
+
+<p><strong>Semi-synchronous replication:</strong> the grown-up compromise. The leader waits for <em>at least one</em> follower to confirm it has <em>received</em> the log entry (not necessarily applied it yet), then acks. Every acknowledged write exists on two machines, and one slow follower doesn't halt writes while another can confirm. MySQL's semi-sync mode and Postgres's <code>synchronous_standby_names = ANY 1 (...)</code> both do this. Keep the confirming follower in the same region and the cost is a millisecond or two per commit — a bargain for "we don't lose acknowledged data when one machine dies."</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>You're sending a signed contract. Async is dropping it in a postbox and immediately telling your boss "sent and done" — almost always fine, until the one day the mail van burns. Sync is a courier who won't let you say "done" until the recipient has signed for it — safe, slow, and if the courier is stuck in traffic, your whole day stops. Semi-sync is getting confirmation that the post office has it: not yet delivered, but no longer in only one place. That's exactly what semi-sync confirms — receipt on a second machine, not application.</p>
+</div>
+
+<table>
+<thead><tr><th>Mode</th><th>Commit latency cost</th><th>Leader dies — what's lost?</th><th>When a follower dies</th></tr></thead>
+<tbody>
+<tr><td>Async</td><td>None</td><td>The unshipped tail of acknowledged writes — seconds of data, gone</td><td>Nothing; leader doesn't wait anyway</td></tr>
+<tr><td>Semi-sync (ANY 1)</td><td>~1 round trip to nearest follower (&lt;2ms same region)</td><td>Nothing acknowledged</td><td>Fine while any confirming follower survives</td></tr>
+<tr><td>Fully sync</td><td>Round trip to slowest follower, every commit</td><td>Nothing acknowledged</td><td>Writes freeze until it recovers</td></tr>
+</tbody>
+</table>
+
+<p>The senior framing: this is a <strong>durability-versus-latency budget</strong>, spendable differently per system. A committed answer: semi-sync to one follower in the same region (survives machine death, ~1ms cost), async to another region (disaster recovery without a 70ms cross-country toll on every commit). Say that with the numbers attached and you sound like someone who has carried the pager.</p>
+
+<h2>Replication lag: the bug your users find before you do</h2>
+
+<p>Async and semi-sync share a property: followers run slightly behind the leader. That gap is <strong>replication lag</strong>. Healthy, it's tens of milliseconds. Under a traffic spike, a bulk migration, a long transaction, or a follower with slow disks, it stretches to seconds or minutes — and many databases replay the log on followers with less parallelism than the leader used to generate it, so a leader shrugging off write load can be feeding a follower that simply cannot keep up.</p>
+
+<p>Lag would be invisible internals except that you're <em>reading</em> from those followers. Here's the classic bug, the one every engineer eventually ships. A user posts a comment; the write goes to the leader. The page reloads, and the read gets load-balanced to a replica 200ms behind — which doesn't have the comment yet. The user watches their comment appear, then <em>vanish on refresh</em>. They didn't see "replication lag." They saw your app eat their words, and filed a one-star review about it.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Timeline showing a read hitting a lagging replica and missing a fresh write">
+  <line class="dg-edge" x1="130" y1="70" x2="700" y2="70"/>
+  <text class="dg-txt" x="14" y="75">Leader</text>
+  <line class="dg-edge" x1="130" y1="170" x2="700" y2="170"/>
+  <text class="dg-txt" x="14" y="175">Replica</text>
+  <rect class="dg-good" x="200" y="52" width="14" height="36" rx="3"/>
+  <text class="dg-txt-s" x="160" y="36">t=0: comment</text>
+  <text class="dg-txt-s" x="160" y="50">written, acked</text>
+  <line class="dg-edge" x1="212" y1="88" x2="500" y2="164" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="300" y="118">log entry in transit (lag)</text>
+  <rect class="dg-bad" x="330" y="152" width="14" height="36" rx="3"/>
+  <text class="dg-txt-s" x="252" y="216">t=80ms: refresh reads here</text>
+  <text class="dg-txt-s" x="252" y="232">comment missing — "app ate it"</text>
+  <rect class="dg-good" x="500" y="152" width="14" height="36" rx="3"/>
+  <text class="dg-txt-s" x="472" y="216">t=300ms: entry applied,</text>
+  <text class="dg-txt-s" x="472" y="232">replica caught up</text>
+</svg>
+<figcaption>The read-after-write race: the write is real, the read is real, and the replica in between is 300ms behind. Everything is "working correctly" and the user still saw their data disappear.</figcaption>
+</figure>
+
+<p>Notice something important: the system isn't broken. Every component is doing its job. The bug lives in the <em>gap between copies</em> — which is why you can't fix it with a patch, only with a policy. Three policies matter:</p>
+
+<p><strong>Read-your-writes.</strong> The guarantee: a user always sees their <em>own</em> writes. Cheapest implementation: after a user writes, route that user's reads to the leader for a short window (say, 10 seconds) — a sticky "recently wrote" flag in their session. More precise: every position in the replication log has an identifier (Postgres calls it an LSN — log sequence number). Record the LSN of the user's write in their session; a replica serves their reads only if it has replayed past that LSN, else the read waits a beat or falls through to the leader. Precise, but now your app is lag-aware plumbing. Start with the pin-to-leader window; graduate to LSN tracking when the leader feels the pinned load.</p>
+
+<p><strong>Monotonic reads.</strong> A sneakier bug: a user who wrote <em>nothing</em> refreshes twice, the first read hits a fresh replica, the second a lagged one — and someone else's comment they just read disappears. Time ran backwards. Monotonic reads forbids this: a user may see stale data, but never <em>older</em> data than they've already seen. Standard fix: <strong>session stickiness</strong> — hash each session to one replica, so one user rides one timeline. (Volunteer the caveat before the interviewer does: when that replica dies, its users hop timelines, so stickiness softens the bug rather than erasing it.)</p>
+
+<p><strong>Honest staleness.</strong> For plenty of surfaces — view counts, dashboards, search results — the senior move is to serve stale data on purpose and say so. Freshness is a budget. Spend it where users notice: their own writes.</p>
+
+<div class="box story"><div class="box-tag">War story — GitLab, January 2017</div>
+<p>Replication lag doesn't just confuse users — it pages tired humans, and tired humans touch primaries. On 31 January 2017, a spam wave hammered GitLab.com's Postgres and replication to the secondary fell so far behind it broke entirely. Late that night, an exhausted engineer rebuilding the secondary meant to wipe its stale data directory — and ran <code>rm -rf</code> on the <em>primary</em>. Roughly 300GB, gone. Then the safety nets failed roll call: the automated pg_dump backups had been silently producing nothing for weeks (a Postgres version mismatch), the S3 backups were empty, and disk snapshots weren't enabled for the database servers. What saved them was a manual LVM snapshot taken about six hours earlier for an unrelated staging refresh. GitLab restored from it — live-streaming the recovery on YouTube — and permanently lost about six hours of issues, merge requests, comments, and new accounts (Git repository data lived elsewhere and survived). Two tattoo-grade lessons: lag is an operational hazard, not just a UX one; and <strong>replication is not backup</strong> — a replica faithfully replays your deletes. Copies protect you from dead hardware. Only backups protect you from commands.</p>
+</div>
+
+<h2>Failover: the leader is dead — long live the leader</h2>
+
+<p>Replication's promise is that when the leader dies, a follower takes over. That handover is <strong>failover</strong>: notice the leader is dead, promote a follower, repoint everything at it. Three steps that sound trivial and are anything but.</p>
+
+<p><strong>Detection</strong> is the first trap. Machines don't announce their death; they go quiet. So we use heartbeats: no answer for N seconds, declare it dead. But "quiet" has many causes — a garbage-collection pause, a saturated link, a brief partition — and from the outside, <em>a dead leader and a slow leader look identical</em>. Set N too small and ordinary hiccups trigger failovers. Set it too large and every real death means minutes of downtime. There is no correct N; only a trade-off you must own.</p>
+
+<p><strong>Promotion</strong> is the second trap. You promote the most caught-up follower — but under async replication, even it may be missing the dead leader's final seconds of acknowledged writes, which get discarded to keep histories consistent. Acknowledged, then discarded: the async contract collecting its fee at the worst moment.</p>
+
+<p>Then there's the third trap, the one with a horror-movie name. Suppose the old leader wasn't dead — just unreachable for a while. Your automation promotes a follower. Now two machines both believe they're the leader, and clients on different sides of the hiccup are writing to <em>both</em>. This is <strong>split brain</strong>: two divergent histories of the truth, growing apart with every write, with no automatic way to merge them. Balances updated on both sides; the same auto-increment ID handed to two different rows. Cleanup is manual archaeology, row by row.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Split brain: a network partition leaves two leaders accepting writes on opposite sides">
+  <rect class="dg-zone" x="14" y="30" width="320" height="240" rx="10"/>
+  <text class="dg-txt-s" x="30" y="54">Region / DC East</text>
+  <rect class="dg-zone" x="386" y="30" width="320" height="240" rx="10"/>
+  <text class="dg-txt-s" x="402" y="54">Region / DC West</text>
+  <rect class="dg-bad" x="80" y="80" width="190" height="64" rx="8"/>
+  <text class="dg-txt" x="98" y="106">Old leader</text>
+  <text class="dg-txt-s" x="98" y="126">not dead, just cut off</text>
+  <rect class="dg-bad" x="450" y="80" width="190" height="64" rx="8"/>
+  <text class="dg-txt" x="468" y="106">Promoted follower</text>
+  <text class="dg-txt-s" x="468" y="126">now also "the leader"</text>
+  <rect class="dg-node" x="80" y="200" width="190" height="50" rx="8"/>
+  <text class="dg-txt" x="98" y="224">East clients</text>
+  <text class="dg-txt-s" x="98" y="241">still writing here</text>
+  <rect class="dg-node" x="450" y="200" width="190" height="50" rx="8"/>
+  <text class="dg-txt" x="468" y="224">West clients</text>
+  <text class="dg-txt-s" x="468" y="241">writing here</text>
+  <line class="dg-edge" x1="175" y1="200" x2="175" y2="144" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="545" y1="200" x2="545" y2="144" marker-end="url(#arrow)"/>
+  <line class="dg-bad" x1="270" y1="112" x2="450" y2="112"/>
+  <text class="dg-txt" x="342" y="104">&#10007;</text>
+  <text class="dg-txt-s" x="296" y="136">partition: replication cut</text>
+  <text class="dg-txt-s" x="230" y="290">Two histories now diverge with every write. No automatic merge exists.</text>
+</svg>
+<figcaption>Split brain: the partition heals eventually — the data doesn't. Every second of dual-leader writes is future manual reconciliation.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A company's head office goes silent for one minute — phones down. Regional office B, following the emergency handbook, declares its manager acting CEO. But head office was never gone, just unreachable, and its CEO kept signing deals the whole time. Now two CEOs have each signed a minute of contracts, some for the same clients, and no lawyer on earth can automatically merge them. The fix in real companies and real databases is the same: before anyone takes the crown, make <em>certain</em> the old ruler can't act — revoke their signing authority, not just their phone line.</p>
+</div>
+
+<p>That "make certain" step has a name: <strong>fencing</strong> — forcibly preventing the old leader from doing damage before the new one takes over. Blunt version: STONITH, "shoot the other node in the head" — cut the old machine's power via its management interface. Elegant version: every leadership term gets an increasing epoch number, and storage and clients reject writes stamped with a stale epoch, so a zombie leader's writes bounce off. Chapter 2.3 builds fencing properly on consensus. For now, burn in the rule: <strong>promotion without fencing is a split brain scheduled for later.</strong></p>
+
+<div class="box story"><div class="box-tag">War story — GitHub, October 2018</div>
+<p>On 21 October 2018 at 22:52 UTC, routine maintenance to replace failing optical equipment briefly severed the link between GitHub's US East Coast data center and its East Coast network hub. Connectivity returned in <em>43 seconds</em>. That was enough. Orchestrator — GitHub's automatic MySQL failover system — saw East Coast primaries unreachable and did exactly what it was built to do: promoted replicas in the <em>West Coast</em> data center and redirected writes there. But cross-country replication was asynchronous, so the East primaries held a tail of acknowledged writes that had never reached the West — and the newly promoted West primaries immediately began accepting fresh writes of their own. Forty-three seconds of network trouble had produced two databases on opposite coasts, each containing writes the other lacked. GitHub refused to guess at a merge: they kept the site degraded, paused webhook delivery and Pages builds (millions of deliveries queued up), restored the East Coast databases from backup, replayed replication until the coasts converged, and reconciled the orphaned East Coast writes. Total time degraded: 24 hours and 11 minutes — from 43 seconds of partition. The automation didn't malfunction; it did precisely what it was configured to do, faster than any human could evaluate whether it <em>should</em>. That's the lesson seniors carry: automatic failover fails in exactly the scenarios hardest to test — partial, asymmetric, brief. GitHub's remediations pushed toward tighter fencing and topology rules so a short blip could never again trigger a cross-country promotion.</p>
+</div>
+
+<p>So should failover be automatic? Commit to a position: <strong>automate detection, preparation, and everything reversible; be extremely careful automating promotion itself.</strong> Many strong teams have automation detect, pick the candidate, pre-stage the runbook — and require a human to press the button, because promotion is irreversible and "leader unreachable" is ambiguous. Teams that fully automate — at large fleet sizes you must; humans don't scale to a failover a day — pair it with real fencing and a consensus-based view of who's alive: a majority of independent observers must agree the leader is gone before anyone is crowned. Majorities and quorums get their full treatment in Chapter 1.10.</p>
+
+<h2>Read replicas: real scale, with a ceiling</h2>
+
+<p>Beyond survival, followers earn their keep serving reads — and most systems are read-heavy, often 10:1 or 100:1. Point feed reads, profile views, and analytics at replicas; reserve the leader for writes and the reads that truly cannot tolerate staleness. Five replicas, roughly five times the read throughput — the standard second act of every scaling story, right after "add a cache."</p>
+
+<p>But replication factor is not infinite read scale, and interviewers love candidates who know where the ceiling is. Three limits:</p>
+
+<ul>
+<li><strong>Every replica replays every write.</strong> At 50% writes, half of each replica's capacity is burned on replay before it serves a single read. The more write-heavy you are, the less each new replica buys — and past a point, replicas can't keep up with the log at all, and lag grows without bound.</li>
+<li><strong>More replicas, more staleness surface.</strong> Ten replicas means ten separately-lagging timelines, ten log streams shipped from the leader, and ten chances for a user to land on the stale one.</li>
+<li><strong>For hot reads, a cache is cheaper.</strong> If 1% of data serves 90% of reads, a Redis layer (Chapter 1.6) absorbs that for a fraction of the cost of full database copies. Replicas shine for <em>diverse</em> reads that miss caches — long-tail queries, analytics.</li>
+</ul>
+
+<p>And the ceiling on writes is absolute: no number of replicas adds a single write per second, because every write still flows through one leader and then into every copy. When the leader's write throughput is the wall, you stop copying data and start splitting it — sharding, next chapter.</p>
+
+<h2>More than one leader: a preview of the deep end</h2>
+
+<p><strong>Multi-leader replication</strong> puts a leader in each region: users write locally at local latency (Sydney users no longer pay 200ms to a Virginia leader), and leaders exchange changes asynchronously. The bill arrives immediately: two users can now edit the same row in two regions in the same second, and <em>both writes are accepted</em>. Someone must decide who wins — last-write-wins (quietly discards data), custom merge logic, or punting to the application. Conflict resolution is genuinely hard and unavoidable; it gets full treatment in Chapter 2.5. The one-line rule: don't take multi-leader for durability — take it only when multi-region write latency forces you to, with a conflict story you can defend.</p>
+
+<p><strong>Leaderless replication</strong> — the Dynamo style, used by Cassandra and Riak — abolishes the leader entirely. The client writes to several replicas at once, done when W of N confirm; reads query R replicas and take the newest version. Choose W + R &gt; N and every read overlaps at least one replica that saw the latest write — no leader, no promotion, no failover drama, at the price of a subtler consistency story. That arithmetic — quorums — anchors Chapter 1.10.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Replication is rarely its own question — it's the trapdoor under every design you draw. Put a database box on the board and assume these are coming:</p>
+<ul>
+<li>"You said async replication — the leader dies with two seconds unreplicated. What exactly did your users lose, and did you acknowledge any of it?" (They want the durability contract stated plainly, and semi-sync offered as the fix if the data warrants it.)</li>
+<li>"A user posts and their refresh doesn't show it. Walk me through the fix." (Name the guarantee — read-your-writes — then a mechanism: pin-to-leader window or LSN tracking, with the cost of each.)</li>
+<li>"How does your failover avoid two leaders?" (The word they're fishing for is fencing. "Short timeout" is the junior answer; the timeout is what <em>causes</em> split brain.)</li>
+<li>"Reads grow 10x — do you just add ten replicas?" (They want the ceiling: replicas replay every write, staleness multiplies, hot reads belong in a cache, and writes need sharding, not copies.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c08-f1">
+<p class="fey-prompt">A junior asks: "We pay for five database servers but one does all the writing, and yesterday my test comment vanished when I refreshed. Why?" Explain both, in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>One machine — the leader — takes every write and streams a log of changes to the other four, which replay it to stay identical copies. We do this so a dead machine costs us nothing (a copy takes over) and so the four followers can serve our read traffic, which is most of our traffic. But the copies run slightly behind the leader — replication lag, usually milliseconds, sometimes seconds under load. Your comment went to the leader; your refresh read from a follower that hadn't replayed it yet, so it looked deleted, then reappeared once the follower caught up. The standard fix is read-your-writes: for a little while after you write, we send your reads to the leader, so you always see your own changes. And one warning while we're here: those five copies are not backups — a bad delete replicates to all five in milliseconds.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your leader is in Virginia. Compliance wants synchronous replication to Oregon (~70ms round trip) so no acknowledged write can ever be lost to a regional disaster. Checkout commits 5 sequential writes. What happens to checkout latency, and what do you counter-propose?</p></div>
+<details><summary>Answer</summary><p>Each commit waits a 70ms cross-country confirmation: 5 × 70 = ~350ms added to checkout. And when Oregon has a bad network day, Virginia stops accepting writes: you've coupled uptime to two regions' health. Counter-proposal: semi-sync to a follower in a <em>different availability zone of the same region</em> (~1–2ms per commit) covering machine and AZ death, plus async to Oregon for regional disaster — accepting that a true region-killing event may lose the last few seconds. Then make the trade explicit: "zero loss even if Virginia is destroyed mid-transaction" costs 350ms per checkout; "zero loss unless an entire region dies, then seconds at most" costs 10ms. Numbers turn a policy fight into a decision.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Users report: "I post a comment, refresh, it's gone, refresh again, it's back." Sketch two fixes, and for each name the cost and the failure mode that remains.</p></div>
+<details><summary>Answer</summary><p>Fix 1 — pin-to-leader window: after any write, route that user's reads to the leader for ~10s via a session flag. Cost: extra leader read load, scaling with write rate. Remaining hole: the window is a guess — lag longer than 10s (migrations, incidents) resurfaces the bug. Fix 2 — LSN tracking: store the log position of the user's last write in their session; replicas serve their reads only if replayed past it, else fall through to the leader. Cost: lag-aware plumbing in the read path. Remaining hole: cross-device — comment on your phone, check on your laptop, and the laptop session carries no LSN; closing it needs server-side per-user write positions. Interview bonus: add session stickiness so each user rides one replica's timeline — monotonic reads, which also kills the "someone else's comment flickers" variant.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A teammate ships a cron: "if the leader misses heartbeats for 10 seconds, auto-promote the freshest follower and update DNS." List what can go wrong, in order of how badly you'll be paged.</p></div>
+<details><summary>Answer</summary><p>(1) Split brain, the career-limiting one: a 15-second GC pause or partition isn't death — the script promotes while the old leader is alive, and with no fencing both take writes; you're now GitHub in October 2018. (2) Acknowledged-write loss: the "freshest follower" under async can still be seconds behind; promotion silently discards the tail, and DNS caching keeps some clients writing to the zombie even longer. (3) Flap storms: a wobbly network trips repeated promotions. (4) Cold-start stampede: the promoted follower inherits full traffic with cold caches at the worst moment. Minimum fixes: fence before promote (cut power or invalidate the epoch), require agreement from multiple observers across failure domains before declaring death, and repoint via a connection proxy you control, not DNS TTLs you don't.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>You run 1 leader + 2 replicas at 80% read capacity; the workload is 40% writes and read traffic is about to double. The intern proposes "add 4 more replicas." Does it work? Do the reasoning.</p></div>
+<details><summary>Answer</summary><p>Mostly no — and the reason is the exercise. At 40% writes, a big slice of every replica's capacity goes to replaying the leader's write stream before it serves one read: each added replica brings maybe 60% of a machine's worth of usable read capacity. Four more replicas roughly doubles usable read capacity — barely covering the doubling, zero headroom — while adding four more lagging timelines, four more log streams from the leader, and four more machines to operate. Better order: profile the reads first. Hot-key traffic → a cache absorbs the doubling for a fraction of the cost. Long-tail → maybe 2 replicas <em>and</em> a cache. And flag the real wall: at 40% writes and growing, the leader is the next bottleneck, and no replica count fixes writes — that's sharding (Chapter 1.9).</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>One copy of your data is a countdown timer: disks fail at 1–2% a year, so at scale machine death is routine, and replication is the only defense.</li>
+<li>Leader-follower is the workhorse: all writes go to one leader, which appends changes to an ordered log that followers stream and replay to stay identical copies.</li>
+<li>Sync vs async vs semi-sync is a durability-versus-latency budget: async can lose acknowledged writes when the leader dies; semi-sync to one nearby follower buys "on two machines before we say saved" for about a millisecond.</li>
+<li>Replication lag causes real user-facing bugs — the vanishing comment — fixed by policy, not patches: read-your-writes (pin to leader or track log positions) and monotonic reads (session stickiness).</li>
+<li>Failover is detection, promotion, repointing — and its nightmare is split brain, two leaders accepting diverging writes; never promote without fencing the old leader.</li>
+<li>Automatic failover is hard because dead and slow look identical from outside: GitHub's 43-second partition in October 2018 triggered a correct-by-configuration cross-country promotion and 24 hours of degraded service.</li>
+<li>Replicas scale reads, never writes — every replica replays every write, so write-heavy workloads gain little per replica, hot reads belong in caches, and write scaling means sharding.</li>
+<li>Replication is not backup: deletes and disasters replicate faithfully in milliseconds — GitLab survived 2017 only because one manual snapshot existed outside the replication chain.</li>
+</ul>
+</div>

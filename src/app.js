@@ -126,6 +126,7 @@ function renderSidebar() {
 
 /* ---------- quiz rendering ---------- */
 function renderQuizItem(q, onAnswer, num) {
+  q = { ...q, options: [...q.options].sort(() => Math.random() - 0.5) }; // authors write correct-first; never show it that way
   const wrap = document.createElement('div');
   wrap.className = 'q-item';
   wrap.innerHTML = `<div class="q-num">${num || ''}${q.tag ? ' · ' + q.tag : ''} · L${q.level}</div>

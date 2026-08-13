@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c10",
+  "items": [
+    {
+      "id": "p1c10-q01", "level": 1, "type": "mcq", "tag": "cap",
+      "q": "What does the CAP theorem actually say?",
+      "options": [
+        {"t": "Every distributed system must pick exactly two of consistency, availability, and partition tolerance", "correct": false,
+         "why": "That's the famous triangle misreading. 'Partition tolerance' isn't a menu item you can decline — networks fail whether you vote or not. The real choice is two-way, and only during a partition."},
+        {"t": "Consistency, availability, and partition tolerance can all be achieved with enough replicas", "correct": false,
+         "why": "More replicas make the trade-off sharper, not softer — more copies means more chances to diverge during a split. The theorem is a proof that all three together are impossible, not an engineering challenge."},
+        {"t": "When a network partition occurs, each operation must choose between consistency and availability", "correct": true,
+         "why": "Right. Partitions aren't optional — the network will split. The theorem only bites during a partition, and the choice is binary: refuse requests you can't verify (C) or answer anyway and reconcile later (A)."},
+        {"t": "NoSQL databases are AP and SQL databases are CP", "correct": false,
+         "why": "Databases don't have zodiac signs. The choice is per operation, during a partition — the same system can refuse checkout writes (CP behavior) while serving stale product pages (AP behavior). Cassandra can even run quorum reads and writes for CP-ish behavior on chosen queries."}
+      ]
+    },
+    {
+      "id": "p1c10-q02", "level": 1, "type": "mcq", "tag": "cap",
+      "q": "Why isn't 'CA' — consistent and available, not partition-tolerant — a real option for a distributed system?",
+      "options": [
+        {"t": "Because consistency and availability directly contradict each other, so no system can ever provide both at once", "correct": false,
+         "why": "They coexist fine on a healthy network — a single-region quorum system serves consistent answers to every request all day. The conflict only appears when a partition forces the choice (and, in milder form, as the daily latency tax on cross-region writes)."},
+        {"t": "Choosing CA means declaring the network will never fail, and the network always eventually fails", "correct": true,
+         "why": "Exactly. 'Partition tolerance' isn't a feature you build; a partition is weather. Switches die, fiber gets cut, a 10-second GC pause looks identical to a network split. Any multi-machine system will face one, and at that moment it acts as CP or AP whether you planned it or not."},
+        {"t": "CA is possible but too expensive for most companies", "correct": false,
+         "why": "It's not an expense problem — it's an impossibility. No budget buys a network that never splits. Even Google's Spanner, with private fiber and atomic clocks, is a CP system: it makes partitions rare and the consistency tax small, but during a real partition it still refuses rather than diverge."},
+        {"t": "CA systems exist but only for read-only workloads", "correct": false,
+         "why": "Read-only data dodges write conflicts, but reads during a partition still face the same fork: serve possibly-stale data (A) or refuse because you can't verify freshness (C). The theorem doesn't exempt reads."}
+      ]
+    },
+    {
+      "id": "p1c10-q03", "level": 1, "type": "mcq", "tag": "pacelc",
+      "q": "What does PACELC add to CAP?",
+      "options": [
+        {"t": "Even without a partition, systems must choose between latency and consistency on every request", "correct": true,
+         "why": "Right. Partitions are rare; the 'Else' clause is the everyday bill: strong consistency means waiting for far-away replicas (80-100ms Virginia to Frankfurt) on every write, or acknowledging locally and accepting staleness. Most systems relax consistency for latency, not for partition survival."},
+        {"t": "A fourth property, durability, that CAP forgot to include alongside the original three", "correct": false,
+         "why": "Durability (surviving crashes) is a real property but it's not what PACELC adds. The E-L-C part is about the healthy-network case: Latency versus Consistency when there's no partition at all."},
+        {"t": "A proof that availability always wins over consistency in practice", "correct": false,
+         "why": "PACELC doesn't pick a winner — it names a second trade-off. Spanner is PC/EC (consistency both times), DynamoDB is PA/EL (availability and speed). Both are deliberate, defensible positions for different data."},
+        {"t": "A way to avoid the CAP choice entirely by using better-synchronized clocks", "correct": false,
+         "why": "Better clocks (like Spanner's atomic clocks) shrink the consistency tax; they don't repeal it. PACELC is a vocabulary for describing the choices, not an escape hatch from them."}
+      ]
+    },
+    {
+      "id": "p1c10-q04", "level": 1, "type": "mcq", "tag": "levels",
+      "q": "What does 'read-your-writes' consistency guarantee?",
+      "options": [
+        {"t": "Every user everywhere sees your write the instant it completes, no matter which replica they read from", "correct": false,
+         "why": "That's linearizability (strong consistency) — the expensive, everyone-everywhere guarantee. Read-your-writes is deliberately narrower: only the writer is guaranteed to see their own write."},
+        {"t": "Reads and writes always go to the same physical node", "correct": false,
+         "why": "That's one possible implementation (session pinning), not the guarantee itself. You can also implement it with version tokens: the client remembers the version it wrote and demands at-least-that-fresh reads from any replica."},
+        {"t": "Writes are re-read and verified before being acknowledged", "correct": false,
+         "why": "That's a durability/verification mechanism, unrelated to this. Read-your-writes is about what a user observes after writing, not about how the write is confirmed."},
+        {"t": "After you write something, your own subsequent reads always include that write — other users' reads may still lag", "correct": true,
+         "why": "Right — it's a targeted, cheap upgrade over eventual consistency. It kills the single most embarrassing replication bug ('your app ate my comment, so I posted it twice') without paying for global strong consistency."}
+      ]
+    },
+    {
+      "id": "p1c10-q05", "level": 1, "type": "mcq", "tag": "levels",
+      "q": "A user refreshes a page and sees a comment; on the next refresh it's gone; on the third it's back. Which guarantee would prevent this flickering?",
+      "options": [
+        {"t": "Read-your-writes", "correct": false,
+         "why": "Close cousin, different bug. Read-your-writes covers your OWN writes vanishing. This user is watching someone else's comment appear and un-appear — that's their view of time running backwards, which is monotonic reads' job."},
+        {"t": "Monotonic reads", "correct": true,
+         "why": "Yes — monotonic reads promise one reader's view never goes backwards in time. The flicker comes from successive reads landing on replicas with different lag. Sticky sessions (one replica per session) is the classic fix."},
+        {"t": "Eventual consistency", "correct": false,
+         "why": "Eventual consistency is what's CAUSING this — it permits any read to be stale, including a read staler than your previous one. It's the floor the bug grows from, not the fix."},
+        {"t": "Durability", "correct": false,
+         "why": "Nothing was lost — the comment exists safely on the primary the whole time. The problem is which version each replica shows, purely a consistency issue, not a durability one."}
+      ]
+    },
+    {
+      "id": "p1c10-q06", "level": 1, "type": "mcq", "tag": "levels",
+      "q": "What is the one promise eventual consistency actually makes?",
+      "options": [
+        {"t": "If writes stop, all replicas converge to the same value, eventually", "correct": true,
+         "why": "That's the whole contract — convergence, with no deadline and no freshness promise along the way. In practice it's usually milliseconds, but any individual read may be stale. It's the default of the internet because for most data, nobody notices."},
+        {"t": "Every read returns data that is at most a few seconds stale, with a hard upper bound", "correct": false,
+         "why": "Eventual consistency promises no bound at all — 'eventually' has no deadline. Systems that promise a maximum staleness are offering something stronger (bounded staleness), which costs more machinery."},
+        {"t": "Writes eventually succeed even during failures", "correct": false,
+         "why": "That's an availability property, not a consistency one. Eventual consistency is about replicas converging on a value, not about whether writes get accepted."},
+        {"t": "Conflicts never happen because replicas take turns accepting writes", "correct": false,
+         "why": "The opposite — eventually consistent systems that accept writes at multiple replicas are exactly where conflicts are born. Convergence requires a conflict-resolution rule (LWW, merge), because concurrent writes will happen."}
+      ]
+    },
+    {
+      "id": "p1c10-q07", "level": 1, "type": "mcq", "tag": "quorum",
+      "q": "With N replicas, W write-acknowledgments, and R read-replies, what does R + W > N guarantee?",
+      "options": [
+        {"t": "All N replicas hold identical copies of the data at all times, because every confirmed write reaches every node", "correct": false,
+         "why": "Quorums never promise that — with W=2 of N=3, one replica is legitimately stale after every write. The guarantee is about the READ finding the fresh copy, not about all copies matching."},
+        {"t": "The system can survive any number of node failures", "correct": false,
+         "why": "Quite the opposite — R and W define exactly how many failures you tolerate. N=3, W=2 stops accepting writes when two nodes die. Choosing R and W is choosing which failure mode you get."},
+        {"t": "The set of nodes you read from must overlap the set that confirmed the latest write, so at least one node you ask has the newest version", "correct": true,
+         "why": "Right — pure pigeonhole arithmetic. Two groups whose sizes sum to more than N must share a member. Version numbers then identify which reply is freshest. That's the entire quorum trick."},
+        {"t": "Writes are applied in the same order on every replica", "correct": false,
+         "why": "Ordering is a separate, harder problem. Quorum overlap gives freshness visibility for reads; it says nothing about two concurrent writes arriving at replicas in different orders — that's what conflict resolution handles."}
+      ]
+    },
+    {
+      "id": "p1c10-q08", "level": 1, "type": "mcq", "tag": "lww",
+      "q": "When two replicas hold conflicting versions of a key, what does last-writer-wins (LWW) do?",
+      "options": [
+        {"t": "Merges the two versions field by field", "correct": false,
+         "why": "That would be a merge strategy — smarter and more work. LWW does no merging at all; it's a coin flip weighted by clock timestamps, which is exactly why it's cheap and exactly why it loses data."},
+        {"t": "Keeps the version with the latest timestamp and silently discards the other — even though it was acknowledged to a user", "correct": true,
+         "why": "Yes, and 'silently' is the load-bearing word. The losing write was accepted, confirmed, and is now gone with no error and no log line. Worse, 'latest' is judged by server clocks, which drift — so clock configuration, not reality, can pick the victim."},
+        {"t": "Returns both conflicting versions to the application and lets it decide which one is the truth", "correct": false,
+         "why": "That's the Dynamo-style detect-and-surface approach (built on vector clocks), the honest alternative to LWW. LWW's selling point is that the application never has to see conflicts — because it destroys one side."},
+        {"t": "Rejects the second write with an error", "correct": false,
+         "why": "Rejection requires noticing the conflict at write time, which needs coordination — the thing AP systems gave up. LWW conflicts are discovered later, when divergent replicas reconcile, long after both writers went home happy."}
+      ]
+    },
+    {
+      "id": "p1c10-q09", "level": 1, "type": "mcq", "tag": "vector-clocks",
+      "q": "What question do vector clocks answer that a plain timestamp cannot?",
+      "options": [
+        {"t": "Which of the two writes physically happened first in real wall-clock time", "correct": false,
+         "why": "Vector clocks deliberately don't answer this — and neither do timestamps, honestly, because server clocks drift. Vector clocks track causality (who had seen what), which is the thing you can actually know in a distributed system."},
+        {"t": "Which replica has the most accurate clock", "correct": false,
+         "why": "Vector clocks contain no wall-clock time at all — that's the point. They're per-replica counters of events seen, immune to clock skew entirely."},
+        {"t": "How to automatically merge two conflicting versions back into a single correct value, without help from the application", "correct": false,
+         "why": "The classic overreach. Vector clocks DETECT concurrency; they resolve nothing. Something that understands the data's meaning — usually application code — still has to do the merge. Detection without resolution is still valuable: it's the difference between knowing you have a conflict and silently losing data."},
+        {"t": "Whether one version already knew about the other when it was written, or whether the two are genuinely concurrent", "correct": true,
+         "why": "Right. Each version carries a tally of what its writer had seen from every replica. Comparing tallies distinguishes 'B descends from A — safe to keep B' from 'neither knew about the other — real conflict, someone must merge.' Timestamps just pick a winner blindly."}
+      ]
+    },
+    {
+      "id": "p1c10-q10", "level": 2, "type": "mcq", "tag": "levels",
+      "q": "You add read replicas to your comments database to handle load. Within a week, users report: 'I posted a comment, refreshed, it was gone — so I posted again, and now it's there twice.' What happened, and what's the targeted fix?",
+      "options": [
+        {"t": "Their write hit the primary but their next read hit a lagging replica; pin each user's reads to the primary for a few seconds after they write", "correct": true,
+         "why": "Exactly — a textbook read-your-writes violation, and it's the predictable first bug after adding replicas. Session pinning (or client-side version tokens) fixes precisely this user's view without giving up the read-scaling you added replicas for."},
+        {"t": "The replicas are corrupt; rebuild them from the primary", "correct": false,
+         "why": "Nothing is corrupt — every replica will show the comment within seconds. The data is fine; the freshness of one specific reader's view is the problem. Rebuilding replicas would fix nothing and recur immediately."},
+        {"t": "Route every comment read to the primary permanently, so replicas can never serve a stale comment to anyone", "correct": false,
+         "why": "This fixes the bug by deleting the feature — you added replicas because the primary couldn't take the read load. Read-your-writes only requires the WRITER to get fresh reads, briefly. Everyone else can happily read stale replicas."},
+        {"t": "Switch the database to synchronous replication so replicas are never behind", "correct": false,
+         "why": "This works but overpays enormously: every comment write now waits for every replica, adding latency to all writes for all users to fix a bug that only affects the writer's own next read. Match the fix to the guarantee actually needed."}
+      ]
+    },
+    {
+      "id": "p1c10-q11", "level": 2, "type": "mcq", "tag": "levels",
+      "q": "In your chat app, a user sees 'No, absolutely not!' appear in a group chat before the question it answers ('Should I delete the prod database?'). Which guarantee is missing, and why is this worse than ordinary staleness?",
+      "options": [
+        {"t": "Monotonic reads — the user's view went backwards", "correct": false,
+         "why": "Nothing went backwards — the user saw the reply once and it stayed. The problem is ORDER between two related writes from different people, which is causality's territory, not one reader's timeline."},
+        {"t": "Linearizability — chat is interactive, so every user must see every message the instant it's sent, which only strong consistency can deliver", "correct": false,
+         "why": "Linearizability would fix it, the way buying a truck fixes needing a wheelbarrow. Chat needs replies-after-questions, not everyone-sees-everything-instantly; causal ordering delivers that at a fraction of the coordination cost. Reaching for the strongest level by default is how latency budgets die."},
+        {"t": "Causal consistency — the reply replicated faster than its cause, and reads that reorder cause and effect change the meaning, not just the freshness", "correct": true,
+         "why": "Right. Stale data is old but true; causally reordered data is actively misleading — an answer without its question reads as a different conversation. Causal consistency delivers writes respecting happened-because-of order, and costs far less than full linearizability because unrelated writes still flow freely."},
+        {"t": "Read-your-writes — the person who replied wasn't able to see their own message right after posting it", "correct": false,
+         "why": "The replier saw their own message fine. The victim is a third user watching two OTHER people's messages arrive in a meaning-destroying order — that's a relationship between writes, which read-your-writes says nothing about."}
+      ]
+    },
+    {
+      "id": "p1c10-q12", "level": 2, "type": "mcq", "tag": "quorum",
+      "q": "Your product catalog does 100 reads for every write, N=3. Someone proposes W=3, R=1. What did they buy, and what's the sharpest risk they took?",
+      "options": [
+        {"t": "Nothing useful — R=1 breaks the overlap guarantee", "correct": false,
+         "why": "Check the arithmetic: R+W = 1+3 = 4 > 3. The overlap holds — every node has every confirmed write (W=3), so reading any single node is guaranteed fresh. The weakness is on the write path's availability, not the read path's freshness."},
+        {"t": "One-node reads for the read-heavy workload, still overlapping — but now a single dead node makes ALL writes fail", "correct": true,
+         "why": "Exactly the right analysis. 3+1>3 keeps the overlap, and paying on the write path makes sense at 100:1 read-heavy. But W=N means zero write-side failure tolerance: any one node down and the catalog can't update. Whether that's acceptable depends on how urgent catalog updates are — say that trade out loud."},
+        {"t": "Faster writes, since all three replicas work in parallel", "correct": false,
+         "why": "W=3 makes writes SLOWER, not faster — the write waits for the slowest of three nodes instead of the slowest of two. Parallel dispatch doesn't help when you must wait for all responses; one slow disk drags every write."},
+        {"t": "Effectively the same guarantees as W=2, R=2, just with cheaper reads and no real downside", "correct": false,
+         "why": "Very different behavior. W=2/R=2 tolerates one dead node for BOTH reads and writes; W=3/R=1 gives cheaper reads but dies for writes on any single failure. Quorum tuning is choosing which failure you'll have — these two configurations fail differently."}
+      ]
+    },
+    {
+      "id": "p1c10-q13", "level": 2, "type": "mcq", "tag": "quorum",
+      "q": "A teammate configures N=3, W=1, R=1 'for speed' on order records. What have they actually built?",
+      "options": [
+        {"t": "A fine configuration — quorums make any R and W safe", "correct": false,
+         "why": "Quorums are knobs, not magic — the overlap guarantee only exists when R+W > N. 1+1=2 on N=3 is explicitly choosing eventual consistency plus thin durability. That can be a legitimate choice for cache-like data; for orders it's a silent data-loss machine."},
+        {"t": "Strong consistency, since both reads and writes use quorums", "correct": false,
+         "why": "'Uses a quorum protocol' isn't the same as 'has quorum overlap.' W=1 and R=1 are the minimum possible values — the machinery is there but the inequality that creates the guarantee (R+W>N) doesn't hold."},
+        {"t": "Maximum durability — every write still reaches all three nodes through background replication, so nothing can be lost even if the acknowledging node dies", "correct": false,
+         "why": "'Eventually reaches' is the trap — the acknowledgment goes out when ONE node has it. Durability is measured at the moment you tell the user 'saved,' and at that moment this data has exactly one copy. The gap between ack and replication is where acknowledged writes die."},
+        {"t": "An eventually consistent store with a durability hole: reads have no freshness guarantee, and a write confirmed by one node can die with that node", "correct": true,
+         "why": "Right on both counts. R+W = 2 ≤ 3 means no overlap — reads can miss the newest write entirely. And a write acknowledged by exactly one replica lives on one disk until background replication copies it; if that node dies first, an acknowledged order vanishes. For order records, that's the unacceptable half."}
+      ]
+    },
+    {
+      "id": "p1c10-q14", "level": 2, "type": "mcq", "tag": "sloppy-quorum",
+      "q": "In a Dynamo-style store, a key's home nodes are A, B, C. Node C becomes unreachable, and the store writes to substitute node D with a note to deliver the data to C later. What is this, and what guarantee did it just trade away?",
+      "options": [
+        {"t": "Sloppy quorum with hinted handoff — writes stay available through failures, but reads of A, B, C can now miss the newest write because it's sitting on D", "correct": true,
+         "why": "Exactly. The hint ('this belongs to C') gets delivered when C returns, but until then the R+W>N overlap math is broken — the read set and the actual write locations may not intersect. It's a deliberate AP move: never refuse a write, accept a window of missable data."},
+        {"t": "Standard quorum behavior — any W nodes always suffice", "correct": false,
+         "why": "A STRICT quorum requires W of the key's designated home nodes and refuses the write when they're unreachable (CP behavior). Accepting substitutes is precisely the 'sloppy' relaxation, and it changes the guarantee — that's why the two have different names."},
+        {"t": "Read repair — fixing stale replicas during reads", "correct": false,
+         "why": "Read repair is a different Dynamo mechanism: when a read notices some replicas returned stale versions, it writes the fresh version back to them. Hinted handoff is about WRITE-time rerouting during failures. Both fight staleness; they act at opposite ends."},
+        {"t": "Split brain — two nodes now each believe they are the authoritative owner of the key and accept independent writes", "correct": false,
+         "why": "Not yet — D isn't claiming to own the key; it's holding a clearly-labeled package for C. Split brain is when two nodes each believe they're authoritative and accept independent writes. Hinted handoff is a courtesy-hold, though yes, it widens the window in which divergence can happen."}
+      ]
+    },
+    {
+      "id": "p1c10-q15", "level": 2, "type": "mcq", "tag": "cap",
+      "q": "During a 60-second network partition, a payment request arrives at the minority side of your payment service. The senior-designed behavior is:",
+      "options": [
+        {"t": "Accept the payment locally and reconcile when the partition heals", "correct": false,
+         "why": "This is the correct pattern for carts and likes — and dangerous for money. 'Reconcile' here means discovering you charged a card twice and unwinding a completed financial transaction. Merge strategies work when merging is meaningful; two charges don't union into one."},
+        {"t": "Queue the payment locally, tell the user it succeeded, and process the charge once the partition heals — instant confirmation, nothing refused", "correct": false,
+         "why": "Confirming success for a payment you haven't durably, verifiably processed is lying with extra steps. If the queued attempt later fails or duplicates, the user was told a falsehood at the worst possible place to tell one. Queue-then-confirm is fine for a like, not for a charge."},
+        {"t": "Refuse with a clear retryable error — a failed request is recoverable; a double charge or a lost charge is a support ticket and a trust dent", "correct": true,
+         "why": "Right — payments are the canonical CP component. The minority side can't verify whether this card was already charged on the other side. Sixty seconds of 'please retry' per year is invisible; charging twice is a refund, an angry customer, and possibly a chargeback fee. Choose the recoverable failure."},
+        {"t": "Route the request to the majority side automatically", "correct": false,
+         "why": "If the minority side could reach the majority side, there wouldn't be a partition — that's what a partition IS. During the split, no path exists. (Failing over CLIENTS to the majority side is a real strategy, but the request that already landed on the minority must still be refused.)"}
+      ]
+    },
+    {
+      "id": "p1c10-q16", "level": 2, "type": "mcq", "tag": "dynamodb",
+      "q": "Your service stores user profile settings in DynamoDB. Reads are 50x writes, and showing settings a second stale is harmless — except on the settings page right after the user saves. What's the cost-aware read strategy?",
+      "options": [
+        {"t": "Strongly consistent reads everywhere — settings are important data, and correctness should never be left to chance", "correct": false,
+         "why": "'Important' isn't the test — 'does staleness cause a user-visible bug?' is. At 50:1 read-heavy, this doubles your entire read bill to fix a bug that occurs on one page in one two-second window. Strong-everywhere is the over-engineering pattern with a monthly invoice."},
+        {"t": "Eventually consistent reads everywhere (half the read cost), with a strongly consistent read only on the settings page immediately after a save", "correct": true,
+         "why": "Right — this is per-OPERATION consistency choice in action. DynamoDB prices the difference explicitly: an eventually consistent read costs half a strongly consistent one. Pay double only on the one read that needs read-your-writes behavior, and let the 50x-cheaper path carry everything else."},
+        {"t": "Eventually consistent reads everywhere — users won't notice", "correct": false,
+         "why": "They will notice exactly once: save, land back on settings, see the OLD value, assume the save failed, save again. That's the read-your-writes bug, and it erodes trust in the save button. One targeted strong read closes it for pennies."},
+        {"t": "Cache settings in the app and skip DynamoDB reads entirely", "correct": false,
+         "why": "A cache ADDS a staleness layer — now you have DynamoDB replication lag plus cache invalidation to get wrong. Caching may be worth it for load reasons, but as a consistency fix it moves in the wrong direction."}
+      ]
+    },
+    {
+      "id": "p1c10-q17", "level": 2, "type": "mcq", "tag": "pacelc",
+      "q": "Your app runs in the US; you add a Frankfurt region for EU users. Product decides every write must be synchronously replicated to both regions 'so the data is always consistent.' What's the first thing users notice?",
+      "options": [
+        {"t": "Every write now takes roughly 100ms longer — each save waits for a transatlantic round trip before acknowledging", "correct": true,
+         "why": "Right — this is PACELC's 'Else' clause arriving in production. Physics charges ~80-100ms round-trip US-to-Frankfurt, added to every single write, partition or no partition. This is why the latency-versus-consistency choice matters more day-to-day than the partition case: you pay it on every request, forever."},
+        {"t": "Nothing — synchronous replication only matters during failures", "correct": false,
+         "why": "Backwards: ASYNC replication is the one that only shows its nature during failures (as lost acknowledged writes). Synchronous replication charges its fee on every healthy-day write — the waiting IS the mechanism."},
+        {"t": "EU reads get dramatically faster, which offsets the slower writes so the overall experience improves", "correct": false,
+         "why": "EU reads get faster because a replica exists nearby — and async replication would deliver that exact benefit too. The read speedup comes from the replica's location, not from the synchronous write protocol. You can have the fast reads without the slow writes if you accept a staleness window."},
+        {"t": "Storage costs double, which is the main trade-off", "correct": false,
+         "why": "Storage does double, but that's true of ANY second replica, sync or async, and storage is cheap. The trade-off that shapes user experience is the write-latency tax — 100ms on every save is what people feel and what the sync-vs-async decision actually controls."}
+      ]
+    },
+    {
+      "id": "p1c10-q18", "level": 2, "type": "mcq", "tag": "lww",
+      "q": "Your IoT fleet reports device locations every 30 seconds into a Cassandra table with default LWW conflict resolution. Is this a problem?",
+      "options": [
+        {"t": "Yes — LWW always risks silent data loss and should never be used", "correct": false,
+         "why": "'Never' overcorrects. LWW silently discards the losing side of a conflict — the question is whether the losing side had value. For a superseded location ping, it didn't. Blanket rules in either direction read less senior than knowing which data tolerates which resolution."},
+        {"t": "Yes — clock skew between servers means a stale location can beat a fresher one and be shown as current", "correct": false,
+         "why": "Skew can indeed crown a slightly-stale ping briefly — and then the next ping, 30 seconds later, overwrites it anyway. Self-refreshing data has a built-in repair loop. The clock-skew danger is real for long-lived mutable state, where the wrong winner persists forever."},
+        {"t": "No — Cassandra's LWW uses vector clocks so nothing is lost", "correct": false,
+         "why": "Two errors in one comfort: Cassandra's default resolution uses timestamps, not vector clocks, and vector clocks wouldn't prevent loss anyway — they detect conflicts rather than resolve them. The reason this design is fine is the data's shape, not a protecting mechanism."},
+        {"t": "No — each ping fully supersedes the previous one, so discarding a conflicting older ping loses nothing anyone wanted", "correct": true,
+         "why": "Right, and this discrimination is the senior skill: LWW is dangerous for data where both sides of a conflict carry meaning (carts, counters, documents) and correct for self-superseding data. A location ping's entire job is to be replaced. The next report heals any wrong winner within 30 seconds."}
+      ]
+    },
+    {
+      "id": "p1c10-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer, after you've drawn an e-commerce design: 'So — is your system CP or AP?' The strongest answer is:",
+      "options": [
+        {"t": "\"AP — availability is what makes e-commerce money; every minute the site refuses requests is lost revenue, so every component should keep answering and we reconcile whatever diverges afterward.\"", "correct": false,
+         "why": "True for the cart, catastrophic for checkout: an always-available payment path double-charges cards during partitions. A single letter for a whole system means some component got the wrong contract. System-wide dogma in either direction is the junior tell this question exists to catch."},
+        {"t": "\"Per component. Cart: AP, always-writable, union-merge on conflict — a refused add is a lost sale. Checkout and inventory: CP behind a quorum — overselling costs more than a retry screen. Product pages: eventual behind a CDN.\"", "correct": true,
+         "why": "This is the senior answer, structurally: it rejects the false premise politely by answering something more precise, and every choice arrives with its reason attached. One system, several data contracts. The question is a trap for dogma, and this response walks around the trap."},
+        {"t": "\"CP — correctness first; you can't build customer trust on inconsistent data, so I'd rather serve an error than ever show two users two different truths.\"", "correct": false,
+         "why": "Principled-sounding, and it means your cart throws errors during every network hiccup — Amazon measured that cost in 2004 and built Dynamo specifically to stop paying it. 'Correctness first' applied uniformly is over-paying for data (likes, carts, page views) whose conflicts are trivially mergeable."},
+        {"t": "\"It depends on the requirements — both CP and AP have real trade-offs, and I'd want to discuss priorities with stakeholders before committing either way.\"", "correct": false,
+         "why": "The hedge that grades as no-judgment. The requirements are ON THE WHITEBOARD — you just designed the system. 'It depends' is what you say before analysis; after analysis you say what it depends on and what you chose. Commit per component and name the reasons."}
+      ]
+    },
+    {
+      "id": "p1c10-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Design review: your shopping cart rides an AP store with app-level union-merge, and a reviewer objects — 'merging means a deleted item can reappear in someone's cart; we should serialize all cart writes through one strongly consistent primary instead.' Your call?",
+      "options": [
+        {"t": "Accept the change — the reviewer is right that anomalies erode user trust, and a correctness-first posture is never the wrong default for production data", "correct": false,
+         "why": "'Never' is dogma wearing a safety vest. Every AP design has a named anomaly; the question is its blast radius. Here it's one puzzled user re-deleting an item, versus a cart that refuses adds whenever a replica set loses quorum. Refusing all anomalies means buying strong consistency everywhere, and its latency and availability bill lands on your best traffic day."},
+        {"t": "Compromise: switch the cart to LWW — simpler than maintaining merge logic, resolves conflicts automatically with zero application code, and completely eliminates the resurrection anomaly the reviewer is worried about", "correct": false,
+         "why": "This trades a visible, self-correcting annoyance for silent data loss: LWW on a cart discards one side's ADDS when versions conflict — items vanish with no trace, which users experience as 'your site lost my stuff.' A worse anomaly, harder to detect, chosen for implementation convenience."},
+        {"t": "Keep the merge design: quantify that a resurrected item is a rare, self-correcting annoyance the user fixes in one tap, while a cart that errors during partitions and failovers loses real revenue — and note this is the exact trade Amazon chose, knowingly", "correct": true,
+         "why": "Committed, quantified, and honest about the wart. The Dynamo paper itself admits the resurrection anomaly and judges it a fair price for adds-never-fail. The senior move isn't a design with no downsides — it's naming the downside, sizing both harms, and choosing the cheaper one on purpose."},
+        {"t": "Escalate to the architecture group for a standard ruling on AP versus CP", "correct": false,
+         "why": "There is no standard ruling — that's the chapter's whole point. Consistency is a per-component decision driven by this data's merge semantics and this failure's cost. Escalating a decision you have all the inputs for reads as avoiding the judgment call, which is the skill being evaluated."}
+      ]
+    },
+    {
+      "id": "p1c10-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your notes app stores each note as a blob in an AP store with LWW. At current scale, conflicts are ~1/month and nobody's complained. You're about to launch shared notebooks, projected 100x usage with concurrent editors. What breaks, and what's the right-sized response?",
+      "options": [
+        {"t": "Concurrent edits to shared notes will collide constantly, and LWW will silently discard whole saves; before launch, move shared notes to detect-and-merge (or an editing model built for concurrency) — solo notes can stay LWW", "correct": true,
+         "why": "The failure math: conflicts scale with concurrent writers to the SAME key, and shared notebooks create exactly that. Each conflict under LWW is a user's entire save silently evaporating — at 100x with sharing, 'rare annoyance' becomes 'daily data loss.' Migrating only the data whose shape changed, before the incident, is the right-sized move."},
+        {"t": "Nothing breaks — LWW has handled conflicts fine for a year in production, and 100x usage just means the same rare conflict slightly more often, still far below the level anyone would notice", "correct": false,
+         "why": "It worked because solo editing made conflicts nearly impossible — one writer per key. The feature launch changes the data's concurrency shape, which is the variable LWW's safety depended on. 'It's been fine' is evidence about the old workload, not the new one; this is exactly what what-breaks-at-10x thinking exists to catch."},
+        {"t": "Ship on schedule with a notice — 'edits may occasionally be lost in shared notebooks' — and fix conflict handling properly in a fast-follow release", "correct": false,
+         "why": "Documenting silent data loss converts it to ANNOUNCED data loss, which is honest and still unacceptable — no one adopts a notes app that disclaims eating your notes. The notice also misleads: 'occasionally' will read as rare while concurrent editing makes it routine."},
+        {"t": "Rebuild everything on CRDTs now — clearly real-time collaboration is the future", "correct": false,
+         "why": "Right direction, unscoped blast radius. Solo notes — the vast majority — have no conflict problem and need no migration. Rebuilding the whole store for the future's imagined requirements, instead of fixing the specific data whose semantics changed, is over-engineering with a deadline risk attached."}
+      ]
+    },
+    {
+      "id": "p1c10-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your MySQL setup: primary in one region, async replica in another, automated failover. An engineer asks: 'when the tool promotes the replica during a partition, what happens to writes the old primary acknowledged but hadn't replicated?' Honest answer and senior follow-up?",
+      "options": [
+        {"t": "\"The failover tool handles it — detecting a failed primary, promoting the healthiest replica, and reconciling state afterward is exactly what Orchestrator-style automation exists to do, and ours has been through plenty of drills.\"", "correct": false,
+         "why": "The tool handles PROMOTION; no tool can replicate writes across a partition that's blocking replication — the writes physically exist only on the unreachable node. GitHub ran Orchestrator, a genuinely excellent tool, and it executed a split brain flawlessly. Trusting tooling to repeal CAP is how this class of incident keeps happening."},
+        {"t": "\"Async replication lag is single-digit milliseconds on our network, so in practice nothing meaningful is lost — a window that small isn't worth engineering around when we have bigger reliability fires.\"", "correct": false,
+         "why": "Milliseconds of lag at thousands of writes per second is still real acknowledged data — GitHub's divergence involved seconds of writes and cost over a day of degraded service to reconcile. 'Small window' reasoning fails for correctness questions: the window's existence, not its width, determines whether you need a plan."},
+        {"t": "\"They're stranded on the old primary — after healing we have two divergent histories, exactly GitHub 2018. We must choose now: semi-sync replication (pay write latency), failover only within a sync boundary, or a written reconciliation plan — today the automation makes an AP choice for us.\"", "correct": true,
+         "why": "This names the mechanism (async ack-then-replicate gap), cites the precedent (GitHub's 43-second partition, 24+ hours of degraded reconciliation), and — the senior part — converts it into a decision that must be made deliberately instead of by tooling defaults. Automation without a consistency stance is a CAP choice nobody signed off on."},
+        {"t": "\"Disable automated failover — a decision that can lose data should always have a human making the final call.\"", "correct": false,
+         "why": "This trades minutes of downtime on every real failure (waiting for a paged human) for the divergence risk, without eliminating it — the human faces the same stranded-writes problem, just slower. The fix isn't removing automation; it's giving the automation an explicit policy about what it may sacrifice."}
+      ]
+    },
+    {
+      "id": "p1c10-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A PM mandates: 'strong consistency everywhere — I never want to hear about stale data again.' The senior response is:",
+      "options": [
+        {"t": "Implement it — consistency requirements are product's call, strong is the safest technical default anyway, and pushing back on an explicit mandate creates friction; if it proves too slow or costly, the latency metrics will make that case later better than an argument now", "correct": false,
+         "why": "'Safest' inverts the ledger: strong-everywhere charges latency on every request and availability during every partition, to fix staleness that in most features harms nobody. Executing a mandate you know is over-broad, without surfacing its price, is how systems end up slow for no reason anyone remembers."},
+        {"t": "Translate the mandate into its costs — every cross-region write slows by ~100ms and availability drops during partitions — then walk the feature list together asking 'what does staleness actually break here?', reserving strong consistency for the few places with a real answer", "correct": true,
+         "why": "This treats the PM as someone with a legitimate concern (user-visible weirdness) and an over-broad prescription. Numbers make the trade concrete, and the per-feature walk usually reveals that two or three flows need strong reads while the rest need a targeted patch like read-your-writes. Negotiating requirements with costs attached is senior behavior; both silent compliance and flat refusal aren't."},
+        {"t": "Explain that CAP makes strong consistency impossible in a distributed system, so the request simply can't be met and the PM should adjust expectations", "correct": false,
+         "why": "Technically false and rhetorically fatal. CAP doesn't forbid strong consistency — Spanner sells it globally — it prices it. Misusing the theorem as a refusal shield will be corrected by the first person who's read it, taking your credibility with it. The honest framing is cost, not impossibility."},
+        {"t": "Quietly keep eventual consistency where it makes sense — PMs don't understand distributed systems, and the results will speak for themselves", "correct": false,
+         "why": "Now the system's actual guarantees and its stakeholders' beliefs about them diverge — an organizational split brain. The first staleness incident becomes 'you ignored an explicit requirement,' which is far worse than the conversation you skipped. Alignment on trade-offs is part of the job, not an obstacle to it."}
+      ]
+    },
+    {
+      "id": "p1c10-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Mid-interview, you've proposed N=3, W=2, R=2 for a user-data store. Interviewer: 'a whole availability zone goes down, taking one replica of every key. Now what?' The strongest response:",
+      "options": [
+        {"t": "\"We'd lose availability — with a replica gone, quorums can't form, so both reads and writes start failing until the zone comes back.\"", "correct": false,
+         "why": "The arithmetic says otherwise: W=2 and R=2 need two live replicas, and two survive. Getting this wrong suggests the numbers were recited rather than understood — the entire point of 3/2/2 is tolerating exactly this failure. Walk the math before answering failure probes."},
+        {"t": "\"That's exactly why I'd propose N=5, W=3, R=3 instead — more replicas means more safety margin, quorums keep holding even with two nodes gone, and capacity planning should assume zones fail; an outage like this one stops being a scary event at all.\"", "correct": false,
+         "why": "Dodges the question (what happens NOW?) and prices poorly: N=5 with W=3 costs 67% more storage and a heavier write path, against a zone failure that N=3/W=2/R=2 already survives. Reflexively adding replicas under pressure reads as not trusting — or not knowing — what the current design guarantees."},
+        {"t": "\"Nothing user-visible — 2 of 3 survive, so quorum reads and writes continue. My real worry is the NEXT failure: we're one node from refusing writes. I'd alert on degraded replica sets immediately, and if repair is slow, that's when I'd consider sloppy quorums — accepting hint-window staleness to keep writes flowing.\"", "correct": true,
+         "why": "Three senior signals in sequence: the calm correct answer (quorum math holds), the unprompted next-failure analysis (one more loss ends write availability), and a pre-decided operational response with its trade-off named. Thinking one failure ahead, unasked, is precisely what the probe is fishing for."},
+        {"t": "\"Trigger failover to the standby cluster in another region, route all traffic there until the zone recovers, then fail back once replication has caught up.\"", "correct": false,
+         "why": "A quorum system's superpower is that it doesn't NEED failover for a single-replica loss — it degrades gracefully by design. Proposing a cluster-level failover (with its own split-brain and data-lag risks, see GitHub 2018) for a failure the design already absorbs is adding the dangerous mechanism the architecture exists to avoid."}
+      ]
+    },
+    {
+      "id": "p1c10-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Two candidates answer 'how consistent should the like counter be?' A: 'Eventually consistent — likes are unimportant.' B: 'Eventually consistent — staleness here is harmless because a flickering count changes no decision, and the write volume makes coordination expensive; but I'd store it as merged increments, not a read-modify-write value, or concurrent likes will overwrite each other and undercount forever.' Who reads senior, and why?",
+      "options": [
+        {"t": "B — same consistency level, but B justified it by consequences and caught that the write PATTERN (lost increments), not staleness, is where likes actually lose data", "correct": true,
+         "why": "The level choice was the easy half. B shows the deeper model: eventual consistency governs when readers converge, while read-modify-write under concurrency loses updates no matter the level — two replicas both reading 40, adding 1, writing 41. Distinguishing staleness (harmless here) from lost writes (permanent undercount) is exactly the judgment layer this chapter builds."},
+        {"t": "A — the right answer efficiently delivered; B is overthinking a like button and burning interview time on a minor feature", "correct": false,
+         "why": "A's conclusion is right and A's reasoning ('unimportant') is luck — the same shrug applied to a view counter with ad-revenue implications would ship a real bug. B's extra sentence isn't padding; it prevents a permanent, invisible undercount. Efficiency that skips the failure mode isn't efficiency."},
+        {"t": "Both read equally senior — they landed on the same consistency level for the same feature, and the level chosen is ultimately what the interviewer is grading", "correct": false,
+         "why": "Interviews grade the reasoning that produced the answer, because the reasoning is what transfers to the next problem. A's 'unimportant' transfers nothing; B's staleness-versus-lost-writes distinction transfers everywhere. Same destination, different demonstrated maps."},
+        {"t": "Neither — a counter this popular needs strong consistency", "correct": false,
+         "why": "Strong consistency on a hot counter serializes every like through coordination — a self-inflicted hot key charging real latency to guarantee a number nobody needs exact. And it's aimed at the wrong problem: B's lost-increment bug is about the update pattern, which merged increments fix at any consistency level."}
+      ]
+    }
+  ]
+}

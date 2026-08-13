@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c04",
+  "items": [
+    {
+      "id": "p1c04-q01", "level": 1, "type": "mcq", "tag": "latency-numbers",
+      "q": "Roughly how long does a read from main memory (RAM) take?",
+      "options": [
+        {"t": "~100 nanoseconds", "correct": true,
+         "why": "Right. RAM ≈ 100 ns is one of the core anchors. On the human scale where an L1 cache hit is one second, a RAM read is about three minutes — slow to the CPU, but a different universe from any disk."},
+        {"t": "~100 microseconds", "correct": false,
+         "why": "That's an SSD random read — 1,000× slower than RAM. Keeping the ns/µs/ms tiers straight is exactly what the latency table trains, because designs live in the gaps between tiers."},
+        {"t": "~1 millisecond", "correct": false,
+         "why": "Milliseconds is disk-and-network territory (same-DC round trip is 0.5 ms). RAM is 10,000× faster than this — which is the whole reason 'keep the hot set in memory' is an architecture."},
+        {"t": "~0.5 nanoseconds", "correct": false,
+         "why": "That's an L1 cache reference — the CPU's own tiny on-chip memory. RAM is about 200× slower than L1, which is why CPUs bother having caches at all."}
+      ]
+    },
+    {
+      "id": "p1c04-q02", "level": 1, "type": "mcq", "tag": "latency-numbers",
+      "q": "How much faster is a RAM read (~100 ns) than a spinning-disk seek (~10 ms)?",
+      "options": [
+        {"t": "About 100,000×", "correct": true,
+         "why": "Yes: 10 ms ÷ 100 ns = 100,000. This single ratio explains why caching exists, why databases fight to keep indexes in RAM, and why 'just read it from disk' should make you flinch."},
+        {"t": "About 100×", "correct": false,
+         "why": "Off by three orders of magnitude. 100× is roughly RAM vs L1 territory. The RAM-vs-disk gap is five orders of magnitude — a difference of category, not degree."},
+        {"t": "About 1,000×", "correct": false,
+         "why": "1,000× is roughly the RAM-to-SSD cliff (100 ns vs 100 µs). Spinning disk adds another 100× on top of SSD for random access. Keeping these two cliffs separate matters: SSD is 'slower RAM', disk is 'a mechanical arm'."},
+        {"t": "About 10×", "correct": false,
+         "why": "If disk were only 10× slower than RAM, caching would barely be worth the complexity. The actual 100,000× gap is why a cache hit vs miss is the difference between a snappy app and a spinner."}
+      ]
+    },
+    {
+      "id": "p1c04-q03", "level": 1, "type": "mcq", "tag": "powers",
+      "q": "For estimation purposes, 2¹⁰ is best treated as:",
+      "options": [
+        {"t": "≈ 1,000, so powers of 2 collapse into powers of 10", "correct": true,
+         "why": "Right — 2¹⁰ = 1,024, and the 2.4% error is irrelevant at envelope precision. This is what lets you chain KB → MB → GB → TB as clean factors of 1,000 and keep the arithmetic in your head."},
+        {"t": "Exactly 1,024, and the difference matters in estimates", "correct": false,
+         "why": "It is exactly 1,024, but insisting on the 24 during an estimate is precision theater. When your inputs are guesses within 3×, a 2.4% correction adds nothing but slowness."},
+        {"t": "≈ 100", "correct": false,
+         "why": "That's about 2⁷ (128). Getting this anchor wrong by 10× poisons every storage calculation downstream — worth re-memorizing cold."},
+        {"t": "≈ 10,000", "correct": false,
+         "why": "That's closer to 2¹³ (8,192). The anchor to burn in is 2¹⁰ ≈ 10³; from there, 2²⁰ ≈ 10⁶ and 2³⁰ ≈ 10⁹ follow for free."}
+      ]
+    },
+    {
+      "id": "p1c04-q04", "level": 1, "type": "mcq", "tag": "qps",
+      "q": "Using the standard rounding trick, 1 million events per day is roughly what per-second rate?",
+      "options": [
+        {"t": "~10 per second", "correct": true,
+         "why": "Yes. Round a day (86,400 s) to 100,000 s, and 1M ÷ 100K = 10/second. This one conversion — 1M/day ≈ 10/s, 1B/day ≈ 10K/s — powers almost every QPS estimate you'll ever do."},
+        {"t": "~100 per second", "correct": false,
+         "why": "Off by 10×. 100/second would be about 10M/day. An order-of-magnitude slip here silently misprovisions everything downstream — this is the one number worth chanting until it's reflex."},
+        {"t": "~1 per second", "correct": false,
+         "why": "1/second is about 100K/day, not 1M. Easy slip: dividing by 10⁶ instead of by the 10⁵ seconds in a day."},
+        {"t": "~1,000 per second", "correct": false,
+         "why": "That's 100M/day territory. If your gut said this, recalibrate with the anchor: a day ≈ 10⁵ seconds, so knock five zeros off any daily total to get per-second."}
+      ]
+    },
+    {
+      "id": "p1c04-q05", "level": 1, "type": "mcq", "tag": "bandwidth",
+      "q": "A 1 Gbps network link can move roughly how many megabytes per second?",
+      "options": [
+        {"t": "~125 MB/s", "correct": true,
+         "why": "Right — network links are quoted in bits, storage in bytes, so divide by 8. Forgetting this is a silent 8× error, and 8× is often the whole difference between 'one NIC is fine' and 'we're saturated'."},
+        {"t": "~1,000 MB/s", "correct": false,
+         "why": "This treats gigaBITS as gigaBYTES. The 'b' in Gbps is bits; divide by 8. It's the single most common bandwidth mistake at the whiteboard."},
+        {"t": "~12.5 MB/s", "correct": false,
+         "why": "You divided by 8 and then by 10 — that's a 100 Mbps link's throughput. 1 Gbps ÷ 8 = 125 MB/s."},
+        {"t": "~8,000 MB/s", "correct": false,
+         "why": "Multiplied by 8 instead of dividing. Remember the direction: bits are smaller than bytes, so bit-rates convert DOWN to byte-rates."}
+      ]
+    },
+    {
+      "id": "p1c04-q06", "level": 1, "type": "mcq", "tag": "peak",
+      "q": "For a typical consumer app with normal daily rhythms, peak-hour traffic runs about how much above the daily average?",
+      "options": [
+        {"t": "2–5×", "correct": true,
+         "why": "Right. Human activity is a tide — near-zero at 4 a.m., cresting in the evening — so peak hour lands at 2–5× the flat average. You design for the peak, because the average is 4 a.m. and nothing breaks at 4 a.m."},
+        {"t": "Exactly 2×, always", "correct": false,
+         "why": "The multiplier is a claim about human behavior, not a constant. Single-country consumer apps skew toward 4–5×; globally spread traffic flattens toward 2×. Pick a number and justify it."},
+        {"t": "10–100×", "correct": false,
+         "why": "That's event-spike territory — flash sales, match notifications, New Year's midnight — not the ordinary daily tide. Mixing up the two regimes leads to either massive waste or a scheduled outage."},
+        {"t": "There's no meaningful pattern; traffic is random", "correct": false,
+         "why": "Traffic is one of the most predictable things in production — the daily curve repeats with eerie regularity. That predictability is exactly what makes the peak factor a defensible estimate."}
+      ]
+    },
+    {
+      "id": "p1c04-q07", "level": 1, "type": "mcq", "tag": "cache-sizing",
+      "q": "In cache design, what does the 80/20 rule claim?",
+      "options": [
+        {"t": "Roughly 20% of items receive roughly 80% of the requests", "correct": true,
+         "why": "Right — and real popularity (Zipf-shaped) is usually even steeper. The skew is a gift: a cache holding a small hot set absorbs most traffic, which is why caches a thousandth the size of the database work."},
+        {"t": "A cache should be sized at 20% of your total data", "correct": false,
+         "why": "Close but subtly wrong: the rule describes the shape of demand, not a sizing mandate. Often the hot set is far under 20% of all-time data — e.g., just the last day's posts — and sometimes throughput, not bytes, decides node count anyway."},
+        {"t": "Caches should aim for an 80% hit rate at most", "correct": false,
+         "why": "There's no such ceiling — production caches routinely run 95–99% hit rates, and pushing 90% → 99% cuts backend load 10×. The rule is about item popularity, not a hit-rate target."},
+        {"t": "80% of your servers should be cache nodes", "correct": false,
+         "why": "Nothing about fleet composition. The rule says demand is concentrated on few items, which is the reason a tiny cache tier can shield a huge database."}
+      ]
+    },
+    {
+      "id": "p1c04-q08", "level": 1, "type": "mcq", "tag": "server-count",
+      "q": "As a sanity anchor, one stateless app server doing simple work (parse, small logic, a cache/DB call, JSON out) handles roughly:",
+      "options": [
+        {"t": "10–50K requests/second", "correct": true,
+         "why": "Right — this anchor turns QPS into a server count in one division. Heavy work (image processing, crypto, huge payloads) can cut it 10–100×, so always say which regime you're assuming."},
+        {"t": "~100 requests/second", "correct": false,
+         "why": "Off by two orders of magnitude for simple work — this is the miscalibration that produces 500-server designs for problems a shelf of machines could carry. (Some legacy or very heavy stacks do run here, but that's the exception to name, not the default.)"},
+        {"t": "~1M requests/second", "correct": false,
+         "why": "Only specialized software (DPDK-style networking, in-memory proxies) approaches this per box. Assuming it as the default leaves you with zero headroom the day reality intrudes."},
+        {"t": "It's unknowable without benchmarks", "correct": false,
+         "why": "You'll benchmark before shipping, sure — but the whole point of anchors is to reason within 3× right now, at the whiteboard. 'Unknowable' abandons estimation exactly where it pays."}
+      ]
+    },
+    {
+      "id": "p1c04-q09", "level": 1, "type": "mcq", "tag": "latency-numbers",
+      "q": "A round trip between continents costs ~150 ms. Why can't better hardware or more money fix it?",
+      "options": [
+        {"t": "It's mostly the speed of light in fiber — physics, not engineering", "correct": true,
+         "why": "Right. Light in fiber covers the ~20,000 km round trip in roughly that time. The only 'fix' is not making the trip: CDNs, edge caches, and multi-region deployments exist precisely because this number won't budge."},
+        {"t": "Undersea cables are old and slow to upgrade", "correct": false,
+         "why": "Cable capacity (bandwidth) keeps improving — but latency is set by distance and the speed of light, not cable quality. More lanes on the highway don't shorten the drive."},
+        {"t": "It's router congestion, which better peering could remove", "correct": false,
+         "why": "Congestion adds jitter on top, but the 150 ms floor remains with perfect routing. Colin Scott's year-by-year latency table shows exactly this: SSDs and networks got faster for decades; the cross-ocean row barely moved."},
+        {"t": "It can be fixed — big companies get it under 10 ms", "correct": false,
+         "why": "No one does, because physics doesn't take meetings. What big companies actually do is move data next to users so the ocean crossing never happens on the hot path — that's the entire CDN industry."}
+      ]
+    },
+    {
+      "id": "p1c04-q10", "level": 2, "type": "mcq", "tag": "qps",
+      "q": "A food-delivery app has 20M DAU, each doing ~10 requests/day. Average QPS is closest to:",
+      "options": [
+        {"t": "~2,000/second", "correct": true,
+         "why": "200M requests/day ÷ ~100K seconds = ~2,000/second. Then the senior follow-through: peak ~3× → 6K/second → a handful of app servers. Scale isn't this system's hard problem; go find the real one (probably dispatch logic or geo-search)."},
+        {"t": "~20,000/second", "correct": false,
+         "why": "One dropped zero — 20K/s would be 2B requests/day. Order-of-magnitude slips are the expensive kind: this one inflates the fleet estimate 10× and can send the whole interview chasing imaginary scale."},
+        {"t": "~200/second", "correct": false,
+         "why": "This is 20M ÷ 100K — the actions-per-user multiplier got lost. The ritual is DAU × actions ÷ seconds; skipping a factor is why you narrate each hop out loud."},
+        {"t": "Can't estimate without knowing registered users", "correct": false,
+         "why": "Backwards — DAU is exactly the right input; registered accounts are the misleading one (often 5–10× larger than daily actives). You have everything you need; declining to divide is declining to estimate."}
+      ]
+    },
+    {
+      "id": "p1c04-q11", "level": 2, "type": "mcq", "tag": "read-write",
+      "q": "Your service sees 5M posts written per day and 500M post views per day. What did you just learn?",
+      "options": [
+        {"t": "It's 100:1 read-heavy — design the read path first and let writes subsidize reads", "correct": true,
+         "why": "Right. The read/write ratio names the architecture: at 100:1 you optimize reads ruthlessly, and it's worth doing extra work at write time (fanout, cache warming) to make each of the 100 reads cheap."},
+        {"t": "It's write-heavy, since writes are more expensive per operation", "correct": false,
+         "why": "Per-op cost doesn't change which side dominates the load. 500M vs 5M is 100:1 in volume — and volume × frequency, not per-op difficulty, decides where your design effort goes."},
+        {"t": "The ratio is trivia; both paths need equal design attention", "correct": false,
+         "why": "Even-handedness sounds mature but reads junior here: a 100:1 skew means a 1% improvement to reads outweighs a 100% improvement to writes. The ratio is precisely the license to be unbalanced on purpose."},
+        {"t": "You need a write-optimized store like an LSM-tree database to absorb the write volume", "correct": false,
+         "why": "That's the answer for the mirror-image workload (logs and metrics, where writes dominate 100:1 the other way). Matching the store to the wrong side of the ratio is a classic buzzword-first mistake."}
+      ]
+    },
+    {
+      "id": "p1c04-q12", "level": 2, "type": "mcq", "tag": "storage",
+      "q": "A chat service stores 50M messages/day at ~200 bytes each. Over 5 years, with the standard multipliers, raw disk footprint is closest to:",
+      "options": [
+        {"t": "~100–200 TB", "correct": true,
+         "why": "Right: 10 GB/day of raw text becomes ~18 TB over 5 years, then ×2–3 for indexes/overhead and ×3 for replication lands ~100–200 TB. Conclusion worth saying aloud: text is small — a modestly sharded store yawns at this, and media (if any) will dwarf it."},
+        {"t": "~18 TB — 10 GB/day times 5 years, done", "correct": false,
+         "why": "That's the raw figure, and stopping there silently drops a ~9× multiplier. Indexes and row overhead cost 2–3×, and keeping three replicas (so a dead disk loses nothing) costs 3× more. Forgetting replication is the classic silent error."},
+        {"t": "Multiple petabytes — chat at this scale is always PB territory", "correct": false,
+         "why": "A 50–100× overestimate. 'Big company = petabytes' is vibes, not arithmetic — the anchor that all of English Wikipedia's text is ~20 GB compressed should recalibrate the gut. Text is cheap; media is what buys petabytes."},
+        {"t": "~500 GB — messages are tiny", "correct": false,
+         "why": "Right instinct (text IS tiny), wrong execution: 10 GB/day for 1,800 days is 18 TB before multipliers. Both failure directions — reflexive 'petabytes' and reflexive 'tiny' — come from skipping the same 60 seconds of multiplication."}
+      ]
+    },
+    {
+      "id": "p1c04-q13", "level": 2, "type": "mcq", "tag": "bandwidth",
+      "q": "20M photos/day are uploaded at ~3 MB each. The estimate says ~600 MB/s (~5 Gbps) average ingress, 3× at peak. What's the design consequence?",
+      "options": [
+        {"t": "Uploads bypass the app servers: clients push straight to object storage via presigned URLs", "correct": true,
+         "why": "Right. 15 Gbps peak of raw image bytes would saturate app-server NICs carrying data the application logic never needed to touch. Presigned URLs (temporary upload permission slips) route bytes straight to storage; app servers handle only metadata. The number forced the shape."},
+        {"t": "Add more app servers behind the load balancer to spread the upload bandwidth across the fleet", "correct": false,
+         "why": "Scaling out works for CPU-bound request handling, but here you'd be buying whole servers to act as network pipes. The senior move is removing the middleman entirely, not multiplying him."},
+        {"t": "5 Gbps is small; a single server's NIC handles it — no change needed", "correct": false,
+         "why": "Average, maybe — 10 Gbps NICs exist. But peak is ~15 Gbps, headroom matters, and 'one NIC, fully saturated with pass-through bytes' is a single point of failure doing zero-value work. The estimate exists to change the design, and here it clearly does."},
+        {"t": "Compress images on the client before upload to shrink ingress", "correct": false,
+         "why": "Helps at the margin (and many apps do it), but it dodges the architectural finding: whatever the byte count, proxying media through app servers is the wrong topology. Fix the shape first, then optimize the volume."}
+      ]
+    },
+    {
+      "id": "p1c04-q14", "level": 2, "type": "mcq", "tag": "fits-in-ram",
+      "q": "A candidate proposes sharding user profiles across 12 database nodes. Profiles: 40M users × ~1 KB. What should have happened first?",
+      "options": [
+        {"t": "The multiplication: 40 GB total, which fits in one machine's RAM", "correct": true,
+         "why": "Right. 'Will it fit in memory?' is the question secretly behind every cache-vs-shard decision, and 40 GB fits with room to spare. One primary, replicas for availability, done. Sharding a suitcase across twelve trucks is the exact failure the envelope ritual prevents."},
+        {"t": "Sharding is still right — it future-proofs the design", "correct": false,
+         "why": "Twelve-way sharding buys operational pain (rebalancing, cross-shard queries, twelve failure domains) against imaginary growth. Even at 10× users it's 400 GB — still one big box or a two-way split. 'Future-proof' without numbers is a cost with no benefit."},
+        {"t": "Benchmark both options and let data decide", "correct": false,
+         "why": "'Measure it' sounds rigorous but is deflection here — the arithmetic already decided at 1000× margin. Benchmarks resolve close calls; envelope math exists to show most calls aren't close."},
+        {"t": "Ask the interviewer how much growth to design for before committing to any storage layout", "correct": false,
+         "why": "Fine question, wrong moment — asked INSTEAD of the 10-second multiplication, it's the waiting-to-be-led pattern. Do the math, state the answer, then note the growth assumption you'd validate."}
+      ]
+    },
+    {
+      "id": "p1c04-q15", "level": 2, "type": "mcq", "tag": "server-count",
+      "q": "Peak load is 30K QPS of simple stateless requests. Using the anchors, the defensible server count is:",
+      "options": [
+        {"t": "~6–10: capacity math says three boxes at ~10K QPS each, doubled for headroom", "correct": true,
+         "why": "Right shape: peak ÷ per-box capacity × 2–3. The headroom isn't cowardice — some boxes are always out of rotation during deploys, N−1 must survive a failure, and benchmarks flatter reality. Committing to a number with named assumptions is the senior finish."},
+        {"t": "3 — the division says 30K ÷ 10K, done", "correct": false,
+         "why": "The division is right and the answer is still wrong: at exactly 3 boxes, one deploy or one dead machine puts you at 150% load on the survivors at peak. Capacity math without headroom is a scheduled incident."},
+        {"t": "~50, to be safe", "correct": false,
+         "why": "A 5× cushion beyond already-generous headroom is not 'safe', it's unexamined — and it signals your estimates don't connect to your provisioning. Safety you can't justify numerically reads as guessing."},
+        {"t": "Whatever autoscaling decides at runtime — fixed server counts are obsolete in the cloud", "correct": false,
+         "why": "Autoscaling is a great tool and a poor answer — it dodges the question of whether the design is even sane (10 boxes vs 1,000 is an architecture question), and it reacts in minutes while spikes arrive in seconds."}
+      ]
+    },
+    {
+      "id": "p1c04-q16", "level": 2, "type": "mcq", "tag": "latency-numbers",
+      "q": "A page needs 5 API calls that must run one after another (each uses the previous result). Same datacenter vs cross-continent, the network cost alone is roughly:",
+      "options": [
+        {"t": "~2.5 ms same-DC vs ~750 ms cross-continent", "correct": true,
+         "why": "Right: 5 × 0.5 ms vs 5 × 150 ms, straight off the table. Same conversation-shape, 300× different outcome. This is why 'count the round trips' precedes all server-side optimization, and why chatty sequential APIs are fine in a datacenter and fatal across an ocean."},
+        {"t": "Both are fine — 5 calls is a small number, and modern networks make the difference negligible", "correct": false,
+         "why": "Counting calls without multiplying by round-trip cost is exactly the miss. Five is small; five × 150 ms is most of a second of pure travel time before any server does any work."},
+        {"t": "Cross-continent is maybe 2× worse — networks are networks", "correct": false,
+         "why": "The table says 300×: 0.5 ms inside a building vs 150 ms across an ocean. Flattening that gap into '2×' is precisely the intuition failure the latency ladder exists to fix."},
+        {"t": "Server processing time will dominate either way", "correct": false,
+         "why": "At 750 ms of unavoidable travel, the servers could compute in literally zero time and the user still waits three-quarters of a second. At intercontinental distance the network isn't part of the latency budget — it IS the budget."}
+      ]
+    },
+    {
+      "id": "p1c04-q17", "level": 2, "type": "mcq", "tag": "feasibility",
+      "q": "A design needs 500K random reads/second against a dataset far too large for RAM, and someone proposes spinning disks. The envelope math says:",
+      "options": [
+        {"t": "~100 random reads/second per disk → ~5,000 disks — the design has to change", "correct": true,
+         "why": "Right — this is the NALSD move: convert the design into physical operations, discover the hardware bill is absurd, and let that force a different design. SSDs are ~100× better at random reads; caches better still; or restructure so reads become sequential. The math isn't checking the design; it's redesigning it."},
+        {"t": "Buy the 5,000 disks — hardware is cheaper than engineering time", "correct": false,
+         "why": "Sometimes true for a 2× gap; never for an architecture that's wrong by orders of magnitude. Five thousand spindles doing 2% useful work each is an ongoing operational tax, not a one-time purchase. When numbers don't close, change the design, not the invoice."},
+        {"t": "Disks are fine for now — add a caching layer later if read latency becomes a problem", "correct": false,
+         "why": "'Add caching later' as a patch admits the base design fails — and if caching is what makes it work, the cache IS the design and should be sized and reasoned about now, not waved in as an afterthought."},
+        {"t": "500K/second is impossible for any storage system", "correct": false,
+         "why": "It's routine — for RAM (a few nodes at ~100K+ ops each) and achievable on NVMe SSD fleets. The point of the anchors is to know which tier makes a target trivial vs absurd; declaring it impossible is miscalibration in the pessimistic direction."}
+      ]
+    },
+    {
+      "id": "p1c04-q18", "level": 2, "type": "mcq", "tag": "cache-sizing",
+      "q": "Your cache runs at a 90% hit rate; the database behind it is at 60% capacity. An engineer says pushing to 99% 'only adds 9%'. What's the truth?",
+      "options": [
+        {"t": "90% → 99% cuts misses from 10% to 1% — the database sees 10× less traffic", "correct": true,
+         "why": "Right. The database experiences the MISS rate, so hit-rate improvements compound near the top: 90 → 99 is 10× relief, 99 → 99.9 is another 10×. That reframing — think in misses, not hits — is the entire insight, and it changes whether the DB needs scaling at all."},
+        {"t": "Correct, ~9% — hit rate improvements are linear", "correct": false,
+         "why": "Linear in hits, but your database doesn't serve hits — it serves misses, and misses just fell 10×. Measuring the wrong side of the ratio makes a 10× win look like a rounding error."},
+        {"t": "The gain is real but unpredictable without load tests", "correct": false,
+         "why": "The arithmetic is exact and needs no test: miss traffic = (1 − hit rate) × reads. Load tests validate; they aren't required to see a 10% → 1% miss collapse. Deferring obvious math to 'testing' reads as not trusting numbers."},
+        {"t": "Chasing 99% is wasteful — the last percent never pays", "correct": false,
+         "why": "Backwards here: the last percents are the most valuable, precisely because relief is measured in miss-rate multiples. (What CAN make 99% expensive is a long-tail access pattern needing a huge cache — that's a cost argument, which this claim isn't making.)"}
+      ]
+    },
+    {
+      "id": "p1c04-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'So how many machines does your feed service need?' Which answer reads senior?",
+      "options": [
+        {"t": "\"Peak is ~15K QPS from my earlier math; at 10K simple QPS per box that's 2 machines of capacity — I'll run 5 for deploys and failure. If my actions-per-user guess is 3× low, it's still under 15. The number I'd validate first is per-box throughput, with a load test.\"", "correct": true,
+         "why": "Commits to a number, shows the division, includes headroom with reasons, stress-tests its own assumption, and names what to validate. That's estimation as a decision tool — every part of it is connected to something real."},
+        {"t": "\"Hard to say — it depends on the hardware, the framework, and traffic patterns.\"", "correct": false,
+         "why": "All true, all useless. 'It depends' with no number is the option-listing pattern in numeric form: the interviewer knows it depends — they're testing whether you can commit within 3× anyway, because that's what capacity planning is."},
+        {"t": "\"With Kubernetes autoscaling, we don't need to know — it finds the right count.\"", "correct": false,
+         "why": "Autoscaling tunes a sane design; it can't tell you whether sane is 5 machines or 500, what the budget looks like, or whether the spike arrives faster than boot time. Outsourcing the estimate to the platform reads as never having owned the bill."},
+        {"t": "\"Somewhere between 10 and 100, to be safe.\"", "correct": false,
+         "why": "A 10× range isn't an estimate, it's a shrug with endpoints. The whole discipline is collapsing uncertainty with stated assumptions — a committed '5, because…' beats a safe '10 to 100' every time at this bar."}
+      ]
+    },
+    {
+      "id": "p1c04-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A candidate flawlessly computes: '36 TB/year, 5K writes/sec, 200:1 read ratio' — writes it in the corner, then designs the system they'd have designed anyway. What's the senior critique?",
+      "options": [
+        {"t": "The numbers never touched the design — each estimate needed a 'so' that changes an architectural choice", "correct": true,
+         "why": "Right. Estimation that changes nothing is filler — a magic trick with no reveal. The deliverable was never the numbers; it was the decisions they force. Same math plus three 'so' sentences is the difference between arithmetic and engineering."},
+        {"t": "The math needed more precision to be actionable", "correct": false,
+         "why": "Precision was never the gap — within 3× is fully actionable ('cache-first' survives the ratio being 70:1 or 500:1). Adding decimal places to unused numbers is polishing the prop for the trick with no reveal."},
+        {"t": "Nothing — clean estimation earns its points on its own", "correct": false,
+         "why": "At mid-level, maybe. At senior, disconnected estimation can read WORSE than none: it demonstrates you know the ritual and reveals you don't know what it's for."},
+        {"t": "Skip the estimation ritual next time and spend those minutes on more design depth", "correct": false,
+         "why": "Wrong lesson from a real observation. Unconnected numbers waste time, yes — but the fix is connecting them, since half of 'design depth' (cache vs shard, push vs pull, one region or three) is downstream of exactly these numbers."}
+      ]
+    },
+    {
+      "id": "p1c04-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your design: stateless tier at 20% utilization, one Postgres primary taking 800 writes/sec peak, cache at 40% memory. Interviewer: '10× the users. What breaks first?'",
+      "options": [
+        {"t": "\"The write path: 8K writes/sec is at or past a single primary's ceiling. The stateless tier just needs more boxes and the cache more memory — those are money problems. The primary is an architecture problem: I'd shard writes or split hot tables.\"", "correct": true,
+         "why": "Right — 10× each number and compare against its ceiling. The skill on display is triage: distinguishing components that scale by purchase order from the one that needs redesign, and knowing a single relational primary's few-thousand-writes/sec ceiling cold."},
+        {"t": "\"Everything scales 10× together, so I'd scale all three tiers proportionally — more app servers, more database, more cache memory.\"", "correct": false,
+         "why": "Uniform scaling assumes no component has a hard ceiling — but a single-primary database doesn't scale by adding boxes; that's what 'single primary' means. The question exists precisely to see if you know which multiplications hit walls."},
+        {"t": "\"The cache breaks first — caches are always the bottleneck at scale.\"", "correct": false,
+         "why": "'Always' is the tell — this answer pattern-matches instead of computing. The numbers given say the cache has 2.5× memory headroom and caches scale horizontally anyway. When the data is on the board, use it; reciting folklore against visible numbers reads worse than either alone."},
+        {"t": "\"Nothing breaks — 10× is why we built it cloud-native.\"", "correct": false,
+         "why": "A buzzword shield. Something always breaks first; the interviewer knows it, and 'cloud-native' doesn't raise a Postgres primary's write ceiling. Deflecting the stress test loses the exact points it was designed to award."}
+      ]
+    },
+    {
+      "id": "p1c04-q22", "level": 3, "type": "mcq", "tag": "distribution",
+      "q": "Your math says a 'global' app averages 6K QPS. Then you learn 70% of users are in India. What's the senior-grade revision?",
+      "options": [
+        {"t": "Redo it per region and local hour: India's evening peak in one region is the real design target, and latency argues for serving India locally", "correct": true,
+         "why": "Right. Uniform arithmetic smears traffic across a smooth imaginary planet; real load clusters by geography and local time simultaneously. The provisioning number AND the region topology both change — which is exactly what makes this estimate worth redoing."},
+        {"t": "6K QPS is 6K QPS — where users live doesn't change the total", "correct": false,
+         "why": "The total survives; its usefulness doesn't. Capacity isn't provisioned globally — it's provisioned per region, and one region eating 70% of traffic during one evening window faces multiples of the global average while others idle. Averages are where load goes to hide."},
+        {"t": "Add a CDN — that's the standard fix for geographic concerns", "correct": false,
+         "why": "A CDN fixes static-content latency; it doesn't touch where your dynamic compute lives or how the regional peak is provisioned. Reaching for the standard tool before re-running the numbers is pattern-matching wearing an architect's badge."},
+        {"t": "Note it as a future multi-region consideration — the global total already sizes the fleet, so keep the current design", "correct": false,
+         "why": "This files a load-bearing fact under 'later'. 70% single-country concentration changes today's provisioning math and puts most users 150 ms from a wrong-continent deployment — physics that no later sprint fixes."}
+      ]
+    },
+    {
+      "id": "p1c04-q23", "level": 3, "type": "mcq", "tag": "distribution",
+      "q": "Your sports app will push 'Match starting!' to 50M users; ~20% historically open within a minute (~170K QPS vs your 8K normal peak). The senior design response is:",
+      "options": [
+        {"t": "Shape the spike you control: stagger the send over 5–10 minutes, pre-scale for the calendar, rate-limit at the edge", "correct": true,
+         "why": "Right — the rare case where the traffic spike is self-inflicted, which means it's schedulable and shapeable. Staggering turns 170K into ~20K; the calendar makes pre-scaling trivial; the backstop keeps overload graceful. Layered, cheap, and derived straight from the arithmetic."},
+        {"t": "The 3× peak-factor headroom in the capacity plan covers spikes like this", "correct": false,
+         "why": "The 2–5× factor models the daily tide of uncoordinated humans. A push notification synchronizes 10M of them into one minute — a 20× spike that has nothing to do with tides. Applying the diurnal multiplier to a synchronized event is using the right tool on the wrong distribution."},
+        {"t": "Autoscaling will absorb it — that's what elasticity is for", "correct": false,
+         "why": "The spike peaks in ~60 seconds; new instances take minutes to boot and warm. Autoscaling excels at tides and fails at steps — by the time capacity arrives, users have hammered retry, multiplying the load, and the outage is already trending."},
+        {"t": "Provision the fleet to 170K QPS permanently — capacity is cheaper than an outage during your biggest match", "correct": false,
+         "why": "20× capacity idling ~23.9 hours/day to survive a spike you could simply spread out is paying rent on a stadium for a weekly dinner party. When you're the one causing the spike, reshaping it is nearly free — buy that first."}
+      ]
+    },
+    {
+      "id": "p1c04-q24", "level": 3, "type": "mcq", "tag": "cache-sizing",
+      "q": "Feed cache math: hot set ~20 GB, but peak reads are 600K ops/second. A teammate says '20 GB fits on one node — run one Redis box (plus a replica).' The right call?",
+      "options": [
+        {"t": "Size by the binding axis: ~100K ops/second per node means 6–8 nodes for throughput, however small the data", "correct": true,
+         "why": "Right, and it's the nuance this scenario exists to test: caches have two independent limits, bytes and ops/second. Junior sizing checks gigabytes and stops; senior sizing checks both and names which one binds. One node would also make 600K/s of reads depend on a single machine — its failure dumps everything on a database provisioned for a whisper."},
+        {"t": "One node with a replica is right — the data fits with huge room to spare, and you never run more hardware than the data needs", "correct": false,
+         "why": "Lazy-minimalism is usually the senior instinct, but it's calibrated against ALL the ceilings. A single node serving 600K ops/s is past most Redis deployments' comfort even before the availability math: fail over 100% of read traffic to one warm replica and hope? The data is small; the traffic is not."},
+        {"t": "Shard to 50 nodes so there's room to grow", "correct": false,
+         "why": "The opposite over-correction: 6× beyond need, bought against no number. Fifty tiny shards means fifty failure domains and rebalancing pain, justified by 'growth' that the envelope math was never asked about. Both extremes share the same root — not letting the numbers pick the count."},
+        {"t": "Skip the cache tier; 20 GB fits in each app server's local memory", "correct": false,
+         "why": "Clever until invalidation: now every feed update must reach N independent copies, and users bounce between servers seeing different feeds. Local caching has real uses (tiny, tolerant-of-staleness data); a hot, constantly-updated 20 GB feed set is the textbook case for a shared tier."}
+      ]
+    },
+    {
+      "id": "p1c04-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Late in an interview your own math shows the origin needs ~100 Gbps of peak video egress. What does a senior candidate do with that number?",
+      "options": [
+        {"t": "Treat it as a verdict: origin shouldn't serve 100 Gbps — a CDN takes the hot bytes, origin drops to cache fills", "correct": true,
+         "why": "Right — this is the NALSD lesson in one move: when the numbers don't close, the design changes, not the budget. The best estimates are the ones that invalidate your own architecture before an interviewer (or a hardware invoice) does. Announcing 'my number just told me my design is wrong, here's the fix' is a top-tier senior moment."},
+        {"t": "Note that bandwidth is purchasable and move on — clouds sell 100 Gbps", "correct": false,
+         "why": "Purchasable, yes — at egress prices that would make this the most expensive line item in the company, for bytes a CDN serves at a fraction of the cost from hardware next door to the user. 'We can buy it' without asking 'should we' is exactly the abstraction NALSD was invented to catch."},
+        {"t": "Quietly recheck the math before saying anything — 100 Gbps sounds implausibly high for a whiteboard design", "correct": false,
+         "why": "Sanity-checking is healthy — out loud. But 100 Gbps is entirely plausible for video (the worked image example hit that from photos alone), and 'the number feels big so it must be wrong' is gut overruling arithmetic — the exact reflex this discipline replaces."},
+        {"t": "Present it as evidence of impressive scale and continue the design", "correct": false,
+         "why": "Petabyte-dropping as theater — the estimate as ornament rather than input. A number that dramatic demands a consequence; sailing past it tells the interviewer your math and your design run on separate tracks, which un-earns the points the math just scored."}
+      ]
+    }
+  ]
+}

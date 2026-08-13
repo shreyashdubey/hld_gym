@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c13",
+  "items": [
+    {
+      "id": "p1c13-q01", "level": 1, "type": "mcq", "tag": "why-nosql",
+      "q": "What is the honest one-line summary of what NoSQL databases are?",
+      "options": [
+        {"t": "A trade: relational features removed to buy scale-out, throughput, or one fast access pattern", "correct": true,
+         "why": "Exactly. Every NoSQL store drops parts of the relational bundle — joins, transactions, strong consistency — to buy something specific. Knowing what you're handing over is the whole skill of picking one."},
+        {"t": "A newer generation of databases, built to replace relational systems as the modern default", "correct": false,
+         "why": "This is the fashion framing the chapter exists to kill. Postgres remains the right default for most systems; NoSQL is a specialized trade, not a successor."},
+        {"t": "Databases that don't use a query language", "correct": false,
+         "why": "Most NoSQL stores have query languages (CQL for Cassandra, Mongo's query API). The name is misleading — the real difference is the features traded away, not the syntax."},
+        {"t": "Databases designed for unstructured data only", "correct": false,
+         "why": "Cassandra tables are rigidly structured — arguably more rigid than SQL, since the keys must match your queries. Schema flexibility is one family's feature, not the definition."}
+      ]
+    },
+    {
+      "id": "p1c13-q02", "level": 1, "type": "mcq", "tag": "families",
+      "q": "Which family matches the mental model 'a hash map the size of a building'?",
+      "options": [
+        {"t": "Key-value (Redis, DynamoDB)", "correct": true,
+         "why": "Right. Store a value under a key, get it back by that exact key, nothing else. The tiny promise is what makes it blazingly fast and trivially scalable — hash the key, that's the machine."},
+        {"t": "Document (MongoDB)", "correct": false,
+         "why": "Close cousin, but documents add queryability — you can search inside the JSON. A pure key-value store can only fetch by exact key, which is precisely why it's simpler and faster."},
+        {"t": "Wide-column (Cassandra)", "correct": false,
+         "why": "Wide-column is a two-level map: partition key finds the machine, then rows are sorted by clustering key inside. That sorted second level is what a flat hash map lacks."},
+        {"t": "Graph (Neo4j)", "correct": false,
+         "why": "Graph stores are about walking relationships between records — roughly the opposite of a flat dictionary where records don't know about each other."}
+      ]
+    },
+    {
+      "id": "p1c13-q03", "level": 1, "type": "mcq", "tag": "partition-key",
+      "q": "In Cassandra, what does the partition key do?",
+      "options": [
+        {"t": "Hashed to decide which nodes store the row; rows sharing it live together", "correct": true,
+         "why": "Right. The partition key is the routing decision: hash it, land on the owning replicas. Inside the partition, the clustering key keeps rows physically sorted — so range reads within one partition are a sequential sweep."},
+        {"t": "It encrypts the partition's data", "correct": false,
+         "why": "Nothing to do with encryption — 'key' here means lookup key, like a map key. It determines data placement across the cluster."},
+        {"t": "It keeps all rows in the table globally sorted so range scans work across the cluster", "correct": false,
+         "why": "That's the clustering key's job, and only within a single partition. There is no global sort order across partitions — they're scattered across nodes by hash."},
+        {"t": "It's a unique ID for each row", "correct": false,
+         "why": "Many rows share one partition key on purpose — that's the point. All of channel 42's messages share a partition so they can be read together. Row uniqueness comes from partition key plus clustering key combined."}
+      ]
+    },
+    {
+      "id": "p1c13-q04", "level": 1, "type": "mcq", "tag": "lsm",
+      "q": "Why can an LSM-tree database like Cassandra accept writes so fast?",
+      "options": [
+        {"t": "A write is an append to a log plus an insert into an in-memory table", "correct": true,
+         "why": "That's the whole trick. Sequential append (WAL) for crash safety, memory insert (memtable) for speed, done. No seeking, no in-place page rewriting, no index maintenance on the write path."},
+        {"t": "It skips writing to disk entirely", "correct": false,
+         "why": "It does hit disk — the write-ahead log is written before acknowledging, which is why a crash doesn't lose data. The speed comes from that disk write being a sequential append, the cheapest thing a disk does."},
+        {"t": "It uses faster hardware than relational databases", "correct": false,
+         "why": "Same hardware. The difference is algorithmic: append-only writing versus find-and-modify-in-place. Run Postgres and Cassandra on identical machines and the write-path difference remains."},
+        {"t": "It buffers writes in memory and applies them to disk in periodic hourly batches", "correct": false,
+         "why": "Writes are acknowledged immediately and durable immediately (via the WAL). The deferred work is compaction — reorganizing already-written data — not the writes themselves."}
+      ]
+    },
+    {
+      "id": "p1c13-q05", "level": 1, "type": "mcq", "tag": "compaction",
+      "q": "What is compaction in an LSM storage engine?",
+      "options": [
+        {"t": "A background merge of SSTables into fewer files, keeping only each row's newest version", "correct": true,
+         "why": "Right — the janitor of the LSM world. It merge-sorts several files into one, drops superseded versions and tombstoned data for real, and deletes the inputs. Without it, files pile up and every read must check more of them."},
+        {"t": "Compressing older SSTables with a cheaper codec so cold data uses less disk", "correct": false,
+         "why": "Reasonable guess from the name, but no — compression is a separate feature. Compaction is about merging files and discarding superseded row versions, though it does reclaim space as a side effect."},
+        {"t": "The database shrinking its memory usage under pressure", "correct": false,
+         "why": "Memory pressure triggers memtable flushes, which is the opposite end of the pipeline. Compaction operates on the on-disk SSTables those flushes create."},
+        {"t": "Vacuuming old rows like Postgres's VACUUM", "correct": false,
+         "why": "Closest wrong answer — both reclaim dead data. But VACUUM cleans within existing structures in place, while compaction rewrites whole immutable files into merged ones. Different mechanics, and compaction also directly determines read performance."}
+      ]
+    },
+    {
+      "id": "p1c13-q06", "level": 1, "type": "mcq", "tag": "btree-lsm",
+      "q": "The fundamental trade-off between B-tree and LSM storage engines is:",
+      "options": [
+        {"t": "B-trees pay on writes so reads stay cheap; LSM trees pay on reads so writes stay cheap", "correct": true,
+         "why": "That's the axis. B-tree: writes find and rewrite pages in place and update every index, so any row is a few hops away on read. LSM: writes are appends, and reads pay by consulting the memtable plus multiple SSTables. Pick the engine to match your read/write ratio."},
+        {"t": "B-trees are the SQL engine and LSM the NoSQL engine — the storage follows the query language", "correct": false,
+         "why": "The correlation is loose, not defining. MongoDB's WiredTiger engine is B-tree based, MySQL's RocksDB engine is LSM. The engine choice follows the workload, not the query language."},
+        {"t": "LSM trees can't handle deletes", "correct": false,
+         "why": "They handle deletes with tombstones — markers meaning 'pretend this is gone' — cleaned up later by compaction. It works, though tombstone pileups are a real operational gotcha, not an impossibility."},
+        {"t": "B-trees lose data on crash, LSM trees don't", "correct": false,
+         "why": "Both are crash-safe — B-tree databases also use write-ahead logs. Durability is table stakes for any real database; the trade-off is about read versus write cost."}
+      ]
+    },
+    {
+      "id": "p1c13-q07", "level": 1, "type": "mcq", "tag": "secondary-index",
+      "q": "Why are secondary indexes (querying by a non-key field) a weak spot in distributed databases?",
+      "options": [
+        {"t": "Matching rows are scattered across nodes, so you either ask every node or maintain a duplicate table", "correct": true,
+         "why": "Right. Cassandra-style local indexes mean scatter-gather to all nodes; DynamoDB-style GSIs are honestly a second table, repartitioned by the new key, updated asynchronously. Either way: every query pattern is paid for explicitly."},
+        {"t": "Distributed databases don't support indexes at all", "correct": false,
+         "why": "They support them — Cassandra has secondary indexes, DynamoDB has GSIs. The problem isn't availability of the feature; it's that the feature is far more expensive than its single-machine namesake."},
+        {"t": "Index storage overhead grows with cluster size until indexes outweigh the data they serve", "correct": false,
+         "why": "Space is a cost but not the distinctive one — single-machine indexes cost space too, and index size tracks data size, not node count. The distributed-specific pain is scatter-gather latency or the write/consistency cost of a repartitioned copy."},
+        {"t": "Secondary indexes break replication", "correct": false,
+         "why": "Replication carries on fine. The issue is query routing: the index can't tell you which node holds the matches unless the data is reorganized (duplicated) around that field."}
+      ]
+    },
+    {
+      "id": "p1c13-q08", "level": 1, "type": "mcq", "tag": "document",
+      "q": "The document family (MongoDB) is the strongest fit when:",
+      "options": [
+        {"t": "Your unit of reading and writing is a whole nested object, and its shape genuinely evolves", "correct": true,
+         "why": "Right — the folder model. A product with nested variants and images, fetched whole in one read, no five-way join, no migration when a field appears next sprint. Both conditions matter; either alone is weaker."},
+        {"t": "You need the fastest possible writes at any scale", "correct": false,
+         "why": "That's the wide-column pitch. Discord left MongoDB precisely when write-heavy message storage outgrew it — document stores optimize for object-shaped reads, not write floods."},
+        {"t": "Your data has many cross-referenced entities that get queried in unpredictable, ad-hoc ways", "correct": false,
+         "why": "That description — entities cross-referenced, ad-hoc queries — is the definition of a relational workload. Forcing it into documents means duplicating data or reimplementing joins in application code, badly."},
+        {"t": "You want ACID transactions across many records", "correct": false,
+         "why": "Multi-record transactions are relational home turf (Mongo added multi-document transactions, but they're not its strength). If atomic cross-record changes drive the design, that's a vote for Postgres or Spanner-class."}
+      ]
+    },
+    {
+      "id": "p1c13-q09", "level": 1, "type": "mcq", "tag": "newsql",
+      "q": "What do Spanner-class (NewSQL) databases offer, and what's the catch?",
+      "options": [
+        {"t": "SQL, real transactions, and strong consistency at horizontal scale — paid in latency, money, and ops", "correct": true,
+         "why": "Right. Spanner (with TrueTime's GPS and atomic clocks) and CockroachDB refuse the NoSQL trade. Physics still gets paid: cross-region commits carry tens of milliseconds of floor latency, and the systems are expensive to buy and run."},
+        {"t": "They're faster versions of Postgres with no downsides", "correct": false,
+         "why": "For a single-region, modest-scale workload, Spanner-class systems are typically slower per query and dramatically more expensive than Postgres. They win only when you truly need transactions plus multi-region scale."},
+        {"t": "They're eventually consistent NoSQL stores with a SQL-compatible query layer bolted on top", "correct": false,
+         "why": "That describes SQL-ish query layers on eventually consistent stores. Spanner-class systems genuinely provide serializable transactions and strong consistency across machines — the hard part is real, which is why the price is."},
+        {"t": "They eliminate the CAP theorem", "correct": false,
+         "why": "No one eliminates CAP. Spanner chooses consistency and pays with availability edge cases and latency; its achievement is making that choice at global scale with excellent (not infinite) availability."}
+      ]
+    },
+    {
+      "id": "p1c13-q10", "level": 2, "type": "mcq", "tag": "family-choice",
+      "q": "You need a session store: 40M daily users, lookup by session token on every request, sub-millisecond target, data is a small blob per user. Best fit?",
+      "options": [
+        {"t": "Key-value — Redis (or DynamoDB for managed durability)", "correct": true,
+         "why": "The purest key-value workload that exists: exact-key lookup, tiny value, brutal volume, zero queries. Redis serves it from memory in sub-millisecond; there's nothing a richer database would add except latency."},
+        {"t": "Postgres — under 1TB, so the chapter says Postgres", "correct": false,
+         "why": "Good instinct, wrong application — the 'Postgres by default' rule is about not over-engineering general workloads. Here the access pattern is pure key-value at per-request volume with a sub-millisecond target, which is exactly the specialized case the key-value family exists for (and you met in the caching chapter)."},
+        {"t": "MongoDB — sessions are JSON-shaped", "correct": false,
+         "why": "The shape fits, but you never query inside a session or evolve complex nesting — you fetch by token. Paying for document queryability you'll never use, while missing Redis's in-memory latency, is a mismatch."},
+        {"t": "Cassandra — it handles the most writes", "correct": false,
+         "why": "Write throughput isn't the bottleneck here; per-read latency is. Cassandra's disk-based quorum reads are milliseconds, not sub-millisecond, and its partition machinery adds nothing for single-key blobs."}
+      ]
+    },
+    {
+      "id": "p1c13-q11", "level": 2, "type": "mcq", "tag": "family-choice",
+      "q": "IoT platform: 400K sensor readings/sec arriving continuously; dashboards read one device's last hour. Which store and why?",
+      "options": [
+        {"t": "Cassandra/ScyllaDB with partition key (device_id, time_bucket), clustering by timestamp", "correct": true,
+         "why": "Textbook wide-column: relentless append-heavy writes (LSM engines eat these) and reads that are one partition's time range — a single-node sequential sweep. The time bucket bounds partition size so no device's partition grows forever."},
+        {"t": "Postgres with a composite index on (device_id, timestamp) and monthly table partitions", "correct": false,
+         "why": "400K writes/sec sustained is beyond a single Postgres primary's comfortable range — B-tree write amplification (rewrite pages, update indexes) bites hard exactly here, and table partitioning doesn't change the write path. This is one of the genuine, numbers-backed exits from the Postgres default."},
+        {"t": "Redis — it has the fastest writes", "correct": false,
+         "why": "Redis is memory-bound: at 400K readings/sec you'd exhaust RAM within hours, and an hour of history per device isn't a cache — it's durable time-series data needing disk economics."},
+        {"t": "MongoDB — each reading as a document", "correct": false,
+         "why": "Millions of tiny documents in write floods is the exact workload Discord outgrew MongoDB on. Document stores shine on rich objects read whole, not firehoses of time-ordered points."}
+      ]
+    },
+    {
+      "id": "p1c13-q12", "level": 2, "type": "mcq", "tag": "partition-key",
+      "q": "For chat storage on Cassandra, why is partition key (channel_id, time_bucket) better than just channel_id?",
+      "options": [
+        {"t": "It bounds each partition's size and spreads one channel's data over many partitions across time", "correct": true,
+         "why": "Both failure modes fixed at once: no partition grows without limit (giant partitions wreck compaction and reads), and a busy channel's traffic doesn't pin to the same few replicas forever. This is Discord's actual design — a bucket is roughly ten days of a channel."},
+        {"t": "It makes messages sort correctly by time", "correct": false,
+         "why": "Time ordering comes from the clustering key (timestamp), which works fine either way. The bucket in the partition key is about partition size and heat, not sort order."},
+        {"t": "Two-column partition keys hash more evenly", "correct": false,
+         "why": "Hash quality isn't the issue — hashes distribute fine on one column. The problem is what shares a partition: with channel_id alone, one channel's entire unbounded history and all its traffic land on the same replicas."},
+        {"t": "It isn't better — it makes reading a channel's history require multiple partitions", "correct": false,
+         "why": "That cost is real (paging back through history crosses buckets) and it's the honest price paid. But it's cheap and predictable, while unbounded hot partitions degrade the whole cluster. Every partition key needs a story for max size and peak heat; channel_id alone has neither."}
+      ]
+    },
+    {
+      "id": "p1c13-q13", "level": 2, "type": "mcq", "tag": "scale-honesty",
+      "q": "150 GB product catalog, 400 QPS peak, small team, queries are varied and evolving. A teammate proposes MongoDB 'for flexibility'. The best-reasoned position is:",
+      "options": [
+        {"t": "Postgres — the numbers are deep inside single-machine comfort, and JSONB covers the nested bits", "correct": true,
+         "why": "All three framework questions point the same way: unpredictable access patterns (relational home turf), no extreme consistency or scale demands, and numbers that a single primary shrugs at. 'Flexibility' of queries is exactly what SQL provides and document stores charge extra for."},
+        {"t": "MongoDB — product data is document-shaped, and evolving queries call for a flexible schema", "correct": false,
+         "why": "Shape alone doesn't decide, and this conflates two different flexibilities. A flexible schema helps with evolving DATA shapes; evolving QUERIES are where document stores hurt, because they optimize fetching known folders. Postgres JSONB gives the nesting without giving up the query engine."},
+        {"t": "DynamoDB — never worry about scale again", "correct": false,
+         "why": "It would force enumerating every access pattern up front — the opposite of 'varied and evolving' — to solve a scale problem that doesn't exist at 150 GB and 400 QPS. Buying insurance against imaginary load with real daily costs."},
+        {"t": "Split it: Postgres for orders, MongoDB for catalog", "correct": false,
+         "why": "Two databases means two systems to operate, back up, monitor, and keep consistent — a permanent tax on a small team, purchased with no measured need. Polyglot persistence is a real pattern, but it's earned by numbers, not defaults."}
+      ]
+    },
+    {
+      "id": "p1c13-q14", "level": 2, "type": "mcq", "tag": "secondary-index",
+      "q": "Your Cassandra orders table is partitioned by customer_id. Product asks for 'all orders over $100 this week, across all customers'. What actually happens if you build this on a secondary index?",
+      "options": [
+        {"t": "Scatter-gather: every node scans its local index and a coordinator merges the results", "correct": true,
+         "why": "Right. The amount column has no relationship to data placement, so no node can be skipped, and latency is set by the slowest one — fine on 5 nodes, grim on 100. The honest designs: a second table keyed for this query, or ship events to an analytics store — either way, paying for the pattern explicitly."},
+        {"t": "Cassandra routes the query to the one node holding that index", "correct": false,
+         "why": "There is no such node — Cassandra's secondary indexes are local, each node indexing only its own partitions. That's precisely why the query must visit all of them."},
+        {"t": "It works like Postgres — indexes are indexes", "correct": false,
+         "why": "The single-machine intuition that transfers worst. On one box an index scan is cheap; distributed, the matching rows live everywhere, so 'use the index' means 'ask every node'. Same words, wildly different cost."},
+        {"t": "The query is rejected — Cassandra refuses to filter on any column outside the partition key", "correct": false,
+         "why": "It runs (with a secondary index, or ALLOW FILTERING). That's the trap — the query works in the demo with tiny data, then melts in production. Databases that quietly permit expensive things are more dangerous than ones that refuse."}
+      ]
+    },
+    {
+      "id": "p1c13-q15", "level": 2, "type": "mcq", "tag": "single-table",
+      "q": "Six months after launching on a DynamoDB single-table design, product wants a genuinely new query pattern the keys weren't built for. Realistic assessment?",
+      "options": [
+        {"t": "A real, paid-for change: a new GSI — a maintained, eventually consistent duplicate of the table — or a remodel", "correct": true,
+         "why": "This is the single-table bargain seen from the losing side: spectacular performance for predicted patterns, real cost for surprises — the GSI charges storage plus write capacity on every write, forever. Flagging that cost calmly (and budgeting for it) is the senior read; DynamoDB shops accept it deliberately."},
+        {"t": "Just add the query — DynamoDB's entire point is scaling any workload without redesign", "correct": false,
+         "why": "It scales throughput on existing key patterns, not query flexibility. An unindexed pattern means a full table scan — ruinous at scale — until you pay for a GSI or remodel."},
+        {"t": "This proves single-table design is bad practice", "correct": false,
+         "why": "Too far the other way. Single-table is a deliberate trade AWS documents extensively: unbeatable for stable, known patterns at scale. The lesson is about when to sign that contract, not that the contract is a scam."},
+        {"t": "Migrate everything to Postgres immediately", "correct": false,
+         "why": "One new pattern doesn't justify a full migration's risk and cost. Add the GSI, note the friction, and only if surprise patterns keep arriving does the workload reveal itself as relational — then discuss migration with evidence."}
+      ]
+    },
+    {
+      "id": "p1c13-q16", "level": 2, "type": "mcq", "tag": "graph",
+      "q": "Which of these is a genuine reason to reach for a graph database like Neo4j?",
+      "options": [
+        {"t": "Checking whether an account links, through any chain of shared devices or cards, to known fraud", "correct": true,
+         "why": "Unknown-depth traversal — the chain might be 2 hops or 9. In SQL that's recursive joins growing uglier and slower per hop; in a graph store, walking edges is the native operation. This is the family's honest home turf."},
+        {"t": "Showing each user's friends-of-friends list", "correct": false,
+         "why": "Fixed depth: two self-joins on a follows table, which Postgres handles with an index. Reaching for Neo4j here is the over-engineering tell — most 'graph problems' are two joins."},
+        {"t": "'People who bought X also bought Y' — recommendations across the whole purchase network", "correct": false,
+         "why": "Also fixed two-hop — orders joined to orders. The word 'network' in a problem statement doesn't make it a graph workload; unknown traversal depth does."},
+        {"t": "Storing users and their posts", "correct": false,
+         "why": "A one-to-many relationship — the bread and butter of a foreign key. No traversal of any depth is happening; this is the most relational workload there is."}
+      ]
+    },
+    {
+      "id": "p1c13-q17", "level": 2, "type": "mcq", "tag": "lsm-ops",
+      "q": "Your Cassandra cluster's write latency is fine, but read p99 has crept from 15 ms to 90 ms over two weeks. Disk space is dropping faster than data growth explains. First suspect?",
+      "options": [
+        {"t": "Compaction is falling behind — SSTables pile up, so every read touches more files", "correct": true,
+         "why": "The signature triple: healthy writes (appends don't care), degrading reads (more files consulted per read), disk anomalies (superseded row versions not being merged away). Check pending compactions and SSTables-per-read. Compaction debt is THE classic LSM incident — Discord hit it at trillion-message scale."},
+        {"t": "The disks are wearing out — reads hit degraded sectors more often than sequential writes do", "correct": false,
+         "why": "Failing disks would hurt writes and reads alike and show I/O errors, and hardware decay doesn't explain disk space vanishing. The write/read asymmetry is the clue pointing at the LSM read path specifically — appends are unaffected by file pileup."},
+        {"t": "Too many clients are connected", "correct": false,
+         "why": "Connection pressure degrades everything at once, including writes, and doesn't touch disk consumption. The three symptoms together fingerprint compaction lag, not load."},
+        {"t": "The replication factor is too high", "correct": false,
+         "why": "Replication factor is a constant you configured — it doesn't creep over two weeks. Gradual read degradation with steady writes points at the accumulating thing: unmerged SSTables."}
+      ]
+    },
+    {
+      "id": "p1c13-q18", "level": 2, "type": "mcq", "tag": "misuse",
+      "q": "A team chose MongoDB for 'schema flexibility'. A year in: orders reference products reference inventory, and the code does multi-step lookups gluing documents together, with occasional inconsistencies. What happened?",
+      "options": [
+        {"t": "The data was relational all along — the code is reimplementing joins and transactions by hand", "correct": true,
+         "why": "The classic document-store misuse arc. Cross-referenced entities are what foreign keys, joins, and transactions were invented for; doing them in app code means every developer rewrites them, worse, without the database's correctness guarantees — and the 'occasional inconsistencies' are the missing transactions announcing themselves."},
+        {"t": "They haven't denormalized enough — embedding products and inventory inside each order fixes it", "correct": false,
+         "why": "Deeper embedding trades lookup-gluing for mass duplication: a product price change now means updating it inside every order document, which is its own consistency nightmare. When both directions hurt, the data is telling you it's relational."},
+        {"t": "MongoDB is missing features — they should file tickets", "correct": false,
+         "why": "Mongo isn't broken; it's mis-fit. It does have multi-document transactions now, but leaning on them everywhere means fighting the tool's grain — a sign the relational model was the right one from the start."},
+        {"t": "This is normal NoSQL development", "correct": false,
+         "why": "It's normal for mischosen NoSQL. Teams whose access patterns genuinely fit documents (folder-shaped reads, evolving shapes) don't spend their days hand-gluing references. Pain this systematic is a fit signal, not a fact of life."}
+      ]
+    },
+    {
+      "id": "p1c13-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interview: 'What database for the message history in your WhatsApp-scale chat design?' Which answer reads most senior?",
+      "options": [
+        {"t": "\"Cassandra or Scylla: a write flood of time-ordered data, read as 'recent messages in one chat' — partition key (chat_id, time_bucket), clustering by message time. Cost: I must know my queries up front.\"", "correct": true,
+         "why": "Family chosen from the access pattern, the exemplar named, the partition key specified with a bounded-size story, and the trade named honestly. This survives the follow-up probe — which is the test the answer is really for."},
+        {"t": "\"NoSQL, definitely — SQL can't handle this scale.\"", "correct": false,
+         "why": "The conclusion may be right but the reasoning is fashion. 'NoSQL' names four families with opposite strengths; no partition key, no access pattern, nothing checkable. One follow-up question ends this answer."},
+        {"t": "\"It depends — MongoDB gives flexible documents, Cassandra gives write scale, DynamoDB is managed. Each has trade-offs, so I'd evaluate all three against the requirements before committing to one.\"", "correct": false,
+         "why": "Option-listing — true, safe, and signal-free. The requirements are sitting right there in the design; a senior uses them to commit. 'It depends' with no decision is the pattern interviewers explicitly mark down."},
+        {"t": "\"Postgres — this book says Postgres is always the answer.\"", "correct": false,
+         "why": "The rule was 'under ~1TB and modest QPS, Postgres' — a numbers-based default, not a slogan. WhatsApp-scale message history is petabytes at millions of writes/sec: exactly the genuine, honest exit from that default. Applying a heuristic after its conditions failed reads worse than not knowing it."}
+      ]
+    },
+    {
+      "id": "p1c13-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your feed service runs happily on Postgres. Interviewer: 'Now 10x the write volume.' Strongest response?",
+      "options": [
+        {"t": "\"Numbers first: 10x is ~30K writes/sec sustained — past one primary's comfort. I'd move the feed-events table, and only it, to a wide-column store keyed by (user_id, day). New cost: no transactions across the two stores.\"", "correct": true,
+         "why": "Quantifies the breaking point, migrates the narrowest thing that breaks, keeps relational strengths (users, follows, auth) where they still fit, and names the consistency seam created. Surgical, numbers-driven evolution — exactly what the 10x push exists to elicit."},
+        {"t": "\"Migrate everything to Cassandra — Postgres was always going to be temporary.\"", "correct": false,
+         "why": "Wholesale migration throws away transactions and ad-hoc queries on tables that were never the problem, and multiplies migration risk. 'Move only what breaks' is the senior scalpel; this is a sledgehammer."},
+        {"t": "\"Shard Postgres by user_id before touching any new database — we keep SQL, transactions, and the team's expertise, and companies like Notion and Instagram proved manual sharding works at far bigger scale.\"", "correct": false,
+         "why": "Defensible-sounding, but those companies built consistent hashing, rebalancing, and cross-shard routing themselves — adopting distributed-database problems without a distributed database's tooling. For an append-heavy feed table, wide-column stores solved exactly this. Loyalty to one tool past its fit reads as dogma, not judgment."},
+        {"t": "\"Add a bigger machine — vertical scaling is simpler.\"", "correct": false,
+         "why": "Right instinct at 2x, exhausted at 10x on writes: you buy one more doubling and land in the same spot with the most expensive machine money rents. A senior names WHEN vertical scaling stops working, not just that it's simpler today."}
+      ]
+    },
+    {
+      "id": "p1c13-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A giant Discord-style channel goes viral and its partition is melting the replicas that own it. An engineer proposes doubling the cluster size. Your call?",
+      "options": [
+        {"t": "\"Won't help — the hot partition still lives on the same replicas. Contain now with caching or request coalescing in front; fix structurally by adding a dimension to the partition key.\"", "correct": true,
+         "why": "The judgment being tested: cluster-wide scaling can't fix single-partition skew, because a partition is owned by a fixed replica set regardless of cluster size — new nodes help total capacity, not per-partition heat. Discord's real fixes were exactly these: coalescing duplicate reads in a data-services layer, and bucketed partition keys."},
+        {"t": "\"Double it — more nodes means more capacity for the hot data.\"", "correct": false,
+         "why": "The intuition everyone has and the cluster doesn't share. New nodes take ownership of OTHER partitions; the hot one stays glued to its replicas. You'd pay 2x the bill and watch the same three nodes burn — averages improve, the incident doesn't."},
+        {"t": "\"Raise the replication factor from 3 to 7 — with more replicas owning the partition, reads spread across more nodes with no data-model change.\"", "correct": false,
+         "why": "Cleverer, and it can genuinely spread read load — but it multiplies storage and write cost for EVERY partition to treat one, slows quorum writes, and doesn't touch write-side heat at all. A cluster-wide constant is the wrong knob for a per-key problem."},
+        {"t": "\"Rate-limit the viral channel until traffic subsides.\"", "correct": false,
+         "why": "As a five-minute emergency brake, defensible. As the answer, it means degrading your most successful content at its peak — load shedding is for protecting the cluster during the incident, never the fix. The interviewer wants containment AND the structural repair."}
+      ]
+    },
+    {
+      "id": "p1c13-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Mid-interview honesty check: the design genuinely fits DynamoDB, but you've operated Postgres for years and only read about DynamoDB. What do you say?",
+      "options": [
+        {"t": "\"The patterns fit DynamoDB. Being transparent: I've run Postgres in production, not DynamoDB — so I'll reason from its model (known queries up front, GSIs as paid-for duplicates) and flag what I'd verify.\"", "correct": true,
+         "why": "Commits on the merits, discloses the experience gap before a probe finds it, then demonstrates real reasoning from the model — turning a weakness into evidence you can operate outside your comfort zone. 'Know one deeply' means your depth transfers; this shows the transfer happening."},
+        {"t": "Recommend DynamoDB confidently and hope the follow-ups stay shallow", "correct": false,
+         "why": "Senior loops are built to go two questions deep — 'what's your partition key, what happens when a GSI throttles?' A bluff discovered poisons trust in everything else you said. Honest gaps grade neutral-to-positive; discovered bluffs grade terminal."},
+        {"t": "\"Postgres can be made to work here — with partitioning, read replicas, and aggressive caching we stay on the store I can defend in depth for the rest of the loop.\"", "correct": false,
+         "why": "Distorting the design to hide a gap is the tell the interviewer is trained to catch — and if the numbers genuinely exceed Postgres's fit, you're now defending a wrong answer with great fluency. Depth should inform the reasoning, not veto the conclusion."},
+        {"t": "\"Either database works — I'll defer to whatever the team prefers.\"", "correct": false,
+         "why": "The interview is asking for YOUR judgment; deference here is the option-listing dodge wearing a collaborative costume. 'Team familiarity matters' is a real factor worth naming — after you make the call on the merits."}
+      ]
+    },
+    {
+      "id": "p1c13-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Startup, 6 engineers, 50 GB of data, growing 5 GB/month. The tech lead wants Cassandra now 'so we never have to migrate later'. The senior counter is:",
+      "options": [
+        {"t": "\"Postgres. At this size Cassandra charges us daily — no ad-hoc queries, no transactions, a cluster to run with six people — to insure against a scale we're years from. My trigger: sustained writes beyond one primary plus a cache.\"", "correct": true,
+         "why": "Names what the 'safe' choice costs NOW (the part pre-scaling arguments always omit), quantifies the runway, sets the escalation trigger, and sizes the future migration honestly — moving one table later beats paying Cassandra's tax every day until then. Discord migrated at 100M messages with a smaller team; migrations are a cost, not a catastrophe."},
+        {"t": "The lead is right — a live-data migration later, under real traffic, will cost far more than adopting Cassandra now, so paying the complexity tax early is the prudent long-term call", "correct": false,
+         "why": "This logic proves too much: it justifies adopting every heavyweight tool on day one. Meanwhile the actual risk profile is inverted — at 5 GB/month you're a decade from Cassandra territory, but the operational tax and lost query flexibility start charging six engineers today."},
+        {"t": "Compromise: run both, new features on Cassandra", "correct": false,
+         "why": "The worst of both: two systems to operate, back up, and keep consistent, with the team's depth split across them — for a scale problem neither system is experiencing. A compromise between a good decision and a bad one is not a good decision."},
+        {"t": "Use DynamoDB instead — managed, so no operational burden", "correct": false,
+         "why": "It removes the cluster-operating burden but keeps the deeper costs: access patterns locked in up front, no ad-hoc queries, key-first modeling — heavy taxes on a 6-person team still discovering its product. 'Managed' fixes who runs the servers, not whether the model fits."}
+      ]
+    },
+    {
+      "id": "p1c13-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You're designing a payments ledger for a company operating in the US, EU, and India. Regulators require strong consistency; volume is high and global. A colleague says 'just use Cassandra, it's multi-region'. Your call?",
+      "options": [
+        {"t": "\"Cassandra's multi-region story is eventually consistent — disqualifying for money, not tunable. This is the rare workload for a Spanner-class store: real transactions at multi-region scale. I'll pay the latency floor and cost.\"", "correct": true,
+         "why": "Consistency needs veto the family before performance is even discussed — question two of the framework doing its job. Naming the price (latency floors, money, ops) while committing anyway is what separates judgment from cargo-culting Spanner because Google made it."},
+        {"t": "\"Cassandra with QUORUM everywhere gives strong enough consistency.\"", "correct": false,
+         "why": "Quorums give you read-your-writes under good conditions — not transactions. A ledger needs atomic multi-row movement (debit + credit as a unit), which no quorum setting provides. 'Strong enough' consistency for money is how reconciliation teams get created."},
+        {"t": "\"Postgres per region for data residency, with reconciliation jobs syncing between regions — each region gets full local transactions, and regulators understand a ledger plus reconciliation.\"", "correct": false,
+         "why": "This is building eventual consistency by hand for a workload whose requirement is the opposite. Reconciliation is what you do when constraints force divergence — choosing it at design time, against a regulator's consistency requirement, is adopting your failure mode as your architecture."},
+        {"t": "\"Single-region Postgres — consistency matters more than latency.\"", "correct": false,
+         "why": "Honest about the consistency priority, but it ducks the stated requirement of high global volume, hands EU and India hundreds of ms per transaction, and creates residency and single-region-failure problems a payments regulator will also care about. When two hard requirements collide, the senior answer names the class of system built for exactly that collision."}
+      ]
+    },
+    {
+      "id": "p1c13-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Final calibration: across a whole interview loop, which database-related habit most reliably reads as senior?",
+      "options": [
+        {"t": "Deriving choices from access patterns and numbers, committing with the cost stated, and going one level deep on a database you actually know", "correct": true,
+         "why": "The chapter's whole method in one sentence: patterns → consistency → scale honesty, then commit-with-cost, then survivable depth (keys, indexes, failure modes). It works for Postgres answers and Cassandra answers alike, because the grading is on the reasoning, not the logo."},
+        {"t": "Demonstrating fluency across the whole modern landscape — relational, key-value, document, wide-column, graph, NewSQL — so no question lands outside your map", "correct": false,
+         "why": "Breadth is one follow-up away from exposure: name nine databases and the interviewer picks one and asks for its partition key. Depth in one per family survives probing; a tour of logos is the read-about-it signal."},
+        {"t": "Always proposing NoSQL, since senior interviews are about scale", "correct": false,
+         "why": "Interviews are about judgment applied to stated numbers — and at many stated scales the judged-correct answer is Postgres with replicas and a cache. Reflexive NoSQL against small numbers is one of the most common down-level signals there is."},
+        {"t": "Always proposing Postgres, since this book says it's usually the answer", "correct": false,
+         "why": "The default earns its keep only through the numbers behind it. Postgres 'because the book said so' fails the same way NoSQL-by-fashion fails: a heuristic recited instead of reasoning shown. When the workload is a 400K writes/sec time-series firehose, the honest answer changed — and you're expected to notice."}
+      ]
+    }
+  ]
+}

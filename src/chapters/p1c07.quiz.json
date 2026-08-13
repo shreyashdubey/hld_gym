@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c07",
+  "items": [
+    {
+      "id": "p1c07-q01", "level": 1, "type": "mcq", "tag": "latency-physics",
+      "q": "Your server responds in 40 ms, but a user across an ocean waits over a second for a small image on a fresh HTTPS connection. What's the main cause?",
+      "options": [
+        {"t": "The server processes international requests more slowly under load", "correct": false,
+         "why": "The server does the same 40 ms of work regardless of where the request came from. The extra second is spent on the wire, not in your code."},
+        {"t": "Several ~200 ms round trips: TCP, TLS, then the request itself", "correct": true,
+         "why": "Right. Light in fiber covers ~200,000 km/s, so a cross-ocean round trip costs ~200 ms — and a fresh HTTPS connection needs three or four of them before the first byte lands. Server time was never the story."},
+        {"t": "Images are compressed less efficiently over long distances", "correct": false,
+         "why": "Compression is distance-independent — the bytes are identical. What distance changes is the time each round trip takes, and handshakes multiply that."},
+        {"t": "International bandwidth is too low to carry the image", "correct": false,
+         "why": "Bandwidth (how much per second) and latency (how long each trip takes) are different things. Undersea cables have enormous bandwidth; they just can't shorten the trip. A small image is latency-bound, not bandwidth-bound."}
+      ]
+    },
+    {
+      "id": "p1c07-q02", "level": 1, "type": "mcq", "tag": "cdn-mechanics",
+      "q": "In CDN terminology, what is the 'origin'?",
+      "options": [
+        {"t": "The CDN data center nearest to the user", "correct": false,
+         "why": "That's the edge PoP (point of presence). The origin is the opposite end: where the content originally lives, typically your servers or your S3 bucket."},
+        {"t": "The first user who ever requested the file", "correct": false,
+         "why": "That user triggers the first miss and pays the long fetch, but they're not the origin. The origin is the system the edge fetches from."},
+        {"t": "The DNS server that routes each user's request to the closest CDN data center", "correct": false,
+         "why": "DNS steers users to the nearest edge, but it's routing machinery, not the content source. The origin is where the bytes authoritatively live."},
+        {"t": "Your server or storage — the authoritative copy edges fetch from on a miss", "correct": true,
+         "why": "Yes. The edges are caches; the origin is the source of truth behind them. On a hit the origin is never contacted — that shielding is most of the value."}
+      ]
+    },
+    {
+      "id": "p1c07-q03", "level": 1, "type": "mcq", "tag": "ttl-invalidation",
+      "q": "What does Cache-Control: max-age=3600 tell a CDN edge?",
+      "options": [
+        {"t": "Serve this cached copy for up to an hour without checking with the origin", "correct": true,
+         "why": "Right. The TTL is a freshness promise: for 3600 seconds, the edge answers from cache confidently. After that, it revalidates or refetches. Long TTL = fewer origin hits but staler content."},
+        {"t": "Delete the file from cache after exactly one hour", "correct": false,
+         "why": "Expiry means 'stop serving without checking', not necessarily 'erase'. After max-age the edge revalidates with the origin — and if unchanged, keeps serving the same bytes."},
+        {"t": "Only cache the file if it's requested more than once per hour", "correct": false,
+         "why": "max-age says nothing about popularity. It's purely a freshness window; caches decide separately what's worth keeping based on demand and space."},
+        {"t": "Refresh the file from the origin every hour automatically", "correct": false,
+         "why": "Pull CDNs are lazy — nothing refreshes on a timer. The edge refetches only when a user asks after the TTL expired. No requests, no refresh."}
+      ]
+    },
+    {
+      "id": "p1c07-q04", "level": 1, "type": "mcq", "tag": "cache-key",
+      "q": "What is a CDN cache key?",
+      "options": [
+        {"t": "The secret key your server uses to sign private, expiring URLs", "correct": false,
+         "why": "That's the signing key for signed URLs — an access-control mechanism. The cache key is about identity: which requests count as 'the same content'."},
+        {"t": "The encryption key protecting cached files at the edge", "correct": false,
+         "why": "Edges may encrypt at rest, but that's storage security. The cache key is a lookup identity, not cryptography."},
+        {"t": "What decides which requests share a cached response — by default the URL", "correct": true,
+         "why": "Exactly. Two requests with the same cache key get the same cached bytes. That makes the key both a correctness boundary (wrong variant) and a security boundary (someone else's page)."},
+        {"t": "A unique ID the CDN assigns to each customer account", "correct": false,
+         "why": "Account IDs exist but have nothing to do with cache lookups. The cache key is computed per-request from URL and configured request attributes."}
+      ]
+    },
+    {
+      "id": "p1c07-q05", "level": 1, "type": "mcq", "tag": "push-pull",
+      "q": "The core difference between a pull CDN and a push CDN is:",
+      "options": [
+        {"t": "Pull is for downloads, push is for uploads", "correct": false,
+         "why": "Both describe how content gets TO the edge for serving downloads. Uploads are a different topic entirely (presigned URLs, multipart)."},
+        {"t": "Pull fills edges lazily on the first miss; push pre-positions content in advance", "correct": true,
+         "why": "Right. Pull is the default: zero planning, but first requesters pay the miss. Push trades planning effort and edge storage for guaranteed hits — worth it when demand is predictable and huge, like Netflix's nightly pre-positioning."},
+        {"t": "Push CDNs are faster because they use better cables", "correct": false,
+         "why": "Same infrastructure, same cables. The difference is purely when content arrives at the edge: before the first request (push) or because of it (pull)."},
+        {"t": "Pull CDNs can't cache large video files the way push CDNs can", "correct": false,
+         "why": "Pull CDNs cache video all day long. The push choice is about miss cost and predictability, not file type."}
+      ]
+    },
+    {
+      "id": "p1c07-q06", "level": 1, "type": "mcq", "tag": "blob-model",
+      "q": "In the S3 object storage model, which statement is accurate?",
+      "options": [
+        {"t": "Objects are stored in a folder tree you can traverse like a filesystem", "correct": false,
+         "why": "The 'folders' are an illusion drawn by UIs — it's a flat key-value namespace. Prefix-based LIST simulates directories, but there's no real tree, no rename-a-folder operation."},
+        {"t": "You can update byte ranges inside an object, like writing to a file", "correct": false,
+         "why": "No partial writes — you replace the object entirely. That constraint is a feature: whole-object semantics make massive replication and durability far simpler."},
+        {"t": "Buckets are limited to 5 TB of total storage", "correct": false,
+         "why": "5 TB is the maximum size of a single object. Buckets are effectively unlimited — that bottomless capacity is a core reason blobs go here and not in your database."},
+        {"t": "Objects live in buckets under flat string keys and are replaced whole — no partial edits", "correct": true,
+         "why": "Yes. Keys like photos/2026/cat.jpg look like folder paths but the slashes are cosmetic. The tiny PUT/GET/DELETE/LIST API with whole-object writes is what lets S3 scale to trillions of objects with 11-nines durability."}
+      ]
+    },
+    {
+      "id": "p1c07-q07", "level": 1, "type": "mcq", "tag": "consistency",
+      "q": "Which correctly describes S3's consistency model today?",
+      "options": [
+        {"t": "Eventually consistent: a read right after a write may return the old version", "correct": false,
+         "why": "This was true before December 2020, and it lives on in old interview guides. Repeating it in 2026 signals stale knowledge — say 'strongly consistent since 2020' instead."},
+        {"t": "Consistency is configurable per bucket for a fee", "correct": false,
+         "why": "There's no such knob. Strong consistency became the universal default at no extra cost — one of the rare cases of getting a better guarantee for free."},
+        {"t": "Strongly consistent for all operations, including overwrites — since December 2020", "correct": true,
+         "why": "Correct. A successful write is immediately visible to all subsequent reads and LISTs. For its first fourteen years S3 was eventually consistent for overwrites, which is why outdated prep material still gets this wrong — and interviewers notice."},
+        {"t": "Strongly consistent for new objects, eventually consistent for overwrites", "correct": false,
+         "why": "A good description of the OLD model (roughly, pre-2020). The 2020 change made everything — new objects, overwrites, deletes, LISTs — strongly consistent."}
+      ]
+    },
+    {
+      "id": "p1c07-q08", "level": 1, "type": "mcq", "tag": "presigned",
+      "q": "What is a presigned upload URL?",
+      "options": [
+        {"t": "A short-lived signed URL letting a client upload one object straight to storage", "correct": true,
+         "why": "Right. Your server (which holds credentials) signs a narrow permission slip — this key, this content type, this expiry — and the heavy bytes flow client-to-S3 while your servers only exchange a little JSON, instead of proxying every upload."},
+        {"t": "A URL the CDN pre-caches before launch", "correct": false,
+         "why": "That's push-CDN pre-positioning — a download-side idea. Presigned URLs solve the upload side: granting temporary, scoped write access to storage."},
+        {"t": "A permanent public upload endpoint that anyone with the link can use", "correct": false,
+         "why": "Permanent and public is exactly what presigning avoids. The signature pins a specific key and expires in minutes — a leaked one dies quickly and can only ever write one object."},
+        {"t": "A URL that uploads faster because it skips encryption", "correct": false,
+         "why": "Presigned uploads still ride HTTPS. The win isn't skipping security — it's skipping your app servers as a pointless, expensive pipe for the bytes."}
+      ]
+    },
+    {
+      "id": "p1c07-q09", "level": 1, "type": "mcq", "tag": "lifecycle",
+      "q": "What does an S3 lifecycle rule do?",
+      "options": [
+        {"t": "Automatically backs up every object in the bucket to a second region", "correct": false,
+         "why": "That's cross-region replication, a separate feature. Lifecycle rules manage an object's storage class and expiry over time, not its geographic copies."},
+        {"t": "Moves aging objects to cheaper storage classes, or deletes them, per your rules", "correct": true,
+         "why": "Yes — 'after 30 days move to Infrequent Access, after a year to Glacier, delete after 7 years.' At 1 PB, Standard is ~$23K/month and Deep Archive ~$1K, so this automation is real money."},
+        {"t": "Extends the CDN TTL of objects as they get older", "correct": false,
+         "why": "CDN TTLs come from Cache-Control headers and CDN config — a different layer entirely. Lifecycle rules act inside the storage system on where objects physically live."},
+        {"t": "Versions objects so old copies are retained when you overwrite them", "correct": false,
+         "why": "That's bucket versioning. Lifecycle rules can manage old versions (e.g., expire them), but their job is class transitions and expiry, not creating versions."}
+      ]
+    },
+    {
+      "id": "p1c07-q10", "level": 2, "type": "mcq", "tag": "cache-key",
+      "q": "You put your API behind a CDN. Hit rate: 0.5%. Investigating, you find the CDN was configured to include the Cookie header in the cache key, and every user carries a unique session cookie. What happened?",
+      "options": [
+        {"t": "The CDN is broken and should be replaced with a different vendor", "correct": false,
+         "why": "The CDN is obediently doing what it was told. Cache-key misconfiguration is an operator error every vendor lets you make — switching vendors ships the same mistake to a new bill."},
+        {"t": "The responses are too large for the edges to cache, so almost everything passes through", "correct": false,
+         "why": "Size limits exist but produce skipped caching with telltale logs, not a uniform 0.5% hit rate. The per-user key partitioning explains the observed number precisely."},
+        {"t": "Every user's requests form a distinct cache key, so responses are cached per-user and almost never reused", "correct": true,
+         "why": "Exactly. A unique-per-user value in the key partitions the cache into millions of single-user shelves. Hit rate collapses, the origin takes full traffic, and everything looks 'fine' except the bills and the latency. Too-broad keys leak data; too-narrow keys destroy hit rate — this is the second failure."},
+        {"t": "API responses can never be cached; only static files can", "correct": false,
+         "why": "Plenty of API responses (public catalog data, trending lists) cache beautifully with the right key and TTL. The absolutism misses the real diagnosis — and the real fix: strip the cookie from the key for cacheable routes."}
+      ]
+    },
+    {
+      "id": "p1c07-q11", "level": 2, "type": "mcq", "tag": "ttl-invalidation",
+      "q": "Your web app deploys new CSS/JS daily. Users must get new versions promptly, but you want maximal caching. The standard senior answer:",
+      "options": [
+        {"t": "Content-hashed filenames (app.3f9a2c.css) served with a one-year immutable TTL", "correct": true,
+         "why": "Right — this is what every modern build pipeline does. Content changes → URL changes → every cache naturally fetches the new file. You get infinite TTL and instant updates simultaneously, because you never reuse a URL. Invalidation becomes a non-problem by design."},
+        {"t": "Set TTL to 60 seconds so updates propagate within a minute", "correct": false,
+         "why": "This works but tortures your origin: every minute, every edge re-checks every asset. You're trading away nearly all caching benefit to solve a problem that URL versioning solves for free."},
+        {"t": "Purge the CDN for all assets on every deploy so edges refetch everything fresh", "correct": false,
+         "why": "A daily global purge means a daily synchronized miss storm hitting your origin — a small self-inflicted outage drill. Purge is the emergency brake for mistakes, not a deploy step."},
+        {"t": "Disable CDN caching for CSS/JS since they change often", "correct": false,
+         "why": "'Changes daily' still means thousands of identical reads between changes. Giving up caching because content ever changes is surrendering to a problem that hashed filenames dissolve entirely."}
+      ]
+    },
+    {
+      "id": "p1c07-q12", "level": 2, "type": "mcq", "tag": "cdn-mechanics",
+      "q": "Your CDN hit rate slips from 99% to 96% during a traffic spike of 200K edge requests/sec. Origin impact?",
+      "options": [
+        {"t": "Origin traffic rises about 3%, matching the hit-rate drop", "correct": false,
+         "why": "The intuitive-but-wrong read. The origin doesn't see the 96% that hit — it sees only misses, and those quadrupled. Percentage-point changes in hit rate are multiplicative at the origin."},
+        {"t": "No impact — the CDN absorbs spikes regardless of hit rate", "correct": false,
+         "why": "The CDN absorbs exactly the hits. Every miss is a real origin request; a spike plus a hit-rate dip compounds into the origin's worst hour."},
+        {"t": "The CDN will queue misses to protect the origin automatically", "correct": false,
+         "why": "Edges collapse concurrent misses for the SAME key into one fetch, but they don't queue distinct misses to spare you. Origin protection beyond that is your job: capacity headroom, rate limits, and monitoring."},
+        {"t": "Origin traffic quadruples, from 2,000 to 8,000 req/s", "correct": true,
+         "why": "Yes. The origin sees misses, so think in miss rate: 1% → 4% is a 4x origin amplification from a '3-point dip'. This is why you alert on origin QPS and hit rate directly — small edge changes are large origin events."}
+      ]
+    },
+    {
+      "id": "p1c07-q13", "level": 2, "type": "mcq", "tag": "signed-urls",
+      "q": "You're building a paid video course platform. Videos are HLS streams — hundreds of small segment files each — served via CDN. How do you keep them subscriber-only?",
+      "options": [
+        {"t": "Obscure, unguessable URLs — practically nobody will find them", "correct": false,
+         "why": "Security by obscurity fails at the copy-paste: any subscriber can share a working link that never expires. Unguessable is not the same as unauthorized — there's no expiry and no revocation."},
+        {"t": "Signed cookies: one grant for /course-42/*, checked at the edge per segment request", "correct": true,
+         "why": "Right tool. One signature covers hundreds of segment fetches, validated at the edge with no origin round trip. Per-file signed URLs also work but mean rewriting every URL in the playlist and re-signing as players fetch — cookies fit the many-small-files shape."},
+        {"t": "Have your app servers proxy every video segment after checking auth", "correct": false,
+         "why": "This re-inserts your servers into the heavy byte path — the exact thing CDNs and presigned patterns exist to avoid. Video is your biggest bandwidth; proxying it means your fleet scales with watch time."},
+        {"t": "Skip the CDN for paid content and serve from the origin with auth checks", "correct": false,
+         "why": "Now every subscriber worldwide pays full geographic latency for the most latency-sensitive content you have (video startup), and your origin carries all the bandwidth. Signed cookies give you auth AND edge delivery."}
+      ]
+    },
+    {
+      "id": "p1c07-q14", "level": 2, "type": "mcq", "tag": "presigned",
+      "q": "In your presigned-upload flow, the mobile client calls POST /uploads/complete after uploading to S3, and your server then creates the metadata row. A teammate asks: 'What if the app crashes right after the S3 upload succeeds?' What's the robust design?",
+      "options": [
+        {"t": "Nothing needed — the client will retry when reopened", "correct": false,
+         "why": "Maybe — or the user uninstalls, or the retry re-uploads 3 MB needlessly. You'd be betting data integrity on client behavior you don't control. The server-side event costs nothing and removes the bet."},
+        {"t": "Have the server poll the bucket periodically for objects without metadata rows", "correct": false,
+         "why": "Works, but it's a reconciliation crutch as the primary path: minutes of lag and full-bucket LISTs that get expensive at scale. Event notifications push you the same fact instantly. (A slow reconciliation sweep as a backstop is fine.)"},
+        {"t": "Drive metadata creation from S3's object-created events, not the client's report", "correct": true,
+         "why": "Right. The storage system's own event is the ground truth that bytes landed; the client is a crash-prone, lying witness. Event-driven finalization means an orphaned object gets its row even when the app dies — and a client claim without a real object never creates a row."},
+        {"t": "Make the client upload through the app server instead, so the server always knows", "correct": false,
+         "why": "This 'fixes' a small consistency gap by re-proxying terabytes through your fleet — the problem presigned URLs exist to solve. Don't buy certainty at the price of your entire bandwidth win when an event subscription gets it free."}
+      ]
+    },
+    {
+      "id": "p1c07-q15", "level": 2, "type": "mcq", "tag": "multipart",
+      "q": "Users upload 20 GB video files from home connections that drop every few minutes. Which mechanism makes these uploads actually complete?",
+      "options": [
+        {"t": "Multipart upload: split into parts, retry only failed parts, resume across disconnects, assemble at the end", "correct": true,
+         "why": "This is the purpose-built tool. A drop costs one part, not 20 GB; parts upload in parallel for speed; and S3 requires it anyway above the 5 GB single-PUT cap. Pair it with a lifecycle rule that aborts abandoned sessions so half-uploaded parts don't bill you forever."},
+        {"t": "A single PUT with a very long timeout", "correct": false,
+         "why": "Two failures: S3 caps single PUTs at 5 GB, and a 99%-done drop restarts from zero — on a flaky link the upload may literally never finish. Timeouts don't fix restart-from-zero."},
+        {"t": "Gzip the video first so there's less to upload", "correct": false,
+         "why": "Video codecs already compressed those bytes; gzip gains roughly nothing. And even a smaller file still restarts from zero on a drop — the problem is resumability, not size."},
+        {"t": "Upload to your app server first, which then pushes to S3 over its stable connection", "correct": false,
+         "why": "The flaky first hop (user to server) is unchanged, so nothing is solved — and now 20 GB flows through your fleet too. The resumability has to live in the client-to-storage protocol itself."}
+      ]
+    },
+    {
+      "id": "p1c07-q16", "level": 2, "type": "mcq", "tag": "pipeline",
+      "q": "Instagram-style app: after upload, each photo needs four sizes generated. A teammate proposes resizing synchronously in the upload request handler — 'it's only 800 ms.' What's the strongest counterargument?",
+      "options": [
+        {"t": "800 ms is too slow; users won't wait", "correct": false,
+         "why": "Users wait multiple seconds for uploads routinely, and a local preview hides even that. The latency is survivable — the capacity coupling and failure handling are not. Naming the wrong cost invites the wrong fix (faster resize code)."},
+        {"t": "Resizing should happen on the client before upload, so servers never do the work", "correct": false,
+         "why": "Client-side generation of some sizes is a real optimization, but you can't trust client output (malformed variants, tampering), and you still want the original for future formats. It complements the pipeline; it doesn't replace it."},
+        {"t": "It's fine — four resizes at 800 ms is cheap enough to keep inline", "correct": false,
+         "why": "For photos at low volume, honestly, it can work — but it sets the architecture down a path that hard-fails at video (minutes of transcoding) and at spikes. The senior instinct is to keep slow, retryable work off the request path from the start."},
+        {"t": "Synchronous CPU work couples request capacity to resize capacity — the 9 pm rush degrades ALL requests", "correct": true,
+         "why": "The load-shape argument is the killer: 800 ms of CPU per upload × an evening spike saturates the fleet serving everything else. Decoupling via queue lets workers lag gracefully during spikes and redo work after crashes — the pipeline pattern exists precisely for this."}
+      ]
+    },
+    {
+      "id": "p1c07-q17", "level": 2, "type": "mcq", "tag": "blob-model",
+      "q": "A teammate proposes storing user avatars (~200 KB each, 10M users) as BYTEA columns in Postgres: 'They're small, and we get backups and replication for free.' Best response?",
+      "options": [
+        {"t": "Postgres can't store binary data", "correct": false,
+         "why": "It can (BYTEA, large objects) — that's what makes the proposal tempting. The argument against isn't capability, it's cost: DB storage, replication, and cache are premium resources wasted on unqueryable bytes."},
+        {"t": "That's 2 TB bloating every backup and replica for bytes we never query — S3 for the bytes, keys in the DB", "correct": true,
+         "why": "The full argument: 2 TB rides along in every backup, streams through every replication event, and competes with hot rows for RAM cache — while the query engine can do nothing useful with a JPEG. 'Free' backups of blob bytes are the most expensive free thing you'll ever get."},
+        {"t": "Fine for avatars since they're small; just don't do it for videos", "correct": false,
+         "why": "Small × 10 million = 2 TB, which is not small. The per-object size is a red herring; aggregate volume and the total absence of query benefit are what condemn the design. (And products grow: avatars today, cover photos tomorrow.)"},
+        {"t": "Agree — one system to operate is simpler than two, and the data is already replicated", "correct": false,
+         "why": "Operational simplicity is a real value, but this buys 'one system' by making that system worse at its actual job: slower queries (cache pollution), heavier failovers, hour-long backups. The metadata-in-DB, blob-in-store split exists because the costs are lopsided, not because engineers love extra systems."}
+      ]
+    },
+    {
+      "id": "p1c07-q18", "level": 2, "type": "mcq", "tag": "push-pull",
+      "q": "You're launching a product globally at a known instant: a game patch (8 GB) that 5 million players will download in the first hour. Pull CDN, push CDN behavior, or something else?",
+      "options": [
+        {"t": "Pull CDN with a long TTL — after the first miss per city it's all hits anyway", "correct": false,
+         "why": "Directionally true and usually fine — but at a synchronized launch, 'first miss per city' happens in hundreds of PoPs within the same seconds, each pulling 8 GB from your origin at once. Why let your biggest moment start with your biggest origin spike when you could fill caches the night before?"},
+        {"t": "Skip the CDN; use a fleet of beefy origin servers with huge bandwidth", "correct": false,
+         "why": "5M × 8 GB = 40 PB of delivery. Even a monster origin fleet serves it across oceans at painful latency and astronomical egress cost. Distributing 40 PB is precisely the job CDNs are built and priced for."},
+        {"t": "Pre-position (push) the patch to the edges before the launch moment", "correct": true,
+         "why": "Right. You know exactly what (one file), when (launch instant), and where (everywhere) — a predictable, synchronized global spike is the textbook push case. Pull would send the first wave in every city through to the origin simultaneously — a self-made miss storm at your most critical moment. Pre-warming turns launch into pure edge hits, which is exactly Netflix's nightly pre-positioning logic."},
+        {"t": "Email download links in randomized waves to spread the load", "correct": false,
+         "why": "Load-spreading has its place, but throttling your own launch to protect infrastructure is letting the tail wag the dog — and gamers will hammer refresh anyway. Fix the delivery architecture; keep the launch."}
+      ]
+    },
+    {
+      "id": "p1c07-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'A user in Jakarta taps a photo in your app. Walk me through the bytes.' Which walkthrough earns the senior grade?",
+      "options": [
+        {"t": "\"App requests a versioned variant URL; DNS lands it on a Jakarta-area edge — usually a hit in ~20 ms. On a miss the edge pulls from S3 and caches under a year-long immutable TTL. My servers never touch image bytes.\"", "correct": true,
+         "why": "Complete loop, correct mechanics, and the two senior tells: quantified hit behavior and the explicit observation that app servers are out of the byte path. It also names WHY the TTL can be a year (versioned, immutable keys) — mechanism, not vocabulary."},
+        {"t": "\"The request hits our API, which reads the image from S3 and returns it to the user; we'd also put a CDN in front of the API to cache the popular photos as an optimization.\"", "correct": false,
+         "why": "This buries the design error inside a fluent sentence: the API proxying image bytes means your fleet scales with image traffic. 'A CDN caches it too' bolted onto a proxy path suggests the candidate has the words but not the architecture."},
+        {"t": "\"CloudFront with an S3 origin, standard setup — honestly there's not much to say here, it's a solved problem these days.\"", "correct": false,
+         "why": "Correct component choice, zero demonstrated understanding. 'Solved problem' is exactly when the interviewer probes mechanics — TTLs, miss paths, invalidation — and 'not much to say' forfeits the chance to show you know what the solution actually does."},
+        {"t": "\"We'd check the Redis cache first, then the database, then S3, and finally return the photo to the user through the API response.\"", "correct": false,
+         "why": "This transplants the app-cache hierarchy onto a media path where it doesn't belong: Redis holding 3 MB JPEGs is the buffer-pool-pollution mistake wearing a different hat, and the geographic latency problem — the actual point — never gets addressed."}
+      ]
+    },
+    {
+      "id": "p1c07-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your image CDN config accidentally cached a private-album photo under a public cache key for ~40 minutes before an engineer caught it. Rank the response. What's the first move?",
+      "options": [
+        {"t": "Shorten the TTL so the cached copies expire quickly on their own", "correct": false,
+         "why": "TTL changes apply to FUTURE cache fills — the copies already sitting at 300 PoPs keep serving until their original TTL runs out. Waiting out a privacy exposure when a purge API exists is choosing slow on purpose."},
+        {"t": "Fix the cache-key config and redeploy so the mistake stops recurring", "correct": false,
+         "why": "Necessary, and second. But fixing the config does nothing about the copies already cached — they'll serve until expiry. Stopping the bleeding (purge) outranks preventing the next cut when private data is being served right now."},
+        {"t": "Assess first: check logs to see if anyone actually fetched it before acting", "correct": false,
+         "why": "Assessment-before-containment leaves the leak live while you investigate. Logs will still be there after the purge; the exposure window won't stop growing on its own. In incidents with active data exposure, contain first is the rule."},
+        {"t": "Purge the objects from every edge now, then rotate the URLs and audit edge logs", "correct": true,
+         "why": "Emergency brake first: every minute cached is more potential exposure, and purge is the only tool that acts globally in seconds-to-minutes. URL rotation prevents re-caching from links in the wild; the log audit determines actual exposure for disclosure decisions. Contain, then prevent, then assess — the Steam Christmas incident is the case study for why caching mistakes are privacy incidents."}
+      ]
+    },
+    {
+      "id": "p1c07-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Design review: a service stores generated PDF reports (300 KB avg, 50K/day) in S3 Standard forever. Reports are downloaded heavily for a week, occasionally for 90 days (contract requirement: retrievable instantly for 90 days), almost never after. An engineer proposes: 'Glacier Deep Archive after 7 days — it's 95% cheaper.' Your call?",
+      "options": [
+        {"t": "Approve — a 95% storage saving is far too large to leave on the table", "correct": false,
+         "why": "The percentage is real; the outage it causes is realer. A customer invoking the 90-day clause waits hours for a 'instant' document — a contract breach discovered by a customer. Storage classes encode access-latency promises, and this one breaks yours."},
+        {"t": "Reject: Deep Archive restores take hours, violating the 90-day instant-access clause", "correct": true,
+         "why": "The senior move is catching that a storage-class change is a PRODUCT-CONTRACT change: Deep Archive's hours-long restore breaks 'retrievable instantly.' The counter-proposal honors the constraint — and the closing instinct matters too: 50K/day × 300 KB ≈ 15 GB/day, so the absolute savings are small; engineering time might be the bigger cost."},
+        {"t": "Reject any tiering — storage is cheap, keep everything in Standard", "correct": false,
+         "why": "At THIS volume (~5.5 TB/year), defensible! But as a blanket principle it's how companies wake up with petabyte Standard bills. The graded skill is doing the volume math and matching tiers to measured access — not a slogan in either direction."},
+        {"t": "Approve, but move to Deep Archive at day 90 instead of day 7", "correct": false,
+         "why": "Closer — the contract is now honored. But it skips the IA middle tier (30–90 days of 'occasional' reads fit IA's instant-with-fee profile at half Standard's price) and, more importantly, skips checking whether the total savings justify any of this. Partial credit; a senior shows the numbers."}
+      ]
+    },
+    {
+      "id": "p1c07-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your whole media platform depends on S3. February 2017 showed S3 can go down for hours. What's your resilience story?' Which answer is senior-calibrated?",
+      "options": [
+        {"t": "\"Replicate every object to a second region and a second cloud provider — S3 clearly can't be trusted with our only serving path.\"", "correct": false,
+         "why": "Maximal redundancy without a cost or complexity acknowledgment reads as fear, not judgment. Cross-region doubles storage cost and cross-cloud doubles your ops surface; proposing both, unpriced, for a once-in-years event is the over-engineering tell. (Also: 11-nines durability was never the issue — availability was.)"},
+        {"t": "\"S3 has eleven nines of durability, so outages aren't a real concern.\"", "correct": false,
+         "why": "This confuses the two words the question is testing. Durability says your data survived; availability says you can reach it. February 2017 lost essentially no data and still broke half the internet for four hours — because availability, not durability, failed."},
+        {"t": "\"Uploads queue behind 'posting…'; reads mostly survive because the CDN keeps serving cached content through an origin outage. Multi-region waits for a business case.\"", "correct": true,
+         "why": "Degraded-mode thinking (what still works, what queues, what users see), the non-obvious insight that a CDN is itself an availability layer during origin outages (serve-stale is a real CDN feature), and a cost-justified decision NOT to build the maximal thing. Committing to less, with reasons, outranks promising everything."},
+        {"t": "\"I'd build our own object storage layer so we're not dependent on AWS.\"", "correct": false,
+         "why": "Trading a battle-tested dependency for the hardest infrastructure project in the catalog — S3 IS one of Part 3's design problems for a reason. 'Build it ourselves' as a resilience plan, without acknowledging the years and the team it costs, reads as never having priced it."}
+      ]
+    },
+    {
+      "id": "p1c07-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your photo pipeline works great at 2M uploads/day. The interviewer applies the 10x lever: 20M/day. What breaks first?",
+      "options": [
+        {"t": "S3 will hit its write capacity limit and start rejecting uploads", "correct": false,
+         "why": "20M/day ≈ 230 writes/sec average, maybe ~1K peak — S3 handles thousands of writes/sec per key prefix and scales beyond that automatically. Naming the most-scalable component as the bottleneck suggests estimating by vibes; the numbers clear S3 instantly."},
+        {"t": "The CDN will run out of edge cache space for 10x the photos", "correct": false,
+         "why": "Edges hold the hot working set, not your corpus; less-popular content simply gets evicted and refetched on demand. Hit rate may dip slightly at the long tail, but 'CDN runs out of space' misreads caches as storage."},
+        {"t": "Nothing — every component is cloud-managed and scales automatically with demand", "correct": false,
+         "why": "The worker fleet is yours, its autoscaling policy is yours, the DB metadata write rate is yours, and the bill is very much yours. 'The cloud handles it' at a 10x probe is the happy-path answer the question exists to catch — something always breaks first; the job is naming it."},
+        {"t": "The transcode workers: S3 and CDN absorb 10x, but the provisioned worker fleet falls behind", "correct": true,
+         "why": "The right instinct: at 10x, the managed, horizontally-infinite parts (S3 ingest, CDN egress) bend while your provisioned compute breaks. Scale workers on queue depth and add priority lanes — small avatars shouldn't wait behind 4K video. Naming those levers shows someone who has operated a pipeline, not just drawn one."}
+      ]
+    },
+    {
+      "id": "p1c07-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You inherit a system serving user-uploaded images at original resolution through the CDN — no variants. Mobile users on slow connections download 4 MB images for 300-pixel thumbnails. Two proposals: (A) backfill-generate four fixed sizes for all 500M existing images via the pipeline; (B) on-the-fly resizing at the edge/origin, cached by the CDN under the requested-size cache key. Your call?",
+      "options": [
+        {"t": "B: resize-on-request only pays for sizes actually requested, and the CDN amortizes each resize", "correct": true,
+         "why": "The insight that decides it: eager backfill (A) burns enormous compute generating variants nobody requests, while lazy generation is demand-proportional and CDN caching makes each size a one-time cost. Committing to B while naming its cost (first-hit latency, a resize service to run and protect) is the senior shape. A remains right for guaranteed-hot sets like recent uploads — saying that hybrid out loud is the flourish."},
+        {"t": "A — precomputing off the request path is always better than computing on it", "correct": false,
+         "why": "'Always' is doing unjustified work here. Precompute wins when access is likely; against a 500M-image long tail where most items are never viewed again, eager generation is a giant compute bill for variants nobody fetches. The access distribution, not a maxim, decides this."},
+        {"t": "Neither — have the mobile app downscale the image after downloading it", "correct": false,
+         "why": "The 4 MB has then already crossed the slow connection — the entire problem was the transfer, not the pixels on screen. Client-side downscaling after download solves nothing; the resize must happen before the bytes travel."},
+        {"t": "B, but skip the CDN caching so resizes are always fresh", "correct": false,
+         "why": "A resized thumbnail of an immutable image never goes stale — 'freshness' isn't a thing here. Uncached on-the-fly resizing means burning CPU on every single request forever; the CDN cache is precisely what makes lazy generation affordable. This takes the right idea and removes the part that makes it work."}
+      ]
+    },
+    {
+      "id": "p1c07-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Final probe: 'You've got the CDN, presigned uploads, the pipeline. What do you monitor, and what pages you at 3am?' The senior answer:",
+      "options": [
+        {"t": "\"Monitor CPU and memory on all servers, and alert if any exceed 80%.\"", "correct": false,
+         "why": "Host metrics can't see this system's real failures: a hit-rate collapse shows up in origin QPS long before origin CPU, and a growing transcode backlog happens while worker CPU sits at a healthy 100%. Infrastructure metrics without system-specific signals is monitoring's junior tell."},
+        {"t": "\"The CDN and S3 are managed services with their own SLAs — monitoring them is the vendor's job; I'd monitor only our own servers.\"", "correct": false,
+         "why": "The vendor monitors their service; nobody but you monitors YOUR configuration of it — the mis-set cache key, the expired signing key, the event notification that silently stopped firing. February 2017's lesson applies: your users experience your dependencies as you. SLAs are refunds, not uptime."},
+        {"t": "\"Page on origin request rate, queue-depth growth, and upload success rate; dashboards for hit rate, edge p99, transcode duration, storage growth.\"", "correct": true,
+         "why": "Concrete signals tied to THIS design's failure modes, split into page-worthy (user-facing or about-to-be) versus dashboard-worthy — the distinction that separates people who've been on call from people who list metrics. Origin QPS as the hit-rate canary and queue-depth GROWTH (not level) are the operator's choices."},
+        {"t": "\"Log everything and investigate when users report problems.\"", "correct": false,
+         "why": "Users-as-monitoring means your detection latency is 'however long until someone tweets at you' — and for silent failures like orphaned uploads, they may never report at all. Logs support diagnosis; alerts on chosen signals do detection. Waiting to be told is the operational version of waiting to be led."}
+      ]
+    }
+  ]
+}

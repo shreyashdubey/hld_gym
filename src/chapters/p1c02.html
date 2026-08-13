@@ -1,0 +1,257 @@
+<p>A user on a shaky metro connection taps "Pay ₹4,999" in your app. The spinner spins. Ten seconds. Timeout. Here's the ugly part: <em>you don't know what happened.</em> Maybe the request never reached your server. Maybe it arrived, charged the card, and the response died on the way back. The app can't tell the difference. Neither can the user — so they do what every human does with a frozen button. They tap it again.</p>
+
+<p>Now you may have charged them twice. Two bank SMS alerts, one angry screenshot, one support ticket. Meanwhile, a partner's integration broke overnight because someone on your team renamed a JSON field "nobody used." And your feed is quietly showing some users the same post twice on page two — but only when the feed is busy, so nobody can reproduce it.</p>
+
+<p>Three unrelated bugs? No. One bug, in three costumes. In each case an API behaved like a casual conversation when it needed to behave like a signed contract. An API is a promise you make to code you will never see, written by people you will never meet. Once someone integrates against it, you honor it for years — or you break strangers' software every time you "clean things up."</p>
+
+<p>This chapter is about writing promises you can keep. Interviewers probe this hard — Meta has an interview track that grades it explicitly — because API design is judgment made visible.</p>
+
+<h2>An API is a contract: resources and verbs</h2>
+
+<p>REST's core idea fits in one sentence: URLs name <strong>things</strong> (resources — nouns), and HTTP methods say <strong>what you're doing</strong> to them (verbs). <code>GET /orders/42</code> reads order 42. <code>POST /orders</code> creates one. <code>DELETE /orders/42</code> removes it. The URL never contains the verb — <code>/getUserOrders</code> and <code>/orders/42/delete</code> smuggle the action into the noun and throw away everything HTTP already gives you: caching for reads, safe retries for some verbs, uniform tooling.</p>
+
+<p>The table below is worth memorizing — especially the last two columns. <strong>Safe</strong> means the call changes nothing on the server. <strong>Idempotent</strong> means calling it five times has the same effect as calling it once. These decide which requests a client, proxy, or load balancer may automatically retry after a timeout.</p>
+
+<table>
+<thead><tr><th>Method</th><th>Meaning</th><th>Safe?</th><th>Idempotent?</th></tr></thead>
+<tbody>
+<tr><td><code>GET</code></td><td>Read a resource</td><td>Yes</td><td>Yes</td></tr>
+<tr><td><code>PUT</code></td><td>Replace the resource at this exact URL</td><td>No</td><td>Yes — replacing twice with the same thing is one replace</td></tr>
+<tr><td><code>DELETE</code></td><td>Remove it</td><td>No</td><td>Yes — deleting twice still leaves it deleted</td></tr>
+<tr><td><code>PATCH</code></td><td>Partially update</td><td>No</td><td>Not guaranteed</td></tr>
+<tr><td><code>POST</code></td><td>Create / trigger an action</td><td>No</td><td><strong>No</strong></td></tr>
+</tbody>
+</table>
+
+<p>Look at that last row. POST — the verb behind "create order," "send message," "charge card" — is the only one where a blind retry causes damage. Hold that thought; it comes back with money attached.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>An API is a wall socket. Every appliance in the country is molded to that exact plug shape by manufacturers who never met the electrician — useful precisely because it's boring, standardized, never surprising. Change the socket shape and you don't inconvenience people; you brick every device in the nation, which is why countries that switched plug standards kept old sockets working for decades. Where the analogy breaks: sockets stay frozen forever, but your API must grow. Evolving the socket without breaking old plugs is what versioning solves — we'll get there.</p>
+</div>
+
+<h2>Status codes are for machines, not decoration</h2>
+
+<p>A status code's first digit is a contract about <em>whose fault it was and what to do next</em>. <strong>2xx</strong>: it worked. <strong>4xx</strong>: the request is wrong — fix it before retrying, because the same request earns the same rejection. <strong>5xx</strong>: the server failed — the request may be fine, and a retry with backoff is reasonable. Retry logic, monitoring dashboards, load balancers, and CDNs all branch on that first digit without reading your body. That's the point: machines react correctly without understanding you.</p>
+
+<p>Within the classes, a dozen codes carry the meaning: <code>400</code> malformed request, <code>401</code> we don't know who you are, <code>403</code> we know exactly who you are and the answer is no, <code>404</code> no such resource, <code>409</code> conflict with current state, <code>422</code> well-formed but semantically invalid ("quantity: -3"), <code>429</code> slow down, <code>500</code> we crashed, <code>503</code> temporarily unable — try again shortly, <code>504</code> a server behind us timed out. Precision matters: <code>409</code> vs <code>500</code> is the difference between "don't retry, re-read the resource" and "retry with backoff."</p>
+
+<p>Which brings us to the cardinal sin: returning <code>200 OK</code> with <code>{"error": "not found"}</code> in the body. It feels harmless. It is sabotage. Monitoring reports a 0% error rate while users see failures. A CDN caches the "successful" error page. Client retry logic sees success and moves on. Every machine between you and the caller reads the status code, and you just lied to all of them.</p>
+
+<h2>Pagination: where naive APIs go to die</h2>
+
+<p>Nobody returns a million rows in one response, so every list endpoint pages. The obvious design is <strong>offset pagination</strong>: <code>GET /feed?page=3&amp;per_page=20</code>, translated to SQL as <code>LIMIT 20 OFFSET 40</code>. It's everywhere, and it has two failure modes that both get worse with success.</p>
+
+<p><strong>Failure one: it lies when data moves.</strong> Offset means "skip N rows from the top, counted right now." But a feed's top is a moving target. Between page one and page two, a new post lands on top — every row shifts down — and the last row of page one becomes the first row of page two. The user sees it twice. A deletion shifts everything up instead, and a row silently vanishes between pages. On a busy feed this isn't rare; it's constant.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Offset pagination returning a duplicate row after an insertion shifts the list">
+  <text class="dg-txt" x="40" y="28">T1 — page 1: offset=0, limit=3</text>
+  <rect class="dg-node-alt" x="40" y="44" width="180" height="30" rx="6"/><text class="dg-txt-s" x="52" y="64">A (newest)</text>
+  <rect class="dg-node-alt" x="40" y="80" width="180" height="30" rx="6"/><text class="dg-txt-s" x="52" y="100">B</text>
+  <rect class="dg-node-alt" x="40" y="116" width="180" height="30" rx="6"/><text class="dg-txt-s" x="52" y="136">C</text>
+  <rect class="dg-node" x="40" y="152" width="180" height="30" rx="6"/><text class="dg-txt-s" x="52" y="172">D</text>
+  <rect class="dg-node" x="40" y="188" width="180" height="30" rx="6"/><text class="dg-txt-s" x="52" y="208">E</text>
+  <line class="dg-edge" x1="240" y1="140" x2="440" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="252" y="126">new post N lands on top</text>
+  <text class="dg-txt" x="460" y="28">T2 — page 2: offset=3, limit=3</text>
+  <rect class="dg-node" x="460" y="44" width="180" height="30" rx="6"/><text class="dg-txt-s" x="472" y="64">N (new)</text>
+  <rect class="dg-node" x="460" y="80" width="180" height="30" rx="6"/><text class="dg-txt-s" x="472" y="100">A</text>
+  <rect class="dg-node" x="460" y="116" width="180" height="30" rx="6"/><text class="dg-txt-s" x="472" y="136">B</text>
+  <rect class="dg-bad" x="460" y="152" width="180" height="30" rx="6"/><text class="dg-txt-s" x="472" y="172">C — seen again!</text>
+  <rect class="dg-node-alt" x="460" y="188" width="180" height="30" rx="6"/><text class="dg-txt-s" x="472" y="208">D</text>
+  <rect class="dg-node-alt" x="460" y="224" width="180" height="30" rx="6"/><text class="dg-txt-s" x="472" y="244">E</text>
+  <text class="dg-txt-s" x="430" y="284">offset=3 now skips N, A, B — and re-serves C</text>
+</svg>
+<figcaption>One insertion between page requests shifts every row, so page 2 re-serves C. A deletion would do the reverse: silently skip a row.</figcaption>
+</figure>
+
+<p><strong>Failure two: it gets slower the deeper you go.</strong> <code>OFFSET 100000</code> doesn't teleport to row 100,001. The database walks 100,000 rows in index order and throws them away — every request. Cost grows linearly with depth: page 5,000 costs 5,000 times page one. A crawler walking your whole collection becomes a database load test you didn't schedule.</p>
+
+<p>The fix is <strong>cursor pagination</strong> (keyset pagination). Instead of "give me page 3," the client says "give me 20 items <em>after this exact position</em>" — the position being a cursor the server returned with the previous page: an opaque token, typically base64, wrapping the sort values of the last item, like <code>(created_at, id)</code>. The server turns it into <code>WHERE (created_at, id) &lt; (:ts, :id) ORDER BY created_at DESC, id DESC LIMIT 20</code>. That's an index seek: jump straight to the position, read 20 rows. Constant cost at any depth — and insertions above your position can't shift anything, because your bookmark is attached to an item, not a row count.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Offset pagination is finding your place in a loose-leaf binder by page number while someone keeps inserting pages at the front — "I was on page 12" is worthless once everything renumbers. A cursor is a physical bookmark clipped to a specific page: insert all you want in front of it, it still marks exactly where you stopped. The catch is real, though — a bookmark can't "jump to page 47." Cursors give up random access, which a feed never needed but a paged admin table does.</p>
+</div>
+
+<p>Two details make cursors production-grade. First, the sort key must be <strong>unique and stable</strong> — <code>created_at</code> alone has ties, and a cursor pointing into a tie skips or repeats rows; the fix is a compound key with a unique tie-breaker: <code>(created_at, id)</code>. Second, keep the cursor <strong>opaque</strong>. If clients can read <code>?after_id=812</code>, they'll construct their own, and your internal sort encoding becomes a public contract you can never change. Twitter's timeline API is the classic example: it paginates by tweet ID (<code>max_id</code>/<code>since_id</code>) because a timeline's top moves every second — and because Twitter's Snowflake IDs embed their creation time (newer tweet = bigger ID), the ID itself is a perfect cursor.</p>
+
+<div class="box story"><div class="box-tag">War story — Slack</div>
+<p>Slack's Web API originally paginated the obvious way: numbered pages backed by MySQL <code>LIMIT/OFFSET</code>. It worked — until Enterprise Grid brought customers with hundreds of thousands of users in one workspace. A deep page of a huge member list meant MySQL scanning and discarding enormous numbers of rows per request, and membership churn between requests drifted the page boundaries, duplicating or dropping users. Slack's engineers documented the move to cursor-based pagination on methods like <code>conversations.members</code>: responses return an opaque base64 <code>next_cursor</code> encoding the last item seen, and the next request resumes from an index seek at that position. Bounded cost at any depth, stable pages under churn — and an opaque cursor kept them free to change what's inside it. Their guidance to consumers became blunt: if an endpoint offers cursors, use them.</p>
+</div>
+
+<h3>Filtering and sorting: small feature, sharp edges</h3>
+
+<p>Filters and sorts ride in query parameters: <code>GET /orders?status=shipped&amp;sort=-created_at</code> (minus prefix = descending, a common convention). Two rules. <strong>Whitelist what's sortable and filterable</strong> — every sortable field promises an index; accept <code>sort=anything</code> and you've handed strangers a full-table-scan button on your primary database. <strong>Bind cursors to their sort</strong> — a cursor encodes a position within one specific ordering, so if the client changes sort or filters mid-walk, reject the stale cursor cleanly instead of returning garbage.</p>
+
+<h2>Idempotency keys: making retries safe when it matters most</h2>
+
+<p>Back to the double-charge. The root problem: a timeout is not an answer — it's the <em>absence</em> of one. After a timed-out POST, exactly one of three things is true: the request never arrived; it arrived and is still executing; it finished and the response was lost. The client cannot tell these apart from outside. Not retrying risks a lost order. Retrying risks a duplicate. GET, PUT, and DELETE escape the dilemma — idempotent, retry freely. POST is the problem child, and "charge this card" is a POST.</p>
+
+<p>The fix: make POST idempotent by hand. The client generates a unique <strong>idempotency key</strong> — a random UUID — for each <em>logical operation</em> (this checkout, this transfer) and sends it as a header: <code>Idempotency-Key: 8e03978e-40d5-...</code>. Crucially, retries reuse the <em>same</em> key; a fresh key per attempt would defeat the whole mechanism. Server side: if the key is new, record it, execute, and store the response (status and body) against the key. If the key has been seen and the operation finished, skip execution and replay the stored response, byte for byte. Now a timed-out payment can be retried with zero fear: either the first attempt never landed and this one executes, or it landed and the client gets the original receipt back. Both paths end in exactly one charge.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Idempotency key flow: response lost, retry replays stored response without a second charge">
+  <rect class="dg-node" x="60" y="20" width="130" height="40" rx="8"/><text class="dg-txt" x="90" y="45">Client</text>
+  <rect class="dg-node" x="530" y="20" width="130" height="40" rx="8"/><text class="dg-txt" x="548" y="45">API server</text>
+  <line class="dg-edge" x1="125" y1="60" x2="125" y2="280" stroke-dasharray="4 4"/>
+  <line class="dg-edge" x1="595" y1="60" x2="595" y2="280" stroke-dasharray="4 4"/>
+  <line class="dg-edge" x1="125" y1="95" x2="595" y2="95" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="170" y="85">POST /charges — Idempotency-Key: k1</text>
+  <text class="dg-txt-s" x="440" y="120">charge once; store k1 → (201, body)</text>
+  <line class="dg-bad" x1="595" y1="140" x2="380" y2="140" stroke-dasharray="6 4"/>
+  <text class="dg-txt-s" x="270" y="132">response lost — timeout ✕</text>
+  <line class="dg-edge" x1="125" y1="195" x2="595" y2="195" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="170" y="185">retry: same body, same key k1</text>
+  <line class="dg-edge" x1="595" y1="240" x2="125" y2="240" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="170" y="262">k1 already done → replay stored 201. One charge total.</text>
+</svg>
+<figcaption>The key turns "did it land? who knows" into "safe to retry forever." At most one execution per key; every retry gets the original response.</figcaption>
+</figure>
+
+<p>The edge cases are where interviews (and production) are won. <strong>Retry races the original mid-execution:</strong> lock on the key; the duplicate gets a conflict error ("in flight, retry shortly"), never a second execution. <strong>Same key, different body:</strong> a client bug — reject loudly rather than replay a response to a different question. <strong>Storage:</strong> the key record and the operation's effect must commit atomically — same database transaction — or a crash between "charged the card" and "stored the key" reopens the exact hole you were closing. Keys get a TTL so the store doesn't grow forever; a day comfortably outlasts any sane retry window. Chapter 2.2 goes deeper into exactly-once and ledgers; this header pattern is the API-facing half.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>It's a wire transfer with a reference number. "Transfer ₹50,000, reference RENT-MARCH" — and the phone line dies before you hear a confirmation. You call back and repeat the reference. The teller doesn't blindly send again; they check first: "That went through at 2:14, here's your confirmation." Sent once, however many times the line drops, because the reference names <em>the operation</em>, not the phone call — which is exactly why retries must reuse the key. A new reference per call would look like a new transfer.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Stripe</div>
+<p>Stripe moves payments over the public internet, where timeouts aren't an edge case — they're weather. So idempotency keys have been first-class in their API for over a decade, and their design is the reference implementation everyone copies. Clients send an <code>Idempotency-Key</code> header (docs recommend a random V4 UUID) on POSTs. Stripe saves the status code and body of the first request made with a key — <em>whether it succeeded or failed</em> — and replays that saved result for every later request with the same key, so a client retrying into an error sees the same error, not a confusing second outcome. Keys are pruned after 24 hours. Reuse a key with different parameters and Stripe rejects it rather than guess which request you meant; a retry racing the original mid-flight is refused with a conflict. Their engineering writing pushed the pattern into the wider industry — it's now an IETF draft header — and it's why "how do clients safely retry payments?" has a canonical answer you're expected to know cold.</p>
+</div>
+
+<h2>Versioning: v1 forever is the real answer</h2>
+
+<p>Everyone frames versioning as a syntax debate — version in the URL (<code>/v2/orders</code>) or in a header (<code>Api-Version: 2024-06-01</code>)? URL versions are visible, trivially routable, cache-friendly; header versions keep URLs stable and allow per-request pinning. Fine. But that's the small question. The big one: <em>when do you get to turn v1 off?</em> The honest answer is approximately never. Somewhere, a cron job written in 2019 by a contractor who left in 2020 is calling your v1 endpoint, and it will keep calling until the company running it dies. Announce a shutdown date and you'll discover how many of your biggest customers are that cron job.</p>
+
+<p>Accept "v1 is forever" and strategy inverts: the cheapest version to support is the one you never had to create, so the real game is <strong>evolving without breaking</strong>. Additive changes are safe: new endpoints, new optional request fields, new response fields — provided your docs order clients to ignore unknown fields. Breaking changes — renaming or removing a field, changing a type or a meaning — are the expensive ones. Most "we need v2" moments are actually "we want to rename things" moments; the senior move is to add the new field beside the old, deprecate the old, and swallow the aesthetic discomfort. You sweat v1's field names <em>because</em> they're permanent.</p>
+
+<div class="box story"><div class="box-tag">War story — Stripe's date-pinned versions</div>
+<p>Stripe took "v1 forever" to its logical extreme. Versions are dates — the day a breaking change shipped — and every account is pinned to whatever version was current at its first API call. A 2016 integration still sees 2016-shaped responses today, no action required; you upgrade deliberately, and can test newer versions per-request via a <code>Stripe-Version</code> header. The engineering that makes decades of versions affordable: each breaking change is a small, self-contained <em>version change module</em> declaring how to transform requests and responses across that one boundary. Core code targets only the current version; a pinned-2016 request is walked forward through each module on the way in, and the response walked backward through the same chain into 2016 shape on the way out. Supporting an old version costs a stack of tiny transformations, not a fork of the codebase — which is why Stripe can afford a promise most companies can't.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Version change modules translating between an old pinned client and current core code">
+  <rect class="dg-node" x="20" y="95" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="38" y="118">Client pinned to</text><text class="dg-txt" x="38" y="136">2019-02-19</text>
+  <rect class="dg-zone" x="220" y="70" width="300" height="110" rx="10"/>
+  <text class="dg-txt-s" x="238" y="62">version-change modules</text>
+  <rect class="dg-node-alt" x="238" y="98" width="80" height="50" rx="6"/><text class="dg-txt-s" x="250" y="127">2020</text>
+  <rect class="dg-node-alt" x="330" y="98" width="80" height="50" rx="6"/><text class="dg-txt-s" x="342" y="127">2022</text>
+  <rect class="dg-node-alt" x="422" y="98" width="80" height="50" rx="6"/><text class="dg-txt-s" x="434" y="127">2024</text>
+  <rect class="dg-node" x="550" y="95" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="566" y="118">Core code:</text><text class="dg-txt" x="566" y="136">latest only</text>
+  <line class="dg-edge" x1="190" y1="110" x2="550" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="550" y1="140" x2="190" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="250" y="212">request upgraded module by module → core sees today's shape</text>
+  <text class="dg-txt-s" x="250" y="232">response downgraded back through the chain → client sees 2019's shape</text>
+</svg>
+<figcaption>Old versions cost a chain of tiny transformations, not a fork. Core logic never learns old shapes exist.</figcaption>
+</figure>
+
+<h2>Rate limits: saying no politely, by machine</h2>
+
+<p>Every public API eventually meets a client in a hot retry loop — buggy, greedy, or malicious, the traffic looks identical. The contract for refusing is <code>429 Too Many Requests</code>, plus headers that let well-behaved clients avoid the wall entirely: <code>X-RateLimit-Limit</code> (your quota), <code>X-RateLimit-Remaining</code>, <code>X-RateLimit-Reset</code> (when it refills), and on the 429 itself, <code>Retry-After</code> — the trio GitHub's API popularized. Clients hold up their end with exponential backoff plus <strong>jitter</strong>: randomness in retry delays, so a thousand rejected clients don't all return in the same instant like a synchronized battering ram. Never answer a 429 with an instant retry. The algorithms behind the limits get their own chapter (1.12).</p>
+
+<h2>Error bodies: design them like a feature</h2>
+
+<p>The status code says <em>what class</em> of failure; the body must say <em>which</em> failure and what to do. A good error body is boringly consistent across every endpoint:</p>
+
+<pre><code>{
+  "error": {
+    "code": "card_declined",
+    "message": "Your card was declined. Try another payment method.",
+    "request_id": "req_7f3aa81b2c",
+    "param": "payment_method"
+  }
+}</code></pre>
+
+<p>Each field has a job. <code>code</code> is machine-readable and <strong>stable</strong> — clients write <code>if code == "card_declined"</code> branches against it, making it part of your contract; renaming a code is a breaking change. <code>message</code> is for humans and may be reworded freely — clients must never parse it. <code>request_id</code> is the underrated hero: it appears in the response <em>and</em> your logs, so "it failed, here's the ID" turns support archaeology into one log query. RFC 9457 ("problem details") standardizes a similar shape if you'd rather adopt a spec. And never leak stack traces — a security disclosure wearing a debugging costume.</p>
+
+<h2>Webhooks: your API in reverse</h2>
+
+<p>So far the client asks and you answer. But "tell me when the payment settles" shouldn't mean polling <code>GET /payments/42</code> every five seconds forever. A <strong>webhook</strong> flips the arrow: the consumer registers a URL, and you POST events to it — <code>payment.succeeded</code>, <code>order.shipped</code> — as they happen. Now <em>you're</em> the client, calling servers you don't control over the same unreliable internet, and the receiving side is where integrations quietly rot.</p>
+
+<p>Providers deliver <strong>at-least-once</strong>: no 2xx back means retry, on a backoff schedule — Stripe keeps retrying for days. That one fact dictates all four receiver duties. <strong>One: verify the signature.</strong> A webhook URL is a public door; anyone can POST fake "payment succeeded" events at it. Providers sign each payload with a shared secret (an HMAC in a header) — check it before believing anything. <strong>Two: acknowledge fast.</strong> Return 200 the moment the event is durably queued; process afterward. Heavy work inline means timeouts, which mean retries, which repeat the heavy work — a retry storm you built yourself. <strong>Three: dedupe.</strong> Every event carries an ID (<code>evt_...</code>); keep a table of processed IDs and skip repeats — idempotency keys again, arriving from the other direction. <strong>Four: never trust arrival order.</strong> Retries and parallel delivery mean <code>order.shipped</code> can land before <code>order.created</code>. The robust pattern: treat the event as a doorbell, not a database — on receipt, fetch the resource's current state from the API instead of replaying event payloads into your tables.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Webhook receiver: verify, ack fast, queue, dedupe, then process">
+  <rect class="dg-node" x="20" y="40" width="150" height="48" rx="8"/><text class="dg-txt" x="42" y="68">Provider</text>
+  <rect class="dg-node-alt" x="280" y="40" width="180" height="48" rx="8"/><text class="dg-txt" x="298" y="62">Your endpoint</text><text class="dg-txt-s" x="298" y="79">verify sig → 200 fast</text>
+  <rect class="dg-node" x="550" y="40" width="150" height="48" rx="8"/><text class="dg-txt" x="596" y="68">Queue</text>
+  <rect class="dg-node" x="550" y="180" width="150" height="48" rx="8"/><text class="dg-txt" x="592" y="208">Worker</text>
+  <rect class="dg-node" x="280" y="180" width="180" height="48" rx="8"/><text class="dg-txt-s" x="296" y="202">processed event IDs</text><text class="dg-txt-s" x="296" y="218">seen evt_42? skip</text>
+  <line class="dg-edge" x1="170" y1="64" x2="280" y2="64" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="178" y="54">evt_42 signed</text>
+  <line class="dg-edge" x1="460" y1="64" x2="550" y2="64" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="472" y="54">enqueue</text>
+  <line class="dg-edge" x1="625" y1="88" x2="625" y2="180" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="550" y1="204" x2="460" y2="204" marker-end="url(#arrow)"/>
+  <line class="dg-bad" x1="170" y1="100" x2="280" y2="100" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="60" y="130">no 2xx? retries: 1m, 5m, 30m… for days</text>
+  <text class="dg-txt-s" x="280" y="270">at-least-once delivery makes dedupe mandatory, not defensive</text>
+</svg>
+<figcaption>Acknowledge before processing, dedupe before acting. The dashed arrow is the provider's promise to hammer you until you say 200.</figcaption>
+</figure>
+
+<h2>gRPC and protobuf: when the caller is your own service</h2>
+
+<p>Everything above assumed strangers calling over the public internet, where JSON-over-HTTP earns its keep: human-readable, curl-able, callable from any browser. But when service A calls service B <em>inside your own walls</em> ten thousand times a second, those virtues invert. Nobody reads those payloads — but every one pays JSON's tax: verbose text on the wire, real CPU burned parsing it. At internal volumes, that tax lands on your cloud bill.</p>
+
+<p><strong>gRPC</strong> — Google's open-sourced descendant of Stubby, the RPC framework behind their internal fleet — is the standard answer. Contracts live in <code>.proto</code> files: declare messages and methods once, and a compiler generates typed client and server code in every language your company speaks, so a mistyped field name becomes a compile error instead of a 3am incident. On the wire, <strong>protobuf</strong> encodes messages in compact binary — several times smaller than JSON, far cheaper to parse. Underneath, HTTP/2 multiplexes many concurrent calls over one long-lived connection and streams in both directions. <strong>Deadline propagation</strong> deserves special mention: a request's remaining time budget travels down the call chain, so when the user has already given up, the fifth service downstream stops working on a corpse. The honest trade-off: you lose curl-ability and easy browser access (grpc-web needs a proxy). Hence the boring, correct rule: <strong>REST at the edge, gRPC inside</strong>.</p>
+
+<p>And GraphQL? One honest paragraph. Facebook built it because mobile screens needed deeply nested, screen-specific data — a post with author, first three comments, each with likes — and REST forced either N round trips or bloated one-size-fits-all responses. GraphQL lets each client ask for exactly the fields it needs from one endpoint — genuinely valuable when you have <em>many diverse clients with fast-changing needs</em> and a platform team to own the schema. The bill: HTTP caching mostly stops working (every query is a POST), rate limiting must become query-cost analysis because one nested query can be a thousand database hits, and naive resolvers breed N+1 query storms (fetch a list in one query, then fire one more query per item). For two internal services with stable needs it's over-engineering — say so in the interview, and say what would change your mind.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Meta's Product Architecture track grades API design as an explicit rubric line, and the grading principle is: <strong>client needs drive the shape</strong>. Strong candidates start from the screens — "the feed view needs post, author, like count, and a page of comments" — and derive endpoints, fields, and pagination from that, rather than decorating a database schema with URLs. Then they volunteer the unhappy paths — timeouts, retries, evolution — without being dragged there. Expect probes like:</p>
+<ul>
+<li>"Walk me through the exact request and response for opening the feed — fields, pagination, and what an error looks like."</li>
+<li>"This POST times out on mobile. What does the client do, and what did you design server-side to make that safe?"</li>
+<li>"Two years from now this response shape has to change. How does that roll out without breaking old app versions still in the wild?"</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c02-f1">
+<p class="fey-prompt">Explain to a junior engineer, in four or five sentences, why a timed-out payment request is dangerous to retry — and how an idempotency key makes the retry safe.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A timeout doesn't mean the request failed — it means you never heard the answer, so the charge may or may not have happened. Retry blindly and you risk charging the customer twice; don't retry and you risk losing the order. So the app generates one random key for the whole operation and sends it as a header on every attempt, including retries. The server remembers each key it has completed, along with the response it sent: a new key executes normally, while a repeated key skips execution and replays the saved response. Either way the charge happens exactly once, so the client can retry as often as the network demands, without fear.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Design the pagination for a comments API on a busy post (thousands of new comments per hour), newest first. Specify the request, the response shape, the underlying query, and one sentence on why not offset.</p></div>
+<details><summary>Answer</summary><p>Request: <code>GET /posts/42/comments?limit=20&amp;cursor=eyJ0cyI6...</code> (cursor omitted on the first page). Response: the items, plus an opaque base64 <code>next_cursor</code> encoding the last item's <code>(created_at, id)</code>, plus <code>has_more</code>. Query: <code>WHERE post_id = 42 AND (created_at, id) &lt; (:ts, :id) ORDER BY created_at DESC, id DESC LIMIT 20</code>, backed by an index on <code>(post_id, created_at, id)</code> — the <code>id</code> tie-breaker prevents duplicates and skips when comments share a timestamp. Why not offset: constant insertions shift row positions, so offset pages repeat and skip comments — and deep offsets scan-and-discard linearly while the cursor's index seek stays constant-cost.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Code review this API sketch and list every sin with its fix: (a) <code>GET /getUser?id=5</code> returns <code>200</code> with body <code>{"error": "user not found"}</code>; (b) <code>POST /users/5/delete</code>; (c) the activity feed uses <code>?page=3</code>; (d) the versioning plan is "we'll just update the API and email the partners."</p></div>
+<details><summary>Answer</summary><p>(a) Two sins: a verb in the URL, and a lie in the status code — make it <code>GET /users/5</code> returning <code>404</code> with a structured error body; the 200-wrapped error blinds monitoring, poisons caches, and fools retry logic. (b) <code>DELETE /users/5</code> — which also makes the operation officially idempotent, so clients may safely retry it after a timeout. (c) An activity feed is high-churn, so page numbers duplicate and skip items as rows shift — use cursor pagination over <code>(created_at, id)</code>. (d) "Update and email" is a breaking change with extra steps; evolve additively (add fields, never rename or remove), tell clients to ignore unknown fields, and reserve explicit version pins for the rare true break — with the old version kept alive effectively forever.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A client POSTs a transfer with idempotency key <code>k1</code> and times out. Enumerate the three possible server-side states at that moment, then give the server's correct behavior for a <code>k1</code> retry in each — plus the fourth case: <code>k1</code> arrives with a different request body.</p></div>
+<details><summary>Answer</summary><p>State 1 — never arrived: no record of <code>k1</code>, so the retry executes as a first attempt. State 2 — still executing: <code>k1</code> is recorded with no stored response; return a conflict ("in flight, retry shortly") — never start a second execution. State 3 — completed, response lost: replay the stored status and body verbatim, executing nothing. Fourth case: same key, different body is a client bug — reject with an explicit error, never replay, because the stored response answers a different question. Bonus point worth saying aloud: the key record must commit in the same transaction as the transfer, or a crash between them reopens the double-execution hole.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your public API returns <code>"amount": 49.99</code> — rupees as a float — and floating-point rounding is causing real accounting bugs. You want integer paise. Thousands of integrations depend on the current field. Ship the fix without breaking anyone.</p></div>
+<details><summary>Answer</summary><p>Additive migration: add <code>"amount_paise": 4999</code> beside the old field and keep both indefinitely. Deprecate <code>amount</code> in docs and SDKs, nudge laggards from the dashboard — but never remove it on a timeline you merely announced; the 2019 cron jobs don't read email. With date-pinned versioning, Stripe-style, you can additionally drop the float field from new-version responses via a version-change transform, so new integrations start clean while pinned ones stay whole. The junior answer is "rename it in v2, sunset v1 in six months"; the senior answer knows v1's sunset date is approximately never, so it makes the old contract harmless instead of trying to kill it.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Sketch a webhook receiver for a payment provider sending ~200 events/sec, with occasional retry storms when your endpoint has a bad minute. Components, and the three metrics that page you?</p></div>
+<details><summary>Answer</summary><p>The endpoint does exactly three things inline: verify the HMAC signature, write the raw event to a durable queue, return 200 — a few milliseconds, so provider timeouts (and thus retry storms) mostly can't start. Workers consume the queue, check each <code>event_id</code> against a processed-IDs table (insert-if-absent, atomic with the side effect), skip duplicates, and treat events as doorbells — fetching current state from the provider's API rather than trusting payload order. Page on: queue depth (workers falling behind — the early-warning signal), endpoint non-2xx rate (you're triggering the provider's retry schedule), and duplicate rate (a spike means acks aren't landing). The classic failure to name aloud: processing inline → slow responses → provider timeouts → retries pile onto an already-slow endpoint → a self-inflicted DDoS from your own payment provider.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>An API is a long-term contract with code you'll never see — design every field name and status code as if you'll support it for a decade, because you will.</li>
+<li>URLs name resources, methods supply the verbs, and status-code classes tell machines whose fault a failure was and whether to retry; returning 200 with an error body sabotages every machine in the chain.</li>
+<li>Offset pagination breaks twice — duplicated and skipped rows when data shifts under it, and linearly growing cost with depth — while an opaque cursor over a unique compound key gives stable pages at constant cost.</li>
+<li>A timeout is the absence of an answer, not a failure; idempotency keys make POST retries safe by executing at most once per key and replaying the stored response, with the key committed atomically alongside the operation.</li>
+<li>The real versioning question is when you can turn v1 off — effectively never — so evolve additively, sweat v1's names, and reserve version pins (Stripe's date-pinning is the gold standard) for rare true breaks.</li>
+<li>Rate-limit refusals are a contract too: 429 plus Retry-After and quota headers, honored by clients with exponential backoff and jitter.</li>
+<li>Webhook receivers live by four rules — verify the signature, ack fast then process async, dedupe by event ID, never trust event order — because at-least-once delivery makes duplicates a promise.</li>
+<li>REST at the edge, gRPC inside: protobuf and HTTP/2 pay off between your own services, while GraphQL earns its complexity only with many diverse clients and a team to own the graph.</li>
+</ul>
+</div>

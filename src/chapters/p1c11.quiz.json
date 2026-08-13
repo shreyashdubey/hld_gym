@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c11",
+  "items": [
+    {
+      "id": "p1c11-q01", "level": 1, "type": "mcq", "tag": "sync-async",
+      "q": "What's the test for deciding whether a piece of work belongs in the synchronous request path?",
+      "options": [
+        {"t": "If this step silently took ten minutes, would the response become a lie?", "correct": true,
+         "why": "Right. 'Order confirmed' depends on the charge succeeding, so the charge is sync. The confirmation email arriving late harms nobody, so it's async. The response's honesty is the boundary."},
+        {"t": "Whether the step takes longer than about 100 ms to complete", "correct": false,
+         "why": "Duration is a clue but not the rule. A 900 ms card charge stays sync because the response depends on it; a 5 ms analytics write can go async because it doesn't."},
+        {"t": "Whether the step calls a third-party API instead of your own code", "correct": false,
+         "why": "Third-party calls are often good async candidates, but the card charge is also a third-party call and must stay sync. What decides is dependence, not ownership."},
+        {"t": "Whether the step writes to the database or only reads from it", "correct": false,
+         "why": "Writes appear on both sides: the order row write is sync (confirming an unrecorded order is a lie), the analytics write is async. The database is not the dividing line."}
+      ]
+    },
+    {
+      "id": "p1c11-q02", "level": 1, "type": "mcq", "tag": "anatomy",
+      "q": "In queue anatomy, what does the broker actually do?",
+      "options": [
+        {"t": "Stores messages durably in the gap between producers and consumers", "correct": true,
+         "why": "Yes. The broker is the durable buffer — on disk, usually replicated — so neither side depends on the other being up or fast. That gap buys decoupling in time, rate, and failure."},
+        {"t": "Executes the work described in each message on behalf of consumers", "correct": false,
+         "why": "That's the consumer's job. The broker never opens the envelope — it just holds and hands over messages. Doing the work is exactly what it must NOT do."},
+        {"t": "Load-balances synchronous requests across the application servers", "correct": false,
+         "why": "That's a load balancer (Chapter 1.5). A load balancer forwards live requests that a client is waiting on; a broker stores messages nobody is waiting on."},
+        {"t": "Converts messages between producer and consumer data formats", "correct": false,
+         "why": "Format agreement is between producer and consumer (schemas help). The broker treats the payload as opaque bytes — that ignorance is what keeps it general."}
+      ]
+    },
+    {
+      "id": "p1c11-q03", "level": 1, "type": "mcq", "tag": "pubsub",
+      "q": "What's the core difference between a point-to-point work queue and pub/sub?",
+      "options": [
+        {"t": "Work queue: each message goes to exactly one consumer; pub/sub: every subscriber gets a copy", "correct": true,
+         "why": "Exactly. 'Resize this image' should happen once, by whoever's free — work queue. 'Order 8213 was placed' should reach email, warehouse, analytics, and fraud independently — pub/sub fan-out."},
+        {"t": "Work queues store messages durably on disk; pub/sub is fire-and-forget with no persistence", "correct": false,
+         "why": "Both can be fully durable — Kafka topics are pub/sub and famously durable. Durability is a property of the broker, not of the delivery pattern."},
+        {"t": "Pub/sub delivers faster because it skips per-message acknowledgments", "correct": false,
+         "why": "Pub/sub systems use acks (or committed offsets) too. The difference is who receives each message — one competing worker vs every subscriber — not speed or ack mechanics."},
+        {"t": "Work queues belong in microservice architectures; pub/sub belongs in monoliths", "correct": false,
+         "why": "Architecture style is orthogonal. A monolith can publish events; microservices use plain work queues constantly. Choose by whether one action or many independent reactions are needed."}
+      ]
+    },
+    {
+      "id": "p1c11-q04", "level": 1, "type": "mcq", "tag": "delivery",
+      "q": "Why does at-least-once delivery produce duplicate messages?",
+      "options": [
+        {"t": "The broker can't tell a crash after the work from a crash before it, so it plays safe and redelivers", "correct": true,
+         "why": "Right — this is the unsolvable puzzle at the heart of the chapter. Unacked could mean 'never processed' or 'processed, ack lost.' Redelivering trades possible duplicates for never losing work."},
+        {"t": "Network routers and switches duplicate packets when they are under load", "correct": false,
+         "why": "TCP handles packet-level duplication below your queue. Message duplication happens at the application layer, from the broker deliberately redelivering unacknowledged messages."},
+        {"t": "Producer-side bugs make applications accidentally publish the same message twice", "correct": false,
+         "why": "Producer retries are a real second source of duplicates (a publish whose confirmation was lost gets resent), but the defining mechanism of at-least-once is broker redelivery after a missing ack."},
+        {"t": "The broker copies each message to several nodes for replication, and consumers see the copies", "correct": false,
+         "why": "Replication copies messages across broker nodes for durability — consumers still see one logical message. Duplicates come from redelivery after ack loss, not from replicas."}
+      ]
+    },
+    {
+      "id": "p1c11-q05", "level": 1, "type": "mcq", "tag": "visibility",
+      "q": "A consumer receives a message from a queue with a visibility timeout. What happens to the message?",
+      "options": [
+        {"t": "It's hidden from other consumers for the window, and reappears if no ack arrives in time", "correct": true,
+         "why": "Correct — the library-loan model. Invisible-but-not-deleted is what makes at-least-once work: only the ack deletes it for good, and a crashed consumer's message automatically comes back for someone else to try."},
+        {"t": "It's deleted from the queue immediately — the consumer that received it now owns it", "correct": false,
+         "why": "Delete-on-read would be at-most-once: a consumer crash after delivery loses the message forever. Deletion must wait for the ack that says the work is done."},
+        {"t": "It's copied to the consumer but stays visible to all the others as a safety net", "correct": false,
+         "why": "Then every message would be processed by many workers at once — duplicates by design. The invisibility window exists precisely to prevent that during normal processing."},
+        {"t": "It stays locked to that consumer until the consumer explicitly releases it, however long that takes", "correct": false,
+         "why": "A permanent lock plus a crashed consumer equals a message stuck for eternity. The timeout is the escape hatch: no ack within the window means the broker reclaims it."}
+      ]
+    },
+    {
+      "id": "p1c11-q06", "level": 1, "type": "mcq", "tag": "dlq",
+      "q": "What problem does a dead-letter queue solve?",
+      "options": [
+        {"t": "It quarantines a message that fails every attempt, instead of retrying it forever", "correct": true,
+         "why": "Yes. Retry loops are correct for transient failures but catastrophic for deterministic ones — a poison message would burn workers and block the queue indefinitely. After the max receive count, it moves to quarantine with its history, and the main queue flows again."},
+        {"t": "It stores messages from producers that have crashed, until they come back", "correct": false,
+         "why": "Producer crashes don't need a special queue — messages already sent are safely in the main queue. The DLQ is about messages that consumers repeatedly fail to process."},
+        {"t": "It keeps a backup copy of every message that flows through, for disaster recovery", "correct": false,
+         "why": "That's replication (and retention), handled inside the broker. The DLQ holds only the few messages that exceeded their retry budget — it's a quarantine ward, not a backup."},
+        {"t": "It's where the broker parks messages marked with the lowest priority level", "correct": false,
+         "why": "Priority queues are a separate feature. 'Dead-letter' means undeliverable-after-retries, borrowed from postal dead letters — mail that couldn't be delivered — not 'less important.'"}
+      ]
+    },
+    {
+      "id": "p1c11-q07", "level": 1, "type": "mcq", "tag": "delivery",
+      "q": "What does 'exactly-once' honestly mean in practice for a consumer that touches external systems (email APIs, card charges)?",
+      "options": [
+        {"t": "At-least-once delivery paired with idempotent processing on the consumer side", "correct": true,
+         "why": "Right. Exactly-once delivery across a network to an arbitrary system is impossible — the crashed-before-or-after puzzle has no answer. What you can build is duplicate-tolerant consumers: check the message ID, make the second run a no-op."},
+        {"t": "The broker itself guarantees each message reaches the consumer exactly one time, end to end", "correct": false,
+         "why": "No broker can promise this to arbitrary external systems — it can't know whether a silent consumer processed the message or died first. Believing this claim is how duplicate charges ship to production."},
+        {"t": "A wire protocol that detects and eliminates duplicate messages on the network", "correct": false,
+         "why": "The duplicates aren't a network artifact — they're deliberate broker redelivery after a missing ack. No wire protocol fixes a broker that must guess whether work happened."},
+        {"t": "A visibility timeout set high enough that redelivery never fires in practice", "correct": false,
+         "why": "A longer timeout reduces false redelivery of slow jobs but does nothing about real crashes after the work is done — that ack is still lost, and redelivery still happens. Timeouts tune liveness, not exactness."}
+      ]
+    },
+    {
+      "id": "p1c11-q08", "level": 1, "type": "mcq", "tag": "scaling",
+      "q": "A Kafka topic has 12 partitions. What limits how many consumers in one consumer group can do useful work?",
+      "options": [
+        {"t": "12 — one consumer per partition, so a 13th consumer would sit idle", "correct": true,
+         "why": "Correct. Each partition is assigned to exactly one consumer in the group — that's what preserves per-partition ordering. Partition count is the parallelism ceiling, chosen at design time, which is why you provision partitions with headroom."},
+        {"t": "There's no limit — consumers in a group share partitions freely", "correct": false,
+         "why": "Two consumers reading one partition would race and destroy the per-partition ordering guarantee, which is half the reason partitions exist. The broker enforces exclusive assignment within a group."},
+        {"t": "Broker CPU — with enough broker capacity, any number of consumers stay busy", "correct": false,
+         "why": "Broker capacity matters for throughput, but the structural cap on consumer parallelism within a group is the partition count, regardless of how beefy the cluster is."},
+        {"t": "One — Kafka consumer groups process serially for safety", "correct": false,
+         "why": "That would waste the whole design. Partitions exist precisely so a group processes in parallel — order within each partition, parallelism across them."}
+      ]
+    },
+    {
+      "id": "p1c11-q09", "level": 1, "type": "mcq", "tag": "backlog",
+      "q": "During a traffic spike, messages pile up in the queue. In a well-designed system, this backlog is:",
+      "options": [
+        {"t": "The design working: the spike is absorbed now, drained afterward", "correct": true,
+         "why": "Yes — the shock absorber. Downstream systems see a flat, survivable load while the 9pm push to 10M users becomes a 33-minute plateau at 5K/s instead of an instantaneous tidal wave. Provisioning for average-plus-drain beats provisioning for peak."},
+        {"t": "An emergency requiring immediate scale-up of everything downstream", "correct": false,
+         "why": "Scaling downstream to eat the spike raw is exactly what the queue exists to avoid. Backlog-then-drain is the intended behavior — panic only if it stops draining."},
+        {"t": "A sign the queue or its consumers are misconfigured and need retuning", "correct": false,
+         "why": "A queue that never develops a backlog under bursty load isn't absorbing anything — it's a pass-through. Depth during a spike is the feature doing its job."},
+        {"t": "Acceptable, but only if the backlog clears within a few seconds", "correct": false,
+         "why": "The tolerable drain time depends on the workload: 40 minutes is fine for marketing pushes, and catastrophic for OTP codes. That's a product decision per queue, not a universal seconds rule."}
+      ]
+    },
+    {
+      "id": "p1c11-q10", "level": 2, "type": "mcq", "tag": "sync-async",
+      "q": "Your checkout calls the email provider inline, and today the provider's outage is failing your checkouts. What's the fix?",
+      "options": [
+        {"t": "Enqueue a send-email job and reply; workers catch up when the provider recovers", "correct": true,
+         "why": "Right — this decouples both latency and availability. The response never depended on the email, so the email never belonged in the response path. The backlog during the outage drains itself afterward."},
+        {"t": "Add a 2-second timeout on the email call and confirm the order anyway if it trips", "correct": false,
+         "why": "Better than nothing, but during outages every checkout still eats a 2-second penalty, and timed-out emails are silently lost — no retry, no record. A queue gives you the fast path AND durable retries."},
+        {"t": "Move to a more reliable email provider with a better uptime record", "correct": false,
+         "why": "Every provider has bad days. The design flaw isn't the vendor — it's coupling your availability to ANY external dependency for work the user isn't waiting on. Fix the coupling, then pick vendors on merits."},
+        {"t": "Retry the email call inline up to 5 times before responding with an error", "correct": false,
+         "why": "Inline retries make it worse: during the outage each checkout now waits through five failures before erroring. Retries are the right idea in the wrong place — they belong in an async worker, off the user's clock."}
+      ]
+    },
+    {
+      "id": "p1c11-q11", "level": 2, "type": "mcq", "tag": "visibility",
+      "q": "Transcode jobs take up to 4 minutes; your queue's visibility timeout is 60 seconds. Users report duplicate videos in their libraries. What's happening?",
+      "options": [
+        {"t": "The timeout expires mid-job, so the broker redelivers and two workers finish the same video", "correct": true,
+         "why": "Exactly — duplicates manufactured by configuration, no crash involved. Fix: heartbeat-extend the timeout while work is in progress, and make the output write idempotent on video ID since at-least-once means duplicates were always possible anyway."},
+        {"t": "Workers are acknowledging messages before the transcode actually finishes", "correct": false,
+         "why": "Ack-before-work causes the opposite symptom — lost jobs on crashes (at-most-once), not duplicates. Duplicates from long jobs point at the timeout expiring under a still-running worker."},
+        {"t": "The broker is duplicating messages while replicating them across storage nodes for durability", "correct": false,
+         "why": "Replication keeps copies across broker nodes for durability; consumers still receive one logical delivery. When duplicates correlate with long-running jobs, suspect the visibility timeout first."},
+        {"t": "Users are double-clicking upload and submitting the same video twice", "correct": false,
+         "why": "Then short videos would duplicate as often as long ones. The correlation with 4-minute jobs is the tell: processing time exceeds the invisibility window."}
+      ]
+    },
+    {
+      "id": "p1c11-q12", "level": 2, "type": "mcq", "tag": "dlq",
+      "q": "A malformed message crashes your consumer every time. The queue is strictly ordered (FIFO), retries are unlimited, and there's no DLQ. What's the blast radius?",
+      "options": [
+        {"t": "It retries forever at the head of the line, and every message behind it waits", "correct": true,
+         "why": "Right — head-of-line blocking is the FIFO-specific disaster: one bad payload stalls the entire queue. Strict ordering means you can't skip the poison. Max-receive-count plus a DLQ is the standard pressure valve."},
+        {"t": "Only that one message is affected; the rest of the traffic flows around it", "correct": false,
+         "why": "On an unordered queue, mostly true (you'd still burn worker capacity on the crash loop). But strict FIFO exists to prevent flowing around — the guarantee that makes it useful is exactly what makes poison messages lethal on it."},
+        {"t": "The broker inspects the payload, detects that it's malformed, and discards it", "correct": false,
+         "why": "The broker never inspects payloads — it can't know your consumer's idea of 'malformed.' All it sees is deliveries without acks, which by design it answers with more retries."},
+        {"t": "Consumers crash-loop until autoscaling adds enough workers", "correct": false,
+         "why": "More workers just crash faster on the same message — on a FIFO queue they can't even work past it. Capacity never fixes a deterministic failure; quarantine does."}
+      ]
+    },
+    {
+      "id": "p1c11-q13", "level": 2, "type": "mcq", "tag": "ordering",
+      "q": "A banking pipeline must apply each account's transactions in order, at 4,000 events/sec across 2M accounts. How do you get ordering without killing throughput?",
+      "options": [
+        {"t": "Partition by account_id: order within each account, parallelism across accounts", "correct": true,
+         "why": "Right — scope the ordering to the key that needs it. Every event for an account lands in the same partition in order, and no rule requires account A ordered against account B, so you keep parallelism across 2M accounts."},
+        {"t": "One global FIFO queue with a single consumer, since money demands strict ordering", "correct": false,
+         "why": "'Money' isn't the scope — the account is. A single serial consumer caps you at maybe hundreds/sec against 4,000/sec incoming: the backlog grows forever. Global order buys correctness you don't need at a price you can't pay."},
+        {"t": "Random partitioning, with timestamps so consumers can re-sort events themselves", "correct": false,
+         "why": "Re-sorting a distributed stream means waiting to be sure nothing earlier is still in flight — you've reinvented ordering, badly, with clock skew as a bonus bug. Route by key instead; the log does the ordering for free."},
+        {"t": "Process everything unordered and fix inconsistencies in a nightly batch", "correct": false,
+         "why": "Between event and nightly repair, balances are wrong — bounced payments, wrong overdrafts, real customer harm. Repair jobs are a last resort, not an alternative to a one-line partition-key decision."}
+      ]
+    },
+    {
+      "id": "p1c11-q14", "level": 2, "type": "mcq", "tag": "scaling",
+      "q": "Your Kafka consumer group (12 consumers, 12 partitions) can't keep up — backlog age is climbing steadily. You add 6 more consumers and nothing improves. Why?",
+      "options": [
+        {"t": "12 partitions feed at most 12 consumers — the new 6 sit idle", "correct": true,
+         "why": "Right. Exclusive partition assignment means partition count is the parallelism ceiling. Options that actually work: repartition the topic (disruptive — why headroom is provisioned upfront), speed up per-message handling, or batch."},
+        {"t": "The new consumers are still warming up their caches and will catch up shortly", "correct": false,
+         "why": "Warm-up affects speed, not assignment. The broker never assigned them partitions at all — with 12 partitions taken, consumers 13–18 have literally nothing to read."},
+        {"t": "The broker itself is the bottleneck and needs more nodes to serve fetches", "correct": false,
+         "why": "Possible in general, but the tell here is 'added consumers, exactly zero change' — that's the signature of idle consumers beyond the partition ceiling, not of a saturated broker (which would show as slow fetches for everyone)."},
+        {"t": "Consumer groups must have a power-of-two consumer count", "correct": false,
+         "why": "No such rule — any count works. The real constraint is the partition ceiling, and any consumers beyond it idle regardless of arithmetic elegance."}
+      ]
+    },
+    {
+      "id": "p1c11-q15", "level": 2, "type": "mcq", "tag": "delivery",
+      "q": "Which workload is a reasonable candidate for at-most-once delivery (accepting silent drops to avoid duplicates and retry cost)?",
+      "options": [
+        {"t": "Delivery drivers' location pings, superseded by the next ping seconds later", "correct": true,
+         "why": "Right — self-healing data. A dropped ping is corrected by the next one before anyone notices, and retrying stale pings adds cost for negative value. Drop-tolerance is the rare case where at-most-once wins."},
+        {"t": "Order confirmation emails sent after a successful checkout", "correct": false,
+         "why": "A silently dropped confirmation is a support ticket and an anxious customer, and a duplicate email is mildly annoying. That asymmetry — loss hurts more than duplication — is exactly the at-least-once case."},
+        {"t": "Payment capture events flowing from the card processor to the ledger", "correct": false,
+         "why": "A silently lost payment event means money unaccounted for — among the worst silent failures in software. Payments demand at-least-once plus idempotency (Chapter 2.2), never fire-and-forget."},
+        {"t": "Password reset emails that a locked-out user just requested", "correct": false,
+         "why": "A dropped reset email is a locked-out user who will retry, fail, and churn or flood support. User-initiated actions with a person waiting on the result should never silently vanish."}
+      ]
+    },
+    {
+      "id": "p1c11-q16", "level": 2, "type": "mcq", "tag": "backlog",
+      "q": "Marketing pushes to 20M users at 9pm. Your push gateway tolerates 8,000 req/s. OTP login codes flow through your notification system too. What's the right design?",
+      "options": [
+        {"t": "Queue the campaign on its own queue, separate from OTPs, and drain at ≤8,000/s", "correct": true,
+         "why": "Both halves matter. The queue converts the spike into a ~42-minute plateau the gateway survives; the separate queue keeps that promo backlog from stalling OTPs, where a 2-minute delay is an outage. Priority isolation per queue is the senior touch."},
+        {"t": "Scale the push gateway to 300K req/s so the whole campaign sends within the 9pm minute", "correct": false,
+         "why": "Provisioning ~40x capacity that idles 23.9 hours a day, assuming the gateway can even scale like that (it's often a third party with hard limits). Absorbing spikes with a backlog is precisely what queues are for."},
+        {"t": "One shared queue for everything — FIFO ensures OTPs are handled fairly", "correct": false,
+         "why": "FIFO is exactly the problem: an OTP enqueued at 9:01 waits behind millions of promo messages. Fairness between traffic classes with different latency needs requires separate queues, not shared order."},
+        {"t": "Send the campaign synchronously in batches from the app servers", "correct": false,
+         "why": "Now app servers babysit a 42-minute send while serving users, a mid-campaign deploy or crash loses track of who got notified, and there's no durable record to resume from. This is rebuilding a queue, badly, in request handlers."}
+      ]
+    },
+    {
+      "id": "p1c11-q17", "level": 2, "type": "mcq", "tag": "pubsub",
+      "q": "The fraud team wants to react to every new order. Orders are currently jobs in a work queue consumed by the email worker. What does the senior propose?",
+      "options": [
+        {"t": "Publish an order.placed event; email, fraud, and future teams each subscribe for their own copy", "correct": true,
+         "why": "Right — this is the moment to move from job (do this once) to event (this happened; react as you wish). Each subscriber processes independently at its own pace, and team #5 next year subscribes without touching the order service."},
+        {"t": "Point the fraud service at the existing email work queue and have it pull from there too", "correct": false,
+         "why": "Competing consumers on one queue SPLIT the messages — fraud would steal messages the email worker then never sees, and vice versa. Each message goes to exactly one puller; that's the opposite of what fan-out needs."},
+        {"t": "Have the email worker call the fraud service after sending each email", "correct": false,
+         "why": "Now fraud detection depends on email processing — a bizarre coupling where an email-provider outage stops fraud scoring, and every future subscriber means editing the email worker. Chained consumers recreate the point-to-point sprawl LinkedIn built Kafka to escape."},
+        {"t": "Give the fraud team a nightly database export of the day's orders", "correct": false,
+         "why": "Fraud caught 24 hours late is fraud succeeded. Batch exports have their place, but 'react to every new order' is a near-real-time requirement, and the event stream answers it directly."}
+      ]
+    },
+    {
+      "id": "p1c11-q18", "level": 2, "type": "mcq", "tag": "tools",
+      "q": "You need: multiple teams independently consuming the same click events, the ability to replay last week's stream into a new consumer, and six-figure events/sec. Which archetype fits?",
+      "options": [
+        {"t": "A log (Kafka-style): retained messages, per-consumer offsets, replay from the past", "correct": true,
+         "why": "All three requirements are log-shaped: retention makes replay possible, independent offsets make multiple readers natural, and partitioned logs are built for this throughput. This is Kafka's home turf."},
+        {"t": "A managed queue (SQS-style) fronted by a fan-out layer, with one queue per team", "correct": false,
+         "why": "SQS deletes messages once consumed — replay is impossible, and the SNS-plus-queue-per-team machinery only patches the fan-out half. Wonderful default for jobs; wrong shape for shared event streams."},
+        {"t": "A smart broker (RabbitMQ-style) with an exchange fanning out to one queue per team", "correct": false,
+         "why": "Fan-out works this way, but consumed messages are gone — no replaying last week into a new consumer — and six-figure events/sec is beyond its comfortable range. Two of three requirements fail."},
+        {"t": "A shared database table that each team scans with its own cursor", "correct": false,
+         "why": "You've just described a hand-rolled log — congratulations, and condolences: at six-figure writes/sec plus N teams polling, you'll rebuild partitioning, retention, and offset management yourself. Sometimes valid at small scale; at this scale, use the tool built for it."}
+      ]
+    },
+    {
+      "id": "p1c11-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Kafka or SQS for the background jobs in your design?' Your system runs on AWS: emails, thumbnails, webhook deliveries. The senior answer is:",
+      "options": [
+        {"t": "\"SQS — one-shot jobs, no replay, no multiple readers, zero ops with a DLQ built in. Either way I need at-least-once and idempotent workers. Kafka only if replay or multiple consumers show up.\"", "correct": true,
+         "why": "Commitment, a reason tied to the workload's shape, the honest note that delivery semantics are identical either way, and a named trigger for the alternative. Boring-and-justified is the senior register."},
+        {"t": "\"Kafka — it's the industry standard, it scales the furthest, and we'll never outgrow it. Most serious engineering organizations standardize on it anyway.\"", "correct": false,
+         "why": "Popularity isn't a mechanism, and 'scales furthest' buys nothing for thumbnail jobs while costing a stateful cluster to operate. Choosing the heaviest tool absent its requirements is the buzzword-architecture tell."},
+        {"t": "\"Either works — both deliver messages reliably and both scale well past anything we need. Honestly it mostly comes down to team preference.\"", "correct": false,
+         "why": "They differ on exactly what matters: retention vs deletion, replay, consumer model, ops burden. 'Mostly preference' announces you haven't operated either — and option-shrugging at a direct question reads junior."},
+        {"t": "\"RabbitMQ — a nice middle ground: more features than SQS, lighter to run than Kafka, and it keeps our options open if requirements change.\"", "correct": false,
+         "why": "Introducing a third option to avoid choosing between two is still not choosing — and it happens to be the worst fit here: a self-managed broker when a managed queue covers every stated need. 'Middle ground' isn't a requirement."}
+      ]
+    },
+    {
+      "id": "p1c11-q20", "level": 3, "type": "mcq", "tag": "backlog",
+      "q": "Your queue's oldest-message age has climbed from 2 minutes to 40 minutes over three weeks, growing every day. A teammate proposes raising the queue's size limit. Your call?",
+      "options": [
+        {"t": "\"Size isn't the issue — consumers are permanently slower than producers. We add consumer capacity, or we push back on the producers.\"", "correct": true,
+         "why": "Right — the spike-vs-deficit diagnosis. Steady growth over weeks isn't a burst being absorbed; it's arithmetic: in-rate exceeds out-rate, and a bigger queue just delays the reckoning. Buffers buy time to react — they cannot manufacture capacity. Backpressure (Chapter 2.7) is the eventual answer."},
+        {"t": "\"Raise the limit — absorbing load is exactly what queues are for, and disk is cheap compared to dropped work.\"", "correct": false,
+         "why": "Queues absorb SPIKES — temporary excess that later drains. A three-week monotonic climb never drains; a bigger buffer means the day you hit the wall, you're 4 hours behind instead of 40 minutes. The queue is now hiding an outage, not preventing one."},
+        {"t": "\"Purge the oldest messages tonight to reset the backlog, then keep an eye on the depth graphs.\"", "correct": false,
+         "why": "That's silently deleting 40 minutes of promised work — at-most-once by panic. If shedding is genuinely acceptable for this workload, it should be a deliberate policy chosen per message class, not a midnight purge."},
+        {"t": "\"Migrate to a bigger broker tier with more throughput so the queue can keep up with the load.\"", "correct": false,
+         "why": "The broker isn't the bottleneck — messages are getting IN fine; they're not getting OUT. Broker throughput doesn't make consumers process faster. Diagnose which side of the queue is slow before spending money on the wrong one."}
+      ]
+    },
+    {
+      "id": "p1c11-q21", "level": 3, "type": "mcq", "tag": "delivery",
+      "q": "A candidate says: 'I'll enable Kafka's exactly-once mode, so my consumers don't need duplicate handling.' The email-sending consumer calls a third-party API. Why does this read junior to the interviewer?",
+      "options": [
+        {"t": "Kafka's exactly-once covers Kafka-to-Kafka pipelines; the external email API call reopens the duplicate window", "correct": true,
+         "why": "Right — the claim is scoped and the candidate missed the scope. Send email, crash before committing the offset, resume, resend: duplicate. Only idempotency closes that window, and trusting a marketing phrase past its boundary tells the interviewer the candidate hasn't operated this in production."},
+        {"t": "Kafka's exactly-once is marketing fiction — no vendor claim like that survives contact with production", "correct": false,
+         "why": "Too cynical, and wrong: the feature is real engineering (transactional writes, read-committed consumers) within its Kafka-to-Kafka scope. The senior skill is knowing a guarantee's boundary, not dismissing the guarantee."},
+        {"t": "Exactly-once mode costs too much throughput to keep up with production email volumes", "correct": false,
+         "why": "There's a throughput cost, but that's not the flaw — the flaw is correctness, not performance. Even at zero cost, the guarantee wouldn't extend across the external API call."},
+        {"t": "Nothing — this is correct, and duplicate handling on top of it would be redundant", "correct": false,
+         "why": "Believe this and some customers get two emails — or worse when the pattern reaches the payment consumer. The rule stands: any consumer touching the outside world assumes redelivery and dedupes, whatever the broker's brochure says."}
+      ]
+    },
+    {
+      "id": "p1c11-q22", "level": 3, "type": "mcq", "tag": "ordering",
+      "q": "A teammate insists your whole event pipeline use strict global FIFO 'so we never have ordering bugs.' Traffic is 50K events/sec. The senior response is:",
+      "options": [
+        {"t": "\"Global order means serial processing — nowhere near 50K/s. Let's list which flows actually need order and partition by those keys.\"", "correct": true,
+         "why": "Right — interrogate the requirement, scope it to keys (per-user, per-order at most), pay for order only where a real invariant demands it. 'To be safe' ordering is over-engineering that fails at this scale not gradually but arithmetically: the backlog compounds every second."},
+        {"t": "\"Agreed — correctness first. Build it strictly ordered so it's provably right, then optimize throughput once it works.\"", "correct": false,
+         "why": "'Make it work then optimize' assumes it works. A serial consumer against 50K/s falls behind by tens of thousands of events per second from minute one — the design is infeasible, not slow. Some requirements must be challenged, not accommodated."},
+        {"t": "\"Compromise: keep the global FIFO, but let several consumers read it in parallel so we get the speed back.\"", "correct": false,
+         "why": "Parallel consumers on one strictly-ordered stream ARE out-of-order processing — worker B finishes message 2 before worker A finishes message 1. This 'compromise' silently abandons the guarantee while still paying FIFO's throughput costs: the worst square of the trade-off."},
+        {"t": "\"Add timestamps to every event so each consumer can detect and repair out-of-order arrivals itself.\"", "correct": false,
+         "why": "Now every consumer carries reorder buffers, late-event windows, and clock-skew handling — you've distributed the ordering problem to every team instead of solving it once at the partition layer with a key. More code, weaker guarantee."}
+      ]
+    },
+    {
+      "id": "p1c11-q23", "level": 3, "type": "mcq", "tag": "ops",
+      "q": "Post-incident review: a producer bug dead-lettered 40,000 order-confirmation messages over three days before anyone noticed. Which prevention actually addresses the failure?",
+      "options": [
+        {"t": "Alert on DLQ depth above zero and on oldest-message age, plus a rehearsed redrive runbook", "correct": true,
+         "why": "Right. The DLQ did its job — it correctly quarantined the poison; the outage was observational: the missing piece was anyone knowing. A DLQ without an alarm is silent data loss with extra steps, and a redrive plan is what turns quarantine into recovery instead of forgetting."},
+        {"t": "Raise the max receive count from 5 to 50 so messages get more chances", "correct": false,
+         "why": "A deterministic bug fails attempt 50 like attempt 5 — this just multiplies wasted worker time and delays quarantine by 10x. Retries are for transient failures; persistent failures need eyes, not patience."},
+        {"t": "Remove the DLQ entirely so failures stay loudly visible in the main queue", "correct": false,
+         "why": "Then 40,000 poison messages crash-loop in the main queue, burning workers and (on ordered queues) blocking healthy traffic — you've traded silent quarantine for a loud outage of everything. The DLQ wasn't the problem; the silence was."},
+        {"t": "Have consumers catch all exceptions and ack anyway so nothing dead-letters", "correct": false,
+         "why": "Ack-on-failure converts every failure into silent, permanent, unrecorded loss — at-most-once wearing a trench coat. The DLQ at least preserved the 40,000 payloads for redrive; this destroys them with a clean conscience."}
+      ]
+    },
+    {
+      "id": "p1c11-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Checkout latency is 3.5s. A teammate proposes: 'Make it all async — including the card charge — and return instantly.' Your call?",
+      "options": [
+        {"t": "\"Charge stays sync — 'confirmed' must mean paid; the rest goes async and we reply in ~350ms. Async charging is a product change, not a latency patch.\"", "correct": true,
+         "why": "Right — the response-honesty test, applied with a commitment. The nuance that async-charge is a legitimate but different PRODUCT (Amazon does it — with a 'pending' state and 'payment failed' emails designed in) is what separates judgment from rule-following."},
+        {"t": "\"Agreed — ship it. Fastest checkout wins, charges rarely fail in practice, and support can clean up the odd failure by hand.\"", "correct": false,
+         "why": "'Rarely fails' times millions of orders is daily: goods confirmed to users whose cards then decline, with no designed way to tell them. Moving work async without redesigning the response's meaning turns your API into a cheerful liar."},
+        {"t": "\"The opposite — no async anywhere in checkout. It's far too important a flow to trust to queues and eventual consistency.\"", "correct": false,
+         "why": "Importance doesn't decide sync vs async; response-dependence does. The email is important AND async-safe. Blanket conservatism leaves the checkout at 3.5s for no correctness gain — over-caution is also a judgment failure."},
+        {"t": "\"Async everything, but have the client poll payment status before it shows the confirmation screen.\"", "correct": false,
+         "why": "The user now waits the same 300ms+ for the charge — through a queue, a worker, a status write, and polling. Latency kept, plus new infrastructure and failure modes. Async isn't a goal; it's a tool for work the user isn't waiting on."}
+      ]
+    },
+    {
+      "id": "p1c11-q25", "level": 3, "type": "mcq", "tag": "scaling",
+      "q": "Your per-merchant-ordered pipeline (partitioned by merchant_id) handles 10x growth fine — except everything is slow every day at noon. Investigation: one huge marketplace merchant produces 35% of all events. What's the real problem?",
+      "options": [
+        {"t": "A hot partition: the whale merchant's events all land in one partition that a single consumer must drain alone", "correct": true,
+         "why": "Right — key skew turns per-key ordering's strength into a bottleneck: the parallelism ceiling for 35% of traffic is one worker, no matter the cluster size. Fixes mean sub-partitioning the hot key (merchant+store, merchant+region) and relaxing ordering scope for that tenant — the celebrity problem, Chapter 2.6."},
+        {"t": "Not enough consumers at peak — autoscale the group up around noon", "correct": false,
+         "why": "The other consumers are idling while one drowns. New consumers can't share the hot partition (exclusive assignment preserves order), so scaling the group adds spectators, not throughput. Skew problems never yield to uniform scaling."},
+        {"t": "The broker cluster needs more nodes to absorb the noon peak in load", "correct": false,
+         "why": "Total load is fine — 10x growth worked. The failure is distributional: one partition is saturated while the rest coast. Cluster-level capacity can't fix a single lane's ceiling."},
+        {"t": "Random partitioning instead of merchant_id, so load spreads evenly across all partitions", "correct": false,
+         "why": "Perfectly even, and the per-merchant ordering guarantee — the pipeline's stated invariant — is gone for every merchant, to fix one. The senior move is surgical: keep ordering where it's cheap, restructure the key only for the whale."}
+      ]
+    }
+  ]
+}

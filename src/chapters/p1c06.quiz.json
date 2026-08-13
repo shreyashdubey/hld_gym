@@ -1,0 +1,730 @@
+{
+  "chapter": "p1c06",
+  "items": [
+    {
+      "id": "p1c06-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "cache-aside",
+      "q": "In cache-aside, what happens on a cache miss?",
+      "options": [
+        {
+          "t": "The cache automatically fetches the value from the database itself",
+          "correct": false,
+          "why": "That's read-through — same behavior, but the fetching logic lives inside the cache layer via a loader function. In cache-aside the cache never talks to the database at all."
+        },
+        {
+          "t": "The app fetches from the database, then writes the result into the cache for next time",
+          "correct": true,
+          "why": "Right — get, miss, fetch, fill. The cache is passive; your application code does the whole dance, which is why cache-aside works in front of anything and degrades gracefully when the cache is down."
+        },
+        {
+          "t": "The request fails and the client retries later",
+          "correct": false,
+          "why": "A miss isn't an error — it's the normal 'first reader pays' path. The request still succeeds; it just takes the slow road through the database once."
+        },
+        {
+          "t": "The cache returns the most recently evicted value as a fallback",
+          "correct": false,
+          "why": "Evicted means gone — the cache has nothing to return. (Serving a stale-but-kept value is a real technique, stale-while-revalidate, but that's a deliberate policy on expired keys, not a property of misses.)"
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "ttl",
+      "q": "What is a TTL on a cache entry, really?",
+      "options": [
+        {
+          "t": "A performance tuning parameter — higher is always faster",
+          "correct": false,
+          "why": "Higher TTL does raise hit rate, but framing it as pure performance misses what you're trading away: correctness. The TTL's real job is bounding how wrong the cache is allowed to be."
+        },
+        {
+          "t": "The time the cache takes to respond to a read",
+          "correct": false,
+          "why": "That's latency. TTL (time to live) is how long the entry survives before the cache discards it and the next read recomputes."
+        },
+        {
+          "t": "A promise about maximum staleness — 'this data may be up to N seconds old'",
+          "correct": true,
+          "why": "Yes. TTL is a product-facing contract, not a performance knob. 'Prices may be 5 minutes stale' is a sentence a PM can accept or veto — and that tolerance, not vibes, is what should set the number."
+        },
+        {
+          "t": "How long the cache waits before evicting under memory pressure",
+          "correct": false,
+          "why": "That's eviction, a separate mechanism. TTL discards what's old; eviction discards what must go because RAM is full — a key can be evicted long before its TTL, or expire with memory to spare."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "eviction",
+      "q": "What's the core difference between LRU and LFU eviction?",
+      "options": [
+        {
+          "t": "LRU evicts what was touched longest ago; LFU evicts what's touched least often",
+          "correct": true,
+          "why": "Right — recency versus frequency. LRU bets the recent past predicts the future but gets flooded by one-time scans; LFU resists scans but clings to yesterday's popular items after tastes shift."
+        },
+        {
+          "t": "LRU evicts the oldest inserted item; LFU evicts the newest",
+          "correct": false,
+          "why": "Evicting by insertion time is FIFO, not LRU. LRU doesn't care when an item arrived — only when it was last used. And no policy evicts the newest first."
+        },
+        {
+          "t": "LRU is for reads, LFU is for writes",
+          "correct": false,
+          "why": "Both policies count any access — reads and writes alike. The difference is what they measure about those accesses: recency (LRU) versus frequency (LFU)."
+        },
+        {
+          "t": "They're identical; LFU is just Redis's name for LRU",
+          "correct": false,
+          "why": "They're genuinely different policies with different blind spots, and Redis offers both — approximated versions of each, selected via maxmemory-policy."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "patterns",
+      "q": "What distinguishes write-back (write-behind) from write-through?",
+      "options": [
+        {
+          "t": "Write-back skips the cache; write-through skips the database",
+          "correct": false,
+          "why": "Neither skips anything permanently. Both patterns eventually land data in both places — the difference is purely when the database write happens: later (write-back) or now (write-through)."
+        },
+        {
+          "t": "Write-back is for reads; write-through is for writes",
+          "correct": false,
+          "why": "Both are write-path patterns. The read-path patterns are cache-aside and read-through — that's the axis this option is mixing up."
+        },
+        {
+          "t": "Write-back is always safer because the cache is faster",
+          "correct": false,
+          "why": "Backwards — write-back is the risky one. Fast acknowledgment is exactly the danger: you've told the caller 'saved' while the data exists only in RAM. A crash before the flush loses it."
+        },
+        {
+          "t": "Write-back writes to the cache now and the database later; write-through writes both synchronously",
+          "correct": true,
+          "why": "Right. Write-back gets memory-speed writes and can batch a hundred increments into one flush — at the cost of a window where the only copy lives in volatile RAM. Write-through pays for both systems on every write but never has that window."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "negative-cache",
+      "q": "What is negative caching?",
+      "options": [
+        {
+          "t": "Evicting entries that get too few hits to be worth their RAM",
+          "correct": false,
+          "why": "That's roughly LFU eviction. Negative caching isn't about unpopular entries — it's about caching the answer 'nothing exists here' as a first-class value."
+        },
+        {
+          "t": "Storing the fact that a lookup found nothing, so absent data stops hitting the database",
+          "correct": true,
+          "why": "Right — store 'NOT_FOUND' with a short TTL. Without it, requests for deleted or nonexistent items bypass the cache forever, and a retrying client or probing attacker gets a free path to hammer your database."
+        },
+        {
+          "t": "A cache that returns errors when overloaded",
+          "correct": false,
+          "why": "That's load shedding — a useful protection, but unrelated. Negative caching is about remembering absences, not refusing requests."
+        },
+        {
+          "t": "Caching values with a TTL of zero",
+          "correct": false,
+          "why": "TTL zero means don't cache at all. Negative entries get a real (short) TTL — short because absence is the answer most likely to change, e.g. the user might be created a second later."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "stampede",
+      "q": "What is a cache stampede (thundering herd)?",
+      "options": [
+        {
+          "t": "A hot key expires and hundreds of concurrent misses run the same expensive query at once",
+          "correct": true,
+          "why": "Right. The database is sized for a trickle of misses; one expiry on a hot key turns 500 concurrent readers into 500 identical queries in the same 50ms. Coalescing, early refresh, or stale-while-revalidate collapse the herd back to one."
+        },
+        {
+          "t": "The cache running out of memory under load and evicting everything at once",
+          "correct": false,
+          "why": "Mass eviction is a different (real) problem. A stampede needs no memory pressure at all — one ordinary TTL expiry on one popular key is enough."
+        },
+        {
+          "t": "Too many cache servers responding to the same request",
+          "correct": false,
+          "why": "Each key lives on one node, so servers don't race to answer. The herd is on the other side: many clients racing to refill the same missing key from the database."
+        },
+        {
+          "t": "Users refreshing the page too quickly",
+          "correct": false,
+          "why": "Heavy traffic alone is what caches are for — a warm cache absorbs it happily. The stampede is specifically the miss-path pileup at the moment a hot entry disappears."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "hit-rate",
+      "q": "Your cache hit rate drops from 99% to 98%. What happens to database load?",
+      "options": [
+        {
+          "t": "It rises by about 1%",
+          "correct": false,
+          "why": "The most natural-looking wrong answer, and the exact trap. The 1-point change is measured against all traffic, but the database only ever sees the miss slice — which just went from 1 unit to 2. Think in misses, not hits."
+        },
+        {
+          "t": "Almost nothing — 98% is still an excellent hit rate",
+          "correct": false,
+          "why": "98% is excellent for latency, but the database doesn't experience percentages — it experiences query volume, which doubled. Whether that's 'nothing' depends entirely on whether it was provisioned for 2x."
+        },
+        {
+          "t": "It doubles",
+          "correct": true,
+          "why": "Yes — the database sees the misses, and misses went from 1% to 2% of traffic. A one-point dip that looks like rounding error is a 2x jump at the origin. This is why seniors monitor absolute miss QPS, not the hit-rate percentage."
+        },
+        {
+          "t": "It halves",
+          "correct": false,
+          "why": "Direction flip — fewer hits means more misses reaching the database, not fewer. Halving is what happens when the hit rate goes the other way, 98% to 99%."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "invalidation",
+      "q": "When your code updates the database, why does the guidance say DELETE the cache key rather than SET the new value?",
+      "options": [
+        {
+          "t": "Deletes are faster than sets in Redis, so the write path finishes sooner",
+          "correct": false,
+          "why": "Both are O(1) and sub-millisecond — performance isn't the issue. The reason is correctness under concurrency: sets race each other, deletes don't."
+        },
+        {
+          "t": "Out-of-order SETs can park a stale value with a fresh TTL; a delete can't lose that race",
+          "correct": true,
+          "why": "Right. Writer A (old value) can SET after writer B (new value), and the cache then serves old data for a full TTL. Deletes are immune to ordering: whoever reads next goes to the database. Delete is the humble, race-resistant move."
+        },
+        {
+          "t": "Setting values from the write path is forbidden by the cache-aside pattern",
+          "correct": false,
+          "why": "It's not forbidden — it's just a known footgun. The pattern police won't arrest you; the out-of-order race will, at 3am, with a stale value that outlives your patience."
+        },
+        {
+          "t": "Deleting saves memory in the cache",
+          "correct": false,
+          "why": "Marginally true and entirely beside the point. You'd happily spend the memory if SET were safe — the delete is chosen because it cannot write stale data, not because it frees a few bytes."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "redis-memcached",
+      "q": "Which capabilities does Redis have that Memcached lacks?",
+      "options": [
+        {
+          "t": "In-memory storage and sub-millisecond reads",
+          "correct": false,
+          "why": "Both have these — RAM-backed speed is the shared foundation, not the differentiator. The fork in the road is structures, persistence, and replication versus pure simplicity."
+        },
+        {
+          "t": "Multithreaded command execution that uses all the cores of one big box",
+          "correct": false,
+          "why": "Reversed — that's Memcached's advantage. Redis executes commands on a single thread (I/O threads since 6.0 help with networking); you scale Redis by sharding, and one slow command blocks everything behind it."
+        },
+        {
+          "t": "The ability to set TTLs on keys",
+          "correct": false,
+          "why": "Both support per-key expiry — TTLs are table stakes for any cache. The real differences are in what values can be and what survives a restart."
+        },
+        {
+          "t": "Rich data structures (sorted sets, hashes, streams), optional persistence, and built-in replication",
+          "correct": true,
+          "why": "Right — Redis is a data-structure server that's often used as a cache. Memcached is deliberately just a cache: opaque bytes, no durability, no built-in replication — and in exchange, radical simplicity and multithreaded throughput."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q10",
+      "level": 2,
+      "type": "mcq",
+      "tag": "jitter",
+      "q": "A deploy at 9am restarts your servers; within minutes, traffic refills 50,000 keys, all with ttl=3600. What happens at 10am, and what's the fix?",
+      "options": [
+        {
+          "t": "Nothing unusual — the expiries are naturally spread out because the refill requests arrived at slightly different moments",
+          "correct": false,
+          "why": "'Slightly different' is the trap: the keys filled within a minute or two of the deploy, so they expire within a minute or two of each other. Sixty seconds of spread against an hour of quiet is still a cliff, not a slope."
+        },
+        {
+          "t": "The cache evicts keys under memory pressure before 10am, so expiry never synchronizes",
+          "correct": false,
+          "why": "Only if you're lucky enough to be running out of RAM — and hoping for memory pressure as your defense is not a plan. With normal headroom, every key survives to its identical expiry time."
+        },
+        {
+          "t": "All 50,000 keys expire in the same minute, dumping the site's reads on the idle database; fix with TTL jitter",
+          "correct": true,
+          "why": "Right — synchronized filling means synchronized expiry, a perfectly scheduled traffic bomb. ttl = 3600 + random(0, 360) smears the cliff across ten minutes for the cost of one line. Add jitter on day one; this bug hides until the worst moment."
+        },
+        {
+          "t": "Raise the TTL to 24 hours so the expiry wave happens at low-traffic time",
+          "correct": false,
+          "why": "You've made the staleness contract 24x worse to move a bomb you could simply defuse — and the next mid-day deploy re-arms it at a new hour. Jitter kills the synchronization itself, at zero cost to freshness."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "stampede",
+      "q": "Your homepage feed is one cached key read 10,000 times/sec, rebuilt by a 200ms query. Its TTL just expired. Which protection most directly prevents the database pileup?",
+      "options": [
+        {
+          "t": "Shard the feed key across more Redis nodes",
+          "correct": false,
+          "why": "Sharding spreads different keys across nodes — it does nothing for one key that's missing. The pileup happens at the database during the refill, and more cache nodes don't change who rebuilds or how many times."
+        },
+        {
+          "t": "Request coalescing: the first miss takes a lock and rebuilds while the others briefly serve the stale value",
+          "correct": true,
+          "why": "Right. In the 200ms rebuild window, ~2,000 requests arrive; without coalescing they're ~2,000 identical expensive queries. A lock (or lease) collapses them to one, and serving the just-expired value to the waiters keeps latency flat."
+        },
+        {
+          "t": "Lower the TTL so the data is fresher",
+          "correct": false,
+          "why": "Ouch — more expiries means more stampede opportunities. You've increased the frequency of the exact event that's hurting you. TTL tuning addresses staleness, not concurrent-miss pileups."
+        },
+        {
+          "t": "Add database read replicas so the herd of identical queries has more room to land",
+          "correct": false,
+          "why": "This buys capacity to survive the waste rather than removing it — 2,000 identical 200ms queries are still 2,000 queries, now spread over replicas you're paying for year-round to absorb a 200ms event. Coalescing makes the herd one query for free."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "patterns",
+      "q": "Video view counts: 100,000 increments/sec at peak, displayed on every video page, nobody needs them perfect. Which write pattern fits?",
+      "options": [
+        {
+          "t": "Write-through: increment the database and cache together on every view",
+          "correct": false,
+          "why": "That's 100,000 database writes per second to keep a decorative number perfectly durable. You'd build serious write infrastructure to protect data nobody needs protected — durability spent where no promise exists."
+        },
+        {
+          "t": "Cache-aside: write each view to the database, delete the cached count",
+          "correct": false,
+          "why": "Even worse than write-through here: 100K writes/sec AND 100K deletes/sec, and the count cache never survives long enough to serve a read. Cache-aside is a read pattern; this workload's problem is the write rate."
+        },
+        {
+          "t": "Don't cache; a view count must come from the source of truth",
+          "correct": false,
+          "why": "'Must' is doing unexamined work — must it? The senior move is asking what the data promises. A view count promises nothing, so paying full durability cost per increment is over-engineering by reflex."
+        },
+        {
+          "t": "Write-back: atomic INCR in Redis, flush aggregated deltas to the database every few seconds",
+          "correct": true,
+          "why": "Right — this is write-back's home turf. Memory-speed increments, a hundred views flushed as one row update, and the loss scenario (a node dies, a few seconds of counts vanish) harms no one because a view count carries no promise. Loss-tolerant + high-rate = write-back."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "invalidation",
+      "q": "Product data is written by your main app, a bulk-import service, and admins running SQL directly. Cached product pages must reflect changes within seconds. Which invalidation approach actually works?",
+      "options": [
+        {
+          "t": "CDC: tail the database's replication log and turn every committed change into a cache delete",
+          "correct": true,
+          "why": "Right — when writers are many and some don't run your code, the only place all writes are guaranteed to appear is the database's own change log. CDC (e.g. Debezium) catches the admin's raw SQL just like app writes. Cost: a pipeline to operate, and sub-second propagation delay."
+        },
+        {
+          "t": "Have the app delete cache keys whenever it writes",
+          "correct": false,
+          "why": "Covers exactly one of the three writers. The bulk importer and the admin's direct SQL never execute your app's delete, so their changes stay invisible until TTL — which violates the 'within seconds' requirement."
+        },
+        {
+          "t": "Set TTL to 5 seconds on all product keys",
+          "correct": false,
+          "why": "It meets the freshness bar by brute force — and shreds your hit rate doing it: every product re-misses every 5 seconds all day, though products change rarely. You've priced the whole catalog at the freshness of its most volatile row."
+        },
+        {
+          "t": "Ban admins from writing SQL directly so app-level invalidation is complete",
+          "correct": false,
+          "why": "A policy patch for an architecture gap. Someone will bypass it in an emergency (that's what emergencies are), and the bulk importer still isn't covered. Robust invalidation shouldn't depend on humans behaving."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "hot-key",
+      "q": "A celebrity's post is drawing 1M reads/sec to the single Redis node that owns post:12345. The cluster has 50 nodes, 49 of them idle-ish. First move?",
+      "options": [
+        {
+          "t": "Rebalance the cluster so keys are distributed more evenly",
+          "correct": false,
+          "why": "The keys ARE evenly distributed — that's not the problem. One key is disproportionately loved, and rebalancing just changes which single node melts. Each key lives on exactly one node no matter how you shuffle."
+        },
+        {
+          "t": "Upgrade the hot node to a much larger instance",
+          "correct": false,
+          "why": "A single key's throughput is capped by one node's single-threaded command loop — bigger RAM doesn't add ops/sec headroom for one key, and 1M/sec is beyond what one node serves comfortably. Vertical scaling loses to fame; you need more copies, not a bigger box."
+        },
+        {
+          "t": "Add a tiny in-process L1 cache for hot keys with a 1–2 second TTL on each app server",
+          "correct": true,
+          "why": "Right — each app server answering from local memory turns 1M reads/sec into (number of app servers) reads/sec against Redis, for the price of up to 2 seconds of staleness on a like count. Key fan-out (N copies of the key) is the other standard move; rehashing or bigger nodes are not, because one key still lives on one node."
+        },
+        {
+          "t": "Lower the TTL on the hot key so it spends less time cached",
+          "correct": false,
+          "why": "This aims the herd at your database instead of Redis — every expiry now stampedes the origin with the hottest key you own. You've traded a melting cache node for a melting database, at a steep markup."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "negative-cache",
+      "q": "A mobile app bug retries a deleted user's profile ~2,000 times/sec. Your cache hit rate looks fine, yet the database is being hammered by these lookups. Why, and what's the fix?",
+      "options": [
+        {
+          "t": "The cache is evicting the user's entry under memory pressure; add RAM",
+          "correct": false,
+          "why": "There's no entry to evict — the user doesn't exist, so no read ever produced a value to store. More RAM changes nothing; the miss path for absent data bypasses the cache by construction unless you cache the absence deliberately."
+        },
+        {
+          "t": "'Not found' was never cached, so every retry reaches the database; fix with negative caching",
+          "correct": true,
+          "why": "Right — a lookup that returns nothing leaves nothing in the cache, so the absence itself must be stored as a value. A 30–60s TTL keeps the 'no' cheap while staying honest if the answer changes. DNS has cached 'no such domain' since the 1990s for exactly this reason."
+        },
+        {
+          "t": "Block the misbehaving client at the gateway",
+          "correct": false,
+          "why": "Reasonable incident response, but it fixes this client, not the vulnerability. The next buggy client, stale crawler, or attacker probing random IDs walks the same unprotected path. Negative caching closes the hole for all of them."
+        },
+        {
+          "t": "Recreate the user row so lookups hit the cache again",
+          "correct": false,
+          "why": "Resurrecting deleted data to soothe your cache is the tail wagging the dog — and a correctness bug (the user was deleted for a reason). The infrastructure should handle absent data gracefully; absence is a normal answer."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "eviction",
+      "q": "You rely on Redis LRU to always keep your 100 hottest keys cached, and you've noticed one occasionally vanishes despite constant traffic. What's going on?",
+      "options": [
+        {
+          "t": "Redis LRU is exact, so a hot key can only vanish via TTL expiry or a bug in your code",
+          "correct": false,
+          "why": "The tempting mental model, and precisely what the docs warn against — Redis trades LRU exactness for hot-path speed. TTL and bugs are also causes of vanishing keys, but approximated eviction alone can explain it."
+        },
+        {
+          "t": "Another team is flushing the cache",
+          "correct": false,
+          "why": "Always worth checking (and a FLUSHALL would take all 100 keys, not one occasionally), but you don't need foul play to explain this — sampling-based eviction produces exactly this 'rarely, one hot key' signature."
+        },
+        {
+          "t": "Hot keys are immune to eviction in Redis; the key must be expiring",
+          "correct": false,
+          "why": "No immunity exists — under memory pressure with allkeys-* policies, every key is a candidate the moment the sampler happens to draw it. If eviction must never touch certain keys, that's a sizing/policy decision you make, not a default you get."
+        },
+        {
+          "t": "Redis LRU is approximated — it samples a few random keys at eviction time — so a frequently used key can occasionally be evicted",
+          "correct": true,
+          "why": "Right. True LRU would mean bookkeeping on every read, so Redis samples (5 keys by default) and evicts the least-recent of the sample — statistically close, wrong in the tail. Design consequence: a cache entry is a hint, never a guarantee; code must always handle the miss."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "patterns",
+      "q": "Users edit their profile and are immediately shown their profile page. Support tickets say edits 'don't save' (they reappear after a while, but users see old data right after saving). The cache is cache-aside with 10-minute TTL and no invalidation. Cheapest correct fix?",
+      "options": [
+        {
+          "t": "Delete the user's cache key in the write path, keeping the TTL as a backstop",
+          "correct": true,
+          "why": "Right — one line in the write path gives read-your-own-write freshness within milliseconds: the next read misses and refetches the new truth. The TTL stays as insurance against the residual fill-after-delete race. No new infrastructure, contract met."
+        },
+        {
+          "t": "Drop the TTL to 10 seconds",
+          "correct": false,
+          "why": "Still up to 10 seconds of 'my edit vanished' — which a user staring at their own edit absolutely notices — and you've multiplied miss traffic for every profile all day. Wrong tool: this is an invalidation problem, not a TTL problem."
+        },
+        {
+          "t": "Switch the whole system to write-through",
+          "correct": false,
+          "why": "It works, but it's a pattern migration — every write now synchronously maintains the cache, including for users nobody will read — to fix what a single delete-on-write line fixes. Reaching for the big refactor first is the over-engineering reflex."
+        },
+        {
+          "t": "Read the user's own profile straight from the database, cache for everyone else",
+          "correct": false,
+          "why": "This can be a legitimate pattern (read-your-own-writes routing), but it leaves the cache stale for everyone else for 10 minutes and adds a special-cased code path to maintain. Delete-on-write fixes it for all readers at lower complexity."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "cache-down",
+      "q": "Read path: 80,000 RPS at 99% hit rate. The database maxes out around 3,000 QPS. An engineer says 'the cache is just an optimization — worst case, things get slow.' What's the accurate correction?",
+      "options": [
+        {
+          "t": "Correct — cache-aside falls through to the database, so requests succeed, just slower",
+          "correct": false,
+          "why": "The code path falls through; the capacity doesn't. Each request 'works' right into a database drowning at over 25x its ceiling — connections pile up, queries time out, and the site is down in minutes. Graceful code, catastrophic load."
+        },
+        {
+          "t": "The database's own buffer pool will absorb most of the load since the queries repeat",
+          "correct": false,
+          "why": "The buffer pool saves disk reads, but every query still pays parsing, planning, locking, and connection overhead — that's why Redis beat the database in the first place. Warm pages don't multiply a 3,000 QPS ceiling by 25."
+        },
+        {
+          "t": "Cache loss means 80,000 QPS against a 3,000-QPS ceiling — a full outage, not a slowdown",
+          "correct": true,
+          "why": "Right — the database was provisioned for the misses (800 QPS), so it's the cache that's carrying the site. 'Just an optimization' was true at 50% hit rate; at 99% the success of the cache has quietly made its failure a database failure. Plan degraded mode and load shedding now."
+        },
+        {
+          "t": "It's fine as long as the cache has replicas",
+          "correct": false,
+          "why": "Replicas shrink the probability of the bad day, not its blast radius — correlated failures (bad deploy, config push, network partition) take out replicas together. The 2010 Facebook outage had redundancy everywhere; the failure mode didn't care."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q19",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Interviewer: 'How do you keep your cache consistent with the database?' Which answer reads senior?",
+      "options": [
+        {
+          "t": "\"I'd wrap the cache update and database write in a distributed transaction so they can never disagree.\"",
+          "correct": false,
+          "why": "Two-phase commit across Redis and your database isn't practically available, and bolting coordination onto the hot path would cost more than the cache saves. Proposing heavyweight machinery for a problem the industry solves with bounded staleness reads as theory over practice."
+        },
+        {
+          "t": "\"I bound staleness instead of chasing sync: delete-on-write plus a TTL backstop — and a key that needs true freshness just isn't cached.\"",
+          "correct": true,
+          "why": "Commits to a mechanism, treats staleness as a bound to state rather than a flaw to hide, and knows the escape hatch. Owning the imperfection is the senior move — the question is a trap for anyone who claims sync."
+        },
+        {
+          "t": "\"Write-through keeps them in sync, so I'd use write-through everywhere.\"",
+          "correct": false,
+          "why": "Write-through narrows the window but doesn't eliminate it (two systems, no shared transaction — a crash between the writes still diverges), and 'everywhere' spends slower writes on keys that never needed the freshness. Absolute claims about consistency invite the follow-up that dismantles them."
+        },
+        {
+          "t": "\"You could use TTLs, or invalidation, or CDC, or versioned keys — each has trade-offs depending on requirements.\"",
+          "correct": false,
+          "why": "A correct table of contents and zero judgment. Option-listing without committing is the documented mid-level tell; the interviewer asked what YOU would do. Pick one for this workload, defend it, name its cost."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Peak traffic. Your cache cluster just died. The database is at 20x capacity and failing. Which incident response reflects a pre-made senior design?",
+      "options": [
+        {
+          "t": "Restart the cache and route traffic back immediately — the sooner it's absorbing reads, the sooner the DB recovers",
+          "correct": false,
+          "why": "An empty cache absorbs nothing — hit rate is 0%, so full traffic pours through the misses onto the dying database, now plus fill-writes. Pointing peak load at a cold cache is a second stampede wearing a rescue uniform."
+        },
+        {
+          "t": "Scale the database up as fast as possible to absorb the load",
+          "correct": false,
+          "why": "Provisioning, replication catch-up, and failover take tens of minutes to hours — the outage is now. And permanently sizing the DB for cache-less peak means paying 20x capacity forever to avoid designing a degraded mode. Emergency scaling is a hope, not a plan."
+        },
+        {
+          "t": "Queue all incoming requests until the cache is rebuilt",
+          "correct": false,
+          "why": "Reads can't wait in a queue — users are staring at a spinner, and a growing backlog of stale read requests serves no one. Queues buy time for writes; for reads, the honest choices are serve degraded, serve stale, or fail fast."
+        },
+        {
+          "t": "Flip on degraded mode (defaults instead of personalization), shed load at the gateway to what the DB survives, then re-warm the cache gradually before restoring full traffic",
+          "correct": true,
+          "why": "Degrade, shed, warm — decided before the incident, executed during it. Serving 30% of users a working site beats serving 100% a timeout, and gradual warming prevents the refill itself from stampeding the still-fragile database. This playbook existing at all is the senior signal."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Design review: an engineer proposes caching for a new internal dashboard — 8,000 rows, updated a few times daily, ~50 requests/minute, queries take 30ms. Your call?",
+      "options": [
+        {
+          "t": "No cache — the database serves this without noticing, and a cache adds staleness bugs for zero felt benefit",
+          "correct": true,
+          "why": "Right — 50 requests/minute at 30ms is nothing; the whole table fits in the DB's buffer pool anyway. Every cache purchases speed with a staleness bug surface and an operational dependency, and this workload can't repay that. Declining infrastructure — and naming what growth signal would change the call — is the senior-calibrated move."
+        },
+        {
+          "t": "Approve — caching is best practice for read-heavy workloads, and this is read-heavy",
+          "correct": false,
+          "why": "'Read-heavy' by ratio, trivial by volume — best practices have preconditions, and pattern-matching without numbers is how internal tools end up with Redis clusters and stale-data tickets. The chapter's leverage math needs load worth leveraging."
+        },
+        {
+          "t": "Approve, but require write-through so staleness can't happen",
+          "correct": false,
+          "why": "This doubles down: now there's a cache AND a write-path integration to maintain, solving a staleness problem that only exists because of the cache you didn't need. Complexity to patch complexity, in service of 30ms nobody perceives."
+        },
+        {
+          "t": "Suggest an in-process cache instead of Redis as a compromise",
+          "correct": false,
+          "why": "Smaller blast radius, same category error — it still adds staleness windows and cache logic to a service whose database is idle. The compromise instinct ('meet in the middle') reads junior when one side of the argument has no supporting numbers at all."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Your cached product API handles 10x traffic growth without incident — hit rate 99.2%, latency flat. The interviewer asks: 'So what breaks first at the NEXT 10x?' Strongest answer?",
+      "options": [
+        {
+          "t": "\"Nothing structural — the cache tier scales horizontally, so I'd add nodes ahead of the growth and move on.\"",
+          "correct": false,
+          "why": "'Horizontally scalable' is an incantation, not an analysis. Adding nodes spreads keys, but each key still lives on one node — fame doesn't shard. The probe is fishing for whether you know your architecture's non-linear failure; this answer announces you don't."
+        },
+        {
+          "t": "\"The database breaks first — 10x traffic means 10x misses.\"",
+          "correct": false,
+          "why": "Arithmetically fair (miss QPS does scale ~10x at constant hit rate) and worth monitoring, but it's the linear, boring failure — you fix it with origin capacity or a hit-rate nudge. The non-linear cliff, the one that takes judgment to foresee, is per-key skew melting a single shard."
+        },
+        {
+          "t": "\"Skew, not average load — the top keys are nearing single-node throughput, so a hot key melts one shard first. Per-server L1, plus fan-out for the worst keys.\"",
+          "correct": true,
+          "why": "This answer knows where caches actually break: not aggregate capacity (add nodes) but per-key ceilings that no horizontal scaling fixes. Naming the mechanism, the first victim, and the mitigation — before being asked — is exactly what the 10x probe exists to surface."
+        },
+        {
+          "t": "\"I'd migrate to a bigger managed cache service before finding out.\"",
+          "correct": false,
+          "why": "Outsourcing the question instead of answering it — managed services have the same per-key physics, and 'migrate preemptively' names neither what breaks nor why. The interviewer learns only that you'd rather buy than reason."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Teammate's design for a payments service: 'Write-back caching for transaction records — Redis is replicated, so durability is covered, and we need the write throughput.' Your review?",
+      "options": [
+        {
+          "t": "Approve — with 3 replicas, the odds of losing all copies in the flush window are negligible",
+          "correct": false,
+          "why": "Probability math is the wrong frame for promised data — the question isn't the odds of loss but whether loss is survivable, and for acknowledged payments it isn't (regulatory, financial, and trust damage). Correlated failures also break independence assumptions exactly when it matters."
+        },
+        {
+          "t": "Reject: replication is not durability — correlated failures and async lag can lose acknowledged transactions. Database first, then cache reads.",
+          "correct": true,
+          "why": "Right. Replication protects against one node dying, not against correlated loss (bad deploy, power event, partition) or the async window — and 'a few seconds of lost transactions' is an unacceptable sentence. Write-back is a durability decision disguised as a performance pattern; money data never qualifies."
+        },
+        {
+          "t": "Approve if the flush interval is shortened to one second",
+          "correct": false,
+          "why": "A shorter window is a smaller bullet wound. Any interval where 'acknowledged' precedes 'durable on the system of record' can lose transactions you told users succeeded — the flaw is in the ordering, not the duration."
+        },
+        {
+          "t": "Reject write-back, and remove caching from the payments service entirely to be safe",
+          "correct": false,
+          "why": "Overcorrection. Caching READS of transaction history is fine and probably wise — the hazard was specifically acknowledging writes from volatile memory. Throwing out safe uses along with the unsafe one reads as rule-following, not reasoning."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "You're designing the caching layer's observability. Which minimal set of signals do you commit to, and why?",
+      "options": [
+        {
+          "t": "Cache memory usage and uptime — if it's up and not full, it's working",
+          "correct": false,
+          "why": "A cache can be up, half-empty, and useless — serving a 60% hit rate that's quietly tripled database load. Green infrastructure metrics with no effectiveness metrics is monitoring the box instead of the job it was hired to do."
+        },
+        {
+          "t": "Hit rate percentage alone — it's the one number that summarizes cache health",
+          "correct": false,
+          "why": "The percentage hides the number that kills you: 99% to 98% reads as noise while origin load doubles. Percentages also mask traffic growth — flat hit rate at 3x traffic is 3x miss QPS. Alert thresholds belong in the database's units, not ratios."
+        },
+        {
+          "t": "End-to-end request latency — users experience latency, so it covers everything upstream",
+          "correct": false,
+          "why": "Latency is the symptom that fires last — by the time p99 moves, the database is already drowning. Cache metrics exist to warn while there's still time to act; watching only the user-facing symptom converts every cache problem into a surprise."
+        },
+        {
+          "t": "Absolute miss QPS (alert near DB capacity), hit-rate trend, eviction rate, and cache p99",
+          "correct": true,
+          "why": "Each signal maps to a failure mode: miss QPS is the database's actual load (alert on it in the DB's units), hit-rate trend catches slow decay, eviction rate catches silent working-set overflow that TTL math won't show, and cache p99 catches the cache itself degrading. Small set, every line actionable."
+        }
+      ]
+    },
+    {
+      "id": "p1c06-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Interviewer: 'Your feed cache serves data that's up to 30 seconds stale. The PM says the feed must be real-time. Walk me through your response.' The senior answer:",
+      "options": [
+        {
+          "t": "\"I'd ask what 'real-time' protects. If it's 'my own post appears instantly,' pin the author's posts fresh in their view and keep 30s staleness for everyone else.\"",
+          "correct": true,
+          "why": "Interrogates the requirement, finds the narrow guarantee hiding inside the broad demand, and proposes a mechanism that meets it for pennies — read-your-own-writes is almost always what 'real-time feed' actually means. Translating product language into a precise, cheap consistency contract is senior judgment at its purest."
+        },
+        {
+          "t": "\"Requirements are requirements — I'd drop the cache TTL to zero and scale the database for the read load.\"",
+          "correct": false,
+          "why": "Obedience isn't engineering. Taking 'real-time' at face value commits you to 10-100x infrastructure cost without asking what the requirement protects — and the PM would almost certainly trade 30 invisible seconds for that budget. Push back with a cheaper mechanism, not a bigger bill."
+        },
+        {
+          "t": "\"I'd explain that real-time isn't possible in distributed systems and the PM must accept staleness.\"",
+          "correct": false,
+          "why": "Both condescending and false — plenty of systems deliver effectively-real-time views when it's worth the cost. 'Educating' the PM instead of decomposing the requirement closes a conversation the senior answer opens; the goal is the need behind the words."
+        },
+        {
+          "t": "\"I'd A/B test 30 seconds versus 5 seconds of staleness and let the data decide.\"",
+          "correct": false,
+          "why": "Experiment-shaped procrastination: it delays the design question, costs weeks, and neither arm addresses the likely true need (seeing your OWN post instantly — which no global TTL choice fixes). Data-driven is a virtue when the hypothesis is right; here the decomposition was skippable thinking, not testable."
+        }
+      ]
+    }
+  ]
+}

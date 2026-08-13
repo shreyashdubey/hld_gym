@@ -1,0 +1,291 @@
+<p>Twenty minutes into a senior loop, a candidate says the magic words: "I'll shard the database." The interviewer, who has been nodding pleasantly, asks one quiet question: <em>"How much data is there?"</em> Silence. The candidate has 50 million users in the requirements and no idea what that means in gigabytes. They do the math live, badly, and it comes out to about 40 GB. Forty gigabytes. That fits in the <em>RAM</em> of one mid-sized server. They had just proposed slicing a suitcase into six pieces and shipping each piece on its own truck.</p>
+
+<p>Nothing about that candidate's knowledge was wrong. What failed was the ritual that should run <em>before</em> any architecture word leaves your mouth: a sixty-second envelope calculation that tells you what size of problem you're actually holding. Skip it, and every decision after is a guess wearing a confident voice.</p>
+
+<p>The ritual is small: a handful of memorized numbers, a few conversion tricks, and one iron rule. Learn it and you can take "10 million daily users" and, in a minute of talking out loud, know whether you need one server or one thousand — and, more importantly, what that answer <em>changes</em> about your design.</p>
+
+<h2>The iron rule: numbers must drive decisions</h2>
+
+<p>Here is the rule, up front, because everything else hangs on it: <strong>an estimate that doesn't change your design is filler.</strong> Interviewers watch candidates compute "36 terabytes per year!" with visible pride, write it in a corner of the whiteboard, and then design exactly the system they were always going to design. That's not estimation. That's a magic trick with no reveal.</p>
+
+<p>Every calculation must end with the word "so." <em>Reads outnumber writes 200 to 1 — so I design the read path first and lean on caching. The dataset is 40 GB — so it fits in memory and sharding is off the table. Media is 95% of the bytes — so it goes to object storage and a CDN, and the database only holds metadata.</em> The number is the setup; the "so" is the deliverable. If you can't finish the sentence, don't do the math.</p>
+
+<div class="box story"><div class="box-tag">War story — Google's NALSD interview</div>
+<p>Google's SRE (Site Reliability Engineering) organization has a name for this discipline: <strong>Non-Abstract Large System Design</strong>, or NALSD — and it built an interview format around it, documented in <em>The Site Reliability Workbook</em> (2018). The format is an iterative squeeze: the candidate sketches a basic design; the interviewer asks <em>Is it possible? Can we do better?</em> Then the scale goes up and the questions sharpen: <em>Is it feasible with real hardware and a real budget? Is it resilient when machines die?</em> The workbook walks a full example — joining two streams of ad logs — and judges every iteration purely on whether the numbers close: disk seeks per second per machine, machines implied, whether the answer costs absurd money. The reason for "non-abstract" is blunt: a design that exists only as boxes and arrows cannot be evaluated at all. Google made "convert the boxes into machines, disks, and dollars" a formal hiring bar because engineers who can't do it ship designs that physically cannot work — and nobody finds out until the hardware order arrives.</p>
+</div>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Envelope math is how you shop for a wedding venue. You don't count guests to the exact person — you say "roughly 300 people, so the 80-seat hall is out, the stadium is absurd, we want a mid-sized banquet hall." The estimate is crude, and it doesn't matter: its only job was to eliminate categories. That's the goal of interview estimation too — not the right number, but the right <em>category</em> of solution. The analogy breaks in one place: venues forgive a 10% overflow; a database at 110% of capacity does not.</p>
+</div>
+
+<h2>The numbers you carry in your head</h2>
+
+<p>You can't estimate without anchors. The anchors are a short table of latencies — how long basic operations take — passed around the industry for decades. Memorize it like multiplication tables: not because anyone quizzes the raw values, but because every storage and caching decision you'll ever defend is secretly a ratio of two rows in it.</p>
+
+<table class="numbers">
+<thead><tr><th>Operation</th><th>Cost</th><th>Scaled: if L1 took 1 second</th></tr></thead>
+<tbody>
+<tr><td>L1 cache reference</td><td>0.5 ns</td><td>1 second</td></tr>
+<tr><td>Main memory (RAM) read</td><td>100 ns</td><td>~3 minutes</td></tr>
+<tr><td>Send 1 KB over a 1 Gbps link</td><td>10 µs</td><td>~6 hours</td></tr>
+<tr><td>SSD random read</td><td>100 µs</td><td>~2.5 days</td></tr>
+<tr><td>Read 1 MB sequentially from RAM</td><td>250 µs</td><td>~6 days</td></tr>
+<tr><td>Round trip inside one datacenter</td><td>0.5 ms</td><td>~11 days</td></tr>
+<tr><td>Read 1 MB sequentially from SSD</td><td>1 ms</td><td>~23 days</td></tr>
+<tr><td>Spinning-disk seek</td><td>10 ms</td><td>~8 months</td></tr>
+<tr><td>Round trip across an ocean</td><td>150 ms</td><td>~9.5 years</td></tr>
+</tbody>
+</table>
+
+<p>Read the third column slowly. If touching the CPU's own cache is one second, reading RAM is a stroll to the next room, an SSD read is a weekend trip, a disk seek is <em>most of a year</em>, and asking a server on another continent is a decade. These aren't differences you tune around — they're different universes, and the ratios between them are the actual content of system design:</p>
+
+<ul>
+<li><strong>RAM vs disk seek: 100,000×.</strong> This one ratio explains why caching exists, why databases fight to keep indexes in memory, and why "just read it from disk" should make you flinch.</li>
+<li><strong>The datacenter network is fast — faster than a disk.</strong> A round trip to a machine in the same building (0.5 ms) costs less than one seek on your own spinning disk (10 ms). That's why fetching from a cache server across the room wins, and why distributed systems make sense at all.</li>
+<li><strong>Cross-continent is physics, not engineering.</strong> 150 ms is mostly the speed of light in fiber doing a 20,000 km lap. No budget fixes it; the only cure is moving data closer to people — the entire reason CDNs and multi-region deployments exist.</li>
+<li><strong>Sequential beats random.</strong> A disk that takes 10 ms to seek streams sequential data at 100+ MB/s once moving. Append-based systems (logs, Kafka, LSM-tree databases) are fast <em>because</em> they arranged their lives around this row.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Latency ladder on a log scale from L1 cache to cross-ocean round trip">
+  <text class="dg-txt-s" x="10" y="30">L1 cache</text>
+  <rect class="dg-node" x="150" y="14" width="18" height="24" rx="4"/>
+  <text class="dg-txt-s" x="176" y="30">0.5 ns</text>
+  <text class="dg-txt-s" x="10" y="76">RAM read</text>
+  <rect class="dg-node" x="150" y="60" width="144" height="24" rx="4"/>
+  <text class="dg-txt-s" x="302" y="76">100 ns</text>
+  <text class="dg-txt-s" x="10" y="122">SSD random read</text>
+  <rect class="dg-node" x="150" y="106" width="330" height="24" rx="4"/>
+  <text class="dg-txt-s" x="488" y="122">100 µs</text>
+  <text class="dg-txt-s" x="10" y="168">Same-DC round trip</text>
+  <rect class="dg-node-alt" x="150" y="152" width="373" height="24" rx="4"/>
+  <text class="dg-txt-s" x="531" y="168">0.5 ms</text>
+  <text class="dg-txt-s" x="10" y="214">Disk seek</text>
+  <rect class="dg-node" x="150" y="198" width="454" height="24" rx="4"/>
+  <text class="dg-txt-s" x="612" y="214">10 ms</text>
+  <text class="dg-txt-s" x="10" y="260">Cross-ocean round trip</text>
+  <rect class="dg-bad" x="150" y="244" width="527" height="24" rx="4"/>
+  <text class="dg-txt-s" x="150" y="292">Log scale: each step right is another 10×. RAM to SSD alone is a 1,000× cliff.</text>
+  <text class="dg-txt-s" x="150" y="312">The highlighted bar: the network next door is cheaper than your own spinning disk.</text>
+</svg>
+<figcaption>The latency ladder. The bars grow logarithmically — every centimeter hides a factor of ten. Design decisions live in the gaps between bars, not the bars themselves.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — where "the numbers" come from</div>
+<p>The table has a documented lineage. Peter Norvig published an early version in his 2001 essay "Teach Yourself Programming in Ten Years," as approximate timings every programmer should internalize. Then Jeff Dean — the Google engineer behind MapReduce, Bigtable, and Spanner — put a slide titled <em>"Numbers Everyone Should Know"</em> into his 2009 LADIS keynote, and it went viral the way engineering slides occasionally do. Dean's point was never trivia: he and Sanjay Ghemawat were famous inside Google for refusing to build anything until the envelope math closed. In his talks, Dean estimates rendering an image-search page of 30 thumbnails — read them serially from disk at ~10 ms a seek and it's over half a second; read them in parallel and it's tens of milliseconds — the entire architecture choice falling out of arithmetic you can do in your head. A researcher named Colin Scott later built a version of the table projected across the years, revealing the deeper lesson: SSDs and networks got dramatically faster since 2009, but the cross-ocean row barely moved. Silicon improves; the speed of light doesn't.</p>
+</div>
+
+<h2>Units, powers, and ruthless rounding</h2>
+
+<p>Second tool: fluency with big numbers, so the arithmetic never steals attention from the reasoning. Three habits cover it.</p>
+
+<p><strong>Habit one: powers of two collapse into powers of ten.</strong> 2¹⁰ = 1,024 ≈ 1,000. So kilo ≈ 10³, mega ≈ 10⁶, giga ≈ 10⁹, tera ≈ 10¹², peta ≈ 10¹⁵, and you can stop caring about the 2.4% error forever. Attach a physical anchor to each: an MP3 song ~5 MB, a two-hour HD movie stream ~4 GB, a laptop SSD ~1 TB — and the full text of English Wikipedia is only ~20 GB compressed, exactly the kind of anchor that stops you from claiming a text dataset is "petabytes."</p>
+
+<p><strong>Habit two: know what things weigh.</strong></p>
+
+<table>
+<thead><tr><th>Thing</th><th>Size</th><th>Worth remembering because</th></tr></thead>
+<tbody>
+<tr><td>ASCII character</td><td>1 byte</td><td>English text is cheap</td></tr>
+<tr><td>UTF-8 character</td><td>1–4 bytes</td><td>Emoji and most non-Latin scripts cost more; budget 2× for global text</td></tr>
+<tr><td>int / long / timestamp</td><td>4 / 8 / 8 bytes</td><td>IDs and times are nearly free</td></tr>
+<tr><td>UUID</td><td>16 bytes (36 as text)</td><td>Store it as bytes, not a string</td></tr>
+<tr><td>A tweet-sized text row</td><td>~300 bytes raw → budget 1 KB</td><td>Indexes, row overhead, and metadata multiply raw data 2–3×</td></tr>
+<tr><td>Thumbnail image</td><td>~10 KB</td><td>Small enough to consider caching aggressively</td></tr>
+<tr><td>Compressed photo</td><td>~200 KB</td><td>What you actually serve</td></tr>
+<tr><td>Phone-camera original</td><td>~3 MB</td><td>What users actually upload — 15× bigger than what you serve</td></tr>
+<tr><td>One minute of HD video, streamed</td><td>~40 MB</td><td>Why video companies talk about petabytes and everyone else doesn't</td></tr>
+</tbody>
+</table>
+
+<p>Notice the built-in multipliers: real storage is raw bytes × 2–3 for indexes and overhead, then × 3 for replication (three copies, so a dead disk loses nothing). A "10 GB" dataset occupies more like 60–90 GB of actual disk. Say the multipliers out loud; forgetting replication is the classic silent 3× error.</p>
+
+<p><strong>Habit three: round ruthlessly, and announce it.</strong> One significant figure everywhere. A day has 86,400 seconds — call it 10⁵ and accept the 14% error with a smile. This buys the most useful conversion in the discipline: <strong>1 million events per day ≈ 10 per second; 1 billion per day ≈ 10,000 per second.</strong> Chant it. A candidate computing "23.148 requests per second" to three decimals is broadcasting that they think precision is the point. It isn't — being reliably within 3× of reality, fast, is the point, and saying "I'm rounding a day to 100K seconds" shows your roundings are choices, not accidents.</p>
+
+<h2>The QPS ritual: from humans to requests</h2>
+
+<p>Now the workhorse calculation, the one you'll run in every interview: converting a population of humans into a rate of requests — QPS, queries per second — in four hops.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 150" role="img" aria-label="Pipeline from daily active users to peak QPS design target">
+  <rect class="dg-node" x="10" y="40" width="140" height="56" rx="8"/>
+  <text class="dg-txt" x="24" y="63">100M DAU</text>
+  <text class="dg-txt-s" x="24" y="82">daily actives</text>
+  <line class="dg-edge" x1="150" y1="68" x2="180" y2="68" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="180" y="40" width="160" height="56" rx="8"/>
+  <text class="dg-txt" x="194" y="63">× 5 actions/day</text>
+  <text class="dg-txt-s" x="194" y="82">= 500M requests/day</text>
+  <line class="dg-edge" x1="340" y1="68" x2="370" y2="68" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="370" y="40" width="160" height="56" rx="8"/>
+  <text class="dg-txt" x="384" y="63">÷ 100K seconds</text>
+  <text class="dg-txt-s" x="384" y="82">= 5K/sec average</text>
+  <line class="dg-edge" x1="530" y1="68" x2="560" y2="68" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="560" y="32" width="150" height="72" rx="8"/>
+  <text class="dg-txt" x="574" y="58">× 3 for peak</text>
+  <text class="dg-txt" x="574" y="78">= 15K/sec</text>
+  <text class="dg-txt-s" x="574" y="95">design target</text>
+  <text class="dg-txt-s" x="10" y="132">Only the last box matters. Nobody builds for the average; the average is 4 a.m.</text>
+</svg>
+<figcaption>The QPS pipeline. DAU × actions ÷ 100K seconds × peak factor. Four multiplications, spoken aloud, ending in the number you actually provision for.</figcaption>
+</figure>
+
+<p>Three details make this senior-grade instead of mechanical:</p>
+
+<p><strong>Use DAU — daily active users — not registered users.</strong> "500 million users" in a prompt usually means accounts; maybe 20% show up on a given day. Asking "registered or daily active?" is a free display of experience — the ratio can be 5–10×, the difference between a rack and a fleet.</p>
+
+<p><strong>The peak factor is a claim about human behavior, so justify it.</strong> Consumer traffic is a tide: near-zero at 4 a.m., cresting in the evening. For a typical diurnal (daily-cycle) pattern, peak hour runs <strong>2–5× the daily average</strong> — pick a number and say why: "consumer app, single dominant country, evening peak — I'll design for 3×." A global user base flattens toward 2×; anything event-driven (sports, TV, flash sales) can spike far past 5×, which we'll get to shortly.</p>
+
+<p><strong>Extract the read/write ratio — it names your architecture.</strong> Run the pipeline twice, reads and writes, and divide. A social feed comes out 100:1 or steeper: design the read path first, cache aggressively, and let writes do extra work (like precomputing feeds) to keep reads cheap. A logging pipeline is the mirror image, 1000:1 <em>write</em>-heavy: now batching, append-only storage, and sequential throughput matter, and read latency is nearly irrelevant. One division tells you which of two very different books you're designing from.</p>
+
+<h2>How many servers? Sanity anchors</h2>
+
+<p>QPS means nothing until divided by what one machine can do. Carry these anchors:</p>
+
+<ul>
+<li><strong>A stateless app server: 10–50K simple requests/second.</strong> "Simple" means parse, small logic, a cache or DB call, JSON out. Heavy work (image resizing, crypto) can drop this 10–100×; say which regime you're in.</li>
+<li><strong>A cache node (Redis/Memcached): ~100K ops/second</strong>, sometimes several times that for pipelined gets.</li>
+<li><strong>A relational database (Postgres/MySQL): a few thousand writes/second; tens of thousands of simple indexed reads/second</strong> if the hot data fits in RAM. Almost always the first ceiling a growing system hits.</li>
+<li><strong>A load balancer or reverse proxy: 100K+ requests/second</strong> — rarely your problem.</li>
+</ul>
+
+<p>Then the formula: <code>servers = peak QPS ÷ per-box capacity, × 2–3 for headroom</code>. The headroom isn't cowardice — it covers deploys (some boxes are always out of rotation), failures (design for N−1: the fleet must carry peak with one box dead), and the gap between benchmark and reality. And when the formula outputs "2.4 servers," believe it: the correct reading is <em>scale is not this system's problem</em>, and the minutes you were about to spend on sharding belong somewhere else.</p>
+
+<div class="box story"><div class="box-tag">War story — Stack Overflow's embarrassingly small fleet</div>
+<p>For years Stack Overflow's engineers — most publicly Nick Craver, in his architecture write-ups around 2016 — documented a fact that quietly humiliates over-engineered designs everywhere: one of the largest programming sites on the internet, serving on the order of 200 million HTTP requests a day, ran its web tier on about <strong>nine servers</strong> idling at roughly 5–10% CPU. Craver was explicit that the site could run on far fewer; nine existed for redundancy and rolling deploys, not capacity. The SQL Servers behind it held hundreds of gigabytes of RAM so essentially all hot data was served from memory — the latency table in action. Run the envelope math yourself: 200M ÷ 100K seconds = ~2,000/second average; spread over nine boxes, a couple hundred per box, loafing. The lesson isn't "you only need nine servers" — their workload is unusually read-heavy and cache-friendly. The lesson is that they <em>knew their numbers cold</em>, sized the system to reality instead of fashion, and spent the complexity budget where it paid: keeping the hot set in RAM.</p>
+</div>
+
+<h2>Bandwidth: the 8× trap and the asymmetry trap</h2>
+
+<p>Two conversions cover almost every bandwidth question. First, <strong>network links are quoted in bits, storage in bytes</strong> — divide by 8. A 1 Gbps link moves 125 MB/s; a "10 Gbps NIC" (the server's network card) means ~1.25 GB/s; mixing these up is a silent 8× error. Second, <strong>ingress and egress are wildly asymmetric</strong> for anything media-shaped: users upload a photo once and the world views it a thousand times, so egress (data out) routinely dwarfs ingress 10–100×. Egress is also what clouds charge for — which is why every media-heavy design routes views through a CDN (a network of edge servers caching content near users) and reserves origin bandwidth for cache fills.</p>
+
+<h2>Cache sizing and the 80/20 rule</h2>
+
+<p>Real access patterns are savagely skewed: a small fraction of items gets almost all the traffic. The shorthand is the <strong>80/20 rule</strong> — 20% of items receive 80% of requests — and real popularity distributions (Zipf curves, where the k-th most popular item gets roughly 1/k of the top item's traffic) are usually steeper. The skew is a gift: you don't need everything in fast storage, only the hot set.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 240" role="img" aria-label="Reads split between a small hot cache and the full database">
+  <rect class="dg-node" x="10" y="88" width="150" height="64" rx="8"/>
+  <text class="dg-txt" x="24" y="113">Feed reads</text>
+  <text class="dg-txt-s" x="24" y="132">600K/sec peak</text>
+  <line class="dg-edge" x1="160" y1="104" x2="300" y2="58" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="180" y="62">~90% of reads</text>
+  <rect class="dg-node-alt" x="300" y="20" width="200" height="70" rx="8"/>
+  <text class="dg-txt" x="314" y="48">Cache (RAM)</text>
+  <text class="dg-txt-s" x="314" y="67">hot 20% of posts ≈ 20 GB</text>
+  <line class="dg-edge" x1="160" y1="136" x2="300" y2="180" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="180" y="196">misses only</text>
+  <rect class="dg-node" x="300" y="150" width="200" height="70" rx="8"/>
+  <text class="dg-txt" x="314" y="178">Database</text>
+  <text class="dg-txt-s" x="314" y="197">full history, tens of TB</text>
+  <text class="dg-txt-s" x="530" y="110">A 90% hit rate cuts DB load 10×.</text>
+  <text class="dg-txt-s" x="530" y="130">99% would cut it 100×.</text>
+</svg>
+<figcaption>The 80/20 split in hardware form: a cache a thousandth the size of the database absorbs nearly all the traffic. Hit rate, not cache size, is the number that matters.</figcaption>
+</figure>
+
+<p>Sizing is one multiplication: <code>hot fraction × item count × item size</code>. And do the hit-rate arithmetic correctly: going from 90% to 99% hit rate is not "9% better" — misses drop from 10% to 1%, meaning <strong>10× less load</strong> on the database. Miss rate, not hit rate, is what your database experiences.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A bookshop doesn't keep every book ever printed on the shop floor — it keeps this month's bestsellers on the front table and orders the rest from the warehouse on demand. The front table is a rounding error of the catalog and serves most customers instantly. Cache sizing is deciding how big the front table must be, and the 80/20 rule says: shockingly small. Where the analogy breaks: when a book goes viral, the shop just sells out — your cache instead forwards the stampede to the warehouse, which is how databases die. Hold that thought for the caching chapter.</p>
+</div>
+
+<h2>Three worked examples</h2>
+
+<p>The ritual end-to-end, three times. Each finishes with the only question that matters: <em>so the design changes how?</em></p>
+
+<h3>Example 1: a Twitter-like service — storage and QPS</h3>
+
+<p>Say 200M DAU. Posting is rare: one post per two users per day → 100M posts/day → <strong>1K writes/second average, 3–5K peak</strong>. Reading is constant: ~100 posts scrolled per user per day → 20B reads/day → <strong>200K/second average, 600K+ peak</strong>. Ratio: 200:1 read-heavy. Storage: ~300 bytes of text per post, budget 1 KB with indexes and metadata → 100 GB/day → ~36 TB/year before replication. Media: if 10% of posts carry a 200 KB image, that's 2 TB/day — <strong>media outweighs five years of text in under three months</strong>.</p>
+
+<p><strong>So the design changes how?</strong> Three ways. The 200:1 ratio means the read path is the product: precompute feeds at write time (spend the cheap resource, writes, to subsidize the expensive one, reads) and cache everything. The write rate — a few thousand per second — is within reach of a relational database, so sharding is motivated by the 36 TB/year of <em>data volume</em>, not write QPS; say that distinction out loud, it lands. And media never touches the database: object storage plus CDN, with the DB holding only URLs.</p>
+
+<h3>Example 2: image uploads — bandwidth</h3>
+
+<p>A photo app, 50M DAU, heavy uploaders: 20M photos/day at ~3 MB per phone original. Ingress: 60 TB/day ÷ 100K sec ≈ <strong>600 MB/s ≈ 5 Gbps average, ~15 Gbps peak</strong>. The other direction: each DAU views 50 photos/day served compressed at 200 KB → 500 TB/day ≈ <strong>46 Gbps average egress</strong>, well over 100 Gbps at peak. Egress is ~10× ingress — after the 15× compression from originals to served copies.</p>
+
+<p><strong>So the design changes how?</strong> First: 15 Gbps of uploads must not flow through your app servers — that's saturating NICs with bytes your application logic never touches. Clients upload straight to object storage using presigned URLs (temporary permission slips the app server hands out); the app server handles only metadata. Second: a queue-driven pipeline compresses each 3 MB original asynchronously, because that 15× reduction is what makes the egress bill survivable. Third: 100+ Gbps of peak egress is a CDN's job by definition; your origin serves cache fills only. Three architecture decisions, all falling straight out of arithmetic.</p>
+
+<h3>Example 3: sizing the feed cache</h3>
+
+<p>Back to the Twitter-like service: can we cache our way out of 600K reads/second? What's hot is recent: ~100M posts from the last day at 1 KB is 100 GB; the 80/20 hot set is <strong>~20 GB</strong>. Add per-user precomputed feed lists — 200 post IDs × 8 bytes ≈ 1.6 KB × 200M users ≈ <strong>320 GB</strong>. Total ~350 GB: by capacity, two or three big-memory boxes. But check the other axis: 600K ops/second ÷ 100K per cache node = <strong>6–8 nodes minimum for throughput</strong>, before replicas.</p>
+
+<p><strong>So the design changes how?</strong> The happy conclusion: the entire hot working set fits in RAM at trivial cost, so cache-first isn't an optimization, it's the architecture — the database is demoted to misses and history. The subtle conclusion: this cluster is sized by <em>ops per second, not gigabytes</em> — you'd run ~8 nodes even if the data were 10× smaller. Junior candidates size caches in GB; seniors check both axes and name which one binds. And each node gets a replica, for a reason the arithmetic makes vivid: losing one node sends its share of 600K/second — over 70K reads — at a database provisioned for a whisper of that.</p>
+
+<h2>Nobody is average: estimate the distribution</h2>
+
+<p>Everything so far divided totals by 86,400 as if traffic fell like steady rain. It doesn't — and here estimation stops being arithmetic and becomes judgment. Load clusters along three axes, and the cluster, never the average, is what breaks you.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 210" role="img" aria-label="Daily traffic curve with evening peak far above the flat average line">
+  <line class="dg-edge" x1="50" y1="170" x2="690" y2="170"/>
+  <line class="dg-edge" x1="50" y1="20" x2="50" y2="170"/>
+  <path class="dg-edge" fill="none" d="M50 152 C 130 160, 200 148, 280 122 C 360 100, 430 96, 470 70 C 505 46, 540 40, 565 44 C 600 52, 640 100, 690 140"/>
+  <line class="dg-edge" stroke-dasharray="6 5" x1="50" y1="112" x2="690" y2="112"/>
+  <text class="dg-txt-s" x="58" y="106">average (what the division gives you)</text>
+  <text class="dg-txt-s" x="440" y="30">evening peak ≈ 3–5× average</text>
+  <text class="dg-txt-s" x="40" y="192">4 a.m.</text>
+  <text class="dg-txt-s" x="350" y="192">noon</text>
+  <text class="dg-txt-s" x="640" y="192">11 p.m.</text>
+</svg>
+<figcaption>The tide. Provisioning for the dashed line means falling over every single evening, on schedule.</figcaption>
+</figure>
+
+<p><strong>Temporal clustering.</strong> The daily tide gives you the 2–5× factor. But scheduled events break the tide model entirely: a World Cup final, a flash sale, a New Year's midnight. WhatsApp has reported handling on the order of 75 billion messages on a single New Year's Eve — the world's midnights arriving as vertical spikes, time zone by time zone, each compressing an hour of traffic into minutes. Event-shaped usage means your peak factor isn't 3×; it can be 10× or worse, arriving in seconds — too fast for autoscaling to boot machines. You pre-provision for the calendar, or architect the spike away (queues, staggered fanout), or you make the news.</p>
+
+<p><strong>Geographic clustering.</strong> A "global" service with 70% of its users in one country doesn't experience its global average — it experiences that country's evening, concentrated in one region, while servers elsewhere doze. Divide by region <em>before</em> dividing by seconds. And the latency table looms: those users sit 150 ms from a wrong-continent deployment, and no code optimization gets that back.</p>
+
+<p><strong>Entity clustering.</strong> Per-user averages hide the celebrity with 100M followers and the one auction item everyone wants. Per-entity skew creates hot keys and hot partitions — the crux of several later chapters. For now, the habit: after computing any average, ask "and what does the worst single user/key/row look like?" The answer is routinely 10,000× the mean.</p>
+
+<p>This is the line between junior and senior estimation. Junior estimation is <em>uniform</em>: totals divided by 86,400, users interchangeable, the world a smooth paste. Senior estimation is <em>lumpy</em>: it asks where traffic lands, when, and on which key — because capacity planning against the average is planning to fail at the exact moment everyone is watching.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>The interviewer doesn't grade your arithmetic — they grade the <em>connection</em> between your numbers and your boxes. A passing answer computes fast, rounds shamelessly, states assumptions, and lands every number in a design decision. Probes to expect:</p>
+<ul>
+<li>"How many servers is that?" — checking you have per-box anchors and headroom logic, not a memorized answer.</li>
+<li>"Will that fit in memory?" — the question secretly behind every cache-vs-shard decision; they want the multiplication done live.</li>
+<li>"You assumed peak is 3× average — what breaks that assumption?" — they want event clustering: the New Year's spike, the flash sale.</li>
+<li>"Which of your estimates, if wrong by 10×, changes the design?" — the strongest probe. Know your load-bearing number (usually the read/write ratio or working-set size) and what flips if it moves.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c04-f1">
+<p class="fey-prompt">A junior teammate asks: "Why do you always scribble numbers before drawing boxes? The numbers are all made up anyway." Answer them in five or six sentences, including how you'd turn "20M daily users, 10 app opens each" into a server count.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>The numbers are made up, but only to within 3× — and that's enough to pick between designs that differ by 1,000×. Watch: 20M users × 10 opens = 200M requests/day; a day is ~100K seconds, so 2K/second average; evening peak maybe 3×, so 6K/second. One app server handles 10K+ simple requests/second, so with redundancy and headroom this is three or four servers — a shelf, not a datacenter. That minute of scribbling just told us scale isn't the hard problem, so we won't waste a week designing sharding we'll never need — we'll go find the actual hard problem. That's the whole trick: the estimate isn't for knowing the number, it's for choosing what to build. An estimate that doesn't change a decision wasn't worth doing.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>URL shortener: 100M new short links/month, each read 10×/month on average, stored forever. Estimate write QPS, read QPS, and five-year storage (a stored link ≈ 500 bytes with indexes). Then the real question: what did the numbers just tell you about where the hard part is?</p></div>
+<details><summary>Answer</summary><p>Writes: 100M/month ≈ 3.3M/day ≈ 33/second — round to 40, peak maybe 150. Reads: 10× that — 400/second average, ~1.5K peak. Storage: 100M × 12 × 5 = 6B links × 500 B = 3 TB. Every number is tiny: one database with a replica and a small cache yawns at this, and 3 TB fits on one disk. So the crux was never scale — it's generating billions of unique short IDs without collisions across concurrent servers, and the estimate's job was to redirect your 45 minutes toward that. Candidates who skip the math spend twenty minutes sharding a 3 TB dataset; the numbers would have told them not to.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your session store holds one entry per logged-in user: 30M concurrent sessions at peak, ~2 KB each. The ops team proposes a 16-node sharded cluster. Run the numbers and give a verdict.</p></div>
+<details><summary>Answer</summary><p>30M × 2 KB = 60 GB — fits comfortably in one modern cache node's RAM (128–256 GB boxes are routine). Check the other axis: the store is hit once per user request, and 30M concurrent sessions is not 30M people actively clicking — most logged-in users are idle at any instant. If the app peaks at, say, 60K requests/second (each session averaging a request every eight minutes), that's 60K ops/second — inside one Redis node's ~100K, snug enough that you'd state the assumption out loud. So 16 shards is over-engineering by an order of magnitude; the right shape is one primary plus one or two replicas, where replicas exist for availability (sessions vanishing = everyone logged out = incident), not capacity. Senior verdict in one sentence: "capacity says one box, throughput says one box, so the only reason for more boxes is failover — two or three, not sixteen."</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A cricket app sends a push notification — "Match starting!" — to 50M users, and history shows 20% open the app within one minute. Your normal peak is 8K QPS, provisioned with 3× headroom. What happens, and what do you change?</p></div>
+<details><summary>Answer</summary><p>10M app opens in 60 seconds ≈ 170K QPS — 20× your normal peak, 7× your provisioned ceiling. The frontend collapses, retries multiply the load, and the outage outlasts the spike. Autoscaling won't save you: machines take minutes to boot; this spike arrives in seconds. Fixes, in order of leverage: <em>you</em> control the spike because <em>you</em> sent the notification — stagger the send over 5–10 minutes (170K becomes ~20K); pre-scale before scheduled matches, since the calendar is known; make the app-open path cheap (match screen from CDN/cache, defer personalization); rate-limit at the edge so overload degrades gracefully. The lesson: a self-inflicted synchronized event makes "peak = 2–5× average" catastrophically wrong — the distribution, not the average, is the design input.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your service runs only in Virginia, USA. A user in Mumbai loads a page that makes 4 sequential API calls (each depends on the previous one's result). Using only the latency table, estimate their wait — and say which fixes work and which don't.</p></div>
+<details><summary>Answer</summary><p>Cross-continent round trip ≈ 150 ms; India to US East is at least that — call it 200 ms real-world. Four sequential calls = 4 round trips = ~800 ms of pure travel time, before the first-connection tax (TCP + TLS handshakes cost 2–3 extra round trips) and before your servers do any work. Your code could run in zero time and the user still waits 800 ms, because the delay is the speed of light in fiber. Fixes that work: collapse the 4 calls into 1 batched call (800 → 200 ms — the cheapest fix by far); serve cacheable pieces from a CDN edge near Mumbai; eventually, deploy a region in India. Fixes that don't: faster servers, more servers, code optimization. The senior habit: count round trips first — at intercontinental distance the network isn't part of the latency budget, it is the latency budget.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>An estimate that doesn't change a design decision is filler — every calculation must end with "so," followed by an architectural consequence.</li>
+<li>Memorize the latency ladder as ratios: RAM beats a disk seek by 100,000×, the same-datacenter network beats your own spinning disk, and a cross-ocean round trip is ~150 ms of physics money cannot fix.</li>
+<li>Round ruthlessly and announce it: one significant figure, a day ≈ 100K seconds, so 1M events/day ≈ 10/second and 1B/day ≈ 10K/second.</li>
+<li>The QPS ritual is DAU × actions ÷ 100K × peak factor (2–5× for daily-cycle traffic) — and the read/write ratio extracted along the way names your architecture.</li>
+<li>One box is bigger than you think — 10–50K simple QPS for an app server, ~100K ops for a cache node, a few thousand writes/second for a relational database — so divide before you shard.</li>
+<li>Storage is raw bytes × 2–3 for indexes × 3 for replication, and media dwarfs text so thoroughly that databases should hold pointers, never the media itself.</li>
+<li>Caches are sized by the 80/20 hot set but bounded by ops/second — check both axes, and remember 90% → 99% hit rate cuts database load 10×, not 9%.</li>
+<li>Averages lie: traffic clusters by hour, event, geography, and entity — estimate the peak of the cluster, because the average is 4 a.m. and nothing breaks at 4 a.m.</li>
+</ul>
+</div>

@@ -1,0 +1,268 @@
+<p>Tuesday design review. The new feature is an activity feed. A teammate puts up a slide: "Postgres won't scale for this. I'm proposing MongoDB. Or maybe Cassandra — Netflix uses Cassandra." Heads nod around the room, because nobody wants to be the engineer defending the old database. You glance at the dashboard: the whole product holds 80 GB of data and peaks at 300 requests per second.</p>
+
+<p>Here's the uncomfortable fact hiding under that meeting: 80 GB fits in the RAM of a single rented server, and 300 requests per second is a load Postgres handles while doing a crossword. The proposal isn't engineering — it's fashion. The same scene plays out in interviews every day, and interviewers listen for it, because the database choice is the decision that most cleanly separates "reasons from access patterns and numbers" from "reasons from blog posts."</p>
+
+<p>So treat what follows as a field guide, not a religion: why these databases exist, what each of the four families is actually for, and what's inside the engines — because once you see the machinery, the trade-offs stop being magic and start being arithmetic. And one piece of interview advice will repeat until you're sick of it: <strong>pick one database per family and know it deeply.</strong> Depth in Postgres plus one NoSQL store beats shallow familiarity with nine logos, every single time.</p>
+
+<h2>Why NoSQL exists (it is not because SQL is old)</h2>
+
+<p>Relational databases — Postgres, MySQL — are one of the most successful ideas in computing. They give you joins (combine data across tables in one query), transactions (several changes succeed or fail as a unit), and strong consistency (after a write commits, every read sees it). For forty years, that bundle has been the right default.</p>
+
+<p>But the bundle was designed for one machine. Joins and transactions are cheap when all the data sits on one box; the moment your data spreads across fifty machines, a join might mean shipping gigabytes over the network, and a transaction might mean fifty machines agreeing in lockstep — slow, fragile, sometimes impossible under failure.</p>
+
+<p>Amazon's engineers wrote the famous Dynamo paper (2007) after watching their shopping-cart infrastructure strain during holiday peaks. Their observation was the founding insight of the whole movement: the cart didn't need joins, and it didn't need perfect consistency — it needed to <em>never refuse a write</em>, even while servers were failing mid-Christmas. So they built a store that dropped joins and transactions entirely and bought, with that sacrifice, always-on availability and effortless scale-out across cheap machines.</p>
+
+<p>That's what NoSQL is: <strong>a trade, not an upgrade.</strong> Every NoSQL database removes features from the relational bundle to buy something specific — horizontal scale, write throughput, flexible schema, or one access pattern made absurdly fast. Which means the only sane way to pick one is to know what you're buying and what you're handing over. Three honest reasons to leave Postgres:</p>
+
+<ul>
+<li><strong>Scale-out.</strong> Your data or traffic genuinely exceeds what one big machine (plus read replicas and a cache) can hold. This is rarer than Twitter makes it sound — a single modern Postgres box comfortably serves a few terabytes and thousands of queries per second.</li>
+<li><strong>A specific access pattern.</strong> You do one operation a million times a second — look up a session by ID, append a sensor reading — and a specialized engine does that one operation 10–100x cheaper.</li>
+<li><strong>Schema flexibility.</strong> Your records legitimately vary in shape and evolve weekly, and migrations have become a tax on every release. (Weakest of the three — Postgres's JSONB column type covers a lot of this.)</li>
+</ul>
+
+<p>"SQL doesn't scale" is not on the list, because it's false at the sizes most systems ever reach. Keep that sentence loaded for design reviews.</p>
+
+<h2>The four families</h2>
+
+<p>Every mainstream NoSQL store belongs to one of four families, and each family is a bet on one access pattern. Learn the mental models, one exemplar each, and the when-to-pick — that's the whole landscape.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Four ways to store your stuff. A <strong>cloakroom</strong>: hand over your coat, get ticket 47; with the ticket, retrieval is instant — but ask the attendant for "all black coats size M" and you'll get a blank stare. That's key-value. A <strong>filing cabinet</strong>: everything about the Sharma case lives in one folder — contracts, photos, notes — grab the folder, you have it all; but finding "every case mentioning witness Mehta" means opening every folder. That's document. A <strong>diary with one page per day</strong>: appending today's entry is instant and entries stay time-ordered, but you must know the date to find anything. That's wide-column. A <strong>family tree on the wall</strong>: following lines from person to person is what the drawing is <em>for</em> — questions like "how are these two related?" answer themselves. That's graph. None of these is "better than a library with a catalog" (the relational database). They're each better at exactly one kind of question, and worse at the rest.</p>
+</div>
+
+<h3>Key-value: the giant dictionary</h3>
+
+<p>Mental model: a hash map the size of a building. You store a value (bytes, JSON, whatever) under a key; you get it back by that exact key. No queries, no joins, no "find all values where…". Because the database promises so little, it can be preposterously fast and scale almost without thought — hash the key, that's the machine it lives on.</p>
+
+<p>Exemplars: <strong>Redis</strong> (in-memory, sub-millisecond, rich value types like counters and sorted sets — you met it in the caching chapter) and <strong>DynamoDB</strong> (Amazon's managed descendant of the Dynamo paper: on-disk, replicated, single-digit-millisecond reads whether you store one gigabyte or one petabyte).</p>
+
+<p>Pick it for: session storage ("session token → user context"), shopping carts ("user ID → cart"), feature flags, rate-limit counters, cache layers. The tell is in the sentence: if you catch yourself saying "given X, fetch its Y" and never "find all the Ys where…", you're describing a key-value problem.</p>
+
+<h3>Document: folders of JSON</h3>
+
+<p>Mental model: a filing cabinet of self-contained JSON objects. A product document holds its own variants, images, and reviews, nested inside; one read fetches the whole thing — data that would be five joined tables in Postgres. Documents in the same collection don't have to share a shape, so adding a field next sprint touches no schema.</p>
+
+<p>Exemplar: <strong>MongoDB</strong>. Pick the family when your unit of reading and writing is naturally a whole nested object (product page, user profile, CMS article, insurance claim) and the shape genuinely evolves. The cost shows up the day your access patterns stop matching the folder boundaries: "every document mentioning X" or data that's actually relational — orders referencing products referencing inventory — turns into either duplicated data or joins reimplemented, badly, in application code. Honest footnote: Postgres's JSONB gives you queryable, indexable documents inside a relational database, so "we need nested JSON" alone no longer justifies a second database.</p>
+
+<h3>Wide-column: the two-level map</h3>
+
+<p>Mental model: a map of maps, and the keys are the entire design. The <dfn>partition key</dfn> decides which machines own the data — hash it, land on a node, exactly like the consistent hashing you learned in the sharding chapter. Inside a partition, rows are stored physically sorted by the <dfn>clustering key</dfn>. So "all messages in channel 42 between 9:00 and 9:05" is: jump to one machine, one sequential sweep through sorted rows. No scanning, no scatter.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Wide-column model: partition key routes to one node, rows sorted inside the partition">
+  <rect class="dg-node" x="8" y="60" width="206" height="80" rx="8"/>
+  <text class="dg-txt" x="22" y="86">New message</text>
+  <text class="dg-txt-s" x="22" y="106">partition key: channel_id=42</text>
+  <text class="dg-txt-s" x="22" y="124">clustering key: timestamp</text>
+  <line class="dg-edge" x1="214" y1="100" x2="258" y2="100" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="216" y="90">hash(42)</text>
+  <rect class="dg-node" x="262" y="8" width="150" height="42" rx="8"/>
+  <text class="dg-txt" x="276" y="34">Node A</text>
+  <rect class="dg-node-alt" x="262" y="62" width="300" height="118" rx="8"/>
+  <text class="dg-txt" x="276" y="84">Node B</text>
+  <rect class="dg-zone" x="276" y="94" width="270" height="76" rx="6"/>
+  <text class="dg-txt-s" x="288" y="112">partition: channel 42 (sorted by time)</text>
+  <text class="dg-txt-s" x="288" y="130">09:00:01  "yo"</text>
+  <text class="dg-txt-s" x="288" y="146">09:00:04  "sup"</text>
+  <text class="dg-txt-s" x="288" y="162">09:00:07  "hi"  ← appended at the end</text>
+  <rect class="dg-node" x="262" y="192" width="150" height="42" rx="8"/>
+  <text class="dg-txt" x="276" y="218">Node C</text>
+  <text class="dg-txt-s" x="430" y="210">a time-range read = one node,</text>
+  <text class="dg-txt-s" x="430" y="228">one sequential sweep</text>
+</svg>
+<figcaption>Wide-column thinking: the partition key picks the machine, the clustering key sorts rows inside it. Design the keys around the query, and reads become mechanical.</figcaption>
+</figure>
+
+<p>Exemplars: <strong>Cassandra</strong> and <strong>ScyllaDB</strong> (same data model; Scylla is a C++ rewrite of Cassandra's Java). Both are leaderless — every node accepts writes, with the quorum machinery from the consistency chapter — so there's no single primary to bottleneck, and adding nodes adds capacity nearly linearly. Pick the family for write-heavy, time-ordered workloads: chat messages, activity feeds, sensor readings, event logs. The cost: you must know your queries when you design the table, because the table <em>is</em> the query. Ask anything the keys weren't designed for and the database shrugs.</p>
+
+<div class="box story"><div class="box-tag">War story — Netflix proves linear scale-out</div>
+<p>In November 2011, Netflix was mid-migration from its own datacenters to AWS and needed to know whether Cassandra could really absorb their write load in the cloud. So they ran a now-famous benchmark: a Cassandra cluster spread across three AWS availability zones, tested at 48, 96, 144, and 288 instances. Throughput scaled almost perfectly linearly — double the machines, double the writes — topping out at over <strong>1.1 million client writes per second</strong> on the 288-node cluster, with every write replicated three ways across zones. The whole experiment took about two hours and a few hundred dollars of EC2 time. That linearity is the whole promise of the leaderless wide-column design: no primary to saturate, no re-architecture at each step, just more nodes. It's why Cassandra became Netflix's workhorse for high-volume operational data like viewing history — and why "we'll add nodes" is a credible scaling answer in this family in a way it never is for a single-primary relational database.</p>
+</div>
+
+<h3>Graph: relationships as first-class citizens</h3>
+
+<p>Mental model: nodes and edges stored so that <em>walking</em> from a node to its neighbors is a pointer hop, not an index lookup. Exemplar: <strong>Neo4j</strong>. The honest use case is variable-depth traversal — queries where you don't know how many hops you'll need: "is this new account connected, through any chain of shared devices, cards, or addresses, to a known fraud ring?" In SQL, unknown-depth traversal becomes recursive joins that get uglier and slower with every hop; in a graph store it's the native operation.</p>
+
+<p>Now the honesty the sales deck omits: <strong>most "graph problems" are two joins.</strong> "Friends of friends" is a self-join, twice, on a follows table — Postgres eats it with an index. "People who bought this also bought" is a two-hop query with a fixed depth — same. In an interview, reaching for a graph database on fixed-depth questions signals you don't know what joins can do. The graph family earns its keep at hop three and beyond, when depth is unknown, or when the traversal itself is the product (fraud detection, dependency analysis, knowledge graphs).</p>
+
+<h2>Under the hood: B-trees, LSM trees, and why Cassandra writes so fast</h2>
+
+<p>You can use databases for years treating the storage engine as magic. But one distinction explains so many observed behaviors — why Cassandra swallows write floods, why its reads sometimes wobble, what "compaction" alerts mean — that it's worth ten minutes.</p>
+
+<p>Postgres and MySQL organize data in <strong>B-trees</strong>: a sorted tree of fixed-size pages on disk. To update a row, the engine finds its page and modifies it in place — and also updates every index that references it. Reads are wonderful: any row is a few page hops away. Writes pay the price: finding and rewriting pages scattered across the disk, once per index.</p>
+
+<p><strong>LSM trees</strong> (log-structured merge trees — the engine inside Cassandra, ScyllaDB, RocksDB, and LevelDB) refuse to modify anything in place. A write goes two places: appended to a <dfn>WAL</dfn> (write-ahead log — an append-only file on disk, so the write survives a crash) and inserted into the <dfn>memtable</dfn> (a sorted structure in RAM). Then the database says "done." That's the entire write path — one sequential append plus one memory insert, which is why it's fast: no seeking, no page rewriting, no index shuffling. When the memtable fills, it's flushed to disk as an <dfn>SSTable</dfn> — a sorted, immutable file. Updates don't touch old data; they just write a newer version. Deletes write a <dfn>tombstone</dfn> — a little marker meaning "pretend this is gone."</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="LSM tree write path: WAL and memtable, flush to SSTables, compaction merges them">
+  <rect class="dg-node" x="8" y="96" width="120" height="48" rx="8"/>
+  <text class="dg-txt" x="30" y="125">Write</text>
+  <line class="dg-edge" x1="128" y1="108" x2="168" y2="76" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="128" y1="132" x2="168" y2="188" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="118" y="160">both, then ack</text>
+  <rect class="dg-node" x="172" y="40" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="186" y="64">Memtable</text>
+  <text class="dg-txt-s" x="186" y="84">sorted, in RAM</text>
+  <rect class="dg-node" x="172" y="176" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="186" y="200">WAL</text>
+  <text class="dg-txt-s" x="186" y="220">append-only log on disk</text>
+  <line class="dg-edge" x1="342" y1="60" x2="416" y2="48" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="344" y="36">flush when full</text>
+  <rect class="dg-node" x="420" y="28" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="432" y="52">SSTable 3 — newest</text>
+  <rect class="dg-node" x="420" y="90" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="432" y="114">SSTable 2</text>
+  <rect class="dg-node" x="420" y="152" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="432" y="176">SSTable 1 — oldest</text>
+  <line class="dg-edge" x1="570" y1="48" x2="600" y2="100" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="570" y1="110" x2="600" y2="115" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="570" y1="172" x2="600" y2="130" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="604" y="82" width="110" height="70" rx="8"/>
+  <text class="dg-txt-s" x="616" y="106">merged</text>
+  <text class="dg-txt-s" x="616" y="122">SSTable, dead</text>
+  <text class="dg-txt-s" x="616" y="138">rows dropped</text>
+  <text class="dg-txt-s" x="560" y="180">compaction</text>
+  <text class="dg-txt-s" x="8" y="266">A read checks the memtable, then SSTables newest → oldest. Compaction keeps that list short —</text>
+  <text class="dg-txt-s" x="8" y="284">when compaction falls behind, every read touches more files, and latency climbs.</text>
+</svg>
+<figcaption>The LSM write path. Writes are one append plus one memory insert — that's the speed. Reads pay a toll that grows with the number of SSTables, and compaction is the janitor keeping the toll low.</figcaption>
+</figure>
+
+<p>The bill arrives on the read path. A row's latest version could be in the memtable or any of a dozen SSTables, so a read may consult several files (helped by per-file Bloom filters — probability tricks that say "definitely not in this file"). Left alone, files pile up and reads keep slowing. So a background process called <dfn>compaction</dfn> continuously merges SSTables: it takes several sorted files, merge-sorts them into one, keeps only each row's newest version, drops tombstoned data for real, and deletes the inputs. Compaction is why LSM reads stay acceptable — and it costs real disk I/O and CPU, forever, in the background.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A B-tree is a librarian who reshelves every returned book immediately: returns are slow (walk to the right shelf, every time), but finding any book is instant. An LSM tree is a returns bin by the door: dropping a book takes one second no matter how busy the library gets — but to find a book you must check the shelves <em>and</em> rummage through every bin, newest first. So each night, staff merge-sort the bins onto the shelves and throw out superseded editions. That nightly merge is compaction. And the classic LSM failure is visible in the analogy: if returns flood in faster than the night staff can sort, bins multiply, and every lookup gets slower — the library is drowning not in books but in unsorted bins.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Discord's three-database journey</div>
+<p>Discord's message store is the best public tour of this whole chapter. They launched in 2015 on <strong>MongoDB</strong> — right choice for shipping fast. By November of that year they had 100 million messages, the data and indexes no longer fit in RAM, and latency turned unpredictable. So they migrated to <strong>Cassandra</strong>, modeling messages with a partition key of <code>(channel_id, bucket)</code> — a bucket being roughly ten days of one channel's messages, precisely the bounded-partition thinking above. That design carried them from billions to <em>trillions</em> of messages on a cluster that grew to 177 nodes. Then the engine itself became the pain: a giant channel going viral created <strong>hot partitions</strong> — traffic hammering the few replicas owning that partition, latency cascading cluster-wide (adding nodes can't fix this; the partition still lives on the same replicas). Cassandra's JVM added <strong>garbage-collection pauses</strong> — the runtime freezing to reclaim memory — that they tuned endlessly. And <strong>compaction fell behind</strong> under load, so reads touched ever more SSTables. In 2022 they migrated to <strong>ScyllaDB</strong> — same data model, C++ engine, no GC, one shard per CPU core — and put Rust "data services" in front that coalesce identical concurrent reads: a thousand clients requesting the same hot message become one database query. Results: 177 nodes down to 72, and worst-case p99 message reads from 40–125 ms to about 15 ms. Notice what survived all three migrations: the access pattern and the partition-key design. The engines were replaceable; the data model was the real asset.</p>
+</div>
+
+<h2>The distributed tax: secondary indexes and single-table thinking</h2>
+
+<p>In Postgres, when you want to query by a new field, you type <code>CREATE INDEX</code> and go get chai. It's the single habit that transfers worst to distributed databases — and interviewers love probing exactly this.</p>
+
+<p>A <dfn>secondary index</dfn> is an index on anything other than the primary key. On one machine it's cheap. But in a store that's sharded by partition key, data for "status = shipped" lives scattered across every node. Distributed databases handle this in one of two unpleasant ways. Cassandra-style local indexes: each node indexes only its own data, so a query by that field must fan out to <em>every node</em> and merge results — called <dfn>scatter-gather</dfn>, with latency set by the slowest node; fine at 5 nodes, grim at 100. DynamoDB-style global secondary indexes (GSIs): the database maintains what is honestly a <em>second copy of your table</em>, repartitioned by the new key and updated asynchronously — so it costs extra storage, extra write capacity on every write, and reads from it are eventually consistent (may briefly lag). Nothing here resembles "type one line, go get chai." <strong>In distributed stores, every query pattern must be paid for explicitly — with a duplicate of the data organized for that query.</strong></p>
+
+<p>Follow that principle to its logical end and you get DynamoDB <strong>single-table design</strong>: list every access pattern up front, then cram all your entity types — users, orders, order items — into one table, overloading generic partition and sort keys (<code>USER#123</code> / <code>ORDER#2026-08-13#456</code>) so that each access pattern is one cheap key lookup, and related records land adjacent for one-query retrieval. It reads as gibberish next to a relational schema, and that's the point: it's a table organized by query, not by entity. The trade is stark — spectacular performance and scale for the queries you predicted, real pain for the ones you didn't. Which makes the deeper lesson of this whole chapter explicit: relational databases let you defer knowing your queries; NoSQL makes you pay for that knowledge up front.</p>
+
+<h2>NewSQL: paying to keep both</h2>
+
+<p>One more shelf in the field guide. A class of databases — Google's <strong>Spanner</strong>, its open-source cousin <strong>CockroachDB</strong> — refuses the founding trade of NoSQL: they offer SQL, real transactions, and strong consistency <em>and</em> horizontal scale-out across machines and regions. Spanner does it with TrueTime, a fleet of GPS receivers and atomic clocks in Google's datacenters that lets nodes bound clock uncertainty tightly enough to order transactions globally. The catch is that physics still gets paid: cross-region commits wait on replication and clock-uncertainty windows, so writes carry tens of milliseconds of floor latency; the systems are expensive; and the operational surface is serious. When someone in an interview says "I need transactions AND multi-region scale," this class is the honest answer — delivered with its price tag, not as a free lunch.</p>
+
+<h2>The decision framework</h2>
+
+<p>Now the field guide's actual method. Three questions, asked in this order — most people ask them in reverse, which is how 80 GB products end up on Cassandra.</p>
+
+<p><strong>1. What are the access patterns?</strong> Not "what data do I have" — how is it read and written? List the top queries and their rough frequencies. "Given a session token, fetch the user" is key-value. "Append events, read one key's recent window" is wide-column. "Read a whole nested object whose shape keeps changing" is document. "Traverse relationships to unknown depth" is graph. "Many entities, cross-referenced, queried in ways I can't fully predict" — that's relational, and it describes most products.</p>
+
+<p><strong>2. What are the consistency needs?</strong> If two records must change together atomically — money moves, seat bookings, inventory — you need transactions, and that vetoes most of the NoSQL landscape no matter how well the access pattern fits. Postgres, or Spanner-class if you truly need multi-region scale too. If stale-by-a-second reads are fine (feeds, likes, sensor dashboards), the eventually consistent families stay on the table.</p>
+
+<p><strong>3. Is the scale real? Be honest.</strong> Put numbers on it — the estimation chapter's whole job. And here is the sentence this book will stand behind: <strong>under roughly a terabyte of data and a few thousand queries per second, the answer is Postgres.</strong> One primary, read replicas, a cache in front — that architecture serves companies with millions of users. Choosing it isn't timid; in an interview it reads as senior, <em>because</em> you attached numbers: "At 200 GB and 800 QPS peak this is comfortably Postgres. The signal that changes my mind is sustained write throughput beyond what one primary plus batching can absorb — then I'd move the write-heavy table, and only it, to Cassandra." Commit, justify, name the escalation trigger.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 380" role="img" aria-label="Decision tree: scale honesty first, then dominant access pattern selects the family">
+  <rect class="dg-node" x="200" y="14" width="270" height="46" rx="8"/>
+  <text class="dg-txt" x="214" y="42">Under ~1 TB, a few thousand QPS?</text>
+  <line class="dg-edge" x1="470" y1="37" x2="540" y2="37" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="492" y="30">yes</text>
+  <rect class="dg-node-alt" x="545" y="14" width="168" height="56" rx="8"/>
+  <text class="dg-txt" x="559" y="38">Postgres. Done.</text>
+  <text class="dg-txt-s" x="559" y="56">revisit at real scale</text>
+  <line class="dg-edge" x1="335" y1="60" x2="335" y2="102" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="343" y="86">no — now pick by pattern</text>
+  <rect class="dg-node" x="195" y="106" width="280" height="46" rx="8"/>
+  <text class="dg-txt" x="240" y="134">Dominant access pattern?</text>
+  <line class="dg-edge" x1="335" y1="152" x2="90" y2="206" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="335" y1="152" x2="270" y2="206" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="335" y1="152" x2="450" y2="206" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="335" y1="152" x2="630" y2="206" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="8" y="210" width="165" height="110" rx="8"/>
+  <text class="dg-txt" x="22" y="234">Key-value</text>
+  <text class="dg-txt-s" x="22" y="256">Redis, DynamoDB</text>
+  <text class="dg-txt-s" x="22" y="276">exact key → value</text>
+  <text class="dg-txt-s" x="22" y="294">sessions, carts, cache</text>
+  <rect class="dg-node" x="188" y="210" width="165" height="110" rx="8"/>
+  <text class="dg-txt" x="202" y="234">Document</text>
+  <text class="dg-txt-s" x="202" y="256">MongoDB</text>
+  <text class="dg-txt-s" x="202" y="276">whole nested objects</text>
+  <text class="dg-txt-s" x="202" y="294">catalogs, profiles</text>
+  <rect class="dg-node" x="368" y="210" width="165" height="110" rx="8"/>
+  <text class="dg-txt" x="382" y="234">Wide-column</text>
+  <text class="dg-txt-s" x="382" y="256">Cassandra, ScyllaDB</text>
+  <text class="dg-txt-s" x="382" y="276">time-ordered writes</text>
+  <text class="dg-txt-s" x="382" y="294">feeds, chat, sensors</text>
+  <rect class="dg-node" x="548" y="210" width="165" height="110" rx="8"/>
+  <text class="dg-txt" x="562" y="234">Graph</text>
+  <text class="dg-txt-s" x="562" y="256">Neo4j</text>
+  <text class="dg-txt-s" x="562" y="276">any-depth traversals</text>
+  <text class="dg-txt-s" x="562" y="294">fraud, dependencies</text>
+  <text class="dg-txt-s" x="8" y="352">Then the consistency veto: need multi-row transactions? Back to Postgres — or a Spanner-class</text>
+  <text class="dg-txt-s" x="8" y="370">store if you genuinely need transactions and multi-region scale, and can pay for both.</text>
+</svg>
+<figcaption>Scale honesty comes first — most systems exit at "Postgres. Done." Only then does the access pattern pick a family, and the consistency question can still veto it.</figcaption>
+</figure>
+
+<table>
+<thead><tr><th>Family</th><th>Mental model</th><th>Know deeply</th><th>Pick when</th><th>It punishes you when</th></tr></thead>
+<tbody>
+<tr><td>Key-value</td><td>Giant dictionary</td><td>Redis or DynamoDB</td><td>Get/put by exact key at high volume: sessions, carts, counters</td><td>You need queries, not lookups</td></tr>
+<tr><td>Document</td><td>Folders of JSON</td><td>MongoDB</td><td>Whole nested objects, genuinely evolving shape</td><td>Data is relational; queries cross folder lines</td></tr>
+<tr><td>Wide-column</td><td>Two-level map: partition key → sorted rows</td><td>Cassandra/ScyllaDB</td><td>Write-heavy, time-ordered, known queries: feeds, messages, telemetry</td><td>New query patterns arrive after the table is designed</td></tr>
+<tr><td>Graph</td><td>Walkable relationships</td><td>Neo4j</td><td>Unknown-depth traversals are the product</td><td>Your "graph problem" was two joins</td></tr>
+<tr><td>Relational</td><td>The flexible default</td><td>Postgres</td><td>Under ~1 TB, mixed/unpredictable queries, transactions</td><td>Sustained write volume beyond one primary</td></tr>
+</tbody>
+</table>
+
+<p>And the interview advice, one more time, because it decides real loops: <strong>pick one per family and know it deeply.</strong> When you say "Cassandra" in a design, the follow-up will be "what's your partition key?" — and the candidate who answers with <code>(channel_id, day_bucket)</code> and an explanation of why the bucket bounds partition size beats the candidate who knows nine database names and no keys. Depth is checkable in one follow-up question; breadth is not a senior signal at all.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Database choice comes up in every single design round, and it's graded on reasoning, not the logo. A passing senior answer names the access pattern, commits to a store, states the cost, and gives the escalation trigger — four sentences. Probes to expect:</p>
+<ul>
+<li>"Why this database? Convince me Postgres doesn't work here." — They're checking whether numbers, not fashion, drove the choice. "It does work, until X" is a great answer.</li>
+<li>"You chose Cassandra — what's your partition key, and what does your hottest partition look like during the Super Bowl?" — One level of depth, instantly separating used-it from read-about-it.</li>
+<li>"Now product wants to query by a field that isn't in your key. Walk me through what actually happens." — They want scatter-gather or a GSI's duplicated-table cost explained, and whether you flag it as a real redesign rather than a config tweak.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c13-f1">
+<p class="fey-prompt">Explain to a junior, in five or six sentences, why Cassandra can absorb writes so much faster than Postgres — and what it gives up in exchange.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Postgres stores rows in sorted structures on disk and updates them in place — every write means finding the right page, rewriting it, and updating every index, which is a lot of disk work. Cassandra never modifies anything in place: a write just gets appended to a log file (so it survives a crash) and dropped into a sorted table in memory, and that's the whole job — sequential and fast. Memory tables get flushed to disk as immutable sorted files, and a background process called compaction keeps merging those files so they don't pile up. The price appears on reads: the latest version of a row might be in memory or in any of several files, so reads do more work and can wobble when compaction falls behind. Cassandra also drops joins and transactions — you have to organize tables around the exact queries you'll run, chosen in advance. So it's a trade: spectacular write throughput and easy scale-out, paid for with read complexity and query flexibility.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Pick a family (and one exemplar) for each, with a one-line justification: (a) session store for 40M daily users; (b) product catalog — nested variants, shape changes weekly, 60 GB; (c) IoT platform ingesting 400K sensor readings/sec, dashboards read one device's last hour; (d) "people who bought X also bought Y" recommendations, exactly two hops.</p></div>
+<details><summary>Answer</summary><p>(a) Key-value — Redis (or DynamoDB if you need durability without managing failover): token → session, tens of millions of lookups, zero queries. (b) Trick question — 60 GB with nested evolving shapes is Postgres with JSONB; document-shaped data is not, by itself, a reason to run a second database. MongoDB becomes defensible if the whole product is document-shaped and the team owns it deeply. (c) Wide-column — Cassandra/ScyllaDB: relentless append-heavy writes, reads are one partition's time range; partition key <code>(device_id, day)</code>, clustering by timestamp. (d) Postgres — fixed two-hop traversal is two self-joins on an orders table; a graph database at fixed depth is the over-engineering tell. Neo4j enters when depth becomes unbounded (fraud chains, dependency closure).</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>You're designing chat storage on Cassandra. A teammate proposes partition key <code>channel_id</code>, clustering key <code>timestamp</code>. What are the two failure modes, and what did Discord actually do?</p></div>
+<details><summary>Answer</summary><p>Failure one: unbounded partitions. A busy channel accumulates messages forever, and its partition grows without limit — multi-gigabyte partitions wreck compaction, repair, and read latency. Failure two: permanent hot partitions. A channel's entire history and all its traffic live on the same few replicas forever; one viral channel melts exactly those nodes, and adding nodes doesn't help because the partition doesn't move. Discord's fix: partition key <code>(channel_id, bucket)</code> where a bucket is about ten days — bounding every partition's size and spreading one channel's load across many partitions over time. General rule worth memorizing: every partition key needs a story for its maximum size and its peak traffic; if either is unbounded, add a dimension (time bucket, hash suffix) to the key.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your team runs 200 GB in Postgres at 800 QPS peak (85% reads). A proposal argues for migrating to DynamoDB "so we never have to worry about scale again." Write the three-sentence senior response.</p></div>
+<details><summary>Answer</summary><p>Something like: "At 200 GB and 800 QPS, Postgres with two read replicas and a cache is bored — we're at maybe 5% of what this architecture handles, so a migration buys us nothing users can feel and costs us a quarter of roadmap plus every ad-hoc query we run today. DynamoDB would also force us to enumerate every access pattern up front, and our analytics queries alone disqualify that. The trigger for revisiting: sustained write growth toward a few thousand QPS on the hot tables or the working set outgrowing RAM — and then we'd move the specific hot table, not the whole database." Numbers, cost of the migration itself, a named trigger — that's the shape.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks at 10x: your Cassandra cluster ingests clickstream events at 100K writes/sec, p99 read latency 12 ms, disks at 40%. Traffic grows 10x over six months. Name the first three things to go wrong, in order.</p></div>
+<details><summary>Answer</summary><p>First, compaction falls behind: at 1M writes/sec the background merging can't keep pace with SSTable creation, files-per-read climbs, and read p99 degrades from 12 ms toward 100+ ms — writes still look fine, which is what makes it sneaky; watch pending-compactions and SSTables-per-read metrics. Second, hot partitions surface: whatever skew exists in your partition key (one huge customer, one popular page) is now 10x hotter, and those replicas spike while cluster averages look healthy — averages lie, per-partition metrics don't. Third, disk pressure: 10x ingest eats the 60% headroom fast, and compaction needs scratch space (roughly the size of what it's merging), so trouble arrives well before 100%. The senior habit: on LSM stores, monitor compaction debt and partition skew as first-class signals, not just CPU and disk.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>NoSQL is a trade, not an upgrade: each family removes relational features (joins, transactions, strong consistency) to buy scale-out, write throughput, or one access pattern made cheap.</li>
+<li>Four families, four mental models: key-value is a giant dictionary (Redis, DynamoDB); document is folders of JSON (MongoDB); wide-column is a two-level map of partition key then sorted rows (Cassandra/ScyllaDB); graph is walkable relationships (Neo4j).</li>
+<li>Most "graph problems" are two joins in Postgres — graph databases earn their keep only at unknown traversal depth.</li>
+<li>LSM engines write fast because they only append (WAL + memtable), and they pay for it on reads; compaction is the background merging that keeps reads survivable, and compaction falling behind is the classic LSM production incident.</li>
+<li>In distributed stores, secondary indexes are either scatter-gather across all nodes or a maintained duplicate of your table — every query pattern must be paid for explicitly, so access patterns must be known up front.</li>
+<li>Design partition keys with a story for maximum size and peak heat — unbounded or hot partitions (Discord's channels) are the signature wide-column failure, and adding nodes does not fix them.</li>
+<li>Scale honesty: under roughly 1 TB and a few thousand QPS, the answer is Postgres with replicas and a cache — saying so with numbers reads senior, not timid.</li>
+<li>Pick one database per family and know it deeply; depth survives the follow-up question ("what's your partition key?") and breadth does not.</li>
+</ul>
+</div>

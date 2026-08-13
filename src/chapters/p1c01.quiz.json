@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c01",
+  "items": [
+    {
+      "id": "p1c01-q01", "level": 1, "type": "mcq", "tag": "dns-chain",
+      "q": "You type hldgym.com. Your browser and OS caches are empty. Which server does your device actually contact?",
+      "options": [
+        {"t": "A recursive resolver (your ISP's, or a public one like 8.8.8.8)", "correct": true,
+         "why": "Right. Your device asks one resolver and waits. The resolver does all the climbing — root, then TLD, then authoritative — on your behalf. That's what 'recursive' means: it chases the answer down for you."},
+        {"t": "A root server — the top of the hierarchy, so that's where the search starts", "correct": false,
+         "why": "Root servers only ever talk to resolvers, and even then only on cache misses. If every phone on Earth asked the roots directly, the hierarchy would melt — the whole design exists to keep queries away from the top."},
+        {"t": "The authoritative name server for hldgym.com, since that's who actually holds the record", "correct": false,
+         "why": "That's the final hop, and it's the resolver's job to find it — your device doesn't even know who the authoritative server is until the chain has been walked."},
+        {"t": "The .com TLD server", "correct": false,
+         "why": "The TLD server is the middle rung of the ladder the resolver climbs. Your device never speaks to it — it only ever speaks to its one configured resolver."}
+      ]
+    },
+    {
+      "id": "p1c01-q02", "level": 1, "type": "mcq", "tag": "ttl",
+      "q": "A DNS record comes back with TTL 300. What does that mean?",
+      "options": [
+        {"t": "Any cache may reuse this answer for up to 300 seconds before asking again", "correct": true,
+         "why": "Exactly. TTL = time to live, in seconds. It's a promise printed on the answer: 'trust me this long.' It's why nearly all lookups are cache hits — and why record changes take a while to reach everyone."},
+        {"t": "The DNS server must answer within 300 milliseconds or the lookup times out", "correct": false,
+         "why": "That would be a timeout, which is a client-side patience setting. TTL says nothing about response speed — it governs how long the answer stays fresh in caches."},
+        {"t": "The packet may cross at most 300 routers", "correct": false,
+         "why": "Kind distractor — IP packets do carry a hop-count field confusingly also named TTL, decremented at each router. Same name, totally different mechanism. DNS TTL is a cache lifetime in seconds."},
+        {"t": "The domain registration expires in 300 days", "correct": false,
+         "why": "Registration is a billing relationship with a registrar, measured in years. TTL is a caching instruction attached to each individual DNS answer, measured in seconds."}
+      ]
+    },
+    {
+      "id": "p1c01-q03", "level": 1, "type": "mcq", "tag": "tcp-handshake",
+      "q": "What does the TCP three-way handshake (SYN, SYN-ACK, ACK) actually accomplish?",
+      "options": [
+        {"t": "Both sides confirm they can hear each other and agree on starting sequence numbers", "correct": true,
+         "why": "Right. The handshake proves the line works in both directions and synchronizes the byte-numbering each side will use for ordering and retransmission. It costs one full round trip — which is why we try hard to reuse connections."},
+        {"t": "It exchanges encryption keys", "correct": false,
+         "why": "That's TLS's job, and it happens after the TCP handshake (or merged into the transport handshake in QUIC). Plain TCP is completely unencrypted — anyone on the path can read it."},
+        {"t": "It verifies the server's identity by checking its certificate against trusted authorities", "correct": false,
+         "why": "Certificates belong to TLS. TCP will happily handshake with an imposter — it only cares that a machine at that address answers, not who that machine really is."},
+        {"t": "It delivers the first HTTP request along with the setup", "correct": false,
+         "why": "In standard TCP, data waits until the handshake finishes — that's the whole round-trip tax this chapter keeps counting. Collapsing setup and data into fewer trips is exactly what QUIC and 0-RTT were invented for."}
+      ]
+    },
+    {
+      "id": "p1c01-q04", "level": 1, "type": "mcq", "tag": "udp",
+      "q": "Why does classic DNS run over UDP rather than TCP?",
+      "options": [
+        {"t": "The messages are tiny, so skipping the handshake saves a round trip; on a rare loss, just re-ask", "correct": true,
+         "why": "Right. Paying a full round trip of handshake to move one tiny packet would double the cost of every lookup. Fire the packet; on the rare loss, ask again. (Large answers do fall back to TCP — the exception that proves the sizing logic.)"},
+        {"t": "UDP is more secure than TCP", "correct": false,
+         "why": "Neither protocol is 'secure' — both send readable bytes. Security comes from layers like TLS on top. UDP's appeal here is purely the skipped setup cost."},
+        {"t": "UDP guarantees faster delivery of each packet because it carries much less protocol overhead per packet", "correct": false,
+         "why": "UDP guarantees nothing at all — that's its defining feature. It's faster in practice only because it skips the handshake and never waits for retransmissions, not because packets travel any faster."},
+        {"t": "DNS responses are too large for TCP to carry", "correct": false,
+         "why": "Backwards — TCP is the protocol for large data; it moves gigabytes happily. It's precisely because DNS answers are tiny that TCP's setup overhead isn't worth paying."}
+      ]
+    },
+    {
+      "id": "p1c01-q05", "level": 1, "type": "mcq", "tag": "tls",
+      "q": "What two things does TLS add that plain TCP doesn't have?",
+      "options": [
+        {"t": "Encryption of the conversation, and proof of the server's identity via certificates", "correct": true,
+         "why": "Right, and keep them separate in your head: scrambling defeats eavesdroppers, but only the certificate — signed by an authority your browser already trusts — proves you're talking to the real site and not an imposter. Encryption without identity is a private chat with a stranger."},
+        {"t": "Compression of payloads and caching of repeated responses", "correct": false,
+         "why": "Those live in HTTP-land (Content-Encoding, Cache-Control headers). TLS is a security layer wrapped around the connection — it neither shrinks nor caches your data."},
+        {"t": "Guaranteed delivery of every packet, plus strict ordering of every byte in the stream", "correct": false,
+         "why": "TCP already provides both, underneath TLS. TLS adds confidentiality and identity on top of TCP's reliability — each layer has one job."},
+        {"t": "Higher transfer speed", "correct": false,
+         "why": "TLS costs speed rather than adding it: an extra round trip of handshake plus a small ongoing encryption overhead. We pay it because the alternative is every network hop reading and rewriting your traffic."}
+      ]
+    },
+    {
+      "id": "p1c01-q06", "level": 1, "type": "mcq", "tag": "http-status",
+      "q": "What's the practical difference between a 4xx and a 5xx response, and why does retry logic care?",
+      "options": [
+        {"t": "4xx means the client's request is wrong, so retrying is pointless; 5xx means the server failed, so a retry might succeed", "correct": true,
+         "why": "Right. A 404 or 400 will fail identically on attempt two — the request itself is the problem. A 503 might be a momentary overload that clears in seconds. This one split drives real retry policies across every system you'll design."},
+        {"t": "4xx errors are temporary and clear on their own, while 5xx errors persist until someone fixes the server", "correct": false,
+         "why": "Roughly backwards. 5xx failures are the ones most likely to be transient (overload, a crashed instance mid-deploy), while a 4xx reflects a request that will be just as wrong next time."},
+        {"t": "4xx means a frontend bug, 5xx means a backend bug", "correct": false,
+         "why": "Tempting mapping, but 'client' here means whoever sent the request — which is often another backend service. The split is about whose message was at fault, not which team's code."},
+        {"t": "They're interchangeable ways of signaling an error — what matters is logging the exact code so someone can debug later", "correct": false,
+         "why": "The family carries the meaning. Collapse them and your retry logic either hammers hopeless requests (retrying 4xx) or gives up on recoverable ones (not retrying 5xx) — both are real production bugs."}
+      ]
+    },
+    {
+      "id": "p1c01-q07", "level": 1, "type": "mcq", "tag": "keep-alive",
+      "q": "Why does HTTP keep-alive (connection reuse) matter so much for latency?",
+      "options": [
+        {"t": "It lets many requests share one connection, so the TCP and TLS handshake round trips are paid once instead of per request", "correct": true,
+         "why": "Right. Setup is the expensive part — two-plus round trips of handshakes. Amortize it over dozens of requests and each one rides an already-open, already-encrypted line. Backend services do the same with connection pools."},
+        {"t": "It keeps the server's application caches warm between requests, so repeat visitors get memory-speed responses instead of disk reads", "correct": false,
+         "why": "Cache warmth is real but unrelated — server caches don't care which connection a request arrived on. Keep-alive's win is skipping connection setup, not remembering your data."},
+        {"t": "It compresses requests that travel together", "correct": false,
+         "why": "Compression is separate machinery (HTTP/2 does compress repeated headers, but that's not keep-alive). The keep-alive win is round trips avoided, not bytes shrunk."},
+        {"t": "It stops the server from going idle and sleeping", "correct": false,
+         "why": "Servers don't doze off between requests. If anything, idle open connections are a cost to the server (memory, file descriptors) — one it accepts because re-handshaking is worse."}
+      ]
+    },
+    {
+      "id": "p1c01-q08", "level": 1, "type": "mcq", "tag": "http2",
+      "q": "What is HTTP/2's headline improvement over HTTP/1.1?",
+      "options": [
+        {"t": "Many requests and responses multiplexed concurrently over a single connection", "correct": true,
+         "why": "Right. HTTP/1.1 served one request at a time per connection, so browsers hacked around it with six parallel connections. HTTP/2 interleaves many streams on one connection — the queue at the HTTP layer disappears (though TCP hides another one underneath)."},
+        {"t": "It introduced encryption to the web", "correct": false,
+         "why": "HTTPS long predates HTTP/2 — TLS wraps HTTP/1.1 just fine. (Browsers do require TLS to use HTTP/2, but encryption isn't the new capability; multiplexing is.)"},
+        {"t": "It runs over UDP instead of TCP", "correct": false,
+         "why": "That's HTTP/3, via QUIC. HTTP/2 stayed on TCP — which is exactly why it inherited TCP's head-of-line blocking and eventually needed a successor."},
+        {"t": "It removed most headers from each request so messages take fewer bytes on the wire", "correct": false,
+         "why": "Headers survived — they carry caching, auth, and content negotiation. HTTP/2 compresses repeated headers, which helps, but the transformative change is concurrent streams."}
+      ]
+    },
+    {
+      "id": "p1c01-q09", "level": 1, "type": "mcq", "tag": "http3",
+      "q": "What problem does HTTP/3 (QUIC) fix that HTTP/2 fundamentally could not?",
+      "options": [
+        {"t": "TCP-level head-of-line blocking — with QUIC, a lost packet stalls only its own stream instead of all of them", "correct": true,
+         "why": "Right. TCP delivers bytes in strict order and knows nothing about streams, so one hole blocked every HTTP/2 stream. QUIC rebuilds reliability per stream on top of UDP, so unrelated streams keep flowing — plus it merges transport and TLS setup into one round trip."},
+        {"t": "It removes the need for TLS", "correct": false,
+         "why": "Opposite: QUIC has TLS 1.3 built into its handshake and can't run without it. The win is doing encryption setup inside the transport handshake — one round trip for both."},
+        {"t": "It eliminates connection handshakes entirely, so requests start flowing with zero setup delay on every connection", "correct": false,
+         "why": "A brand-new connection still needs one round trip to establish. The famous '0-RTT' applies only when resuming with a server you've spoken to before, using saved secrets."},
+        {"t": "It compresses JSON payloads automatically", "correct": false,
+         "why": "QUIC is a transport — it moves opaque bytes and never looks at your payload format. Body compression remains an application-layer concern, same as ever."}
+      ]
+    },
+    {
+      "id": "p1c01-q10", "level": 2, "type": "mcq", "tag": "latency-anatomy",
+      "q": "Users report your site takes ~900 ms to start loading on first visit, but subsequent clicks take ~150 ms. Server p99 is a steady 40 ms. Most likely explanation?",
+      "options": [
+        {"t": "First visits pay cold DNS, TCP and TLS handshakes; later clicks reuse the cached answer and the warm connection", "correct": true,
+         "why": "Right. At ~200 ms RTT, DNS + TCP + TLS + request is about four trips ≈ 800 ms of pure setup, then warm requests cost one trip. The deterministic first-slow-then-fast pattern is the signature of connection setup, and the fixes are edge termination and reuse — not server work."},
+        {"t": "The server is slow while it warms up, then speeds up once its caches and runtime are hot — classic cold-start behavior", "correct": false,
+         "why": "The metrics rule this out: p99 is 40 ms throughout, including during those first visits. When the server's own numbers are healthy but users are slow, the missing time is on the wire, not in the code."},
+        {"t": "Users have slow devices", "correct": false,
+         "why": "A slow device would slow everything roughly evenly. It wouldn't produce this precise pattern — a large fixed penalty on exactly the first request, vanishing once a connection exists."},
+        {"t": "The network path is congested when a user first arrives and clears by their next click", "correct": false,
+         "why": "Congestion doesn't schedule itself for first visits and then politely clear. The 6x gap tracks connection state perfectly — cold versus warm — which is arithmetic, not weather."}
+      ]
+    },
+    {
+      "id": "p1c01-q11", "level": 2, "type": "mcq", "tag": "sse",
+      "q": "A live cricket score strip on a news homepage: millions of viewers, an update every ball, data flows server-to-client only. Best transport?",
+      "options": [
+        {"t": "Server-Sent Events — one-way push over plain HTTP, browser auto-reconnect included, proxy- and CDN-friendly", "correct": true,
+         "why": "Right. The traffic is strictly one-directional and event-shaped: SSE's exact home turf. Riding ordinary HTTP means your existing load balancers and CDNs help with fanout, and reconnection comes free from the browser."},
+        {"t": "WebSockets — a persistent full-duplex connection per viewer guarantees the lowest possible update latency", "correct": false,
+         "why": "It would work — but you'd hold millions of stateful, full-duplex connections to carry data that only ever flows one way. You take on drain-on-deploy and reconnect-storm operations for a capability (client push) this feature never uses."},
+        {"t": "Short polling every 2 seconds", "correct": false,
+         "why": "Millions of viewers polling every 2 seconds is on the order of a million mostly-empty requests per second — enormous cost to deliver scores late. Polling suits occasional checks, not high-fanout live updates."},
+        {"t": "gRPC streaming to each browser", "correct": false,
+         "why": "Browsers can't speak native gRPC — you'd need a proxy translation layer just to reach them. gRPC streaming shines between backend services; at the browser edge, SSE and WebSockets are the vocabulary."}
+      ]
+    },
+    {
+      "id": "p1c01-q12", "level": 2, "type": "mcq", "tag": "websocket",
+      "q": "You're designing 1:1 chat with instant delivery, typing indicators, and read receipts flowing both ways. Transport?",
+      "options": [
+        {"t": "WebSockets — genuinely bidirectional, latency-sensitive traffic is exactly what justifies stateful connections", "correct": true,
+         "why": "Right. Messages, typing signals and receipts stream both directions at conversational tempo — the textbook case for full duplex. The senior touch is naming the price in the same breath: connection draining on deploys, reconnect storms, heartbeats."},
+        {"t": "Server-Sent Events", "correct": false,
+         "why": "SSE only flows server-to-client, so every message, typing signal and receipt going up needs a separate HTTP POST. Apps do ship this hybrid, but at chat's message frequency the POST-per-event overhead makes full duplex the cleaner committed answer."},
+        {"t": "Short polling every 5 seconds", "correct": false,
+         "why": "Chat that arrives up to 5 seconds late feels broken, and typing indicators are meaningless at that delay. Polling's simplicity is lovely, but this feature's latency requirement disqualifies it on arrival."},
+        {"t": "Long polling — the server holds each request open until an event arrives, then the client immediately re-asks", "correct": false,
+         "why": "It can deliver near-instant downstream and served as chat's pre-WebSocket workhorse, but every event costs a completed request plus an immediate re-ask — constant churn. Today it's the fallback for networks that block WebSockets, not the primary design."}
+      ]
+    },
+    {
+      "id": "p1c01-q13", "level": 2, "type": "mcq", "tag": "ttl-ops",
+      "q": "You're migrating your API to new IP addresses next Tuesday at 09:00. The DNS records currently have TTL 24 hours. What's the right sequence?",
+      "options": [
+        {"t": "Days before: lower TTL to a few minutes. Migrate Tuesday, verify, then raise TTL back up", "correct": true,
+         "why": "Right. Caches must first drain the old 24-hour promise — that takes up to 24 hours — and then hold only short-TTL answers. Come Tuesday, the world re-checks within minutes of your change. Restoring the long TTL afterwards buys back cache resilience."},
+        {"t": "Just update the record Tuesday at 09:00 — modern DNS propagates changes within seconds", "correct": false,
+         "why": "Resolvers holding the old answer are entitled to keep serving it for up to 24 more hours — a full day of users hitting the old IPs. TTL is a promise already distributed; you can't un-promise it at migration time."},
+        {"t": "Set TTL to 0 permanently for maximum agility", "correct": false,
+         "why": "Now every lookup everywhere goes to your DNS provider — more load, more latency, and zero cache cushion the day that provider has an outage (the Dyn lesson: caches were the only thing keeping sites alive). Agility is for migration windows, not forever."},
+        {"t": "Lower the TTL Tuesday morning at 08:55, then migrate at 09:00", "correct": false,
+         "why": "Five minutes early is 24 hours late. The old records — with the old 24-hour TTL — are already cached worldwide, and your TTL change only reaches each resolver after its existing entry expires. The lead time must exceed the old TTL."}
+      ]
+    },
+    {
+      "id": "p1c01-q14", "level": 2, "type": "mcq", "tag": "udp-media",
+      "q": "You're building a video-calling app. TCP or UDP for the live audio/video stream, and why?",
+      "options": [
+        {"t": "UDP-based — TCP's retransmissions would freeze the live stream to deliver stale frames nobody needs anymore", "correct": true,
+         "why": "Right. TCP's contract — everything arrives, in order — forces newer data to wait behind retransmissions of older data your call no longer needs. Real-time media drops the lost frame and moves on, recovering smoothness with app-level tricks like jitter buffers. Fresh beats perfect."},
+        {"t": "TCP — dropped words break a call, so guaranteed delivery is always worth the price", "correct": false,
+         "why": "Reliability has a price: waiting. For files and messages, correct-but-late is fine. For live audio, late IS broken — a retransmitted syllable from two seconds ago is noise. 'Always' is the tell that the trade-off wasn't weighed."},
+        {"t": "TCP, because many corporate networks block UDP entirely, and a call that cannot connect is worse than a laggy one", "correct": false,
+         "why": "There's a real fact here — some corporate networks do block UDP, and real apps carry a TCP fallback for them. But you design around the primary path, and every major calling product runs UDP-based transport by default for the latency reasons above."},
+        {"t": "UDP, because it encrypts media efficiently", "correct": false,
+         "why": "UDP does no encryption at all — it barely does anything, which is its charm. Call encryption comes from layers above (DTLS/SRTP). Right protocol choice, but this reason confuses the layers."}
+      ]
+    },
+    {
+      "id": "p1c01-q15", "level": 2, "type": "mcq", "tag": "grpc",
+      "q": "Your order service calls your inventory service 8,000 times/second using JSON over HTTP/1.1. CPU and latency are creeping up. A teammate proposes gRPC. What's the actual mechanism of the win?",
+      "options": [
+        {"t": "Protobuf is far cheaper to serialize and parse than JSON, and HTTP/2 multiplexes calls over warm, long-lived connections", "correct": true,
+         "why": "Right — and being able to name the mechanism is what separates this from buzzword adoption. At 8K calls/sec, text encoding/decoding and per-call connection handling are a measurable tax; gRPC removes both, and typed generated stubs catch contract drift at compile time as a bonus."},
+        {"t": "gRPC bypasses the network layer for co-located services", "correct": false,
+         "why": "Nothing bypasses the network — gRPC calls travel TCP/HTTP2 like everything else. The savings come from cheaper bytes and reused connections, not from skipping the wire."},
+        {"t": "gRPC makes the database queries behind the service faster", "correct": false,
+         "why": "Wrong layer. gRPC changes how services talk to each other, not what they do once a request arrives. If the creep were database time, a protocol swap would change nothing — always locate the cost before choosing the cure."},
+        {"t": "Keep JSON and add more servers — hardware is cheaper than a risky protocol migration across two production services", "correct": false,
+         "why": "Horizontal scaling is a legitimate lever, but here it pays the protocol tax forever at linear cost instead of removing it once — and extra servers do nothing for per-call latency. Buying hardware to avoid fixing overhead is a trade you should at least price consciously."}
+      ]
+    },
+    {
+      "id": "p1c01-q16", "level": 2, "type": "mcq", "tag": "hol-blocking",
+      "q": "You migrated your mobile API from HTTP/1.1 to HTTP/2 expecting a speedup. Users on flaky cellular connections got slower. What plausibly happened?",
+      "options": [
+        {"t": "HTTP/2 put all streams on one TCP connection, so a single lost packet now stalls every stream at once", "correct": true,
+         "why": "Right — this is TCP head-of-line blocking, HTTP/2's known weakness on lossy links. TCP delivers bytes in strict order, so one hole holds back all interleaved streams behind it — where HTTP/1.1's six parallel connections at least failed independently. The direction of the fix is HTTP/3, whose QUIC streams don't share TCP's single ordering."},
+        {"t": "HTTP/2 is simply slower on mobile devices", "correct": false,
+         "why": "On clean networks HTTP/2 is usually faster — fewer connections, multiplexing, header compression. The regression is specific to packet loss, which is why it shows up on flaky cellular and not on office Wi-Fi. Diagnose the condition, not the protocol."},
+        {"t": "HTTP/2's header compression is fragile on weak signals, corrupting packets that must be re-sent", "correct": false,
+         "why": "Compression doesn't corrupt anything — TCP's checksums and retransmissions guarantee intact delivery regardless of signal quality. The problem is the waiting that ordering imposes after loss, not damage to the data."},
+        {"t": "Mobile phones don't support HTTP/2", "correct": false,
+         "why": "Every modern mobile OS and browser has supported HTTP/2 for years — and unsupported clients would just negotiate down to HTTP/1.1 and stay at their old speed, not get slower."}
+      ]
+    },
+    {
+      "id": "p1c01-q17", "level": 2, "type": "mcq", "tag": "polling-fit",
+      "q": "An internal dashboard shows the status of a nightly batch job that runs for ~40 minutes. About 30 employees glance at it. How should the page get updates?",
+      "options": [
+        {"t": "Short polling every 30 seconds — simple, stateless, and matched to how fast the data actually changes", "correct": true,
+         "why": "Right — and saying 'polling is correct here' out loud is a senior signal. Thirty users at one request per 30 seconds is one request per second of load, and a 30-second-stale view of a 40-minute job costs nobody anything. Match the tool to the need, not to the fanciest option."},
+        {"t": "WebSockets, so status updates arrive instantly", "correct": false,
+         "why": "Instant delivery of information nobody needs instantly — while taking on stateful connections, reconnect handling and LB configuration for 30 users. This is over-engineering, and in an interview it reads as reaching for the resume-worthy tool over the right one."},
+        {"t": "Server-Sent Events — a held-open stream that delivers each status change the instant it happens", "correct": false,
+         "why": "Not wrong, just unnecessary — SSE is the answer when updates are frequent or latency matters. Here the update rate is glacial and staleness is free, so held-open connections buy nothing that a 30-second timer doesn't."},
+        {"t": "Stream job events to the browser via a Kafka consumer", "correct": false,
+         "why": "Kafka is a backend event log between services — browsers don't consume it directly, so you'd build a whole bridge tier for a status page. This is the buzzword-architecture reflex: naming powerful infrastructure where a timer and an endpoint would do."}
+      ]
+    },
+    {
+      "id": "p1c01-q18", "level": 2, "type": "mcq", "tag": "ws-ops",
+      "q": "Compared with your stateless HTTP fleet, what makes deploying new code to a WebSocket tier harder?",
+      "options": [
+        {"t": "A restart drops every connection the server holds, so deploys need draining — and cause a reconnect surge either way", "correct": true,
+         "why": "Right. Stateless servers can be swapped mid-traffic because every request is independent; a connection-holding server takes its users down with it. Deploys become drain-and-migrate choreography, and the reconnect wave — TCP + TLS + auth per client — is load the steady state never showed you."},
+        {"t": "WebSocket services can't run in containers, so they fall outside the standard rolling-deploy pipeline entirely", "correct": false,
+         "why": "They containerize like anything else. The difficulty isn't packaging — it's the long-lived state (connections) that dies with a process, which no packaging technology changes."},
+        {"t": "TLS doesn't work over WebSockets, complicating security review", "correct": false,
+         "why": "wss:// — WebSockets over TLS — is standard and universal; the connection even starts life as an ordinary HTTPS request. Security review isn't the issue; connection lifecycle during restarts is."},
+        {"t": "WebSocket servers can't share hosts with HTTP servers", "correct": false,
+         "why": "They coexist happily — the same port can serve both, since WebSockets begin as an HTTP upgrade request. The deploy pain comes from statefulness, not from cohabitation."}
+      ]
+    },
+    {
+      "id": "p1c01-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interview: 'Add real-time notifications to this social app.' Which answer reads most senior?",
+      "options": [
+        {"t": "\"SSE: notifications are one-way push, it rides plain HTTP through our proxies and CDNs, and reconnection is free. If we later add genuinely bidirectional features like presence, I'd move to WebSockets and accept the stateful-tier cost.\"", "correct": true,
+         "why": "Commitment matched to the traffic's actual shape, infrastructure awareness, a named upgrade trigger, and the cost of the alternative stated honestly. This is the full senior pattern: decide, justify with the workload, and price what you didn't choose."},
+        {"t": "\"WebSockets — the modern standard for real-time. One duplex transport covers notifications today and presence or typing tomorrow, keeping the stack simple.\"", "correct": false,
+         "why": "A commitment, but justified by fashion and hypothetical future features rather than today's traffic. Notifications flow one way; volunteering to run the most stateful, operationally demanding option before anything requires it is the over-engineering tell interviewers screen for."},
+        {"t": "\"There's short polling, long polling, SSE, and WebSockets — each trades latency, statefulness and infrastructure support differently. I'd want to see the full requirements and expected scale before committing to one.\"", "correct": false,
+         "why": "The requirements are sitting in front of you: one-way, latency-tolerant-to-a-second, browser clients. Reciting the menu without ordering is the option-listing pattern — accurate, complete, and graded as 'no judgment displayed.'"},
+        {"t": "\"Push events through Kafka to the clients.\"", "correct": false,
+         "why": "Kafka may well sit in the backend pipeline, but it isn't a client transport — browsers can't consume it, so the actual question (the last hop to the user) is still unanswered. Naming infrastructure instead of answering the question reads as buzzword architecture."}
+      ]
+    },
+    {
+      "id": "p1c01-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your chat runs 100K concurrent WebSocket connections on 4 servers, comfortably. The PM announces a partnership that means 10M concurrent next year. What's the senior read of what breaks?",
+      "options": [
+        {"t": "\"Connection density — 10M at 25K/box is 400 servers; reconnect storms — a blip means 10M simultaneous handshakes, so clients need jittered backoff; and fanout — routing across hundreds of boxes needs pub/sub we don't have.\"", "correct": true,
+         "why": "Names the actual scaling axis of persistent-connection systems (connections, not QPS), identifies the transition load as the real killer, and spots the architectural gap (fanout/routing) that only appears past a handful of servers. Ordered, priced, calm — the 10x answer interviewers are fishing for."},
+        {"t": "\"Autoscale on CPU like the rest of our services — 10M connections is just more instances behind the load balancer.\"", "correct": false,
+         "why": "Connection-holding servers are bounded by memory and file descriptors, often at modest CPU — the trigger watches the wrong gauge. And scaling down is uniquely painful when every instance you kill drops thousands of live connections. Stateless reflexes applied to a stateful tier is the exact miss this question probes."},
+        {"t": "\"Move to HTTP/3 — QUIC's cheaper handshakes let each server hold far more connections.\"", "correct": false,
+         "why": "QUIC improves handshake trips and loss behavior; it does not change what a held connection costs your servers or how a million clients reconnect after a blip. Reaching for a protocol upgrade to solve a capacity-and-architecture problem confuses the layers."},
+        {"t": "\"Shard users by region — regional clusters split the connection load naturally, keep latency low, and contain any failure to one region. It's the pattern every global chat product already runs.\"", "correct": false,
+         "why": "Partial thinking presented as complete. Regional sharding helps latency and blast radius, but every region still faces density limits, reconnect storms and cross-server fanout — and the partnership's users may cluster in one region anyway. A real answer decomposes the problem before distributing it."}
+      ]
+    },
+    {
+      "id": "p1c01-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You run checkout for an e-commerce company. After reading about the 2016 Dyn attack, leadership asks: 'Could a DNS outage take us down?' Strongest proposal?",
+      "options": [
+        {"t": "Run two independent authoritative DNS providers with synced records, keep TTLs moderate, and monitor resolution from outside our network", "correct": true,
+         "why": "This is the post-Dyn industry playbook. Dual providers remove the single vendor as a failure point; moderate TTLs preserve a cache cushion without freezing failover; external monitoring catches what inside-the-network checks can't — that the outside world has lost your name."},
+        {"t": "Raise TTL to 7 days so resolver caches worldwide can carry us through even a long provider outage", "correct": false,
+         "why": "Stale-cache resilience is a real effect — it's what kept Dyn's customers half-alive — but a week-long TTL makes every migration and emergency failover take a week to propagate. And any resolver whose cache is cold still fails. You've traded all agility for partial protection."},
+        {"t": "Go multi-region, active-active — with healthy checkout stacks on three continents, no single outage anywhere can take us down", "correct": false,
+         "why": "Solves a different failure. During the Dyn attack, everyone's servers were perfectly healthy in every region — the names wouldn't resolve, so nobody could reach them. Redundant compute is worthless while the phone book is down; the redundancy has to live at the DNS layer."},
+        {"t": "Self-host authoritative DNS in our own data centers, so no third-party provider can take us down", "correct": false,
+         "why": "Now your DNS shares fate with your infrastructure — an outage takes both down together, which is precisely the mechanism of Facebook's 2021 disaster. And you'd be absorbing DDoS traffic with a fraction of a dedicated provider's capacity. Control isn't resilience; independence is."}
+      ]
+    },
+    {
+      "id": "p1c01-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "In a design review, your health-check system automatically withdraws a data center's routes when it can't reach the backend fleet. An engineer notes: 'That mechanism is how Facebook erased itself in 2021.' What's the senior takeaway?",
+      "options": [
+        {"t": "Keep the automation but bound its blast radius — quorum or a human gate before withdrawing the last replicas — plus out-of-band access that survives the outage", "correct": true,
+         "why": "Right. Withdrawing one broken site is failover working; withdrawing all of them simultaneously because a shared dependency broke is automation amplifying a failure. The guard is a blast-radius bound plus a back door that survives your own outage — Facebook lacked both and paid six hours for it."},
+        {"t": "Remove the automated withdrawal — routing changes are too consequential to automate, and a human in the loop would have caught what the audit tool missed", "correct": false,
+         "why": "Over-correction. The automation handles the common case — a genuinely sick site — faster and more reliably than any paged human. Deleting it trades one famous failure mode for daily slow failovers. Senior judgment constrains automation; it doesn't abolish it."},
+        {"t": "The design is fine — Facebook's outage was operator error, not a design flaw", "correct": false,
+         "why": "The system did exactly what it was designed to do — that's the damning part. Every DNS server 'correctly' concluded it was unhealthy because a shared dependency (the backbone) failed. A design that behaves catastrophically under a correlated failure is flawed even when every component follows its spec."},
+        {"t": "Health checks should never influence routing", "correct": false,
+         "why": "They must — health-driven route withdrawal is how normal failover works at all. The lesson isn't 'don't connect health to routing'; it's that the connection needs limits on how much capacity it may remove at once, and a recovery path that doesn't route through the patient."}
+      ]
+    },
+    {
+      "id": "p1c01-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "'Walk me through what happens when you type a URL and press Enter.' At a senior loop, what separates a strong answer from a correct one?",
+      "options": [
+        {"t": "Attaching costs: where round trips accumulate, what's cached where, and how that math motivates real decisions — CDNs, keep-alive, protocols", "correct": true,
+         "why": "Right. Everyone senior-adjacent can name the steps; the differentiator is pricing them and connecting them to design. 'TLS 1.3 costs one round trip, which is 200 ms from Sydney, which is why we terminate at the edge' turns a recital into engineering — that's what the depth gauge is measuring."},
+        {"t": "Correctly naming all seven OSI layers, and the protocol at each, as the request descends the stack", "correct": false,
+         "why": "Taxonomy is the textbook answer, and it's the tell the question is designed to catch. Interviewers grade applied understanding — what the steps cost and what you'd do about it — not whether you can recite a classification scheme nobody uses at the whiteboard."},
+        {"t": "Going maximally deep on one step — say, TLS cipher negotiation — to demonstrate genuine depth beyond the rehearsed outline", "correct": false,
+         "why": "Depth is welcome, but this is a journey question — unprompted deep-diving one stop while skipping the route misses its purpose. Cover the path with costs attached, then offer depth: 'happy to go deeper on the TLS handshake if useful.'"},
+        {"t": "Moving through it quickly to save time for the real design questions", "correct": false,
+         "why": "This IS design material — the round-trip math in this question is the entire justification for CDNs, connection pooling and QUIC. Racing past it signals you see networking as trivia rather than as the physics your architectures answer to."}
+      ]
+    },
+    {
+      "id": "p1c01-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your API's p50 is 80 ms, but p99 is 2 seconds — and the slow requests correlate almost perfectly with users far from your single us-east region. The team proposes a two-week server-side optimization sprint. Your call?",
+      "options": [
+        {"t": "Redirect it: the tail is distance times round trips, which code can't fix — terminate TLS at the edge, reuse connections, confirm with p99 by geography", "correct": true,
+         "why": "Right. The geographic correlation is the diagnosis: distant users pay ~200 ms per trip across setup and retransmissions, and no amount of server tuning changes the speed of light. Redirecting a team from plausible work to correct work — with the data named — is exactly the senior judgment being tested."},
+        {"t": "Approve the sprint — server optimization always helps somewhat, it's low-risk, and the team can start today", "correct": false,
+         "why": "It would shave milliseconds off a tail measured in seconds. 'Always helps somewhat' is how teams spend two weeks confirming a misdiagnosis; the correlation with distance was the evidence that the cost lives on the wire, not in the code."},
+        {"t": "The distant users' networks are the problem — out of scope", "correct": false,
+         "why": "The physics is real but the conclusion is fatal: their experience is your product. The entire CDN industry exists because 'far away' is a solvable engineering problem — you move the endpoint closer instead of shrugging at geography."},
+        {"t": "Add more servers in us-east — p99 spikes usually mean queueing under load, and extra headroom is the cheapest insurance while we investigate", "correct": false,
+         "why": "Capacity fixes saturation, and nothing here says saturation — p50 is a healthy 80 ms. Adding servers where the users aren't leaves every round trip exactly as long as before. Latency and throughput are different diseases with different cures."}
+      ]
+    },
+    {
+      "id": "p1c01-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A 3-person startup is building its public API for third-party developers. The CTO wants gRPC everywhere 'because that's what Google does.' The senior counsel is:",
+      "options": [
+        {"t": "\"REST/JSON for the public API — any developer can integrate it in an afternoon with no special tooling. gRPC earns its keep on internal paths we don't have yet; revisit when serialization cost shows in our metrics.\"", "correct": true,
+         "why": "Fit-to-context over pedigree: your customers are outside developers with unknown stacks, and REST's universality is a product feature for them. Deferring gRPC with a concrete, measurable trigger — rather than dismissing it — shows the choice is sequenced, not ignorant."},
+        {"t": "\"Agree — gRPC is technically superior on every axis that matters, and starting with the right protocol avoids a painful public migration later\"", "correct": false,
+         "why": "Technically superior on which axis, for whom? For third-party integration, protobuf toolchains and non-browser-native transport are friction that costs you adopters. Copying Google's internal choices without Google's internal problems is cargo-culting — the constraint that matters here is your customers' afternoon."},
+        {"t": "\"Refuse gRPC outright — it's overcomplicated tech for big companies\"", "correct": false,
+         "why": "Dogma in the other direction. gRPC genuinely wins on chatty internal paths — typed contracts, compact payloads, multiplexed connections — and this startup may reach that point. Senior judgment says 'not yet, and here's what would change my mind,' not 'never.'"},
+        {"t": "\"Offer both REST and gRPC endpoints from day one — REST for quick adopters, gRPC for performance-minded customers — so nobody is ever blocked by our protocol choice and we never face a migration\"", "correct": false,
+         "why": "Two API surfaces means double the documentation, versioning, testing and support — carried by three people — before a single customer has asked for the second one. Optionality has a maintenance price, and paying it speculatively is over-engineering wearing a customer-friendly mask."}
+      ]
+    }
+  ]
+}

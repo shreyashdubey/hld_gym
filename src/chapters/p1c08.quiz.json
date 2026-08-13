@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c08",
+  "items": [
+    {
+      "id": "p1c08-q01", "level": 1, "type": "mcq", "tag": "why-replicate",
+      "q": "What problems does leader-follower replication actually solve?",
+      "options": [
+        {"t": "Surviving machine death and scaling reads — but not scaling writes", "correct": true,
+         "why": "Right. Copies mean a dead leader doesn't lose the data, and followers absorb read traffic. But every write still funnels through one leader AND gets replayed on every copy — write scaling needs sharding, not replication."},
+        {"t": "Surviving machine death, scaling reads, and scaling writes", "correct": false,
+         "why": "Two out of three. Writes don't scale: one leader accepts them all, and each follower must also replay every one to stay a copy. Three replicas = the same write done three times, not shared three ways."},
+        {"t": "Making individual queries run faster", "correct": false,
+         "why": "A replica runs a query at the same speed the leader would — it's the same data on similar hardware. Replication adds capacity (more machines answering), not speed per query. Speed per query is indexing and caching territory."},
+        {"t": "Protecting against accidental deletes and bad migrations", "correct": false,
+         "why": "The opposite, painfully: replicas replay deletes as faithfully as inserts, within milliseconds. Only backups — copies outside the replication stream — protect you from bad commands. GitLab learned this in 2017."}
+      ]
+    },
+    {
+      "id": "p1c08-q02", "level": 1, "type": "mcq", "tag": "log-shipping",
+      "q": "In leader-follower replication, how does a follower stay identical to the leader?",
+      "options": [
+        {"t": "It streams the leader's ordered change log (WAL/binlog) and replays each entry in order", "correct": true,
+         "why": "Yes — log shipping. Same starting state, same changes, same order gives a byte-for-byte copy. The log records effects ('row 4182, new value X'), which is why nondeterministic SQL like NOW() doesn't break the copies."},
+        {"t": "It re-executes the same SQL statements clients sent", "correct": false,
+         "why": "Statement forwarding exists historically but is fragile: NOW(), RAND(), and anything nondeterministic produces different results on each machine. That's exactly why replication ships a log of resulting changes instead."},
+        {"t": "It periodically copies the leader's data files in bulk", "correct": false,
+         "why": "Bulk file copy is how you *seed* a brand-new follower, not how it stays in sync. Continuous sync needs a continuous ordered stream of changes — the log."},
+        {"t": "Clients write to both leader and follower simultaneously", "correct": false,
+         "why": "If clients wrote to followers directly, two clients could write in different orders on different machines and the copies would diverge. Single-writer-plus-log exists precisely to force one global order of changes."}
+      ]
+    },
+    {
+      "id": "p1c08-q03", "level": 1, "type": "mcq", "tag": "sync-async",
+      "q": "With asynchronous replication, what exactly do you risk losing when the leader dies?",
+      "options": [
+        {"t": "The tail of writes the leader acknowledged but hadn't yet shipped to any follower", "correct": true,
+         "why": "Exactly — and 'acknowledged' is the sting. The user was told 'saved.' Usually it's milliseconds of writes; under lag it can be seconds or more. Whether that's acceptable depends entirely on what the data is — likes, fine; payments, no."},
+        {"t": "Nothing, because the followers have full copies", "correct": false,
+         "why": "Followers have full copies *up to the last log entry they received*. Async means the leader acks before shipping, so there's always a tail of acknowledged writes existing only on the leader — the tail dies with it."},
+        {"t": "The entire database since the last backup", "correct": false,
+         "why": "That's the no-replication disaster from the cold open. With replicas, you lose only the unshipped tail — replication shrinks the loss window from hours to seconds. (It doesn't shrink it to zero; that's what sync/semi-sync buy.)"},
+        {"t": "Only uncommitted transactions", "correct": false,
+         "why": "Uncommitted transactions are expected losses in any crash — nobody was promised anything. The async-specific danger is losing COMMITTED, acknowledged writes. That's a broken promise, which is a different class of problem."}
+      ]
+    },
+    {
+      "id": "p1c08-q04", "level": 1, "type": "mcq", "tag": "semi-sync",
+      "q": "What does semi-synchronous replication guarantee before acknowledging a write?",
+      "options": [
+        {"t": "At least one follower has received the log entry, so the write exists on two machines", "correct": true,
+         "why": "Right — received, not necessarily applied yet. That's the clever economy of semi-sync: 'on two machines' is what survives a leader death, and confirming receipt is much faster than waiting for the follower to replay it."},
+        {"t": "All followers have applied the write", "correct": false,
+         "why": "That's fully synchronous to everyone — which stalls every commit on the slowest follower and freezes all writes when any one follower dies. It's why essentially nobody runs all-sync."},
+        {"t": "The write has been flushed to the leader's disk", "correct": false,
+         "why": "Local disk durability is standard in any committed write, async included. Semi-sync's addition is a SECOND machine — protecting against the leader's disk being the thing that dies."},
+        {"t": "Half the followers have confirmed the write", "correct": false,
+         "why": "You're describing a majority quorum — that's the consensus/leaderless world (Chapter 1.10). Semi-sync is humbler: ANY one follower confirming receipt is enough to ack."}
+      ]
+    },
+    {
+      "id": "p1c08-q05", "level": 1, "type": "mcq", "tag": "lag",
+      "q": "What is replication lag?",
+      "options": [
+        {"t": "The delay between a write committing on the leader and a follower having replayed it", "correct": true,
+         "why": "Yes. Healthy: tens of milliseconds. Under bulk writes, long transactions, or a struggling follower: seconds to minutes. It's invisible internals — until a read lands on a lagging replica and a user watches their comment vanish."},
+        {"t": "The network round-trip time between client and database", "correct": false,
+         "why": "That's ordinary network latency, paid on every query regardless of replication. Lag is specifically the followers running behind the leader's log."},
+        {"t": "The time a failover takes to promote a new leader", "correct": false,
+         "why": "That's failover time — downtime during a leadership change. Lag is a steady-state property of normal, healthy operation. (Though lag at failover time determines how much data promotion discards — they meet at the worst moment.)"},
+        {"t": "The delay a write waits in the leader's queue under load", "correct": false,
+         "why": "Queueing on the leader delays the write's acknowledgment. Lag happens AFTER acknowledgment — the write is real and committed, and copies just haven't caught up. Different phase, different bug."}
+      ]
+    },
+    {
+      "id": "p1c08-q06", "level": 1, "type": "mcq", "tag": "read-your-writes",
+      "q": "What does the read-your-writes guarantee promise?",
+      "options": [
+        {"t": "A user always sees their own writes; others' writes may still appear late", "correct": true,
+         "why": "Right — it's a personal guarantee, not a global one. It targets exactly the bug users notice most (their own comment vanishing) while leaving cheap stale reads in place for everything else. Freshness spent where it's noticed."},
+        {"t": "All users see every write immediately", "correct": false,
+         "why": "That's strong consistency across the board — vastly more expensive, and unnecessary here. Users rarely notice someone ELSE's post arriving 300ms late; they always notice their own disappearing."},
+        {"t": "Reads always go to the leader", "correct": false,
+         "why": "That's one blunt implementation (and it sacrifices the read scaling you built replicas for). The guarantee is the promise; pin-to-leader-after-write and LSN tracking are just two ways to keep it."},
+        {"t": "Writes are confirmed before the user's page reloads", "correct": false,
+         "why": "The write IS confirmed — that's not the problem. The refresh's READ landed on a replica that hadn't replayed it yet. Read-your-writes is about routing reads, not confirming writes."}
+      ]
+    },
+    {
+      "id": "p1c08-q07", "level": 1, "type": "mcq", "tag": "monotonic-reads",
+      "q": "Monotonic reads prevents which specific anomaly?",
+      "options": [
+        {"t": "A user seeing data, refreshing, and seeing an OLDER state — time appearing to run backwards", "correct": true,
+         "why": "Yes. First read hits a fresh replica, second hits a lagged one, and a comment you just read (even someone else's) vanishes. Stickiness — one session rides one replica's timeline — is the standard fix. Stale is allowed; going backwards is not."},
+        {"t": "A user failing to see their own recent write", "correct": false,
+         "why": "That's the read-your-writes guarantee. Related but distinct: monotonic reads protects you even when you wrote nothing — it forbids the timeline rewinding between two of your reads."},
+        {"t": "Two users seeing writes in different orders", "correct": false,
+         "why": "Cross-user ordering is consistent prefix / stronger consistency territory (Chapter 1.10). Monotonic reads is a single reader's guarantee: my successive reads never go back in time."},
+        {"t": "Reads blocking while replication catches up", "correct": false,
+         "why": "Waiting for catch-up is a possible *mechanism* in LSN-based read-your-writes, not the anomaly. Monotonic reads names a correctness promise, not a performance behavior."}
+      ]
+    },
+    {
+      "id": "p1c08-q08", "level": 1, "type": "mcq", "tag": "split-brain",
+      "q": "What is split brain?",
+      "options": [
+        {"t": "Two nodes both believing they're the leader, both accepting writes, producing divergent histories", "correct": true,
+         "why": "Right — the failover nightmare. The old leader wasn't dead, just unreachable; automation promoted a follower; now two 'official ledgers' grow apart with every write, and merging them afterward is manual archaeology."},
+        {"t": "A follower falling so far behind it can't catch up", "correct": false,
+         "why": "That's runaway replication lag — bad, but there's still exactly one truth (the leader's). Split brain is worse: two truths, both accepting writes, no automatic merge."},
+        {"t": "A network partition separating clients from the database", "correct": false,
+         "why": "A partition is often the TRIGGER, but split brain is the specific outcome where both sides keep a live, writing leader. A partition with proper fencing produces downtime on one side — annoying, recoverable, and honest."},
+        {"t": "The leader's log being corrupted halfway through", "correct": false,
+         "why": "Log corruption is a data-integrity failure with its own recovery story. Split brain is about AUTHORITY — two machines each convinced they hold the pen."}
+      ]
+    },
+    {
+      "id": "p1c08-q09", "level": 1, "type": "mcq", "tag": "replication-vs-backup",
+      "q": "You have five perfectly synced replicas. Why do you still need backups?",
+      "options": [
+        {"t": "Because deletes, bad migrations, and human mistakes replicate to all five copies in milliseconds", "correct": true,
+         "why": "Exactly. Replication protects against dead HARDWARE; it faithfully propagates bad COMMANDS. GitLab 2017: an accidental rm -rf on the primary, and what saved them was a snapshot outside the replication chain — after their automated backups turned out to be silently broken. Test your restores."},
+        {"t": "You don't — five copies is plenty of redundancy", "correct": false,
+         "why": "Five copies of a mistake is still a mistake, times five. DROP TABLE reaches every replica before you've finished gasping. Redundancy and backup solve different failure classes: machines dying vs humans (and software) erring."},
+        {"t": "Backups are only needed for compliance and audits", "correct": false,
+         "why": "Compliance is a reason, not THE reason. The engineering reason is that only a copy outside the replication stream survives a replicated mistake — and that class of incident happens at every company eventually."},
+        {"t": "Because replicas can't be read during a failover", "correct": false,
+         "why": "Brief read unavailability during failover is an availability hiccup, not a data-loss risk, and backups wouldn't help with it anyway. Backups exist for the unrecoverable-by-replication cases: bad writes replicated everywhere."}
+      ]
+    },
+    {
+      "id": "p1c08-q10", "level": 2, "type": "mcq", "tag": "lag-bug",
+      "q": "A user posts a comment, sees it appear, refreshes, and it's gone. Refresh again — it's back. Nothing is crashing and no data was lost. What happened?",
+      "options": [
+        {"t": "The write went to the leader; the first refresh's read was load-balanced to a replica that hadn't replayed it yet", "correct": true,
+         "why": "The classic read-after-write race. Every component worked correctly — the bug lives in the gap between copies, which is why it needs a routing policy (read-your-writes) rather than a code patch. The second refresh just got luckier routing."},
+        {"t": "The comment write failed and a client-side retry re-posted it", "correct": false,
+         "why": "A failed-then-retried write would show a gap and then a NEW comment (possibly duplicated) — not the same comment flickering with no errors anywhere in the logs. Intermittent visibility with healthy components is lag's signature."},
+        {"t": "A caching layer between the app and the browser served a stale copy of the page on the first refresh", "correct": false,
+         "why": "Plausible-sounding, and stale caches cause similar symptoms — but the question says reads hit the database tier. With replicas behind a load balancer, replication lag produces exactly this flicker with zero caching involved. Diagnose the tier you actually have."},
+        {"t": "The database rolled back the transaction and re-applied it", "correct": false,
+         "why": "Databases don't speculatively roll back committed transactions and quietly redo them. Once committed on the leader, the write is permanent — visibility on REPLICAS is what wobbles during lag."}
+      ]
+    },
+    {
+      "id": "p1c08-q11", "level": 2, "type": "mcq", "tag": "ryw-fix",
+      "q": "You must fix the vanishing-comment bug this sprint. The team is small and the leader has spare capacity. Which fix ships first?",
+      "options": [
+        {"t": "After any write, pin that user's reads to the leader for ~10 seconds via a session flag", "correct": true,
+         "why": "The right first move: a few lines of routing logic, covers the common case, and the stated spare leader capacity absorbs the cost. Graduate to LSN tracking when pinned load starts to hurt. Cheapest-thing-that-honors-the-guarantee is senior sequencing."},
+        {"t": "Track the log position (LSN) of each user's last write and have replicas serve reads only past that position", "correct": false,
+         "why": "The precise, scalable solution — and over-built for this sprint. It threads lag-awareness through sessions and the read path. Right answer later, when pin-to-leader load hurts; naming it as your upgrade path IS the senior move."},
+        {"t": "Route all reads to the leader until the bug is understood", "correct": false,
+         "why": "The bug IS understood — it's replication lag — and this abandons the read scaling that replicas exist for. All-reads-to-leader is how the leader becomes your single point of overload."},
+        {"t": "Reduce replication lag by upgrading replica hardware", "correct": false,
+         "why": "Shrinking lag shrinks the race window but can't close it — lag spikes under migrations and incidents no matter the hardware. Correctness bugs need a guarantee, not a faster race."}
+      ]
+    },
+    {
+      "id": "p1c08-q12", "level": 2, "type": "mcq", "tag": "async-loss",
+      "q": "Your async-replicated leader died; the freshest follower was 3 seconds behind and got promoted. The PM asks what happened to those 3 seconds of writes. The honest answer:",
+      "options": [
+        {"t": "\"They were acknowledged to users but are gone — discarded at promotion. That's the async trade we chose; if any of this data class can't tolerate that, we move it to semi-sync.\"", "correct": true,
+         "why": "Honest, precise, and forward-looking: names the broken promise ('acknowledged'), explains it was a chosen trade-off, and offers the per-data-class fix. This is the durability conversation done like an owner."},
+        {"t": "\"Nothing was lost — the follower is a full copy of the leader; that's the whole point of running replicas.\"", "correct": false,
+         "why": "False, and dangerously reassuring. It had a full copy up to 3 seconds before death. Papering over acknowledged-write loss means the org keeps making durability decisions on wrong information."},
+        {"t": "\"The old leader still has them; we'll merge them back in when it's repaired.\"", "correct": false,
+         "why": "The new leader has since accepted its own writes — histories diverged, and naive re-merging risks conflicts (reused IDs, double-applied changes). Sometimes reconciliation recovers SOME data, painfully and manually — GitHub spent hours on exactly this. Never promise a merge."},
+        {"t": "\"Users will simply retry their failed requests.\"", "correct": false,
+         "why": "These requests didn't fail — that's the whole problem. Users got 'saved' and moved on. Nobody retries a success, which is precisely why acknowledged-write loss is a broken promise rather than a hiccup."}
+      ]
+    },
+    {
+      "id": "p1c08-q13", "level": 2, "type": "mcq", "tag": "sync-latency",
+      "q": "Compliance demands zero loss of acknowledged writes even if a whole machine dies. Your leader is in one AWS region. The lowest-latency compliant setup is:",
+      "options": [
+        {"t": "Semi-sync to one follower in a different availability zone of the same region; async to another region for disaster recovery", "correct": true,
+         "why": "Machine death (the stated requirement) is covered by 'on two machines before ack,' costing ~1-2ms same-region. The async cross-region copy covers regional disaster without taxing every commit 70ms+. Matching the guarantee to the actual requirement is the skill being tested."},
+        {"t": "Synchronous replication to a follower on another continent", "correct": false,
+         "why": "Over-delivers on the requirement and charges every commit 100ms+ for it. The requirement was machine death, not continental destruction. Always price the guarantee you're actually asked for."},
+        {"t": "Async replication to followers in two other availability zones, with a strict lag SLO and paging the moment lag exceeds 100ms", "correct": false,
+         "why": "Monitored async is still async: there's always an acknowledged-but-unshipped tail, and the leader dying mid-millisecond loses it. 'Small' loss is still loss; the requirement said zero."},
+        {"t": "Fully synchronous replication to all five followers", "correct": false,
+         "why": "Zero loss, yes — plus commit latency set by your slowest follower and total write freeze when ANY follower hiccups. You'd be coupling uptime to five machines' health to buy a guarantee one confirming follower already provides."}
+      ]
+    },
+    {
+      "id": "p1c08-q14", "level": 2, "type": "mcq", "tag": "failover-detection",
+      "q": "Your leader hasn't answered heartbeats for 8 seconds. Before promoting a follower, the question you MUST be able to answer is:",
+      "options": [
+        {"t": "\"Is it actually dead, or just slow/unreachable — and if it's alive, what stops it from accepting writes after we promote?\"", "correct": true,
+         "why": "The failover question. From outside, dead and slow are indistinguishable — GC pauses and partitions mimic death perfectly. If the answer to 'what stops it' isn't fencing (cut its power, invalidate its epoch), promotion is a split brain scheduled for later."},
+        {"t": "\"Which follower has the least replication lag, and how much acknowledged data would promoting it discard?\"", "correct": false,
+         "why": "Necessary for choosing WHO to promote — but it's the second question. Promoting the perfect candidate while the old leader still accepts writes gives you two leaders, which is worse than either data loss or downtime."},
+        {"t": "\"How quickly can DNS propagate the new leader's address?\"", "correct": false,
+         "why": "Repointing matters (and DNS TTLs are a famously leaky way to do it — clients cache), but it's mechanics. The existential question is whether you're about to create a second live leader."},
+        {"t": "\"Should we wait another 8 seconds to be sure?\"", "correct": false,
+         "why": "Waiting longer just trades availability for slightly better confidence — and no timeout, however long, can distinguish dead from partitioned. The fix isn't more patience; it's fencing plus agreement among multiple observers."}
+      ]
+    },
+    {
+      "id": "p1c08-q15", "level": 2, "type": "mcq", "tag": "replica-limits",
+      "q": "Your workload is 50% writes. Read traffic doubles, so a teammate proposes doubling the replica count. What's the flaw?",
+      "options": [
+        {"t": "Every replica must replay the full write stream, so at 50% writes roughly half of each new replica's capacity is spent before it serves a single read", "correct": true,
+         "why": "The ceiling on read-scaling-by-copies. Each replica individually re-performs every write to stay a copy, so write-heavy workloads gain little per replica — and more replicas also mean more lagging timelines and more leader shipping fan-out. Profile for caching first; watch the leader's write wall."},
+        {"t": "Replicas must pause read traffic while they replay incoming writes, so doubling the fleet also doubles the pauses", "correct": false,
+         "why": "They can — replay and reads run concurrently. The issue isn't blocking; it's capacity accounting: replay consumes CPU and I/O that reads then can't use. It's a budget problem, not a locking problem."},
+        {"t": "The leader's network link saturates shipping its log to that many followers, stalling replication for all of them", "correct": false,
+         "why": "Fan-out load on the leader is real and grows with replica count (cascading replication exists to relieve it), but it isn't the first wall at these numbers. The dominant cost is each replica burning half its capacity on replay."},
+        {"t": "More replicas make split brain more likely", "correct": false,
+         "why": "Split brain is about failover and fencing discipline, not replica count. Ten well-fenced replicas are safer than two unfenced ones. Wrong failure mode for this question."}
+      ]
+    },
+    {
+      "id": "p1c08-q16", "level": 2, "type": "mcq", "tag": "monotonic-fix",
+      "q": "Users complain: \"other people's comments flicker — visible on one refresh, gone the next, back again.\" Your reads are load-balanced randomly across 8 replicas. The targeted fix:",
+      "options": [
+        {"t": "Session stickiness: hash each session to one replica so each user rides a single timeline", "correct": true,
+         "why": "This is a monotonic-reads violation — random routing bounces users between fresh and lagged replicas, so time runs backwards. Stickiness gives each user one consistent (possibly stale) timeline. Volunteer the caveat: when a replica dies, its users hop timelines once."},
+        {"t": "Pin all users' reads to the leader after they write", "correct": false,
+         "why": "Read-your-writes machinery — but these users didn't WRITE anything; they're seeing others' comments flicker. Right family of fixes, wrong guarantee. Match the anomaly to its guarantee before choosing machinery."},
+        {"t": "Add more replicas so each carries less read load and lag shrinks across the whole fleet", "correct": false,
+         "why": "Even with tiny lag, random routing across unevenly-lagged replicas can rewind time between two refreshes. The anomaly is caused by ROUTING across timelines, not by the amount of lag."},
+        {"t": "Cache rendered pages so refreshes return identical content", "correct": false,
+         "why": "A page cache would mask the flicker briefly — and add its own staleness layer plus invalidation pain to debug. Fixing a read-routing anomaly with a cache is treating the symptom in a different organ."}
+      ]
+    },
+    {
+      "id": "p1c08-q17", "level": 2, "type": "mcq", "tag": "semi-sync-degraded",
+      "q": "You run semi-sync with one confirming follower. That follower just crashed. What should the leader do, and what's the trade?",
+      "options": [
+        {"t": "Depends on the data: fall back to async (keep accepting writes, temporarily losing the two-machine guarantee) for most systems; halt writes for money-grade data — and alert loudly either way", "correct": true,
+         "why": "This is a policy decision, not a technical one — availability vs durability with no free option. MySQL semi-sync falls back to async after a timeout by default; Postgres with a required sync standby blocks commits. Knowing that BOTH behaviors exist, are configurable, and map to data classes is the senior answer."},
+        {"t": "Always fall back to async so writes keep flowing — the guarantee resumes when the follower recovers", "correct": false,
+         "why": "For a payments ledger, silently dropping to async means the next leader death can lose acknowledged money-writes — the exact thing semi-sync was bought to prevent. 'Always' is the tell: durability policy should follow the data's blast radius."},
+        {"t": "Always halt writes until a confirming follower returns — otherwise semi-sync's guarantee is meaningless", "correct": false,
+         "why": "For a social feed, halting all writes because one replica crashed is self-inflicted downtime protecting data nobody would miss. The other 'always' — same mistake, opposite direction."},
+        {"t": "Promote a different follower to leader", "correct": false,
+         "why": "The LEADER is healthy — a confirming FOLLOWER died. Failover here would cause downtime to fix a problem that reconfiguration (pick another confirming follower, or degrade deliberately) solves in place."}
+      ]
+    },
+    {
+      "id": "p1c08-q18", "level": 2, "type": "mcq", "tag": "multi-leader-when",
+      "q": "Which situation actually justifies multi-leader replication?",
+      "options": [
+        {"t": "Users on three continents need low-latency WRITES, and you can define how concurrent edits to the same data merge", "correct": true,
+         "why": "The legitimate trigger: physics. A Sydney user can't write to a Virginia leader in under ~200ms, ever. A local leader fixes that — and the price is accepting concurrent conflicting writes, so you only take the deal with a merge story you can defend (Chapter 2.5)."},
+        {"t": "You want higher durability — with two leaders, either machine's death leaves a live writable copy", "correct": false,
+         "why": "Durability comes from MORE COPIES and sync policy — semi-sync leader-follower gives it without conflict pain. A second leader adds a second writer, and with it conflicts; it adds no durability a follower couldn't."},
+        {"t": "Your single leader is out of write capacity", "correct": false,
+         "why": "Tempting — two leaders, twice the writes? But both leaders must still replicate and apply each other's writes, so total write work per machine barely changes. Write capacity comes from splitting data (sharding), not adding writers to the same data."},
+        {"t": "You want to eliminate failover complexity", "correct": false,
+         "why": "Multi-leader keeps all the failover machinery per region AND adds conflict resolution on top. If failover pain is what you're fleeing, leaderless/quorum designs (Chapter 1.10) are the family that actually removes promotion drama."}
+      ]
+    },
+    {
+      "id": "p1c08-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: \"How should writes be replicated for your payments service?\" Which answer reads senior?",
+      "options": [
+        {"t": "\"Semi-sync: every commit confirmed by one follower in another AZ, ~2ms cost — acknowledged payments survive any single machine death. Async copy cross-region for DR, and if the confirming follower dies, we halt writes rather than silently degrade; for payments I'll pay downtime over data loss.\"", "correct": true,
+         "why": "Commits to a mode, prices it, names what it survives, covers the degraded case in advance, and states the availability-vs-durability priority for THIS data class. Every clause is a decision with a reason — that's the full senior package."},
+        {"t": "\"Fully synchronous replication to every follower in every region — payments are sacred, so no write is acknowledged until every copy has it, whatever that costs.\"", "correct": false,
+         "why": "Right instinct, unpriced execution. 'Everywhere' means every commit waits on the slowest follower and any follower's bad day freezes all payments — durability bought with an unbounded availability bill. Seniors name costs; 'never' without a price tag reads junior."},
+        {"t": "\"We could do sync, async, or semi-sync — each has trade-offs depending on requirements.\"", "correct": false,
+         "why": "True, empty, and the exact option-listing pattern that caps candidates at mid-level. The interviewer knows the menu; they asked what YOU would order for a payments service, where the requirements are largely implied."},
+        {"t": "\"Async with aggressive lag monitoring — alerts fire the moment lag exceeds 100ms, so we always know exactly how exposed we are.\"", "correct": false,
+         "why": "Monitoring measures the loss window; it doesn't close it. A leader death with 90ms of unshipped acknowledged payments loses them with every alert green. Observability is not a durability mechanism — confusing the two is a red flag on money paths."}
+      ]
+    },
+    {
+      "id": "p1c08-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "After reading GitHub's October 2018 postmortem (43-second partition → automatic cross-country promotion → 24 hours degraded), your CTO asks: \"So is automatic failover good or bad?\" The senior answer:",
+      "options": [
+        {"t": "\"Wrong axis. Automate detection and preparation everywhere; automate PROMOTION only with fencing and multi-observer agreement, and constrain topology so a brief blip can't trigger a cross-region promotion.\"", "correct": true,
+         "why": "Reframes a binary into the actual engineering decision: which steps are reversible (automate freely) vs irreversible (guard heavily), plus the specific guards. And the mature read of the postmortem backs it: GitHub's automation did exactly what it was configured to do — the failure was in what was allowed, not what executed."},
+        {"t": "\"Bad — GitHub's incident proves promotion is too dangerous to automate; a human should approve every failover before it runs.\"", "correct": false,
+         "why": "One incident doesn't decide the axis, and at fleet scale humans can't approve a failover a day — plus a human staring at '43 seconds of silence' has the same dead-or-slow ambiguity the machine did. The lesson is guards and blast-radius limits, not human reflexes."},
+        {"t": "\"Good — 43 seconds of detection is faster than any on-call human; the rest was bad luck.\"", "correct": false,
+         "why": "Speed was never the problem — speed is what turned a 43-second blip into a two-coast divergence. Calling a foreseeable async-tail-plus-cross-region-promotion outcome 'bad luck' is exactly the happy-path thinking postmortems exist to cure."},
+        {"t": "\"The real fix is synchronous cross-country replication so promotion never loses data.\"", "correct": false,
+         "why": "That charges every write ~60ms+ forever to soften a rare event, halts writes when the remote coast blips, and still doesn't prevent dual-leader writes without fencing. A durability tax that doesn't even fix the authority problem is the over-engineering trap."}
+      ]
+    },
+    {
+      "id": "p1c08-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your design has 1 leader + 4 replicas handling reads. Interviewer: \"Reads grow 10x. Go.\" The strongest response:",
+      "options": [
+        {"t": "\"Decompose the reads first: hot-key traffic goes to a cache — probably 80% of the 10x at a fraction of the cost; long-tail reads get a few more replicas, accepting more staleness surface. Then check the write mix, because the leader's write wall may be the real next cliff.\"", "correct": true,
+         "why": "Decomposes the load before scaling it, matches each slice to the cheapest tool, names the ceilings unprompted (staleness surface, the replay tax behind the write-mix check) and spots the next bottleneck beyond the question asked. That's what-breaks-at-10x thinking done like an owner."},
+        {"t": "\"Add 40 replicas — reads scale linearly with replica count, and hardware is cheaper than engineering time spent on anything cleverer.\"", "correct": false,
+         "why": "Linear only for read-only workloads: every replica replays the full write stream, the leader ships log to 40+ followers, and you now operate 40 separately-lagging timelines. Scaling by multiplication without decomposing the load is the junior tell here."},
+        {"t": "\"Shard the database across 10 nodes now — 10x growth means it's time for the real scaling tool anyway.\"", "correct": false,
+         "why": "Sharding is the WRITE-scaling tool, with migration cost measured in quarters. Reaching for the heaviest machinery when the problem said 'reads' — which caches and replicas handle far more cheaply — reads as tool-grabbing before diagnosis."},
+        {"t": "\"Migrate reads to a leaderless quorum store like Cassandra, which was built to scale horizontally without a leader bottleneck.\"", "correct": false,
+         "why": "A database migration plus a consistency-model change to solve read growth that caching plus a few replicas absorbs in-place. Biggest-hammer-first, and quorum reads (R replicas per read) aren't even free. The senior instinct exhausts in-place tools before proposing migrations."}
+      ]
+    },
+    {
+      "id": "p1c08-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Postmortem: a 40-second partition; your automation promoted a follower; the old leader — alive and reachable by some clients — kept accepting writes for those 40 seconds. Which remediation actually prevents recurrence?",
+      "options": [
+        {"t": "Fence before promote: cut the old leader's power via its management interface or invalidate its leadership epoch so its writes are rejected — promotion proceeds only after fencing is confirmed", "correct": true,
+         "why": "The only option that closes the hole. Split brain isn't caused by bad timing — it's caused by promoting while the old leader can still write. Remove that ability (STONITH or epoch/fencing tokens, Chapter 2.3) and the anomaly is impossible rather than merely less likely."},
+        {"t": "Lengthen the detection timeout from 10 to 60 seconds", "correct": false,
+         "why": "Slower detection means a 70-second partition causes the identical incident, plus every REAL leader death now costs 60+ seconds of downtime. Tuning a timeout adjusts the odds; fencing removes the possibility. Postmortems should buy impossibility where it's for sale."},
+        {"t": "Have the old leader continuously check that it can reach a majority of followers, and demote itself within seconds the moment it can't", "correct": false,
+         "why": "Genuinely valuable — and insufficient alone. Self-demotion depends on the confused node correctly diagnosing its own confusion in time (a GC-paused leader resumes and writes for seconds before checking anything). Defense in depth: self-demotion as belt, external fencing as the suspenders that don't rely on the failing node's cooperation."},
+        {"t": "Page on-call the instant failover triggers, with a runbook for verifying the old leader is really dead before traffic moves", "correct": false,
+         "why": "The dual-writes happened in 40 seconds — under any human response time. Alerting turns split brain into a faster-diagnosed split brain. Detection-based remediations can't fix an authority problem; only fencing revokes authority."}
+      ]
+    },
+    {
+      "id": "p1c08-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Leadership review after losing 4 seconds of acknowledged orders in a leader crash: \"We paid for FIVE database servers. How did we lose data?\" The answer that reads senior:",
+      "options": [
+        {"t": "\"Copy count was never the control for this — replication MODE is. We ran async, so acks preceded copies; five or fifty replicas, same window. The fix is semi-sync on the order path — ack only after a second machine holds the write, ~2ms per order — and here's the config change.\"", "correct": true,
+         "why": "Corrects the mental model (copies ≠ durability contract), takes ownership of the original trade, and lands a priced, specific fix with its verification plan. Translating 'we have N servers' into 'here is what we promised and when' is exactly the durability conversation seniors run."},
+        {"t": "\"Extremely rare timing — the leader died in the worst possible window. Unlucky.\"", "correct": false,
+         "why": "The async tail exists on EVERY write; the crash merely sampled it. Calling a permanent structural window 'rare timing' misdiagnoses in a way that guarantees recurrence — and leadership will remember you called it luck."},
+        {"t": "\"We'll add two more replicas and spread them across racks, so there's even more redundancy the next time a leader dies.\"", "correct": false,
+         "why": "Fails the review's own question: replicas five, six, and seven receive the log the same async way; the acknowledged-but-unshipped tail is untouched. Spending money on the axis that doesn't move the risk is the misdiagnosis dressed as action."},
+        {"t": "\"We'll add replication-lag monitoring with tight alerts, so next time we know instantly how exposed we are and can react.\"", "correct": false,
+         "why": "You're ALWAYS exposed under async — that's what the mode means; the dashboard would read 'exposed' forever. Monitoring quantifies the window; only changing the ack contract (semi-sync) closes it. Observability proposed as a durability fix is a category error."}
+      ]
+    },
+    {
+      "id": "p1c08-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Failover, 2:15am. Follower A: 0.2s behind, same rack as the dead leader (rack has had two power events tonight). Follower B: 2.1s behind, different rack, same DC. Follower C: 0.4s behind, another region (adds ~70ms to every write until failback). Commit to a promotion.",
+      "options": [
+        {"t": "\"B. A's freshness is worthless on a rack that's failed twice tonight — that's an active failure domain. C's 70ms taxes every write indefinitely. B costs ~2 seconds of tail once; I take the bounded, one-time loss and page whoever owns the affected writes for reconciliation.\"", "correct": true,
+         "why": "Weighs data loss, blast radius, and steady-state latency against each other, prices each, commits, and handles the consequence (reconciliation) in the same breath. Choosing a known one-time cost over recurring or correlated risk — and saying so — is the judgment being probed."},
+        {"t": "\"A — promote the most caught-up follower, always; 0.2 seconds of loss beats 2.1, and the standard rule exists precisely for 2am calls like this one.\"", "correct": false,
+         "why": "Rules encode defaults, not judgment. A's rack is an ACTIVE failure domain; recovering 1.9 extra seconds of writes by placing the new leader on tonight's flakiest power is trading a bounded known loss for an unbounded likely one. Applying the textbook rule while ignoring the scenario's screaming context is the junior tell."},
+        {"t": "\"C — nearly as fresh as A, and cross-region placement buys disaster tolerance while we're at it; 70ms is a fair price for surviving a DC fire.\"", "correct": false,
+         "why": "It buys DR by taxing every write ~70ms indefinitely and moving your write path a region away from your app tier at 2am — with failback as a whole second migration. Solving a problem nobody had, during an incident, at recurring cost: over-engineering under pressure."},
+        {"t": "\"Wake the DBA lead — promotion is too consequential for on-call to decide alone.\"", "correct": false,
+         "why": "The database is DOWN for writes right now; every minute waiting is user-facing outage, and the DBA gets the same three options with the same trade-offs. Escalation that adds latency without adding information is the waiting-to-be-led pattern wearing an ops costume."}
+      ]
+    },
+    {
+      "id": "p1c08-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your read-your-writes fix pins users to the leader for 60s after any write. It shipped fine. Six months later the product added activity feeds — users now write every few seconds. What breaks, and what's the senior fix?",
+      "options": [
+        {"t": "Frequent writers stay permanently pinned, so the leader is quietly absorbing most read traffic and the replicas idle; the fix is LSN tracking — serve reads from any replica that has replayed past the user's last write, leader only as fallback", "correct": true,
+         "why": "The pin window assumed writes were rare; the workload changed and the shortcut's ceiling arrived — pinning ≈ everyone reads the leader. LSN tracking honors the same guarantee while restoring replica utilization. Recognizing that a fine-yesterday fix has a workload assumption baked in, and naming the graduation path, is the senior skill."},
+        {"t": "Nothing breaks — the pin is per-user and only 60 seconds long, so at any moment just a small slice of users is reading from the leader", "correct": false,
+         "why": "Per-user windows that REFRESH every few seconds are effectively permanent pins. Multiply by every active feed user and 'short' becomes 'the leader serves nearly all reads.' Reasoning about one user's window instead of the fleet's steady state is exactly how this failure hides."},
+        {"t": "Shorten the pin to 5 seconds to reduce leader load", "correct": false,
+         "why": "Users writing every few seconds re-arm even a 5-second pin continuously — load barely moves, and now lag spikes beyond 5s resurface the vanishing-comment bug you originally fixed. Tuning a constant when the mechanism's assumption broke is patching the symptom."},
+        {"t": "Add more read replicas — feed traffic is growing, and absorbing read growth is exactly what replicas are for", "correct": false,
+         "why": "The pinning logic ROUTES readers away from replicas — new ones idle just like the current ones while the leader drowns. Adding capacity that the routing bug prevents you from using is spending money to not fix the problem. Fix routing first; then see if you even need hardware."}
+      ]
+    }
+  ]
+}

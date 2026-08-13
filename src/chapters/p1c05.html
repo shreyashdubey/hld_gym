@@ -1,0 +1,319 @@
+<p>Your side project got picked up by a newsletter. Yesterday you had 200 users; today the graph looks like a wall. Your one server — a modest VM running the app and the database — is at 96% CPU. Requests that took 80 milliseconds now take 4 seconds. Some just time out.</p>
+
+<p>Every scaling story on earth starts at this moment, and there are only two doors out of the room. Door one: get a bigger server. Door two: get more servers. Every architecture you'll ever draw is some combination of those two moves.</p>
+
+<p>Most engineers have been trained to sneer at door one. That training is wrong, and interviewers know it. So before we build the fleet, the big single box gets the honest defense it deserves.</p>
+
+<h2>Scaling up: the honest defense of one big box</h2>
+
+<p><strong>Vertical scaling</strong> means making one machine stronger: more CPU cores, more RAM, faster disks. <strong>Horizontal scaling</strong> means adding machines and spreading the work. The industry spent fifteen years romanticizing the second and forgetting how absurdly powerful the first has become.</p>
+
+<p>Here's one machine in the mid-2020s: cloud instances rent with hundreds of CPU cores and terabytes of RAM — the biggest memory-optimized ones pass 20 TB. A single NVMe SSD does on the order of a million random reads per second, and a server holds a stack of them. Run the numbers from the estimation chapter: a service doing a few thousand requests per second with a working set of a few hundred gigabytes fits on <em>one machine</em> with room to spare. That's not a toy — that's a successful business.</p>
+
+<p>Vertical scaling also has a property no benchmark shows: <strong>it adds zero new problems</strong>. One machine has no network partitions inside it, no distributed transactions, no "which server has the session" puzzle. Every problem in the rest of this book is one you buy the moment you go from one machine to two. A senior engineer delays that purchase as long as the numbers allow.</p>
+
+<div class="box story"><div class="box-tag">War story — Stack Overflow</div>
+<p>For most of the 2010s, Stack Overflow — about 66 million page loads a day in its published 2016 numbers — ran on-premises on hardware you could inventory on one whiteboard. The well-documented 2016 snapshot: nine IIS web servers running the whole application, idling at 5–10% CPU. The databases were four SQL Server machines stuffed with RAM — 768 GB on the biggest — so hot data lived in memory and rarely touched disk. In front: a small set of HAProxy load balancers in redundant pairs. No microservices, no NoSQL fleet. Their engineers wrote openly that the site could survive on a fraction of that hardware; the rest was redundancy and headroom. The monolith only began moving to Azure in 2023, starting with the Teams product — a business decision, not a scaling emergency. The lesson isn't "never scale out"; it's that scale-up plus discipline goes much further than conference talks admit, and saying when one big box is enough earns more trust than reflexively drawing twelve services.</p>
+</div>
+
+<p>So why ever leave? Two reasons, and only one is performance.</p>
+
+<ul>
+<li><strong>The price curve bends the wrong way.</strong> Doubling a small server roughly doubles the cost; at the top of the range, the last doubling of capacity can cost 4–10x. Two mid-size machines cost twice one mid-size machine, forever. Past a point, horizontal is simply cheaper per unit of work.</li>
+<li><strong>One box is one funeral.</strong> The real killer. Kernel panic, disk controller death, a fat-fingered reboot — and you are 100% down. A bigger box is just a bigger <strong>single point of failure</strong> (SPOF: any component whose death takes the whole system with it — hunting them is a reflex you'll use in every chapter from here on).</li>
+</ul>
+
+<p>So you buy a second server. And before it serves a single request, you have two new problems: traffic has to find it, and — nastier — your app has to survive users bouncing between machines. The nasty one first, because until it's solved, the second server is useless.</p>
+
+<h2>The prerequisite: your servers must forget everything</h2>
+
+<p>Run the same app on two servers and here's day one. Priya logs in; the request lands on server A, which stores "session 4f2a = Priya, logged in" in its own memory and hands back a session cookie. Her next click lands on server B, which looks up session 4f2a in <em>its</em> memory, finds nothing, and shows her the login page. Every second click, she's a stranger.</p>
+
+<p>The bug isn't the second server. It's that server A was <strong>stateful</strong>: it kept information between requests in its own memory. The fix is to make every app server <strong>stateless</strong> — after finishing a request, the server remembers nothing, so any server can handle any request from any user. The state doesn't disappear; it moves to one of two places:</p>
+
+<ul>
+<li><strong>Into the request itself.</strong> Put session data in a token the client carries and presents each time, cryptographically signed so it can't be forged (the idea behind JWTs). Any server verifies the signature — no lookup at all. Cost: you can't easily revoke a token before it expires, and cookies must stay small.</li>
+<li><strong>Into a shared store.</strong> Keep sessions somewhere all servers reach — Redis, classically. The cookie holds only a session ID. Cost: one extra fast lookup per request, and the session store becomes a component you must keep alive (its replication story is chapter 1.8).</li>
+</ul>
+
+<p>The same rule covers everything servers quietly hoard: uploaded files go to blob storage (chapter 1.7), local caches become a shared cache tier (chapter 1.6), scheduled jobs move to a queue (chapter 1.11). Interchangeable servers are cattle, not pets: add ten, kill three, and no user can tell.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A stateful server is your neighborhood barber: he knows your usual cut — in his head. Wonderful, until he's sick or has a queue of nine, and nobody else can serve you. A stateless server is a bank teller: your account lives in the central system, so <em>any</em> window can serve you, the bank can open five more at noon rush, and a teller going to lunch loses nothing. The honest edge: the tellers now all depend on that central system — you haven't deleted the state, you've relocated it, and the new home must itself be made reliable.</p>
+</div>
+
+<p>Servers are now interchangeable. Next: someone has to stand at the door and deal the requests out.</p>
+
+<h2>The load balancer: one address, many servers</h2>
+
+<p>A <strong>load balancer</strong> (LB) owns the public address of your system and forwards each incoming connection or request to one of the servers behind it. Clients only ever see the LB; the fleet behind it grows, shrinks, and churns invisibly. But "forwards traffic" hides the key split: at what layer does the balancer <em>look</em>? The names come from the OSI model of chapter 1.1 — layer 4 is transport (TCP/UDP), layer 7 is application (HTTP).</p>
+
+<ul>
+<li>A <strong>layer 4 (L4) balancer</strong> sees only the envelope: source and destination IPs and ports. It picks a backend when the TCP connection opens, then shovels packets, blind to their meaning — it never learns the URL, headers, or cookies. Work per packet is tiny, so L4 is brutally fast: this is how you hold millions of concurrent connections. Examples: AWS Network Load Balancer, Linux IPVS, Google's Maglev.</li>
+<li>A <strong>layer 7 (L7) balancer</strong> opens the envelope. It terminates the TCP connection and usually TLS (it holds the certificate and decrypts), reads the actual HTTP request, and only then routes. Because it can read, it can be smart: send <code>/api/*</code> to one pool and <code>/video/*</code> to another, retry a failed request elsewhere, compress, rate-limit, set cookies. Cost: real work per request, so a lower ceiling per box. Examples: NGINX, HAProxy, Envoy, AWS Application Load Balancer.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Comparison of what a layer 4 and a layer 7 load balancer can see">
+  <rect class="dg-zone" x="8" y="10" width="344" height="230" rx="10"/>
+  <text class="dg-txt" x="24" y="34">L4 — reads the envelope</text>
+  <rect class="dg-node" x="24" y="62" width="80" height="40" rx="8"/>
+  <text class="dg-txt" x="40" y="87">Client</text>
+  <rect class="dg-node-alt" x="140" y="62" width="84" height="40" rx="8"/>
+  <text class="dg-txt" x="152" y="87">L4 LB</text>
+  <rect class="dg-node" x="260" y="62" width="80" height="40" rx="8"/>
+  <text class="dg-txt" x="274" y="87">Server</text>
+  <line class="dg-edge" x1="104" y1="82" x2="140" y2="82" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="224" y1="82" x2="260" y2="82" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="24" y="132">Sees: IPs, ports, TCP/UDP</text>
+  <text class="dg-txt-s" x="24" y="152">Blind to: URL, headers, cookies</text>
+  <text class="dg-txt-s" x="24" y="172">Picks a server per connection,</text>
+  <text class="dg-txt-s" x="24" y="190">then just moves packets. Very fast.</text>
+  <rect class="dg-zone" x="368" y="10" width="344" height="230" rx="10"/>
+  <text class="dg-txt" x="384" y="34">L7 — opens the envelope</text>
+  <rect class="dg-node" x="384" y="62" width="80" height="40" rx="8"/>
+  <text class="dg-txt" x="400" y="87">Client</text>
+  <rect class="dg-node-alt" x="496" y="62" width="84" height="40" rx="8"/>
+  <text class="dg-txt" x="508" y="87">L7 LB</text>
+  <rect class="dg-node" x="616" y="34" width="88" height="36" rx="8"/>
+  <text class="dg-txt-s" x="628" y="57">api pool</text>
+  <rect class="dg-node" x="616" y="96" width="88" height="36" rx="8"/>
+  <text class="dg-txt-s" x="628" y="119">video pool</text>
+  <line class="dg-edge" x1="464" y1="82" x2="496" y2="82" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="580" y1="74" x2="616" y2="56" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="580" y1="90" x2="616" y2="110" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="384" y="132">Terminates TLS, reads full request</text>
+  <text class="dg-txt-s" x="384" y="152">Routes by path, header, cookie</text>
+  <text class="dg-txt-s" x="384" y="172">Can retry, compress, rate-limit.</text>
+  <text class="dg-txt-s" x="384" y="190">Smarter, costlier per request.</text>
+</svg>
+<figcaption>L4 forwards connections it never reads; L7 reads every request and routes on its content. Big systems chain them: L4 at the front for raw capacity, L7 behind it for routing brains.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>An L4 balancer is the postal sorting facility: it reads the address on the envelope and routes it — millions per hour, never opening a single letter. An L7 balancer is the office mailroom clerk: she opens each envelope, reads "this is an invoice," and walks it to accounting; complaints go to support; letters from a known pest get refused (rate limiting). She's far smarter and far slower per item — which is why the postal service doesn't open mail, and why the biggest sites put L4 in front of L7.</p>
+</div>
+
+<p>The interview default: say "load balancer," mean L7, and reach for L4 when the numbers demand it — millions of long-lived connections, or the front door of a CDN-scale system.</p>
+
+<h2>Picking a server: the four algorithms that matter</h2>
+
+<p>The LB has a request and eight healthy servers. Which one gets it?</p>
+
+<ul>
+<li><strong>Round robin</strong>: deal requests in rotation — 1, 2, 3 … 8, 1, 2. Perfect when servers are identical and requests cost roughly the same. For a stateless API of short, similar requests, it's genuinely hard to beat.</li>
+<li><strong>Weighted round robin</strong>: bigger servers get more turns. For mixed hardware generations — or to send 1% of traffic to a canary server running new code (a rollout trick from chapter 2.8).</li>
+<li><strong>Least connections</strong>: new request goes to the server with the fewest open connections. Name this when request costs <em>vary wildly</em> — uploads, report generation, slow queries. Under round robin an unlucky server accumulates five slow requests while neighbors idle; least connections self-corrects, because a busy server naturally stops receiving work. It's the supermarket move: join the shortest checkout line, not the next line in rotation.</li>
+<li><strong>IP hash</strong>: hash the client's IP to pick the server, so the same client always lands in the same place — stickiness without cookies. Its famous failure: thousands of users behind one corporate or mobile-carrier NAT (network address translation — many devices sharing one public IP) all hash to the <em>same server</em>, which melts while the fleet naps.</li>
+</ul>
+
+<p>One senior-level refinement: <strong>power of two choices</strong>. Tracking the exact least-loaded server across a huge fleet is expensive, and when many LBs all chase the same briefly-idle server, they dogpile it. Instead: pick two servers at random, send to the less loaded. Sounds like a party trick; provably close to optimal. Envoy and NGINX both implement it.</p>
+
+<table>
+<thead><tr><th>Algorithm</th><th>Reach for it when</th><th>Watch out for</th></tr></thead>
+<tbody>
+<tr><td>Round robin</td><td>Identical servers, short uniform requests</td><td>Slow requests pile up on unlucky servers</td></tr>
+<tr><td>Weighted round robin</td><td>Mixed hardware; canary deploys</td><td>Weights go stale as hardware changes</td></tr>
+<tr><td>Least connections</td><td>Request duration varies a lot</td><td>Herding when many LBs chase one "idle" server</td></tr>
+<tr><td>IP hash</td><td>Same-client-same-server without cookies</td><td>NAT lumps thousands of users onto one server</td></tr>
+</tbody>
+</table>
+
+<p>All four share one assumption so obvious it's easy to miss: that the servers in the rotation are alive. What happens when one isn't?</p>
+
+<h2>Health checks: noticing the dead, gently removing the dying</h2>
+
+<p>Server 5 just died. Round robin doesn't know — it cheerfully deals every eighth request to a corpse, and one in eight users gets an error until someone notices. The LB needs to know who's healthy, two complementary ways:</p>
+
+<ul>
+<li><strong>Active checks</strong>: probe on a schedule — say <code>GET /healthz</code> every 5 seconds, mark down after 3 straight failures, up after 2 successes. Do the arithmetic aloud: 3 × 5s means a dead server keeps taking traffic for up to ~15 seconds. Tighter intervals detect faster but tolerate less jitter — naming that knob is a senior tell.</li>
+<li><strong>Passive checks</strong>: watch <em>real</em> traffic — a server returning connection errors or 5xx responses gets ejected without waiting for a probe. Faster and free, but it needs real failures to trigger. Production LBs use both: passive to react, active to confirm recovery.</li>
+</ul>
+
+<p>Now the trap that has caused real outages: <strong>what should the health check check?</strong> The tempting answer is everything — have <code>/healthz</code> ping the database, the cache, the downstream services. Walk through a 10-second database blip: every server's deep check fails <em>simultaneously</em>, the LB marks the <em>entire fleet</em> unhealthy, and users get nothing — for a blip the app might have partially survived (cached reads still worked!). You converted a degradation into a total outage.</p>
+
+<p>The senior answer: keep the LB's check <em>shallow</em> — "is this process up and able to serve?" — and handle dependency failures in the request path with timeouts and fallbacks (chapter 2.7). Kubernetes formalizes the split as liveness ("restart me") vs readiness ("don't send traffic right now"). And use the escape hatch good LBs ship: <strong>fail-open</strong> — if more than some fraction of the fleet looks unhealthy (Envoy calls it the panic threshold), assume the <em>check</em> is lying and route anyway. Degraded service beats no service.</p>
+
+<h3>Draining out, warming in</h3>
+
+<p>Health checks also give you civilized maintenance. Kill server 3's process to deploy, and every in-flight request on it dies mid-response. Instead, <strong>connection draining</strong>: tell the LB to stop sending it <em>new</em> requests, let in-flight ones finish — with a deadline, typically 30–300 seconds — then deploy, then let the health check readmit it. The standard trick: the app deliberately fails its own health check (a "drain me" switch), waits out the drain, deploys. Zero dropped requests, every deploy.</p>
+
+<p>The mirror image: a <em>freshly added</em> server has cold caches and empty connection pools. Hand it a full traffic share in its first second and it's your slowest server for a minute — or tips over. LBs offer <strong>slow start</strong>: ramp a new server from a trickle to full share over a window. Drain on the way out, ramp on the way in — that pair is what "zero-downtime deploy" means mechanically.</p>
+
+<h2>Sticky sessions: the tempting shortcut</h2>
+
+<p>Back up. When we hit the session problem, there was a third fix we skipped: leave the servers stateful and make the <em>LB</em> keep each user on the same one. That's a <strong>sticky session</strong> (session affinity): the L7 balancer sets a cookie recording which backend served you and routes you back there every time. No Redis, no token redesign, one config flag.</p>
+
+<p>Genuinely tempting — and it silently un-solves everything this chapter solved. Load skews: heavy users stuck to server C stay stuck; no algorithm can rebalance them. Deploys turn hostile: draining C means waiting hours for sessions to end, or logging its users out. Autoscaling feeds only <em>new</em> users to new servers. A crash wipes every session on the box. Stickiness is statefulness wearing a load balancer costume.</p>
+
+<p>When is it legitimate? Two honest cases. <strong>Long-lived connections</strong> — WebSockets are pinned to one server for the connection's life by nature (rebalancing them after a restart is a chapter 3.4 problem). And <strong>legacy apps</strong> you can't rewrite yet — carts in memory, scale needed now; stickiness is the pragmatic bridge. The senior framing: stickiness as a <em>performance optimization</em> (warmer local cache, degrading gracefully to a miss elsewhere) is acceptable; stickiness as a <em>correctness requirement</em> (wrong server = broken app) is debt with a payoff date.</p>
+
+<h2>Who load-balances the load balancer?</h2>
+
+<p>Look at your diagram. You removed the single point of failure by adding five servers… then put a single load balancer in front. If it dies, five healthy servers serve nobody. You moved the SPOF, not removed it. "Your LB is now the SPOF — what do you do?" is one of the most reliable senior probes in the canon, and the real answer comes in layers.</p>
+
+<p><strong>Layer one: an active-passive pair with a floating IP.</strong> Run two identical LBs sharing one <strong>virtual IP (VIP)</strong> — the address clients connect to, owned by whichever box is active. The pair runs <strong>VRRP</strong> (Virtual Router Redundancy Protocol; keepalived is the common implementation): the active LB sends a heartbeat roughly every second. Miss about three, and the standby declares it dead and claims the VIP — broadcasting "this IP now lives at my hardware address" (a gratuitous ARP). Traffic flows to the standby within seconds. Clients see at most a blip of reset connections; no DNS change, no client cooperation.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The standby LB is a theater understudy: she watches every show from the wings (heartbeats), wearing the same costume (same VIP, same config). The night the lead collapses mid-act, she steps out and continues the scene, and the audience — who bought tickets to the <em>character</em> — mostly never notices. Honest edges: the scene stutters for a beat (in-flight connections on the dead LB are lost), and an understudy protects against one collapse, not the theater burning down. For that you need another theater — which is where DNS and anycast come in.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Load balancer pair failing over a virtual IP using VRRP heartbeats">
+  <rect class="dg-zone" x="8" y="10" width="344" height="280" rx="10"/>
+  <text class="dg-txt" x="24" y="34">Normal operation</text>
+  <rect class="dg-node" x="130" y="48" width="90" height="36" rx="8"/>
+  <text class="dg-txt" x="148" y="71">Clients</text>
+  <text class="dg-txt-s" x="118" y="106">VIP 203.0.113.10</text>
+  <line class="dg-edge" x1="175" y1="84" x2="115" y2="150" marker-end="url(#arrow)"/>
+  <rect class="dg-good" x="40" y="152" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="54" y="172">LB-A</text>
+  <text class="dg-txt-s" x="54" y="188">active, owns VIP</text>
+  <rect class="dg-node" x="210" y="152" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="224" y="172">LB-B</text>
+  <text class="dg-txt-s" x="224" y="188">standby</text>
+  <line class="dg-edge" x1="150" y1="174" x2="210" y2="174"/>
+  <text class="dg-txt-s" x="134" y="216">heartbeat ~1s</text>
+  <rect class="dg-node" x="60" y="240" width="70" height="32" rx="8"/>
+  <text class="dg-txt-s" x="74" y="261">app 1</text>
+  <rect class="dg-node" x="145" y="240" width="70" height="32" rx="8"/>
+  <text class="dg-txt-s" x="159" y="261">app 2</text>
+  <rect class="dg-node" x="230" y="240" width="70" height="32" rx="8"/>
+  <text class="dg-txt-s" x="244" y="261">app 3</text>
+  <line class="dg-edge" x1="95" y1="196" x2="95" y2="240" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="368" y="10" width="344" height="280" rx="10"/>
+  <text class="dg-txt" x="384" y="34">LB-A dies</text>
+  <rect class="dg-node" x="490" y="48" width="90" height="36" rx="8"/>
+  <text class="dg-txt" x="508" y="71">Clients</text>
+  <text class="dg-txt-s" x="510" y="106">VIP 203.0.113.10</text>
+  <line class="dg-edge" x1="545" y1="84" x2="620" y2="150" marker-end="url(#arrow)"/>
+  <rect class="dg-bad" x="400" y="152" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="414" y="172">LB-A</text>
+  <text class="dg-txt-s" x="414" y="188">silent, dead</text>
+  <rect class="dg-good" x="570" y="152" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="584" y="172">LB-B</text>
+  <text class="dg-txt-s" x="584" y="188">claims VIP</text>
+  <text class="dg-txt-s" x="400" y="222">3 missed heartbeats (~3s):</text>
+  <text class="dg-txt-s" x="400" y="240">B announces the VIP as its own</text>
+  <text class="dg-txt-s" x="400" y="258">(gratuitous ARP) and takes traffic.</text>
+  <text class="dg-txt-s" x="400" y="276">Clients keep the same address.</text>
+</svg>
+<figcaption>VRRP failover: two load balancers share one virtual IP. The standby hears heartbeats; a few missed beats and it claims the address. Clients never learn anything happened.</figcaption>
+</figure>
+
+<p><strong>Layer two: DNS failover, for when the whole site dies.</strong> A VIP pair protects a machine, not a building — a data center power cut kills both LBs. DNS failover health-checks your sites from outside (as Route 53 does) and changes the DNS answer to point at the survivor. It works, but respect its speed limit: DNS answers are cached by resolvers and operating systems for the TTL (time-to-live) you set — commonly 30–60 seconds in failover setups — and plenty of resolvers and long-lived apps ignore your TTL and hold stale answers for minutes or hours. DNS failover is measured in minutes: disaster recovery, not high availability.</p>
+
+<p><strong>Layer three: anycast, the Cloudflare-style front door.</strong> There's a way to fail over globally <em>without</em> DNS: announce the <em>same IP address</em> from many places at once. Internet routing (BGP — the protocol networks use to tell each other which addresses they can reach) delivers each packet to the topologically nearest site announcing it. That's <strong>anycast</strong>. Cloudflare announces the same addresses from data centers in hundreds of cities: a user in Mumbai reaches the Mumbai edge, a user in Lyon reaches Paris — same IP. When a site dies, it stops announcing, and the internet reroutes its users to the next-nearest edge in seconds, with no DNS change. That's how edge networks put a load balancer "everywhere" behind one address; the full CDN story is chapter 1.7.</p>
+
+<p>Notice the shape: VRRP pair inside a site (seconds, protects a box), anycast or DNS across sites (protects a location). Naming the layers <em>and their failover time scales</em> separates "add another LB" from a senior answer.</p>
+
+<h2>The scale cube: this chapter is one of three axes</h2>
+
+<p>Everything so far — clone the stateless server, balance across the clones — is one axis on the map interviewers carry in their heads. The <strong>scale cube</strong> (from the book <em>The Art of Scalability</em>) says systems grow along three independent axes:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="The three axes of the scale cube: cloning, functional split, data split">
+  <text class="dg-txt" x="16" y="52">X: clone it</text>
+  <rect class="dg-node" x="150" y="24" width="76" height="34" rx="8"/>
+  <text class="dg-txt-s" x="168" y="46">app</text>
+  <line class="dg-edge" x1="226" y1="41" x2="290" y2="41" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="300" y="10" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="27">app copy 1</text>
+  <rect class="dg-node-alt" x="300" y="42" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="59">app copy 2</text>
+  <rect class="dg-node-alt" x="300" y="74" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="91">app copy 3</text>
+  <text class="dg-txt-s" x="470" y="46">identical clones + LB</text>
+  <text class="dg-txt-s" x="470" y="64">= this chapter</text>
+  <text class="dg-txt" x="16" y="162">Y: split by function</text>
+  <rect class="dg-node" x="150" y="134" width="76" height="34" rx="8"/>
+  <text class="dg-txt-s" x="168" y="156">app</text>
+  <line class="dg-edge" x1="226" y1="151" x2="290" y2="151" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="300" y="120" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="137">auth service</text>
+  <rect class="dg-node-alt" x="300" y="152" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="169">feed service</text>
+  <rect class="dg-node-alt" x="300" y="184" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="201">upload service</text>
+  <text class="dg-txt-s" x="470" y="156">different work,</text>
+  <text class="dg-txt-s" x="470" y="174">different fleets</text>
+  <text class="dg-txt" x="16" y="272">Z: split by data</text>
+  <rect class="dg-node" x="150" y="244" width="76" height="34" rx="8"/>
+  <text class="dg-txt-s" x="168" y="266">app</text>
+  <line class="dg-edge" x1="226" y1="261" x2="290" y2="261" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="300" y="230" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="247">users A–H</text>
+  <rect class="dg-node-alt" x="300" y="262" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="279">users I–P</text>
+  <rect class="dg-node-alt" x="300" y="294" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="314" y="311">users Q–Z</text>
+  <text class="dg-txt-s" x="470" y="266">same code, slice of data</text>
+  <text class="dg-txt-s" x="470" y="284">= sharding, chapter 1.9</text>
+</svg>
+<figcaption>The scale cube. X multiplies identical copies (needs statelessness + a load balancer). Y splits by kind of work. Z splits by slice of data — the only axis that scales writes and state.</figcaption>
+</figure>
+
+<ul>
+<li><strong>X-axis — clone it.</strong> Identical copies behind an LB. Cheapest and simplest; it's this whole chapter. Its limit: every clone still needs all the data, so cloning scales compute and reads — never writes or data size.</li>
+<li><strong>Y-axis — split by function.</strong> Auth service, feed service, upload service: the microservices axis. Its honest primary benefit is organizational — teams that deploy and scale independently — with the perk of sizing each fleet for its own workload.</li>
+<li><strong>Z-axis — split by data.</strong> Same code everywhere, but each server owns a slice: users A–H here, I–P there. This is sharding — the only axis that scales writes and storage — and it's hard enough to get its own chapter (1.9).</li>
+</ul>
+
+<p>The order is a judgment call interviewers probe: X first, nearly free once you're stateless. Z when a data tier outgrows one machine. Y when the <em>team's</em> shape demands it — not because a conference said so. Which brings us to the company that learned this in public.</p>
+
+<div class="box story"><div class="box-tag">War story — Pinterest</div>
+<p>In 2011–2012 Pinterest was among the fastest-growing sites the web had seen — past 10 million users with a single-digit engineering team. Under that pressure they adopted everything that promised infinite scale, and their famous "Scaling Pinterest" retrospective shows the September 2011 stack: MySQL <em>plus</em> Cassandra <em>plus</em> MongoDB <em>plus</em> Membase <em>plus</em> Redis <em>plus</em> Memcached <em>plus</em> Elasticsearch, with multiple sharding schemes at once. Each clustered "auto-scaling" technology, pushed to its limit, failed in its own novel way — and every novel failure was an all-hands emergency with no answers on the internet. So they reversed course and simplified brutally: sharded MySQL (4,096 logical shards at launch, each object's shard baked into its 64-bit ID), Redis, Memcached, Solr — mature tools with boring, documented failure modes. Their stated lessons became canon: keep it simple; use known, proven technology; clone stateless web servers behind load balancers for traffic (the X-axis) and shard data where you must (the Z-axis). The architecture that carried Pinterest through hypergrowth was less exotic than what many ten-person startups run today.</p>
+</div>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Load balancing is rarely the headline question; it's the terrain under every question. A passing senior answer commits ("L7, least-connections because upload times vary, shallow health checks with a 15-second detection window") and raises the failure story unprompted. Probes to expect:</p>
+<ul>
+<li>"You've drawn one load balancer. What happens when it dies?" — they want layers with time scales: VRRP pair and floating VIP inside the site, anycast or DNS failover across sites.</li>
+<li>"A user logs in and the next request hits a different server. Walk me through it." — the statelessness prerequisite: signed token vs shared session store, and the trade-off.</li>
+<li>"Why least-connections instead of round robin here?" — the algorithm tied to workload variance, not recited as trivia.</li>
+<li>"How do you deploy with zero dropped requests?" — drain by failing the health check, deadline in-flight work, slow-start the return. Mechanics, not vibes.</li>
+<li>"All your health checks went red during a database blip — what did you get wrong?" — deep checks in the LB probe; fix is shallow checks plus fail-open.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c05-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, the difference between an L4 and an L7 load balancer, and why big systems use both.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A load balancer is the front door that spreads incoming traffic across many servers, and the L4/L7 split is about how much of each message it reads. An L4 balancer only reads the envelope — IP addresses and ports — so it picks a server when the connection opens and then just forwards packets; it never knows what URL you asked for, which makes it fast enough to hold millions of connections. An L7 balancer opens the envelope: it terminates the TLS connection, reads the actual HTTP request, and can route by path or header, retry failures, and set cookies — much smarter, but it does real work per request, so each box handles less. Big systems chain them: a thin L4 layer at the front absorbs enormous connection counts, passing to L7 balancers behind it that make the intelligent routing decisions. Memory hook: L4 is the postal sorting center that never opens mail; L7 is the mailroom clerk who reads every letter and walks it to the right desk.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your API peaks at 20,000 requests/second. Load tests show one app server handles 1,200 req/s before p99 latency degrades. How many servers behind the LB? Show the reasoning that isn't just division.</p></div>
+<details><summary>Answer</summary><p>Raw division: 20,000 / 1,200 ≈ 17 servers at 100% — which you never run; a full fleet has no room for spikes, deploys, or deaths. Target ~70% peak utilization: 20,000 / (1,200 × 0.7) ≈ 24, which also survives N+2 (one server draining, one freshly dead). Commit to ~24, autoscaling between maybe 12 and 30. Senior extras: check the load test used a realistic request mix, and remember every added server multiplies queries into the database — the web tier scales while the data tier quietly becomes the next bottleneck.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks: <code>/healthz</code> checks the app <em>and</em> pings the database. The database is unreachable for 20 seconds. LB config: probe every 5s, down after 2 failures, up after 3 successes. Narrate the timeline.</p></div>
+<details><summary>Answer</summary><p>T+0: blip begins; every server's check starts failing. T+10s (two failed probes): the LB has marked <em>every</em> server down — 100% of requests now fail at the LB, including cached reads that needed no database. T+20s: database recovers, but readmission needs 3 straight successes at 5s intervals, so servers return around T+35s — a 20-second blip became a ~35-second total outage, and at readmission all the queued client retries slam the fleet at once. Fixes: shallow LB checks, dependency failures handled per-request with timeouts and fallbacks, and fail-open so that when "everyone" looks dead the LB assumes the check is lying and routes anyway.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Sketch the exact sequence for deploying new code to a 6-server fleet behind an L7 balancer with zero dropped requests, naming every mechanism from this chapter you use.</p></div>
+<details><summary>Answer</summary><p>One server at a time (or two, if the capacity math allows): (1) flip server 1's drain switch so <code>/healthz</code> starts failing — the LB stops sending new requests (active check as removal lever); (2) wait out connection draining with a deadline, say 60s; (3) deploy; the app warms critical caches before reporting healthy; (4) after 2–3 passing probes the LB readmits it — with slow start, so it ramps instead of getting hammered cold; (5) watch error rate and p99 before touching server 2 — this is the rollback point, and weighted routing can make server 1 a 1% canary first. Repeat. Every mechanism is standard LB configuration; the skill is the sequence.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>You enabled IP-hash balancing so users hit the same server (warm local caches). A week later one server sits at 90% CPU while seven idle at 15%. What happened, and what are two fixes with trade-offs?</p></div>
+<details><summary>Answer</summary><p>NAT lumping: a big population — a mobile carrier's gateway, a campus — shares one public IP, so IP-hash sends the whole crowd to one server. Fix 1: cookie-based stickiness at the L7 balancer, which distinguishes users behind shared IPs; cost: sticky sessions' deploy and skew problems, though milder. Fix 2: drop affinity — least connections, with a local cache miss falling back to the shared cache tier (chapter 1.6); cost: lower hit rate, slightly higher latency, but even load and painless deploys. Say the framing aloud: affinity is fine while the "wrong" server costs only milliseconds; the moment it costs correctness or operability, externalize.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>There are only two scaling moves — bigger box, more boxes — and the senior answer defends the bigger box honestly (Stack Overflow: ~66 million page loads a day on nine underworked web servers) before paying horizontal's complexity tax.</li>
+<li>Vertical scaling ends for two reasons: the price curve bends upward, and one machine is one funeral — a single point of failure no money removes.</li>
+<li>Horizontal scaling has a prerequisite: stateless servers. Sessions move into signed tokens or a shared store; files to blob storage; servers become interchangeable cattle.</li>
+<li>L4 balancers read the envelope (IPs, ports) and are brutally fast; L7 balancers open it (terminate TLS, read HTTP) and route intelligently. Big systems put L4 in front of L7.</li>
+<li>Match the algorithm to the workload: round robin for uniform requests, weighted for mixed fleets and canaries, least-connections when durations vary, IP-hash only with eyes open to NAT lumping.</li>
+<li>Health checks the LB acts on should be shallow, paired with passive checks and fail-open — deep checks turn a dependency blip into a self-inflicted total outage, and the same checks double as the deploy lever: fail the check to drain, deploy, readmit with slow start.</li>
+<li>The LB is itself a SPOF: VRRP pair with a floating VIP inside a site (seconds), anycast or DNS failover across sites (seconds to minutes) — name the layers and their time scales.</li>
+<li>On the scale cube, this chapter is the X-axis (clone it). It scales compute and reads, never writes or data size — for that, sharding (chapter 1.9) awaits.</li>
+</ul>
+</div>

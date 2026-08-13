@@ -1,0 +1,282 @@
+<p>Your photo app runs on servers in Virginia. It's fast — you've profiled it. The server builds a response in 40 milliseconds. Then a friend in Delhi messages you: "Nice app, but why does every photo take three seconds to load?"</p>
+
+<p>You check everything. Database: fine. Cache hit rate: great. Server CPU: bored. The app is fast — in Virginia. Your friend's request is crossing twelve thousand kilometers of ocean floor, twice, per round trip — and a fresh HTTPS connection needs three or four round trips before the first image byte even starts moving.</p>
+
+<p>No amount of code optimization fixes this. You are not fighting your stack. You are fighting the speed of light — and light is not going to get faster. This chapter is about the only move that works: stop making the bytes travel. Put copies of them near every user (that's a CDN), and put the originals somewhere built to hold trillions of files forever (that's blob storage). Almost every real system you'll design in Part 3 — Instagram, YouTube, Dropbox — stands on these two legs.</p>
+
+<h2>The speed of light is a budget</h2>
+
+<p>Light in a fiber-optic cable travels at about 200,000 km per second — two-thirds of its speed in a vacuum, because glass slows it down. That sounds fast until you do the division. Virginia to Delhi is roughly 12,000 km. One round trip: 24,000 km ÷ 200,000 km/s = 120 milliseconds — and that's the physics-textbook best case. Real cables don't run in straight lines, and every router along the path adds a little, so the real round-trip time (RTT) is more like 180–250 ms.</p>
+
+<p>Now count round trips. A brand-new HTTPS connection costs: one round trip for the TCP handshake (the "hello, are you there?" that starts every connection), one more for the TLS handshake (agreeing on encryption), and one for the actual request and response. Three round trips minimum — call it 600 ms from Delhi before the first image byte arrives. A page with images on a few separate connections stacks these costs. That's your three seconds, and your server's 40 ms was never the story.</p>
+
+<table>
+<thead><tr><th>Distance</th><th>Typical RTT</th><th>Feels like</th></tr></thead>
+<tbody>
+<tr><td>Same city</td><td>1–5 ms</td><td>Instant</td></tr>
+<tr><td>Same continent (coast to coast)</td><td>60–80 ms</td><td>Snappy</td></tr>
+<tr><td>Across an ocean</td><td>150–250 ms</td><td>Noticeable pause</td></tr>
+<tr><td>Antipodes (Sydney ↔ Virginia)</td><td>200–300 ms</td><td>Painful, and it multiplies per round trip</td></tr>
+</tbody>
+</table>
+
+<p>The senior takeaway from this table: latency across distance is not an engineering problem, it's geography. The only fix is to shorten the trip. So the industry built exactly that.</p>
+
+<h2>CDNs: your files, already in Delhi</h2>
+
+<p>A CDN — content delivery network — is a company (Cloudflare, Akamai, Fastly, CloudFront) that runs hundreds of small data centers around the world, called <strong>edge PoPs</strong> (points of presence). Delhi has several. So does Sydney, São Paulo, Lagos. Each PoP is a big shared cache, sitting 5–20 ms from the users near it.</p>
+
+<p>You met caching in the last chapter. A CDN is that same idea with a passport: it caches your responses geographically, close to whoever is asking. The mechanics:</p>
+
+<ul>
+<li>Your friend in Delhi requests <code>photos.yourapp.com/cat.jpg</code>. DNS steers that hostname to the nearest PoP instead of your server (CDNs do this with anycast or geo-aware DNS — you saw how that routing works in chapter 1.1).</li>
+<li><strong>Cache hit:</strong> the PoP already has <code>cat.jpg</code>. It replies in ~20 ms. Your Virginia server never hears about it.</li>
+<li><strong>Cache miss:</strong> the PoP doesn't have it. It fetches from your server — called the <strong>origin</strong> — stores a copy, and replies. That first user in Delhi pays the ocean crossing; everyone in Delhi after them gets the 20 ms hit.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Request path without a CDN versus with a CDN edge cache">
+  <rect class="dg-zone" x="8" y="10" width="704" height="120" rx="10"/>
+  <text class="dg-txt-s" x="24" y="34">WITHOUT CDN — every request crosses the ocean</text>
+  <rect class="dg-node" x="40" y="55" width="130" height="50" rx="8"/>
+  <text class="dg-txt" x="58" y="85">User (Delhi)</text>
+  <rect class="dg-node" x="530" y="55" width="150" height="50" rx="8"/>
+  <text class="dg-txt" x="548" y="85">Origin (Virginia)</text>
+  <line class="dg-edge" x1="170" y1="80" x2="530" y2="80" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="270" y="70">~220 ms RTT, every time</text>
+  <rect class="dg-zone" x="8" y="150" width="704" height="170" rx="10"/>
+  <text class="dg-txt-s" x="24" y="174">WITH CDN — the ocean crossing happens once, on a miss</text>
+  <rect class="dg-node" x="40" y="205" width="130" height="50" rx="8"/>
+  <text class="dg-txt" x="58" y="235">User (Delhi)</text>
+  <rect class="dg-node-alt" x="270" y="205" width="160" height="50" rx="8"/>
+  <text class="dg-txt" x="288" y="228">Edge PoP (Delhi)</text>
+  <text class="dg-txt-s" x="288" y="245">cache of your files</text>
+  <rect class="dg-node" x="530" y="205" width="150" height="50" rx="8"/>
+  <text class="dg-txt" x="548" y="235">Origin (Virginia)</text>
+  <line class="dg-edge" x1="170" y1="230" x2="270" y2="230" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="185" y="220">~20 ms</text>
+  <line class="dg-edge" x1="430" y1="230" x2="530" y2="230" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="440" y="220">miss only</text>
+  <text class="dg-txt-s" x="40" y="295">Hit: served in 20 ms, origin never contacted. Miss: first requester pays ~220 ms, then the file stays at the edge for its TTL.</text>
+</svg>
+<figcaption>Same file, two worlds. A CDN converts "every user pays for distance" into "one user per region pays once."</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A CDN is the corner shop, and your origin is the dairy farm. Nobody drives 300 km to the farm for milk — the shop stocks it locally, and when the fridge runs low, the shop restocks from the farm. The TTL is the expiry date on the carton: the shop will confidently sell it until that date, then check with the farm for a fresh one. Where the analogy breaks: a shop pays for stock up front, while a pull CDN only fetches after someone asks — the first customer in each neighborhood waits for the delivery truck.</p>
+</div>
+
+<h3>TTLs, cache keys, and the two ways to un-publish a file</h3>
+
+<p>How long does the edge keep a copy? You tell it, with a <strong>TTL</strong> (time to live), usually via the <code>Cache-Control</code> response header. <code>max-age=3600</code> means "any cache may serve this for an hour without asking me again." The trade-off is the same one from the caching chapter: long TTL = fewer origin hits but staler content; short TTL = fresher but your origin works harder.</p>
+
+<p>What counts as "the same file"? The <strong>cache key</strong> — by default the URL, plus any headers or query parameters you choose. Get it wrong in either direction and things go sideways. Include too much (say, a per-user session cookie) and every user misses — hit rate quietly hits 0% while your origin takes full traffic. Include too little and you serve the wrong bytes: if <code>?size=small</code> isn't in the key, the desktop user gets the thumbnail. The truly dangerous version is caching a <em>personalized</em> response under a shared key — then user A is served user B's page.</p>
+
+<div class="box story"><div class="box-tag">War story — Steam's Christmas cache leak</div>
+<p>On December 25, 2015, Steam users started seeing other people's account pages — strangers' email addresses, purchase histories, partial payment info. Valve took the store offline. It wasn't a hack: Steam was under a denial-of-service attack, and a caching configuration deployed to absorb the traffic was wrong. For about an hour, personalized store pages were cached and served to other users as if they were shared static files; Valve's statement put it at around 34,000 users exposed. The lesson is precise: a cache key is a security boundary. Anything personalized must either never be cached at the edge or be keyed so it can only ever reach its owner. One wrong caching rule turned a traffic problem into a privacy incident on the store's busiest day of the year.</p>
+</div>
+
+<p>Now the harder question, the one interviewers love: you pushed a broken image, and it's cached at 300 PoPs with a 24-hour TTL. How do you take it back? Two tools:</p>
+
+<ul>
+<li><strong>Purge (invalidation):</strong> every CDN has an API — "delete this URL from all edges." It works, but it's a global broadcast taking seconds to minutes: your emergency brake, not your steering wheel.</li>
+<li><strong>Versioned URLs:</strong> the senior default. Put a content hash in the filename — <code>app.3f9a2c.css</code> — and serve it with <code>Cache-Control: max-age=31536000, immutable</code> (a year, never revalidate). When content changes, the URL changes, and every cache on Earth fetches the new file naturally. You never invalidate because you never reuse a URL. Every modern web build pipeline does exactly this.</li>
+</ul>
+
+<p>The rule of thumb: version what you can, purge what you must (a leaked file, a legal takedown, a cached error page).</p>
+
+<h3>Pull vs push</h3>
+
+<p>Everything above describes a <strong>pull CDN</strong>: lazy, fills itself on demand, the default for nearly everyone. Its weakness is the cold cache — a new file, a just-purged file, or a new PoP means a burst of misses hitting your origin at once (good CDNs soften this by collapsing concurrent misses for the same key into one origin fetch).</p>
+
+<p>A <strong>push CDN</strong> flips the direction: you upload to the edges ahead of time, before anyone asks. More work — you decide what goes where and pay for edge storage — so it only pays off when demand is predictable and the cost of a miss is brutal. There is one company for whom both are extremely true.</p>
+
+<div class="box story"><div class="box-tag">War story — Netflix Open Connect</div>
+<p>By 2011, Netflix streaming was on its way to being a double-digit share of all downstream internet traffic (Sandvine has measured it around 15% globally in recent years) — too big to keep renting commercial CDNs. So in 2012 Netflix built its own, Open Connect, with a twist: it ships <em>Open Connect Appliances</em> — servers stuffed with hundreds of terabytes of storage — to internet service providers, free, to install inside their own networks. Your stream often never touches the public internet; it comes from a box in your ISP's building. The second twist is the push model: every night, during off-peak hours, each appliance downloads the titles Netflix predicts that region will watch tomorrow, so the evening peak is served from disks a few kilometers away. ISPs win too — Netflix bytes stop clogging their expensive upstream links. Today effectively all Netflix video is served from Open Connect appliances in thousands of locations across 100+ countries. That's why a global simultaneous release doesn't melt the internet: the show was already everywhere before anyone pressed play.</p>
+</div>
+
+<h3>Faster even when it can't cache</h3>
+
+<p>Interviewers ask: "my API responses are personalized — is the CDN useless?" No. <strong>Dynamic acceleration</strong>: the user still connects to the edge 20 ms away, so the TCP and TLS handshakes happen over 20 ms instead of 220. From there the request rides the CDN's private backbone to your origin over connections that are already open and warm. Zero caching, and you've still turned three slow round trips into three fast ones plus one long one.</p>
+
+<h3>Private content: signed URLs and signed cookies</h3>
+
+<p>A CDN edge serves anyone who asks — that's the point. But what about paid course videos, or private photos? You can't just put them on public URLs and hope nobody shares the link.</p>
+
+<p>The answer is a <strong>signed URL</strong>: your app server combines the URL, an expiry time, and a secret key into a cryptographic signature appended as a query parameter. The edge verifies signature and expiry locally — no call to your origin — and serves or rejects. Your app decides <em>who</em> gets a link (only logged-in, paid-up users); the CDN enforces that the link is genuine and fresh, and a leaked link dies at expiry. For content made of many files — a video split into hundreds of segments — signing each URL is clumsy, so CDNs offer <strong>signed cookies</strong>: one signed grant authorizing everything under a path like <code>/course-42/*</code>.</p>
+
+<h2>Blob storage: where the originals live</h2>
+
+<p>The CDN caches copies. Copies of what, stored where? Your first instinct — the app server's disk — dies the moment you have two app servers (which one has the file?) or one server failure (where did the photos go?). Your second instinct might be the database. Hold that thought — we're about to kill it properly.</p>
+
+<p>What you want is a <strong>blob store</strong> (blob = binary large object: images, videos, PDFs, backups — any opaque pile of bytes). The model the whole industry copied is Amazon S3, launched 2006: you create a <strong>bucket</strong> (a namespace) and put <strong>objects</strong> into it under <strong>keys</strong> — strings like <code>photos/2026/08/cat.jpg</code>. The slashes are cosmetic: the namespace is flat, keys just look like folder paths. The API is deliberately tiny — PUT, GET, DELETE, LIST — and there's no "edit byte range 100–200"; you replace an object whole. In exchange you get the numbers that matter: objects up to 5 TB, effectively infinite capacity, pay-per-GB, and <strong>eleven nines of durability</strong> (99.999999999% — redundant copies across multiple data centers make losing an object a once-in-millions-of-years design goal). Availability is a different, lower number, and a senior keeps the two words apart: durability is "is my data still alive somewhere," availability is "can I reach it right now."</p>
+
+<p>One fact to state correctly, because it changed: since December 2020, S3 is <strong>strongly consistent</strong> — after a successful write, any read anywhere immediately sees the new object, including overwrites and LISTs. For S3's first fourteen years, overwrites were only <em>eventually</em> consistent (a read just after a write could return the old version), and a generation of interview prep material still says so. Saying "S3 is eventually consistent" in 2026 is a small but real credibility ding.</p>
+
+<h3>The pattern: metadata in the database, blob in the store</h3>
+
+<p>So why not blobs in the database? Because database storage is the most expensive kind you own. Every gigabyte of photo bytes in Postgres sits in the engine's carefully managed pages, gets copied to every replica, bloats every backup, and shoves hot rows out of the buffer pool (the RAM cache that makes queries fast). And for all that cost, the database gives blobs nothing back — you can't index, query, or join on the middle of a JPEG. You'd be paying for a scalpel and using it as a shovel.</p>
+
+<p>The pattern every serious system uses instead:</p>
+
+<pre><code>photos table (Postgres)                blob store (S3)
+--------------------------             -----------------------
+id: 8814                               key: photos/8814/orig.jpg
+owner_id: 442                          (the actual 3 MB of bytes)
+s3_key: "photos/8814/orig.jpg"
+width, height, created_at, ...</code></pre>
+
+<p>The database holds <strong>metadata</strong> — who owns it, when it was made, where it lives — everything you query and join on. The store holds the bytes; the row points at the object by key. This split shows up in every Part 3 design that touches media, and interviewers treat "blobs in the DB" as a genuine red flag.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>It's a coat check. The cloakroom (blob store) holds the heavy coats; you hold a small numbered ticket (the database row with the key). Nobody rummages through a rack of coats to find yours — they look up the ticket number and go straight to the hook. And you'd never staple the coat to the ticket: the ticket stays light precisely so the front desk can flip through thousands of them per second. The analogy is honest about one more thing: lose the ticket and the coat is orphaned — which is why the metadata row and the object need to be created and deleted together, carefully.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — the typo that turned off half the internet</div>
+<p>On February 28, 2017, an Amazon engineer debugging a slowdown in S3's billing system in us-east-1 — AWS's oldest, busiest region — ran a playbook command to take a few servers out of service. One parameter was mistyped, and the command removed a large chunk of capacity instead, including servers running S3's <em>index subsystem</em> (which knows where every object lives) and its <em>placement subsystem</em> (which decides where new objects go). Both needed full restarts. Neither had been fully restarted in years, and S3 had grown enormously in that time; recovery took roughly four hours. The outage cascaded through everything built on S3 — Trello, Quora, IFTTT, Slack file uploads, countless sites whose images simply vanished. The quietly damning detail: AWS's own status dashboard couldn't show its red warning icon, because the icon was stored in S3. The fixes were pure senior-engineering hygiene: the capacity-removal tool now refuses to drop below a safety floor, and the subsystems were partitioned into smaller cells so no restart is ever that big again. Two lessons for interviews: ops tooling needs guardrails exactly like APIs do, and when half the internet keeps its bytes in one system in one region, that system's blast radius is half the internet.</p>
+</div>
+
+<h2>Uploads: get out of the way</h2>
+
+<p>Downloads sorted. Now uploads, where there's a subtler trap. The obvious flow — client uploads to your app server, which writes to S3 — makes your servers a pipe. Run the numbers: 2 million uploads a day at 3 MB each is 6 TB flowing <em>through</em> your servers daily, ~550 Mbps average and several times that at peak, each in-flight upload holding a connection and buffer memory for seconds. Your fleet scales with upload bandwidth while adding zero value to the bytes — it receives them and immediately forwards them.</p>
+
+<p>The fix is the <strong>presigned upload URL</strong> — the CDN section's signature trick, pointed the other way. Your server uses its S3 credentials to sign a short-lived permission slip: "the bearer may PUT one object to exactly this key, with this content type, within 10 minutes." The client then uploads <em>directly to S3</em>. Your server handles a tiny JSON exchange; the 3 MB rides S3's bandwidth, not yours.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Presigned upload flow: client gets a signed URL from the app server then uploads directly to blob storage">
+  <rect class="dg-node" x="30" y="110" width="130" height="56" rx="8"/>
+  <text class="dg-txt" x="60" y="143">Client</text>
+  <rect class="dg-node" x="295" y="30" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="318" y="56">App server</text>
+  <text class="dg-txt-s" x="318" y="73">has S3 credentials</text>
+  <rect class="dg-node-alt" x="540" y="110" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="580" y="137">S3 bucket</text>
+  <text class="dg-txt-s" x="562" y="154">takes the bytes</text>
+  <line class="dg-edge" x1="140" y1="110" x2="300" y2="70" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="130" y="76">1. "I want to upload cat.jpg"</text>
+  <line class="dg-edge" x1="330" y1="86" x2="170" y2="126" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="205" y="115">2. presigned URL (expires in 10 min)</text>
+  <line class="dg-edge" x1="160" y1="145" x2="540" y2="145" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="255" y="136">3. PUT 3 MB directly — bypasses app server</text>
+  <line class="dg-edge" x1="560" y1="166" x2="430" y2="220" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="295" y="200" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="318" y="226">App server</text>
+  <text class="dg-txt-s" x="318" y="243">writes metadata row</text>
+  <text class="dg-txt-s" x="455" y="200">4. event / confirm:</text>
+  <text class="dg-txt-s" x="455" y="216">"object exists"</text>
+</svg>
+<figcaption>The heavy arrow (3) never touches your servers. Steps 1 and 2 move a few hundred bytes of JSON; step 4 creates the metadata row only after the object verifiably exists.</figcaption>
+</figure>
+
+<p>Two operational details separate a working answer from a hand-wave. First, <strong>constrain the slip</strong>: pin the exact key, content type, and a size limit in the signature — otherwise you've handed the client a blank check to fill your bucket. Second, <strong>don't trust "done."</strong> Clients crash, lie, and lose connectivity. Create the metadata row only after S3 confirms the object exists — via a HEAD check when the client reports back or, better, S3's event notification firing on object creation.</p>
+
+<h3>Multipart upload: big files, unreliable networks</h3>
+
+<p>A 4 GB video over one HTTP PUT is a bad bet: S3 caps single PUTs at 5 GB anyway, and one dropped packet at 99% means restarting from zero — on a phone connection the upload may never finish. <strong>Multipart upload</strong> fixes this: initiate a session, split the file into parts (5 MB–5 GB each, up to 10,000), upload parts independently — in parallel for speed, retrying only what failed — then send a "complete" call and S3 assembles the object. A flaky connection now costs one 10 MB part, not 4 GB of progress.</p>
+
+<p>The habit that marks people who've run this: abandoned uploads (user quits at part 3 of 400) silently keep their parts, and you pay for invisible half-files forever. S3 has a lifecycle rule to auto-abort incomplete multipart uploads after N days — set it on day one. Which brings us to lifecycle rules in general, because storage has a temperature.</p>
+
+<h2>Hot, cool, frozen: storage classes and lifecycle</h2>
+
+<p>Data ages predictably. A photo gets most of its views in week one; by month six it's opened once in a blue moon; after two years it exists mostly as an archive. Paying hot-storage prices for frozen data is burning money, so S3 (and every peer) offers <strong>storage classes</strong> — same API, different price/retrieval trade-off:</p>
+
+<table>
+<thead><tr><th>Class</th><th>~Price per GB-month</th><th>Retrieval</th><th>Use for</th></tr></thead>
+<tbody>
+<tr><td>Standard (hot)</td><td>~2.3¢</td><td>Instant, free</td><td>Actively served content</td></tr>
+<tr><td>Infrequent Access (IA)</td><td>~1.25¢</td><td>Instant, per-GB fee</td><td>Older content, still occasionally read</td></tr>
+<tr><td>Glacier tiers (archive)</td><td>~0.4¢ down to ~0.1¢</td><td>Instant to hours, fees; minimum storage 90–180 days</td><td>Compliance, backups, "probably never"</td></tr>
+</tbody>
+</table>
+
+<p>A <strong>lifecycle rule</strong> automates the demotion: "after 30 days, move to IA; after 365, to Glacier; delete logs after 7 years." At petabyte scale this is real money — 1 PB in Standard is about $23,000/month; in Glacier Deep Archive, about $1,000.</p>
+
+<p>The gotcha interviewers enjoy: cold classes charge <em>retrieval</em> fees and enforce minimum storage durations (30 days in IA, up to 180 in Deep Archive). Move data that's still being read into IA and the retrieval fees can exceed your savings. Tiering decisions need measured read rates per age cohort — access numbers, not vibes.</p>
+
+<h2>The media pipeline: putting all of it together</h2>
+
+<p>One pattern assembles this whole chapter, and it appears in Instagram, YouTube, WhatsApp, and half of Part 3. A user uploads a photo or video; you need it resized into variants (thumbnail, feed, full size) or transcoded into multiple video qualities — which for video takes minutes of CPU, not milliseconds. None of that can happen on the request path; the user won't hold the line while you transcode 4K.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Media pipeline: upload to blob storage, event to queue, workers create variants, CDN serves them">
+  <rect class="dg-node" x="15" y="90" width="100" height="52" rx="8"/>
+  <text class="dg-txt" x="35" y="121">Client</text>
+  <rect class="dg-node-alt" x="165" y="90" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="180" y="113">S3: originals</text>
+  <text class="dg-txt-s" x="180" y="130">presigned PUT</text>
+  <rect class="dg-node" x="335" y="90" width="100" height="52" rx="8"/>
+  <text class="dg-txt" x="358" y="113">Queue</text>
+  <text class="dg-txt-s" x="350" y="130">upload events</text>
+  <rect class="dg-node" x="485" y="20" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="502" y="43">Workers</text>
+  <text class="dg-txt-s" x="502" y="60">resize / transcode</text>
+  <rect class="dg-node-alt" x="485" y="160" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="497" y="183">S3: variants</text>
+  <text class="dg-txt-s" x="497" y="200">thumb, feed, HD</text>
+  <rect class="dg-node" x="640" y="90" width="70" height="52" rx="8"/>
+  <text class="dg-txt" x="655" y="121">CDN</text>
+  <line class="dg-edge" x1="115" y1="116" x2="165" y2="116" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="285" y1="116" x2="335" y2="116" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="435" y1="104" x2="490" y2="60" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="545" y1="72" x2="545" y2="160" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="605" y1="186" x2="648" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="15" y="240">Slow work (transcoding) happens off the request path. The user sees "processing…" until the variants land; the CDN serves only finished variants.</text>
+</svg>
+<figcaption>Upload → event → queue → workers → variants → CDN. Every arrow is a boundary you can scale and retry independently.</figcaption>
+</figure>
+
+<p>Walk the path: the client uploads the original via presigned URL. S3's object-created event drops a message onto a queue (a buffer that holds work until a worker is free — chapter 1.11 dissects these). Workers pull jobs, produce the variants, write them back to S3 under versioned keys, and mark the metadata row "ready." The CDN serves the variants with year-long immutable TTLs. Meanwhile the app shows the uploader "processing" — or, the common product trick, a locally rendered preview so it <em>feels</em> instant.</p>
+
+<p>Why a queue instead of resizing synchronously after upload? Because upload traffic spikes (everyone posts at 9 pm) while transcoding capacity is expensive and finite. The queue absorbs the spike; workers chew through it at their own pace; if a worker dies mid-job, the message returns to the queue and another worker retries. For images there's a legitimate alternative — resize on the fly at request time and let the CDN cache the result, trading first-request latency for zero wasted preprocessing. For video there is no debate: transcoding is minutes of work and always goes through the pipeline.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>CDN and blob storage rarely headline a question — they're assumed vocabulary inside every media-flavored design, and seniors are graded on deploying them unprompted with correct mechanics: presigned upload and CDN-fronted download drawn without being asked. Expect probes like:</p>
+<ul>
+<li>"Walk me through the bytes when a user uploads a profile photo." (Checking for presigned URLs, the metadata/blob split, async variant generation.)</li>
+<li>"A bad image is cached at the edge with a 24-hour TTL. What do you do?" (Purge as the emergency brake — and the senior answer adds that versioned URLs make this a non-event by design.)</li>
+<li>"Why not store images in Postgres? It's replicated and backed up already." (They want the real costs: buffer pool pollution, backup and replication bloat, expensive storage doing zero query work.)</li>
+<li>"Your CDN hit rate drops from 99% to 90%. How bad?" (Origin traffic just went up 10x, not 9%. Miss the amplification and you never understood what the CDN was absorbing.)</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p1c07-f1">
+<p class="fey-prompt">A junior asks: "Why does everyone store images in S3 and serve them through a CDN, instead of just keeping them in our database and serving them from our API?" Answer in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Two different problems, two specialized tools. A database is built for small structured rows you query and join; a 3 MB photo is an opaque blob it can do nothing clever with, yet it would bloat every backup, every replica, and the RAM cache that keeps real queries fast. So the photo goes to S3 — unlimited blobs, cheap, almost never loses one — and the database keeps a small row pointing at it. Serving is a physics problem: our servers live in one place, and a user on another continent pays 200 ms of light-travel time per round trip no matter how fast our code is. A CDN keeps copies in hundreds of cities, so nearly every user downloads from a cache a few milliseconds away, and our servers only ever see the occasional miss. Database for facts, S3 for bytes, CDN for distance.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your app's users upload 2 million photos/day, averaging 3 MB. (a) If uploads are proxied through your app servers, what average and peak bandwidth do the servers carry? (b) How much new storage per year, and roughly what does it cost per month in S3 Standard by year's end? Assume peak is 3× average.</p></div>
+<details><summary>Answer</summary><p>(a) 2M × 3 MB = 6 TB/day ÷ 86,400 s ≈ 70 MB/s ≈ 560 Mbps average, ~1.7 Gbps at peak — through servers that add nothing to those bytes. That number is the argument for presigned URLs. (b) 6 TB/day × 365 ≈ 2.2 PB/year of originals. At ~2.3¢/GB-month that's ≈ $50K/month by year's end and climbing — which is why the lifecycle-to-IA conversation isn't optional at this scale. Both answers changed a design decision; that's what made them worth computing.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your CDN serves 100,000 requests/sec at a 99% hit rate, and your origin comfortably handles about 3,000 requests/sec. A config mistake drops the hit rate to 94%. What happens, and what does this teach about how to monitor a CDN?</p></div>
+<details><summary>Answer</summary><p>At 99%, origin sees 1% of 100K = 1,000 req/s — comfortable. At 94%, 6,000 req/s: six times the load, double what the origin survives. A 5-point dip 6x'd origin traffic and took you down, because the CDN was silently absorbing 99% of true demand. Lessons: alert on hit rate and origin QPS directly (QPS moves before origin CPU does), and capacity-plan the origin for a realistic worst-case hit rate, not the sunny-day one. Same amplification is why a mass purge during peak hours is a self-inflicted outage.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Design the upload flow for a Dropbox-like app where users upload files up to 50 GB from laptops on unreliable Wi-Fi. Name the mechanisms and the failure handling.</p></div>
+<details><summary>Answer</summary><p>Server authorizes and initiates a multipart upload, issuing presigned URLs per part (say 64–128 MB each — 50 GB is far over the 5 GB single-PUT cap anyway). Client uploads parts in parallel; on connection loss it asks which parts completed and resumes, re-uploading only failures. After the final part, a complete call assembles the object, and an object-created event — not the client's word — triggers metadata finalization. Round it out with part checksums, presigned URLs scoped to exact part and expiry, and a lifecycle rule auto-aborting incomplete uploads after ~7 days so abandoned halves don't bill you forever.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A chat app stores 1 PB of media. Analytics: read heavily for 30 days after upload, rarely from day 30–365 (~1% re-read per month), almost never after a year. Design the lifecycle policy and sanity-check it against the retrieval-fee gotcha.</p></div>
+<details><summary>Answer</summary><p>Standard for days 0–30 (hot reads need free, instant retrieval). At day 30, transition to IA: storage drops from ~2.3¢ to ~1.25¢/GB-month, and the 1%/month re-read rate at ~1¢/GB retrieval adds a negligible fee against the savings on the other 99%. After 365 days: Glacier Instant (~0.4¢) if old media must open instantly in chat history; Deep Archive only if the product tolerates an hours-long "retrieving your file" state. The check that matters: the IA move wins <em>because</em> the measured re-read rate is 1% — at 50% re-reads, retrieval fees would eat the savings. Tiering decisions come from access numbers, never from data age alone.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Distance is latency by physics — ~200,000 km/s in fiber means a cross-ocean round trip costs ~200 ms, handshakes multiply it, and the only real fix is moving bytes closer to users.</li>
+<li>A CDN is a geographic cache: edges serve hits in ~20 ms and shield your origin, which only sees misses — so a small hit-rate drop is a large origin-traffic multiplier.</li>
+<li>The cache key is a correctness and security boundary: too broad serves the wrong (or someone else's) content, too narrow silently destroys your hit rate.</li>
+<li>Version your URLs with content hashes and long immutable TTLs so invalidation never needs to happen; keep purge as the emergency brake.</li>
+<li>Store blobs in an object store and only metadata (with the object key) in your database — blobs in the DB bloat backups, replicas, and the buffer pool while gaining nothing.</li>
+<li>S3 has been strongly consistent read-after-write since December 2020 — the "eventually consistent" caveat is outdated interview folklore.</li>
+<li>Presigned URLs let clients upload straight to storage so your servers exchange kilobytes of JSON instead of proxying terabytes; multipart upload makes big files survivable on bad networks.</li>
+<li>Data has a temperature: lifecycle rules demote aging objects to cheaper classes, but only measured access rates — not age alone — justify the move, because cold tiers charge for retrieval.</li>
+</ul>
+</div>

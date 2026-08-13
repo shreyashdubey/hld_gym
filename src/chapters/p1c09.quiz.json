@@ -1,0 +1,355 @@
+{
+  "chapter": "p1c09",
+  "items": [
+    {
+      "id": "p1c09-q01", "level": 1, "type": "mcq", "tag": "why-shard",
+      "q": "Your database is out of disk and the primary can't keep up with writes. Why doesn't adding more replicas help?",
+      "options": [
+        {"t": "Every replica holds a full copy of the data, and all writes still go through the one primary", "correct": true,
+         "why": "Right. Replication multiplies copies — five replicas is five machines running out of disk in sync — and replicas absorb reads only. Data size and write throughput are exactly the two problems that force sharding."},
+        {"t": "Replicas are read-only, so they can't store data at all", "correct": false,
+         "why": "Replicas absolutely store data — a complete copy each, which is the problem. They serve reads from that copy; what they can't do is take writes or hold only a slice."},
+        {"t": "It does help — add enough replicas and eventually they absorb both the reads and the writes", "correct": false,
+         "why": "In single-leader replication (chapter 1.8), every write must go through the primary and then be copied to every replica. More replicas means more copies of each write, not fewer."},
+        {"t": "Replication is only for backups, not for scaling", "correct": false,
+         "why": "Replication genuinely scales reads and provides failover — it's not just backup. Its limits are specific: total data size and write throughput, which is where sharding takes over."}
+      ]
+    },
+    {
+      "id": "p1c09-q02", "level": 1, "type": "mcq", "tag": "partitioning",
+      "q": "What's the difference between vertical and horizontal partitioning?",
+      "options": [
+        {"t": "Vertical splits by table (users here, photos there); horizontal splits the rows of one table across machines", "correct": true,
+         "why": "Exactly. Vertical gives each table its own machine but leaves the biggest table whole — it buys months. Horizontal (sharding) slices the big table itself, which is the cut that scales without a ceiling."},
+        {"t": "Vertical means scaling up hardware; horizontal means scaling out to more machines", "correct": false,
+         "why": "That's vertical vs horizontal *scaling* — a related but different axis. Partitioning is about how you cut the data: by table/column (vertical) or by row (horizontal)."},
+        {"t": "Vertical is for SQL databases, horizontal is for NoSQL", "correct": false,
+         "why": "Both cuts apply to both worlds. Instagram and Pinterest horizontally sharded plain Postgres and MySQL; the cut direction has nothing to do with the query language."},
+        {"t": "They're the same thing at different scales", "correct": false,
+         "why": "They're different cuts with different limits. Vertical partitioning can never shrink your biggest table — when photos IS the 6 TB monster, only a row-wise (horizontal) cut helps."}
+      ]
+    },
+    {
+      "id": "p1c09-q03", "level": 1, "type": "mcq", "tag": "shard-key",
+      "q": "What is a shard key?",
+      "options": [
+        {"t": "The column whose value decides which shard a row lives on", "correct": true,
+         "why": "Right — and that routing rule is destiny: queries that include the key go to one shard, queries that don't must ask every shard. That's why the shard key is THE sharding decision."},
+        {"t": "The primary key of the table", "correct": false,
+         "why": "Sometimes they coincide, but not by definition. A messages table might have message_id as primary key while sharding by conversation_id, so a whole conversation stays on one shard."},
+        {"t": "An encryption key that protects each shard", "correct": false,
+         "why": "Nothing to do with cryptography — 'key' here means the routing value, like a sorting label on a package deciding which truck it rides."},
+        {"t": "The password used to connect to a shard", "correct": false,
+         "why": "It's a data-placement concept, not credentials. The shard key maps each row to a home; connection auth is a separate, ordinary concern."}
+      ]
+    },
+    {
+      "id": "p1c09-q04", "level": 1, "type": "mcq", "tag": "hash-vs-range",
+      "q": "Which query is efficient under range sharding but painful under hash sharding?",
+      "options": [
+        {"t": "\"All orders placed between May 1 and May 7\"", "correct": true,
+         "why": "Yes. Range sharding keeps keys sorted, so a date window is one contiguous slice on one or two shards. Hashing deliberately scatters adjacent keys everywhere, so this query must ask every shard."},
+        {"t": "\"Fetch the order with ID 8842\"", "correct": false,
+         "why": "A point lookup by exact key is fast under both schemes — hash it or binary-search the ranges, either way one shard answers. Point lookups are the query hashing is built for."},
+        {"t": "\"Count all orders in the system\"", "correct": false,
+         "why": "A full count touches every shard under any scheme — there's no placement rule that puts 'everything' in one place. Both schemes scatter-gather this one equally."},
+        {"t": "\"Insert a new order\"", "correct": false,
+         "why": "Inserts route to exactly one shard under both schemes. The difference is which shard: hashing spreads inserts evenly, while range sharding with time-correlated keys sends every insert to the newest shard — that's a hot-range problem, not an efficiency difference for a single insert."}
+      ]
+    },
+    {
+      "id": "p1c09-q05", "level": 1, "type": "mcq", "tag": "mod-n",
+      "q": "You route with hash(key) % 4 and add a fifth server, switching to % 5. Roughly what fraction of keys change servers?",
+      "options": [
+        {"t": "About 80%", "correct": true,
+         "why": "Right. A key stays only when h % 4 == h % 5, true for about 1 in 5 keys. The new server needed just 20% of the data, but the formula bakes N into every placement, so changing N invalidates almost all of them."},
+        {"t": "About 20% — just the share the new server takes", "correct": false,
+         "why": "That's what SHOULD move, and it's exactly what consistent hashing achieves. Mod-N moves 4x more than necessary — that gap is the whole reason consistent hashing exists."},
+        {"t": "None — hashes don't change when servers are added", "correct": false,
+         "why": "The hash values don't change, but the answer of '% N' does for most of them. h=7 maps to server 3 under %4 and server 2 under %5 — same hash, different home."},
+        {"t": "Exactly 50%", "correct": false,
+         "why": "There's no halving here. The stay-put fraction for N to N+1 is roughly 1/(N+1) — so about 1/5 stay and 4/5 move when going from 4 to 5 servers."}
+      ]
+    },
+    {
+      "id": "p1c09-q06", "level": 1, "type": "mcq", "tag": "consistent-hashing",
+      "q": "With consistent hashing, K keys, and N servers, adding one server moves roughly how many keys?",
+      "options": [
+        {"t": "About K/N — only the keys the new server takes over", "correct": true,
+         "why": "Right, and that's the theoretical minimum: the new server must hold its fair share, and that data has to come from somewhere. The new node claims one arc of the ring; every key outside that arc keeps its old home."},
+        {"t": "About K — nearly everything, same as mod-N", "correct": false,
+         "why": "That's precisely the disaster consistent hashing was invented to prevent. Servers and keys hash onto the same ring, so a new server disturbs only the arc between itself and its predecessor."},
+        {"t": "Zero — no keys ever move", "correct": false,
+         "why": "Tempting, but impossible: the new server would be empty and useless. Some data must move to it — consistent hashing's achievement is moving ONLY that data, about K/N keys, and nothing else."},
+        {"t": "About K/2 — half the ring rebalances", "correct": false,
+         "why": "Only one arc changes hands: the stretch between the new node and its counterclockwise neighbor. Everything else on the ring still walks clockwise into the same server it always did."}
+      ]
+    },
+    {
+      "id": "p1c09-q07", "level": 1, "type": "mcq", "tag": "vnodes",
+      "q": "What problem do virtual nodes (vnodes) solve in consistent hashing?",
+      "options": [
+        {"t": "Random placement makes arcs lumpy, and a dead node dumps its whole arc on one neighbor", "correct": true,
+         "why": "Both halves matter. Hundreds of points per server make ownership statistically fair (law of large numbers), and a dead server's many little arcs are inherited by many different successors — its load sprinkles instead of crushing one machine. Bonus: beefier machines get more vnodes."},
+        {"t": "They let the ring hold more keys than the cluster's combined physical memory would normally allow", "correct": false,
+         "why": "Capacity is set by the machines, not the ring — the ring is just a routing rule. Vnodes change how ownership is distributed, not how much data fits."},
+        {"t": "They make the hash function faster to compute", "correct": false,
+         "why": "Vnodes add hash lookups if anything (more points to search). The win is load distribution and failure behavior, and it's worth the negligible routing cost."},
+        {"t": "They encrypt traffic between nodes on the ring", "correct": false,
+         "why": "'Virtual node' means a server appearing at many positions on the ring under names like serverA-1, serverA-2 — it's a placement trick, nothing to do with security."}
+      ]
+    },
+    {
+      "id": "p1c09-q08", "level": 1, "type": "mcq", "tag": "directory",
+      "q": "What is directory-based sharding?",
+      "options": [
+        {"t": "A lookup table maps keys (or key buckets) to shards, and routing consults the map instead of computing a formula", "correct": true,
+         "why": "Right. You trade a formula for a map — a moving part that must stay available and correct — and gain total control: move one hot tenant with a one-line edit, drain a machine gradually, always know where data lives. Pinterest scaled through hypergrowth on exactly this."},
+        {"t": "Sharding the filesystem directory structure across machines", "correct": false,
+         "why": "'Directory' here means a lookup service — a map from keys to shards — not folders on disk. Think phone directory, not file directory."},
+        {"t": "A scheme where each shard keeps a directory of all other shards' contents", "correct": false,
+         "why": "That would mean every shard indexing everything — the single-machine problem all over again. The directory is one small, centralized (but replicated) map, cached by clients."},
+        {"t": "Using DNS to route queries to shards, giving each shard a subdomain that clients resolve per key", "correct": false,
+         "why": "DNS resolves names to addresses; it's far too slow-changing and coarse for per-key or per-tenant placement. The directory is an application-level map, usually in a small consistent store."}
+      ]
+    },
+    {
+      "id": "p1c09-q09", "level": 1, "type": "mcq", "tag": "scatter-gather",
+      "q": "A query arrives that doesn't include the shard key. What must the system do?",
+      "options": [
+        {"t": "Send the query to every shard and merge the results — scatter-gather", "correct": true,
+         "why": "Right. Without the shard key there's no way to know which shard holds matching rows — they could be anywhere. So you broadcast, wait for all replies (including the slowest), and merge. This is the standing tax on every query your shard key doesn't serve."},
+        {"t": "Reject the query — sharded systems can't answer it", "correct": false,
+         "why": "It's answerable, just expensive. Systems run scatter-gather queries all the time; the design goal is making them rare, not impossible."},
+        {"t": "Check shards one at a time until a match is found", "correct": false,
+         "why": "Sequential probing has the same worst case (all shards) with far worse latency, and for queries wanting ALL matches — not just one — you must visit every shard anyway. Real systems fan out in parallel."},
+        {"t": "Route it to the largest shard, where the row most likely lives", "correct": false,
+         "why": "Placement isn't probabilistic — the row lives exactly where the shard key sent it, and without the key you have no idea where that is. Guessing gives wrong answers, not slow ones."}
+      ]
+    },
+    {
+      "id": "p1c09-q10", "level": 2, "type": "mcq", "tag": "shard-key",
+      "q": "You're sharding the messages table of a chat app. The overwhelming query is 'load recent messages of this conversation.' Best shard key?",
+      "options": [
+        {"t": "conversation_id — every chat-open hits one shard and reads its messages together", "correct": true,
+         "why": "Right. The shard key should serve the dominant query, and this one keeps each conversation's messages co-located for a single sequential read. Pair it with a time-ordered clustering column, and note the kept risk: one mega-group becomes a hot partition (Discord's exact problem)."},
+        {"t": "message_id — it's the most uniform key available", "correct": false,
+         "why": "Perfectly uniform, perfectly wrong. Spread is only one of three shard-key properties — this choice scatters every conversation across all shards, so the dominant query becomes a scatter-gather merge. Uniformity that ignores the access pattern optimizes for traffic you don't have."},
+        {"t": "sender_id — messages belong to the users who sent them", "correct": false,
+         "why": "A conversation has many senders, so rendering one chat means gathering from many shards and merge-sorting by time — the hottest query becomes the most expensive. Shard by what you read together, not by who wrote it."},
+        {"t": "sent_at timestamp — chronological order matches how chats display", "correct": false,
+         "why": "Time-correlated keys send all new writes (and most reads — recent messages are the hot ones) to the newest shard. You'd have N machines and one machine's throughput: the conveyor-belt trap."}
+      ]
+    },
+    {
+      "id": "p1c09-q11", "level": 2, "type": "mcq", "tag": "hot-range",
+      "q": "A URL shortener shards its links by created_at range: January's links on shard 1, February's on shard 2, and so on. What actually happens in production?",
+      "options": [
+        {"t": "The newest shard takes nearly 100% of writes AND most reads, while old shards sit idle at full cost", "correct": true,
+         "why": "Right — a double hot spot. Every insert has this month's timestamp, and click traffic decays with link age, so reads pile onto recent links too. The fix is hashing the short code: the only real query is a point lookup by exact code, so range scanning was a superpower nobody was going to use."},
+        {"t": "It works well — each month is a clean, predictable slice, and next month's shard is easy capacity planning", "correct": false,
+         "why": "The splits are clean and the load is catastrophic. Range sharding's spread is only as even as the key's traffic distribution, and time-correlated keys have the most uneven traffic there is: everything targets 'now'."},
+        {"t": "Reads spread evenly because old links get clicked forever", "correct": false,
+         "why": "Link traffic follows a sharp decay — most clicks arrive in the first days after creation. Even if reads were even, writes alone (100% to the newest shard) would sink this design."},
+        {"t": "Writes are fine but range queries get slower", "correct": false,
+         "why": "Inverted: range queries by date are the one thing this scheme does well. It's the writes — all racing to the newest shard — that melt it."}
+      ]
+    },
+    {
+      "id": "p1c09-q12", "level": 2, "type": "mcq", "tag": "mod-n",
+      "q": "Your 4-node memcached tier (hash % 4 routing, 95% hit rate) gets a fifth node during peak traffic. What happens in the next sixty seconds?",
+      "options": [
+        {"t": "~80% of lookups miss, and the database takes a sudden ~16x read spike — a self-inflicted outage risk", "correct": true,
+         "why": "Right. Four of five keys now route to a node that doesn't have them. The database was seeing 5% of reads; it briefly sees ~80% — a stampede you caused by 'scaling up.' This is why cache clients use consistent hashing (Ketama was built for memcached in 2007 for exactly this)."},
+        {"t": "Hit rate improves immediately — a fifth node adds 25% more capacity, so more keys fit and more requests hit", "correct": false,
+         "why": "Eventually, yes; immediately, the opposite. Capacity helps only after keys are cached at their new homes. The transition is the danger: routing changed for 80% of keys but the data didn't move (caches don't migrate — entries just miss and refill)."},
+        {"t": "Nothing changes until the old nodes are restarted", "correct": false,
+         "why": "The routing formula lives in the clients, and it changed the moment they learned about node five. No restart needed for the damage — the very next request for 4 out of 5 keys goes to the wrong node."},
+        {"t": "The new node crashes from taking all the traffic", "correct": false,
+         "why": "The new node takes ~1/5 of traffic, which it can handle. The victim is downstream: the database absorbing the flood of misses. In cache failures, always ask who catches the misses."}
+      ]
+    },
+    {
+      "id": "p1c09-q13", "level": 2, "type": "mcq", "tag": "lookup-table",
+      "q": "Users are sharded by hash(user_id). Login needs 'find user by email.' What's the standard fix?",
+      "options": [
+        {"t": "A mapping table email → user_id, itself sharded by email — login becomes two single-shard hops", "correct": true,
+         "why": "Right. Hop one: hash the email, fetch the user_id from the mapping shard. Hop two: hash the user_id, fetch the user. Two cheap point lookups replace a broadcast. DynamoDB's global secondary indexes are this pattern productized — a second copy of data organized by a different key."},
+        {"t": "Scatter-gather every login across all shards — logins are rare enough", "correct": false,
+         "why": "Login is usually one of the hottest paths in the system (every session start, every token refresh). Broadcasting it to N shards burns N times the resources and inherits the slowest shard's latency — for a query with a clean structural fix."},
+        {"t": "Shard users by email instead of user_id, since login is the first query of every session", "correct": false,
+         "why": "You'd fix login and break everything else — every other query in the system arrives holding a user_id (from sessions, foreign keys, URLs). And emails change, which would mean physically moving the user's row. Never pick a mutable shard key to serve one query."},
+        {"t": "Cache all email-to-user mappings in every app server's memory", "correct": false,
+         "why": "Hundreds of millions of mappings won't fit in app-server RAM, and keeping every copy consistent as users register and change emails is a distributed-cache problem you'd be inventing from scratch. The mapping table gives the same answer durably."}
+      ]
+    },
+    {
+      "id": "p1c09-q14", "level": 2, "type": "mcq", "tag": "ring-failure",
+      "q": "A consistent-hash ring runs WITHOUT virtual nodes. Node C dies under heavy load. What happens next?",
+      "options": [
+        {"t": "C's entire arc lands on its clockwise successor, roughly doubling that node's load — and possibly toppling it too", "correct": true,
+         "why": "Right — the cascade scenario. One node inherits everything C owned, on top of its own full share. If it buckles, ITS successor inherits both loads, and the dominoes run. Vnodes exist to break this: C's hundreds of small arcs would sprinkle across the whole cluster instead."},
+        {"t": "C's keys redistribute evenly across all surviving nodes, each inheriting a proportional slice of the arc", "correct": false,
+         "why": "That's what happens WITH vnodes — and it's exactly why they exist. Without them, the ring's rule is brutal: keys walk clockwise to the next single node, so one neighbor eats the entire orphaned arc."},
+        {"t": "The ring stops serving requests until C is replaced", "correct": false,
+         "why": "The ring's whole charm is that it doesn't stop — routing self-heals as keys walk past the dead node to the next live one. The danger isn't downtime; it's the overload concentrating on one survivor."},
+        {"t": "Nothing — consistent hashing makes node failure a non-event", "correct": false,
+         "why": "Consistent hashing minimizes *data movement*, but the orphaned load must go somewhere. Without vnodes it goes to exactly one place. 'Where does the dead node's load land?' is a question to ask of every design."}
+      ]
+    },
+    {
+      "id": "p1c09-q15", "level": 2, "type": "multi", "tag": "shard-key",
+      "q": "Your B2B analytics product is choosing a shard key. Which properties should the key have? (Select all that apply.)",
+      "options": [
+        {"t": "High cardinality — many distinct values", "correct": true,
+         "why": "Yes. You can't spread 100 machines' worth of load across a key with 20 possible values — a 'country' column caps your cluster at 20 uneven shards forever."},
+        {"t": "Spreads load evenly, not just row counts", "correct": true,
+         "why": "Yes, and the distinction matters: rows can be balanced while traffic isn't. A key where one value gets half the requests gives you one burning shard and N−1 napping ones."},
+        {"t": "Appears in your dominant query patterns", "correct": true,
+         "why": "Yes — this is the property people forget. A perfectly uniform key that your hottest queries don't contain turns every one of them into scatter-gather. The key must be derived from access patterns, not from data-shape aesthetics."},
+        {"t": "Monotonically increasing, like a timestamp or auto-increment ID", "correct": false,
+         "why": "The opposite of what you want under range sharding — every new write targets the last shard (the conveyor-belt trap). Time-ordered keys are fine only when hashed, or as the sort-within-shard column of a compound key."}
+      ]
+    },
+    {
+      "id": "p1c09-q16", "level": 2, "type": "mcq", "tag": "tenant-isolation",
+      "q": "Your SaaS shards by tenant_id. One tenant grows to 1,000x the median and their shard is drowning. Which sharding scheme makes the cleanest fix possible, and what is that fix?",
+      "options": [
+        {"t": "Directory-based: edit the map to give that tenant a dedicated shard, and migrate just their data", "correct": true,
+         "why": "Right — this is the directory's killer feature. The whale's placement is one row in a map a human can edit; you move one tenant, deliberately, watching dashboards. With pure hash placement there's no per-tenant knob to turn — the hash says where they live, period."},
+        {"t": "Consistent hashing: keep adding nodes — every addition shrinks each arc, until the whale's slice is small enough to cope", "correct": false,
+         "why": "More nodes shrink every arc, including the whale's — but the whale still lands whole on ONE node. Hashing spreads keys, not per-key load; you'd be buying machines for the whole cluster to dilute one tenant, and it still wouldn't isolate them."},
+        {"t": "Mod-N: bump N so the whale rehashes to a bigger shard", "correct": false,
+         "why": "Rehashing moves ~everything (the mod-N disaster) and the whale's new home is random — likely just a different drowning shard. You'd take maximum migration pain for zero targeting."},
+        {"t": "Any scheme works — just cache the whale's queries", "correct": false,
+         "why": "Caching absorbs hot *reads* and is often part of the answer, but a 1,000x tenant also writes 1,000x — and writes punch through caches. Isolation fixes both directions; caching alone fixes one."}
+      ]
+    },
+    {
+      "id": "p1c09-q17", "level": 2, "type": "mcq", "tag": "logical-shards",
+      "q": "Instagram created thousands of logical shards for far fewer physical machines. Pinterest did the same with MySQL databases. Why over-provision logical shards?",
+      "options": [
+        {"t": "Growing then means moving whole logical shards to new machines — a bulk copy plus a map update — never re-cutting rows", "correct": true,
+         "why": "Right. Logical shards are nearly free to create on day one; re-splitting live data never is. With 4,096 logical shards on 8 machines, you can grow to 4,096 machines by relocating complete units. Redis Cluster's fixed 16,384 slots is the same idea in its purest form."},
+        {"t": "More shards always means more performance", "correct": false,
+         "why": "Logical shards sharing a machine share its CPU and disk — 500 shards on one box perform like one box. The win isn't speed today; it's that tomorrow's growth becomes a move operation instead of a migration project."},
+        {"t": "It provides redundancy — with thousands of logical shards, losing any one still leaves copies on the others", "correct": false,
+         "why": "Logical shards hold different slices, not copies — that's partitioning, not replication. Redundancy comes from replicating each shard (chapter 1.8); the two mechanisms compose but never substitute."},
+        {"t": "Databases perform better with many small tables", "correct": false,
+         "why": "Any per-table effects are noise next to the real reason: pre-splitting fixes the bucket count forever, so N never changes, so the mod-N trap can never spring."}
+      ]
+    },
+    {
+      "id": "p1c09-q18", "level": 2, "type": "mcq", "tag": "cross-shard-txn",
+      "q": "Accounts are sharded by account_id. A transfer debits account A on shard 1 and credits account B on shard 4. The app crashes between the two writes. What went wrong, structurally?",
+      "options": [
+        {"t": "Atomicity ('both or neither') only exists within one database — no single machine saw both writes, so the money is debited but never credited", "correct": true,
+         "why": "Right. A single database's transaction machinery guarantees all-or-nothing because it controls every write in the transaction. Split the writes across machines and that guarantee evaporates — you need distributed protocols (2PC, sagas — chapter 2.1), or better: a shard key that keeps transactions single-shard."},
+        {"t": "The app should have credited before debiting", "correct": false,
+         "why": "Reordering just flips the failure: crash after the credit and money is created from nothing. Either order leaves a window where one write exists without the other — the problem is the window, not the sequence."},
+        {"t": "Shard 4 was too slow — faster hardware prevents this", "correct": false,
+         "why": "Speed shrinks the window but can't close it; crashes, network partitions, and deploys can always land inside it. Correctness that depends on 'fast enough to not fail mid-way' isn't correctness."},
+        {"t": "This can't happen — both shards run ACID databases, and ACID transactions guarantee the transfer is atomic", "correct": false,
+         "why": "EACH database guaranteed ACID for ITS write — both writes committed fine locally. ACID is a per-database promise, and this transaction spanned two of them. That gap is precisely why distributed transactions are a whole chapter (2.1)."}
+      ]
+    },
+    {
+      "id": "p1c09-q19", "level": 3, "type": "mcq", "tag": "commit-and-justify",
+      "q": "Interviewer: 'How would you shard the photos table for an Instagram-like app?' Which answer reads senior?",
+      "options": [
+        {"t": "\"By user_id — 95% of reads are 'load this user's photos,' so profile pages stay single-shard. The cost is that celebrity accounts become hot shards; above a threshold I'd cache their content aggressively and I know splitting or isolating the account is the structural fix.\"", "correct": true,
+         "why": "Commitment, a justification tied to the dominant access pattern, and the choice's cost named unprompted with a mitigation. That's the full senior package — the key derived from queries, not habit, and the weakness raised before the interviewer finds it."},
+        {"t": "\"We could shard by user_id, which keeps a user's photos together; by photo_id, which spreads most evenly; or by date, which matches feed ordering. Each has trade-offs, so it depends on the access patterns — I'd want to benchmark all three before committing.\"", "correct": false,
+         "why": "True and empty — this is option-listing, the pattern that reads as no judgment. The interviewer knows the options exist; they're waiting for you to pick one and defend it. 'Depends on access patterns' without stating the access patterns is a non-answer."},
+        {"t": "\"By photo_id — it's the most uniform distribution, which is what sharding is for.\"", "correct": false,
+         "why": "A commitment, but to the wrong master. Uniformity is one of three shard-key properties, and this choice scatters every user's photos across all shards — the dominant query (profile page) becomes a permanent scatter-gather. Optimizing spread while ignoring access patterns is a classic mid-level tell."},
+        {"t": "\"I'd use DynamoDB so partitioning is handled for us.\"", "correct": false,
+         "why": "Outsourcing the question isn't answering it — DynamoDB still demands you choose a partition key, and a bad one hits the same hot-partition wall. The interviewer wants your reasoning about data placement wherever it runs."}
+      ]
+    },
+    {
+      "id": "p1c09-q20", "level": 3, "type": "mcq", "tag": "hotspot-10x",
+      "q": "Your user_id-sharded system survives 10x growth — except one shard, home to a celebrity with 80M followers, which is melting. A teammate proposes doubling the shard count. Your call?",
+      "options": [
+        {"t": "\"Doubling shards won't touch this — her key still lands whole on one shard. Short-term: cache her content and coalesce duplicate requests in front. Structurally: split or isolate that account. Hashing spreads keys, not per-key load.\"", "correct": true,
+         "why": "Right. Naming WHY the proposed fix can't work (single key = single shard, at any shard count) is the senior move, followed by containment now and the structural fix next. This is Discord's lesson: hot partitions were solved by request coalescing in front of the database, not by more nodes."},
+        {"t": "\"Agreed — go from N to 2N shards. Each shard then holds half as many users, so her shard sheds half its load, and we get headroom for the next celebrity at the same time.\"", "correct": false,
+         "why": "The load of ONE key cannot spread by re-sharding: every placement scheme sends one key value to one home. You'd pay for a fleet-wide migration and the celebrity's shard would melt exactly as before. Always separate 'many keys, uneven spread' (more shards helps) from 'one hot key' (it can't)."},
+        {"t": "\"Move her to the biggest machine we can rent.\"", "correct": false,
+         "why": "Honest but partial credit — isolation via directory is real, and a bigger box buys weeks. But it's vertical scaling's dead end again in miniature: her next viral moment outgrows any single machine. Fine as the containment step, junior as the whole answer."},
+        {"t": "\"Rate-limit reads of her profile until load normalizes.\"", "correct": false,
+         "why": "You'd be degrading the product's most-viewed content — the traffic isn't abusive, it's your success arriving. Protecting the system by turning away its most valuable requests is backpressure aimed at the wrong target; serve the demand from a cache instead."}
+      ]
+    },
+    {
+      "id": "p1c09-q21", "level": 3, "type": "mcq", "tag": "commit-and-justify",
+      "q": "Interviewer: 'Hash or range sharding for your ride-hailing app's trips table?' The strongest reply:",
+      "options": [
+        {"t": "\"Hash on trip_id for placement, because our queries are point lookups by trip and rider — but I'd keep each rider's trips retrievable together via a compound key, hashed on rider_id with trips time-ordered within. Pure range sharding is out: trip keys correlate with time, so the newest shard would take every write.\"", "correct": true,
+         "why": "A decision, the workload fact that drives it, the compound-key refinement showing depth, and the rejected option dismissed WITH its failure mode. Naming why the alternative fails is as strong a signal as defending your pick."},
+        {"t": "\"Hash sharding is more standard, so I'd default to it.\"", "correct": false,
+         "why": "The right choice for the wrong reason earns little — 'it's standard' is an appeal to habit, not to this system's workload. The follow-up ('why?') exposes that nothing behind the choice connects to trips, riders, or query patterns."},
+        {"t": "\"Both are workable. Hash gives even load across the fleet; range gives efficient scans over contiguous trip windows. It comes down to the workload, and honestly either could be made to work well here, so I could go either way.\"", "correct": false,
+         "why": "Accurate textbook summary, zero judgment displayed — the exact hedge that caps a grade at mid-level. The interviewer asked YOU to choose for THIS system; the trade-off recital was supposed to be the input to a decision, not the output."},
+        {"t": "\"Range sharding, so analysts can scan trips by date efficiently.\"", "correct": false,
+         "why": "Committed, but optimized for the wrong customer: analyst scans are rare and batch-tolerant, while rider-facing point lookups are the hot path — and time-correlated range sharding melts the newest shard under write load. Analytics belongs in a separate store or replica, not steering the OLTP shard key."}
+      ]
+    },
+    {
+      "id": "p1c09-q22", "level": 3, "type": "mcq", "tag": "resharding",
+      "q": "Your 8-shard Postgres fleet is at 85% disk and you must reach 16 shards with zero downtime. The senior plan:",
+      "options": [
+        {"t": "\"If we pre-split into logical shards, this is a rebalance: replicate half of them to 8 new machines, flip the map. If we didn't: dual-write old and new, backfill, verify counts, cut reads over, retire — one shard at a time, rollback path at every step.\"", "correct": true,
+         "why": "Right — and the shape matters: recognize the easy case (logical shards make it a move, not a re-cut), and for the hard case, the dual-write/backfill/verify/cutover sequence with verification and rollback named. Incremental, observable, reversible is what zero-downtime actually means (chapter 2.11 goes deep)."},
+        {"t": "\"Switch routing to hash % 16 during the lowest-traffic window, absorb the brief spike of misplaced reads, and let the system settle into the new layout overnight.\"", "correct": false,
+         "why": "The mod-N disaster on purpose: ~everything remaps instantly while zero rows have moved, so reads route to shards that don't hold the data. Nothing 'settles' — databases don't backfill themselves. This is minutes-to-hours of serving wrong answers."},
+        {"t": "\"Announce a Sunday 2am maintenance window, stop writes, copy half of each shard onto the 8 new machines, verify, and reopen by morning — offline migration is far safer than juggling live traffic.\"", "correct": false,
+         "why": "Copying terabytes doesn't fit in a night — realistic migrations take days to weeks, and 'safer' evaporates when 6am arrives mid-copy with no rollback. The requirement said zero downtime; negotiating requirements away instead of engineering them reads junior."},
+        {"t": "\"Adopt consistent hashing first — then resharding handles itself.\"", "correct": false,
+         "why": "Consistent hashing minimizes WHAT moves; it doesn't move anything for you. Data still needs streaming, verification, and cutover — plus you've added a re-platforming project in front of an urgent capacity problem. Buzzword as substitute for mechanism is the tell here."}
+      ]
+    },
+    {
+      "id": "p1c09-q23", "level": 3, "type": "mcq", "tag": "when-not-to-shard",
+      "q": "A startup's Postgres holds 400 GB, growing 10 GB/month, on a mid-size instance at 40% capacity. The new tech lead proposes sharding now 'to get ahead of scale.' Your read?",
+      "options": [
+        {"t": "\"Don't. At this growth we have years of headroom via bigger instances, archiving, and read replicas. Sharding's costs — cross-shard queries, no global transactions, harder ops — start the day you shard and never leave. I'd write down the trigger: shard when we project hitting single-node limits within 12 months.\"", "correct": true,
+         "why": "Right. Sharding is a one-way door with a permanent tax, and this workload is decades from needing it at current growth. Declining complexity WITH a named escalation trigger is top-of-rubric senior judgment — the same instinct that says a linear scan beats Elasticsearch for 10K records."},
+        {"t": "\"Good instinct — retrofitting a shard key onto a grown system is one of the most painful migrations there is, so paying the cost now, while the data is small and the team can move carefully, is the cheaper path.\"", "correct": false,
+         "why": "The premise has truth (retrofit migrations are painful) but the conclusion doesn't follow at 400 GB: you'd pay sharding's permanent tax for years against a need that may never come — and if it comes, you'll know far more then about the right shard key. Complexity bought early against imaginary load is the over-engineering pattern."},
+        {"t": "\"Compromise: shard into just 2 shards now — small enough to stay manageable, but enough to force us to learn the operational patterns before real scale arrives.\"", "correct": false,
+         "why": "Two shards buys nearly all of sharding's pain — cross-shard queries, broken transactions, doubled ops surface — for almost none of its capacity benefit. Half an over-engineering decision is still over-engineering; there's no cheap trial membership."},
+        {"t": "\"Shard, but only vertically — split tables across databases.\"", "correct": false,
+         "why": "Still surgery on a healthy patient: joins break and transactions narrow the moment tables separate, for capacity nobody needs at 40% of one node. Vertical partitioning is a real tool — for when a workload actually presses against the box."}
+      ]
+    },
+    {
+      "id": "p1c09-q24", "level": 3, "type": "mcq", "tag": "scheme-choice",
+      "q": "You're designing two systems: (a) a distributed cache tier, (b) the sharded primary datastore behind it. For each, consistent hashing or directory-based placement? Commit.",
+      "options": [
+        {"t": "\"Cache: consistent hashing — a moved key is just a miss that refills, so zero-coordination routing wins. Database: directory over fixed logical shards — rows don't refill themselves, so every move must be deliberate, tracked, and reversible.\"", "correct": true,
+         "why": "Right, and the reasoning generalizes: the cost of a misplaced key decides the scheme. Caches tolerate placement drift (worst case: a miss), so the formula's simplicity wins. Databases can't (worst case: data appears lost), so control wins. This split is how industry actually builds — Ketama for memcached, directories for Pinterest/Vitess/MongoDB."},
+        {"t": "\"Consistent hashing for both — it's the more sophisticated technique, it removes the directory as a point of failure, and one scheme everywhere keeps the code uniform.\"", "correct": false,
+         "why": "'More advanced' is not a property of a good fit. For the primary store, fully automatic placement means a topology change can start relocating authoritative data on its own schedule — most databases that use ring-style placement surround it with heavy operational machinery. Choosing by sophistication instead of by failure cost is the buzzword trap."},
+        {"t": "\"Directory for both — one placement mechanism, one map to operate, and full control over where every key lives in both tiers. Consistency across the stack beats cleverness.\"", "correct": false,
+         "why": "For the cache, the directory buys control you don't need (misplaced entries cost a miss, nothing more) at the price you least want: a lookup dependency and map maintenance on the hottest, latency-critical path in the system. Uniform answers to non-uniform problems read as one-tool thinking."},
+        {"t": "\"They should match — mixing schemes doubles operational complexity.\"", "correct": false,
+         "why": "Consistency across components is worth something, but not more than fitness: these two tiers have opposite failure costs, and forcing them to share a scheme means one of them wears the wrong one. Client libraries handle each scheme independently; the 'doubled complexity' is smaller than the mismatch cost."}
+      ]
+    },
+    {
+      "id": "p1c09-q25", "level": 3, "type": "mcq", "tag": "tail-latency",
+      "q": "Your search endpoint scatter-gathers across 100 shards. Each shard's p99 is a respectable 200ms (p50: 8ms), yet users report constant slowness. Dashboards confirm: endpoint median is ~180ms. Why, and what's the senior fix?",
+      "options": [
+        {"t": "\"With 100-way fan-out, the odds of catching at least one shard in its slow 1% is 1 − 0.99¹⁰⁰ ≈ 63% — our users' median IS our shards' tail. The fix is removing the fan-out for hot queries: a denormalized index sharded by the query's own key, with hedged requests as a stopgap for the scatter that remains.\"", "correct": true,
+         "why": "Right — the math is the insight: fan-out multiplies exposure to the tail, so most requests meet somebody's worst moment. And the fix targets the structure (fewer shards consulted) rather than the shards. Hedging — a backup request to a replica when the first is slow — trims what fan-out you can't remove."},
+        {"t": "\"Each shard's p99 is 200ms and the endpoint median is 180ms, so the shards themselves are fine — the problem must be the network, the merge step, or the load balancer. I'd profile the coordinator before touching the shard layer.\"", "correct": false,
+         "why": "A reasonable-sounding dodge that misses the arithmetic: 100 healthy shards at 1%-slow each mathematically produce a ~63% chance per query of waiting on a straggler. Nothing is broken — the architecture is doing exactly what fan-out does. Profiling would find no culprit because the culprit is the shape."},
+        {"t": "\"Tighten each shard's p99 from 200ms to 100ms — with faster shards, even the unlucky queries wait half as long, and the endpoint median follows.\"", "correct": false,
+         "why": "Halving the tail halves the pain but keeps the disease: ~63% of queries still wait on somebody's worst 1%, now at 100ms. Chasing per-shard tails is a treadmill — the exposure count (100 chances per query) is the variable that matters, and only design changes reduce it."},
+        {"t": "\"Add caching in front of the endpoint to absorb repeated queries.\"", "correct": false,
+         "why": "Helps exactly as much as your queries repeat — and search traffic is long-tail, so most queries are near-unique and sail through to the full fan-out. Caching is a fine layer here, but presenting it as THE fix ignores that the uncached majority still eats the straggler math."}
+      ]
+    }
+  ]
+}
