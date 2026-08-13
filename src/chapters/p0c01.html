@@ -1,0 +1,174 @@
+<p>Picture this. You walk into a room (or a Zoom call). A stranger smiles, says hi, and gives you one sentence: <em>"Design Instagram."</em> Then they lean back and wait.</p>
+
+<p>Forty-five minutes. One vague sentence. And on the other side of that conversation: a level, an offer, maybe a life-changing amount of money. The strange part? The interviewer is not really testing whether you can design Instagram. Nobody builds Instagram in 45 minutes. They're testing something else entirely — and most candidates never figure out what.</p>
+
+<p>This chapter is the answer key. Before you learn a single thing about caching or sharding, you're going to learn what this exam actually grades. Study the exam before the subject — it changes how you learn everything that follows.</p>
+
+<h2>What the interviewer is actually doing</h2>
+
+<p>The interviewer sits there with a mental scorecard, not a checklist of technologies. Across companies the scorecard looks remarkably similar. They're asking themselves:</p>
+
+<ul>
+<li><strong>Can this person take something vague and make it concrete?</strong> Real work never arrives as a clean spec. "Design Instagram" is fuzzy on purpose.</li>
+<li><strong>Do they make decisions, or list options?</strong> Engineers who own systems commit: "I'll use Postgres here, because…" Engineers who read blog posts recite: "We could use SQL or NoSQL, both have trade-offs…"</li>
+<li><strong>Do they find the hard part?</strong> Every system has one or two genuinely hard problems buried in a pile of easy ones. Spotting the hard part fast is a senior skill.</li>
+<li><strong>Have they felt production?</strong> People who've been paged at 3am design differently. It shows in small ways: they mention monitoring, they ask what happens when a node dies, they distrust anything with a single point of failure.</li>
+</ul>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A system design interview is a driving test, not a written exam. The examiner doesn't care whether you can recite the manual — they care whether you check the mirror before changing lanes, without being told. Naming ten databases is reciting the manual. Saying "I'll put a queue here, because this write path will spike at 9pm and I don't want the database taking that punch directly" — that's checking the mirror.</p>
+</div>
+
+<h2>The shape of a good 45 minutes</h2>
+
+<p>Nearly every strong interview follows the same skeleton. Learn it like a song structure — verse, chorus, verse. You'll practice it so many times in this book that it becomes muscle memory.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 190" role="img" aria-label="Timeline of a 45 minute system design interview">
+  <rect class="dg-node" x="10" y="60" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="24" y="82">Requirements</text>
+  <text class="dg-txt-s" x="24" y="99">~5 min</text>
+  <rect class="dg-node" x="140" y="60" width="100" height="52" rx="8"/>
+  <text class="dg-txt" x="154" y="82">Estimation</text>
+  <text class="dg-txt-s" x="154" y="99">~5 min</text>
+  <rect class="dg-node" x="260" y="60" width="130" height="52" rx="8"/>
+  <text class="dg-txt" x="274" y="82">API + Data</text>
+  <text class="dg-txt-s" x="274" y="99">~5 min</text>
+  <rect class="dg-node" x="410" y="60" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="424" y="82">High-level</text>
+  <text class="dg-txt-s" x="424" y="99">~10 min</text>
+  <rect class="dg-node-alt" x="550" y="40" width="160" height="72" rx="8"/>
+  <text class="dg-txt" x="564" y="70">Deep dives</text>
+  <text class="dg-txt-s" x="564" y="87">~15-20 min</text>
+  <text class="dg-txt-s" x="564" y="102">where seniors win</text>
+  <line class="dg-edge" x1="120" y1="86" x2="140" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="240" y1="86" x2="260" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="86" x2="410" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="530" y1="86" x2="550" y2="86" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="10" y="150">Wrap-up (~3 min): failure modes you didn't get to, what you'd monitor, what you'd build first.</text>
+</svg>
+<figcaption>The 45-minute skeleton. The last block decides your level.</figcaption>
+</figure>
+
+<h3>1. Requirements (~5 min): shrink the problem</h3>
+
+<p>"Design Instagram" is a trap if you take it literally. Instagram is fifty products in a trench coat. Your first job is to shrink it, out loud, with the interviewer's agreement: "I'll focus on photo upload and the home feed. Stories, DMs, and Reels are out of scope — fair?"</p>
+
+<p>Split what remains into two lists. <strong>Functional requirements</strong> — what the system does: upload a photo, follow people, see a feed. <strong>Non-functional requirements</strong> — the qualities it must have: feed loads in under 200 milliseconds, survives a machine dying, handles 500 million users. Non-functional requirements are where design decisions come from. A feed for 500 users and a feed for 500 million users are different machines that happen to share a name.</p>
+
+<h3>2. Estimation (~5 min): get numbers that change your design</h3>
+
+<p>Back-of-envelope math has one purpose, and it isn't impressing anyone with arithmetic. The numbers must <em>drive decisions</em>. If your estimate doesn't change what you build, skip it — that's the senior move.</p>
+
+<p>"500 million users, maybe 100 million daily. Each opens the feed a few times a day — call it 5. That's 500 million feed loads a day, roughly 6,000 per second on average, so plan for 20,000 at peak. Writes? Maybe 100 million new photos a day, about 1,200 per second. So this system is enormously read-heavy — reads outnumber writes maybe 20 to 1. <em>That</em> ratio is why I'll design the read path first, and why caching will carry this whole system."</p>
+
+<p>See what happened? The math produced a conclusion, and the conclusion shaped the architecture. That's the whole game. Chapter 1.4 drills this until it's reflex.</p>
+
+<h3>3. API and data model (~5 min): draw the contract</h3>
+
+<p>A handful of endpoints and the core tables/entities. <code>POST /photos</code>, <code>GET /feed?cursor=…</code>. A <code>users</code> table, a <code>photos</code> table, a <code>follows</code> table. Don't gold-plate this part — its job is to prove you can turn requirements into concrete shapes, then get out of the way.</p>
+
+<h3>4. High-level design (~10 min): the complete machine</h3>
+
+<p>Boxes and arrows: clients, load balancer, app servers, database, cache, queue, storage. Here is the single most important rule at every level: <strong>finish the loop</strong>. A request must be traceable from the user's thumb all the way in (write path) and all the way back out (read path). The most common failure in these interviews — documented over thousands of real sessions — isn't a lack of depth. It's never finishing a working design. An incomplete brilliant design loses to a complete boring one, every time.</p>
+
+<h3>5. Deep dives (~15–20 min): where the level is decided</h3>
+
+<p>Everything before this was the qualifying lap. Now the interviewer picks a box on your whiteboard and says "tell me more" — or, if you're playing at the senior level, <em>you</em> pick the box before they ask. This is the part of the interview that separates levels, and it deserves its own section.</p>
+
+<h2>The crux: every problem has a hard part</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>In every design problem, most of the system is routine — CRUD endpoints, a load balancer, a database. And then there's one part that's <em>actually hard</em>, the part the question was invented to probe. For a URL shortener, it's ID generation without collisions. For a chat app, it's message ordering and delivery guarantees. For a news feed, it's fanning out posts from accounts with 100 million followers. Finding the crux fast — and saying it out loud: "the interesting problem here is X, I want to spend most of our time there" — is the single strongest senior signal that exists. Every problem chapter in Part 3 stamps its crux exactly like this box, until spotting them becomes instinct.</p>
+</div>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A design problem is like a house tour where one room is on fire. Junior candidates tour every room with equal enthusiasm, describing the curtains. Senior candidates smell smoke, walk straight to the burning room, and start talking about how to put it out. The interviewer already knows which room is on fire — they lit it. They're waiting to see how long you take to notice.</p>
+</div>
+
+<h2>Mid-level pass vs senior pass: the same answer, graded twice</h2>
+
+<p>Here's the uncomfortable truth from people who've sat on both sides of the table: a complete, sensible high-level design with reasonable trade-offs is a <em>strong pass</em> for a mid-level candidate — and the same performance gets marked "lacking depth" for a senior. The delta isn't knowledge. It's behavior.</p>
+
+<table>
+<thead><tr><th>Dimension</th><th>Mid-level (E4 / L4)</th><th>Senior (E5 / L5)</th></tr></thead>
+<tbody>
+<tr><td>Who drives</td><td>Covers requirements and the high-level design, then lets the interviewer steer the deep dives</td><td>Drives all 45 minutes; proposes their own deep-dive agenda: "I want to dig into the fanout path next"</td></tr>
+<tr><td>Trade-offs</td><td>Discusses options when asked</td><td>Commits with justification: "Postgres, because I need transactions here and it won't be the bottleneck" — then names the cost of that choice</td></tr>
+<tr><td>Depth</td><td>Solid breadth; textbook understanding is acceptable</td><td>Goes deep on 2–3 components without being asked, with specifics: what's cached, what happens on a miss, what happens when the cache dies</td></tr>
+<tr><td>Failure</td><td>Handles failures when prompted</td><td>Raises them first: "What happens at 10x load? When this region dies? Who gets paged?"</td></tr>
+<tr><td>Numbers</td><td>Forgiven for rough estimation</td><td>Estimation is non-negotiable, and each number must earn its place by changing the design</td></tr>
+</tbody>
+</table>
+
+<p>Read the second column again. Nothing in it requires knowing more facts. It requires <em>owning the room</em>: proposing, committing, self-critiquing. That's trainable, and it's precisely what the Level 3 quizzes in every chapter train — they put you in a scenario and make you choose like an owner, then explain why hedging reads junior.</p>
+
+<div class="box story"><div class="box-tag">War story — the question that gets redesigned three times</div>
+<p>A candidate interviewing for a senior role at Meta described their design round like this: the interviewer kept asking one question, over and over — "and what if you had 100 times more users?" Each time, part of the design melted. A single database became sharded. A simple fanout hit a celebrity account and had to become a hybrid push-pull system. The candidate redesigned their sharding strategy three times in one interview. That wasn't the interview going badly — that <em>was</em> the interview. Meta's design rounds deliberately push a working design until it breaks, because how you respond to your own design breaking is the senior signal. Expect it, and you can even enjoy it: when your design breaks, say "good — here's what breaks first, and here's the fix," and you're demonstrating exactly what they came to see.</p>
+</div>
+
+<h2>Operational maturity: design something you'd be on call for</h2>
+
+<p>This is the newest and least-prepared-for part of the senior bar. Interviewers increasingly grade whether you think past the launch: How do you know the system is healthy? What do you watch — latency, error rate, queue depth? How do you roll out a change without betting the company on it? How do you roll back? What does the 3am page look like, and what did you build so it never fires?</p>
+
+<p>One retelling from a failed senior loop puts it perfectly: "You never said monitoring, deployment, or rollback. You never walked through what happens at 3am. That gap alone can sink an otherwise strong performance." The fix costs thirty seconds: end every design with what you'd monitor and how you'd ship it. We'll build this habit in Part 2 (observability, rollouts) until it's automatic.</p>
+
+<h2>The seven ways strong candidates fail</h2>
+
+<p>Thousands of post-mortems from real loops boil down to a short list. Pin it somewhere.</p>
+
+<ul>
+<li><strong>Never finishing.</strong> Beautiful deep dive, incomplete system. Complete beats clever.</li>
+<li><strong>Waiting to be led.</strong> Correct answers, delivered passively, read as mid-level.</li>
+<li><strong>Option-listing.</strong> "We could do A or B or C…" with no commitment reads as no judgment.</li>
+<li><strong>Buzzword architecture.</strong> Kafka, Redis, and "multi-region" in the first ten minutes, before any traffic numbers exist to justify them.</li>
+<li><strong>Happy-path-only.</strong> No failure modes, no monitoring — tells the interviewer you've never been on call.</li>
+<li><strong>Over-engineering.</strong> Distributed search for ten thousand rarely-updated records. Simplicity, justified, reads senior; complexity, unjustified, reads insecure.</li>
+<li><strong>Fighting the hints.</strong> Interviewers steer you away from dead ends on purpose. Ignoring the steer loses the collaboration points.</li>
+</ul>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>How this chapter's material actually surfaces in a real round — the meta-questions behind every question:</p>
+<ul>
+<li>"Design X" (vague on purpose) — they're grading how you scope before they grade what you build.</li>
+<li>"How many servers would this need?" — they're checking whether your numbers connect to your design or float free of it.</li>
+<li>"What would you improve with another week?" — they're checking whether you can critique your own design, a pure senior signal.</li>
+<li>"What breaks first if traffic goes 10x?" — they want you to have known the answer <em>before</em> they asked.</li>
+</ul>
+</div>
+
+<div class="feynman" data-key="p0c01-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, what a system design interview actually measures — and why "knowing lots of technologies" isn't it.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>It measures judgment, not vocabulary. The interviewer gives you a vague problem and watches whether you can make it concrete: narrow the scope, put numbers on the load, and design a complete machine that a request can actually travel through. Then they watch what you do with the hard part — every problem has one genuinely difficult piece, and finding it yourself is worth more than knowing extra tools. Committing to choices and explaining why beats listing every alternative, because that's what owning a real system looks like. And they listen for signs you've lived with software in production: what you'd monitor, what breaks under load, what the failure plan is. A candidate with fewer facts and real judgment beats a walking encyclopedia every time.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Take "Design WhatsApp" and do <em>only</em> the first five minutes: write functional requirements (pick 3–4, cut the rest out loud) and non-functional requirements (with numbers you invent but justify). Time yourself. Five minutes, no more.</p></div>
+<details><summary>Answer</summary><p>One good shape: functional — 1:1 messages, delivery/read receipts, online status; out of scope — groups, calls, stories, encryption details. Non-functional — messages delivered in under a second when both users are online; no message ever lost once the server accepts it (that acceptance acknowledgment is a promise); 1 billion users, 50 billion messages/day ≈ 600K messages/sec average, plan for 1.5M/sec peak; chat history available on a new device. Notice how each non-functional line implies architecture: "never lost" means durable storage before acknowledging, "under a second" means persistent connections, not polling.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>For each system, name the crux in one sentence: (a) a URL shortener, (b) a ticket-booking site the day Coldplay tickets drop, (c) a Google Docs clone.</p></div>
+<details><summary>Answer</summary><p>(a) Generating billions of short, unique IDs fast, without two servers ever producing the same one. (b) Thousands of people buying the <em>same seat</em> in the same second — concurrency and overselling, not traffic volume, is the fire. (c) Two people typing in the same paragraph at the same time — merging concurrent edits so every copy converges to the same result. If you found these in under a minute each, you're already thinking like the interviewer.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Rewrite this option-listing answer as a committing answer: "For the feed we could use push, where we write to every follower's feed at post time, or pull, where we build the feed at read time. Push is faster to read but expensive for popular accounts. Pull is cheaper to write but slower to read. Both are valid."</p></div>
+<details><summary>Answer</summary><p>Something like: "I'll use push — write each new post into followers' cached feeds at post time — because feeds are read 20 times more often than they're written, so I want reads to be a cheap cache hit. The cost is that a celebrity with 100M followers triggers 100M writes, so for accounts above roughly a million followers I'll flip to pull and merge their posts in at read time. Push by default, pull for celebrities." Same facts, plus a decision, a reason tied to the read/write ratio, an honest cost, and a mitigation. That's the difference between a book report and a design.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>The interview grades judgment under vagueness, not technology trivia.</li>
+<li>Follow the skeleton: requirements → estimation → API/data → complete high-level design → deep dives → ops wrap-up.</li>
+<li>A complete boring design beats an incomplete brilliant one — always finish the loop.</li>
+<li>Estimation only counts when the numbers change the design.</li>
+<li>Every problem has a crux; find it fast, announce it, spend your time there.</li>
+<li>Senior = drive the room, commit with reasons, go deep 2–3 times unprompted, raise failure modes first.</li>
+<li>End every design with monitoring and rollout — design something you'd be on call for.</li>
+</ul>
+</div>
