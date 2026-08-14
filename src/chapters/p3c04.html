@@ -50,40 +50,48 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 
 <figure class="diagram">
 <svg viewBox="0 0 720 330" role="img" aria-label="Message routing from sender through gateways and registry to recipient">
-  <rect class="dg-node" x="10" y="40" width="95" height="46" rx="8"/>
-  <text class="dg-txt" x="22" y="62">Phone A</text>
-  <text class="dg-txt-s" x="22" y="78">sender</text>
-  <rect class="dg-node" x="145" y="40" width="70" height="46" rx="8"/>
-  <text class="dg-txt" x="160" y="68">LB</text>
-  <rect class="dg-node-alt" x="255" y="40" width="115" height="46" rx="8"/>
-  <text class="dg-txt" x="267" y="62">Gateway 17</text>
-  <text class="dg-txt-s" x="267" y="78">A's socket</text>
-  <rect class="dg-node-alt" x="470" y="40" width="115" height="46" rx="8"/>
-  <text class="dg-txt" x="482" y="62">Gateway 42</text>
-  <text class="dg-txt-s" x="482" y="78">B's socket</text>
-  <rect class="dg-node" x="620" y="40" width="90" height="46" rx="8"/>
-  <text class="dg-txt" x="632" y="62">Phone B</text>
-  <text class="dg-txt-s" x="632" y="78">recipient</text>
-  <line class="dg-edge" x1="105" y1="63" x2="145" y2="63" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="215" y1="63" x2="255" y2="63" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="370" y1="63" x2="470" y2="63" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="385" y="55">3. route</text>
-  <line class="dg-edge" x1="585" y1="63" x2="620" y2="63" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="588" y="55">4.</text>
-  <rect class="dg-node" x="330" y="150" width="185" height="52" rx="8"/>
-  <text class="dg-txt" x="342" y="172">Registry (Redis)</text>
-  <text class="dg-txt-s" x="342" y="190">user+device → gateway</text>
-  <line class="dg-edge" x1="330" y1="98" x2="370" y2="150" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="255" y="130">2. where is B?</text>
-  <rect class="dg-node" x="40" y="240" width="235" height="56" rx="8"/>
-  <text class="dg-txt" x="52" y="262">Message svc + Cassandra</text>
-  <text class="dg-txt-s" x="52" y="280">durable write, assigns seq</text>
-  <line class="dg-edge" x1="295" y1="86" x2="180" y2="240" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="128" y="150">1. persist FIRST</text>
-  <rect class="dg-node" x="470" y="240" width="170" height="56" rx="8"/>
-  <text class="dg-txt" x="482" y="262">Push (FCM/APNs)</text>
-  <text class="dg-txt-s" x="482" y="280">if B is offline</text>
-  <line class="dg-edge" stroke-dasharray="5,4" x1="595" y1="240" x2="660" y2="90" marker-end="url(#arrow)"/>
+  <g data-step="1" data-step-label="Durability before delivery — the message is safe before anyone is told">
+    <rect class="dg-node" x="10" y="40" width="95" height="46" rx="8"/>
+    <text class="dg-txt" x="22" y="62">Phone A</text>
+    <text class="dg-txt-s" x="22" y="78">sender</text>
+    <rect class="dg-node" x="145" y="40" width="70" height="46" rx="8"/>
+    <text class="dg-txt" x="160" y="68">LB</text>
+    <rect class="dg-node-alt" x="255" y="40" width="115" height="46" rx="8"/>
+    <text class="dg-txt" x="267" y="62">Gateway 17</text>
+    <text class="dg-txt-s" x="267" y="78">A's socket</text>
+    <line class="dg-edge" x1="105" y1="63" x2="145" y2="63" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="215" y1="63" x2="255" y2="63" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="40" y="240" width="235" height="56" rx="8"/>
+    <text class="dg-txt" x="52" y="262">Message svc + Cassandra</text>
+    <text class="dg-txt-s" x="52" y="280">durable write, assigns seq</text>
+    <line class="dg-edge" x1="295" y1="86" x2="180" y2="240" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="128" y="150">1. persist FIRST</text>
+  </g>
+  <g data-step="2" data-step-label="B holds a socket somewhere. The registry knows which box">
+    <rect class="dg-node" x="330" y="150" width="185" height="52" rx="8"/>
+    <text class="dg-txt" x="342" y="172">Registry (Redis)</text>
+    <text class="dg-txt-s" x="342" y="190">user+device → gateway</text>
+    <line class="dg-edge" x1="330" y1="98" x2="370" y2="150" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="255" y="130">2. where is B?</text>
+  </g>
+  <g data-step="3" data-step-label="Gateway to gateway, inside your own network">
+    <rect class="dg-node-alt" x="470" y="40" width="115" height="46" rx="8"/>
+    <text class="dg-txt" x="482" y="62">Gateway 42</text>
+    <text class="dg-txt-s" x="482" y="78">B's socket</text>
+    <line class="dg-edge" x1="370" y1="63" x2="470" y2="63" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="385" y="55">3. route</text>
+  </g>
+  <g data-step="4" data-step-label="Down the open socket — or via push if B closed the app">
+    <rect class="dg-node" x="620" y="40" width="90" height="46" rx="8"/>
+    <text class="dg-txt" x="632" y="62">Phone B</text>
+    <text class="dg-txt-s" x="632" y="78">recipient</text>
+    <line class="dg-edge" x1="585" y1="63" x2="620" y2="63" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="588" y="55">4.</text>
+    <rect class="dg-node" x="470" y="240" width="170" height="56" rx="8"/>
+    <text class="dg-txt" x="482" y="262">Push (FCM/APNs)</text>
+    <text class="dg-txt-s" x="482" y="280">if B is offline</text>
+    <line class="dg-edge" stroke-dasharray="5,4" x1="595" y1="240" x2="660" y2="90" marker-end="url(#arrow)"/>
+  </g>
 </svg>
 <figcaption>One message's journey. Step 1 — the durable write — happens before anything else. Steps 3–4 are just delivery attempts; if they fail, the inbox and a push notification catch B later.</figcaption>
 </figure>

@@ -134,34 +134,44 @@
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="Gates funnel: one million recipients shrink through dedup, preferences, quiet hours, and rate limit before rendering">
   <text class="dg-txt" x="10" y="30">campaign event × 1,000,000 recipients</text>
-  <rect class="dg-node" x="10" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="24" y="83">1. Dedup</text>
-  <text class="dg-txt-s" x="24" y="100">retries out</text>
-  <rect class="dg-node" x="138" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="152" y="83">2. Prefs</text>
-  <text class="dg-txt-s" x="152" y="100">opt-outs out</text>
-  <rect class="dg-node" x="266" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="280" y="83">3. Quiet hrs</text>
-  <text class="dg-txt-s" x="280" y="100">defer to 8am</text>
-  <rect class="dg-node" x="394" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="408" y="83">4. Rate limit</text>
-  <text class="dg-txt-s" x="408" y="100">cap N/day</text>
-  <rect class="dg-node-alt" x="522" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="536" y="83">5. Render</text>
-  <text class="dg-txt-s" x="536" y="100">per channel</text>
-  <rect class="dg-node" x="650" y="60" width="62" height="54" rx="8"/>
-  <text class="dg-txt-s" x="660" y="91">queue</text>
-  <line class="dg-edge" x1="114" y1="87" x2="138" y2="87" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="242" y1="87" x2="266" y2="87" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="370" y1="87" x2="394" y2="87" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="498" y1="87" x2="522" y2="87" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="626" y1="87" x2="650" y2="87" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="24" y="150">in: 1.00M</text>
-  <text class="dg-txt-s" x="152" y="150">in: 0.99M</text>
-  <text class="dg-txt-s" x="280" y="150">in: 0.64M</text>
-  <text class="dg-txt-s" x="408" y="150">in: 0.58M (60K deferred)</text>
-  <text class="dg-txt-s" x="24" y="180">P0 skips gates 3 and 4 — critical messages are never silenced or budgeted.</text>
-  <text class="dg-txt-s" x="24" y="205">All gates are O(1) Redis/cache lookups: ~4 ops × 100K/sec = 400K ops/sec at burst.</text>
+  <g data-step="1" data-step-label="Cheapest gate first: drop the retries before anything else runs">
+    <rect class="dg-node" x="10" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="24" y="83">1. Dedup</text>
+    <text class="dg-txt-s" x="24" y="100">retries out</text>
+    <text class="dg-txt-s" x="24" y="150">in: 1.00M</text>
+  </g>
+  <g data-step="2" data-step-label="Opt-outs leave. This is the gate that keeps you out of court">
+    <line class="dg-edge" x1="114" y1="87" x2="138" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="138" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="152" y="83">2. Prefs</text>
+    <text class="dg-txt-s" x="152" y="100">opt-outs out</text>
+    <text class="dg-txt-s" x="152" y="150">in: 0.99M</text>
+  </g>
+  <g data-step="3" data-step-label="Quiet hours defer rather than drop — 350K people are asleep">
+    <line class="dg-edge" x1="242" y1="87" x2="266" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="266" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="280" y="83">3. Quiet hrs</text>
+    <text class="dg-txt-s" x="280" y="100">defer to 8am</text>
+    <text class="dg-txt-s" x="280" y="150">in: 0.64M</text>
+  </g>
+  <g data-step="4" data-step-label="Per-user daily cap: the gate that stops you becoming spam">
+    <line class="dg-edge" x1="370" y1="87" x2="394" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="394" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="408" y="83">4. Rate limit</text>
+    <text class="dg-txt-s" x="408" y="100">cap N/day</text>
+    <text class="dg-txt-s" x="408" y="150">in: 0.58M (60K deferred)</text>
+  </g>
+  <g data-step="5" data-step-label="Rendering happens last, on 58% of the original volume">
+    <line class="dg-edge" x1="498" y1="87" x2="522" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="522" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="536" y="83">5. Render</text>
+    <text class="dg-txt-s" x="536" y="100">per channel</text>
+    <line class="dg-edge" x1="626" y1="87" x2="650" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="650" y="60" width="62" height="54" rx="8"/>
+    <text class="dg-txt-s" x="660" y="91">queue</text>
+    <text class="dg-txt-s" x="24" y="180">P0 skips gates 3 and 4 — critical messages are never silenced or budgeted.</text>
+    <text class="dg-txt-s" x="24" y="205">All gates are O(1) Redis/cache lookups: ~4 ops × 100K/sec = 400K ops/sec at burst.</text>
+  </g>
 </svg>
 <figcaption>The funnel — each label is what arrives at that gate. Over 40% of the blast never becomes a message, which is exactly why gates run before rendering and queueing, not after.</figcaption>
 </figure>

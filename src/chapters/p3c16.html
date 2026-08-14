@@ -249,16 +249,26 @@ DEL  key                -&gt; OK</code></pre>
   <line class="dg-zone" x1="85" y1="96" x2="85" y2="315"/>
   <line class="dg-zone" x1="370" y1="96" x2="370" y2="315"/>
   <line class="dg-zone" x1="635" y1="96" x2="635" y2="315"/>
-  <line class="dg-edge" x1="85" y1="125" x2="370" y2="125" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="110" y="117">1. GET feed:hot ×1000 (expired)</text>
-  <line class="dg-edge" x1="370" y1="160" x2="85" y2="160" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="110" y="152">2. first: MISS lease=7291 · rest: WAIT</text>
-  <line class="dg-edge" x1="85" y1="205" x2="635" y2="205" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="180" y="197">3. one client queries — 1 query, not 1,000</text>
-  <line class="dg-edge" x1="85" y1="250" x2="370" y2="250" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="110" y="242">4. SET feed:hot LEASE 7291 → OK</text>
-  <line class="dg-edge" x1="370" y1="290" x2="85" y2="290" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="110" y="282">5. everyone retries → HIT</text>
+  <g data-step="1" data-step-label="A thousand servers hit the same expired key in the same millisecond">
+    <line class="dg-edge" x1="85" y1="125" x2="370" y2="125" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="110" y="117">1. GET feed:hot ×1000 (expired)</text>
+  </g>
+  <g data-step="2" data-step-label="Exactly one caller gets a token. The other 999 are told to wait">
+    <line class="dg-edge" x1="370" y1="160" x2="85" y2="160" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="110" y="152">2. first: MISS lease=7291 · rest: WAIT</text>
+  </g>
+  <g data-step="3" data-step-label="This is the whole point — the database sees one query">
+    <line class="dg-edge" x1="85" y1="205" x2="635" y2="205" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="180" y="197">3. one client queries — 1 query, not 1,000</text>
+  </g>
+  <g data-step="4" data-step-label="The write is accepted only because the token still matches">
+    <line class="dg-edge" x1="85" y1="250" x2="370" y2="250" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="110" y="242">4. SET feed:hot LEASE 7291 → OK</text>
+  </g>
+  <g data-step="5" data-step-label="The waiters wake to a warm cache instead of a stampede">
+    <line class="dg-edge" x1="370" y1="290" x2="85" y2="290" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="110" y="282">5. everyone retries → HIT</text>
+  </g>
 </svg>
 <figcaption>The lease coalesces a thousand concurrent misses into exactly one database query. Clients that sent <code>STALE_OK</code> get the just-expired value instead of waiting. The token also acts as a version guard: a DEL invalidates outstanding leases, so a late SET from a stale reader is refused.</figcaption>
 </figure>

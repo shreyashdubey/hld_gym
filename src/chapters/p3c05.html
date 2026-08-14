@@ -52,41 +52,49 @@
 
 <figure class="diagram">
 <svg viewBox="0 0 720 285" role="img" aria-label="Hybrid fanout write path: post service persists then emits event; fanout workers push to follower feed lists for normal accounts and skip celebrities">
-  <rect class="dg-node" x="8" y="118" width="76" height="44" rx="8"/>
-  <text class="dg-txt" x="22" y="144">Client</text>
-  <rect class="dg-node" x="116" y="118" width="104" height="44" rx="8"/>
-  <text class="dg-txt" x="122" y="136">Post service</text>
-  <text class="dg-txt-s" x="124" y="152">durable write</text>
-  <rect class="dg-node" x="116" y="24" width="104" height="44" rx="8"/>
-  <text class="dg-txt" x="130" y="42">Posts DB</text>
-  <text class="dg-txt-s" x="124" y="58">author outbox</text>
-  <rect class="dg-node" x="252" y="118" width="96" height="44" rx="8"/>
-  <text class="dg-txt" x="270" y="136">Queue</text>
-  <text class="dg-txt-s" x="262" y="152">post events</text>
-  <rect class="dg-node" x="380" y="118" width="112" height="44" rx="8"/>
-  <text class="dg-txt" x="388" y="136">Fanout</text>
-  <text class="dg-txt-s" x="388" y="152">workers</text>
-  <rect class="dg-node" x="380" y="24" width="112" height="44" rx="8"/>
-  <text class="dg-txt" x="390" y="42">Social graph</text>
-  <text class="dg-txt-s" x="390" y="58">who follows A?</text>
-  <rect class="dg-node" x="556" y="64" width="156" height="52" rx="8"/>
-  <text class="dg-txt" x="566" y="84">Follower feeds</text>
-  <text class="dg-txt-s" x="566" y="102">Redis, post IDs only</text>
-  <rect class="dg-node-alt" x="556" y="196" width="156" height="52" rx="8"/>
-  <text class="dg-txt" x="566" y="216">Celebrity path</text>
-  <text class="dg-txt-s" x="566" y="234">pulled at read time</text>
-  <line class="dg-edge" x1="84" y1="140" x2="116" y2="140" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="168" y1="118" x2="168" y2="68" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="176" y="98">1. store</text>
-  <line class="dg-edge" x1="220" y1="140" x2="252" y2="140" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="222" y="130">2. event</text>
-  <line class="dg-edge" x1="348" y1="140" x2="380" y2="140" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="436" y1="118" x2="436" y2="68" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="444" y="98">3. follower list</text>
-  <line class="dg-edge" x1="492" y1="130" x2="556" y2="98" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="490" y="86">4a. under 1M: push</text>
-  <line class="dg-edge" x1="492" y1="150" x2="556" y2="214" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="466" y="192">4b. 1M+: skip push</text>
+  <g data-step="1" data-step-label="The post is durable before any fanout is attempted">
+    <rect class="dg-node" x="8" y="118" width="76" height="44" rx="8"/>
+    <text class="dg-txt" x="22" y="144">Client</text>
+    <rect class="dg-node" x="116" y="118" width="104" height="44" rx="8"/>
+    <text class="dg-txt" x="122" y="136">Post service</text>
+    <text class="dg-txt-s" x="124" y="152">durable write</text>
+    <rect class="dg-node" x="116" y="24" width="104" height="44" rx="8"/>
+    <text class="dg-txt" x="130" y="42">Posts DB</text>
+    <text class="dg-txt-s" x="124" y="58">author outbox</text>
+    <line class="dg-edge" x1="84" y1="140" x2="116" y2="140" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="168" y1="118" x2="168" y2="68" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="176" y="98">1. store</text>
+  </g>
+  <g data-step="2" data-step-label="The write returns here. Everything after this is asynchronous">
+    <line class="dg-edge" x1="220" y1="140" x2="252" y2="140" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="252" y="118" width="96" height="44" rx="8"/>
+    <text class="dg-txt" x="270" y="136">Queue</text>
+    <text class="dg-txt-s" x="262" y="152">post events</text>
+    <text class="dg-txt-s" x="222" y="130">2. event</text>
+  </g>
+  <g data-step="3" data-step-label="Workers look up who follows the author">
+    <line class="dg-edge" x1="348" y1="140" x2="380" y2="140" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="380" y="118" width="112" height="44" rx="8"/>
+    <text class="dg-txt" x="388" y="136">Fanout</text>
+    <text class="dg-txt-s" x="388" y="152">workers</text>
+    <rect class="dg-node" x="380" y="24" width="112" height="44" rx="8"/>
+    <text class="dg-txt" x="390" y="42">Social graph</text>
+    <text class="dg-txt-s" x="390" y="58">who follows A?</text>
+    <line class="dg-edge" x1="436" y1="118" x2="436" y2="68" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="444" y="98">3. follower list</text>
+  </g>
+  <g data-step="4" data-step-label="The fork: normal accounts get pushed, celebrities get skipped">
+    <rect class="dg-node" x="556" y="64" width="156" height="52" rx="8"/>
+    <text class="dg-txt" x="566" y="84">Follower feeds</text>
+    <text class="dg-txt-s" x="566" y="102">Redis, post IDs only</text>
+    <line class="dg-edge" x1="492" y1="130" x2="556" y2="98" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="490" y="86">4a. under 1M: push</text>
+    <rect class="dg-node-alt" x="556" y="196" width="156" height="52" rx="8"/>
+    <text class="dg-txt" x="566" y="216">Celebrity path</text>
+    <text class="dg-txt-s" x="566" y="234">pulled at read time</text>
+    <line class="dg-edge" x1="492" y1="150" x2="556" y2="214" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="466" y="192">4b. 1M+: skip push</text>
+  </g>
 </svg>
 <figcaption>The write path. The post is durable in step 1 — everything after is asynchronous and allowed to lag. Step 4 is the fork the whole interview is about.</figcaption>
 </figure>

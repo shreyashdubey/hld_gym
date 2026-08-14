@@ -100,6 +100,25 @@ Rules:
 - Text: `<text class="dg-txt" x=… y=…>` — keep labels short; font is set by CSS.
 - viewBox width 720, height as needed (200–420). Nothing outside the viewBox.
 
+### Stepped diagrams (optional)
+
+Every diagram already animates: edges draw themselves and nodes fade in left-to-right when the reader scrolls to them. That is automatic — author nothing.
+
+If a diagram tells a **sequence** (a request hopping through services, a migration running in phases, a failure and its recovery), wrap each stage in a `<g data-step="N">` and the engine adds a stepper the reader can walk through:
+
+```html
+<g data-step="1" data-step-label="Client asks the app server for permission">
+  <rect class="dg-node" …/><text class="dg-txt" …>Client</text>
+  <line class="dg-edge" … marker-end="url(#arrow)"/>
+</g>
+<g data-step="2" data-step-label="Server signs a short-lived slip">…</g>
+```
+
+- Steps are cumulative: step 3 shows everything from steps 1–3.
+- Anything left outside a `<g data-step>` is scaffold — always visible. Use it for lifelines and frames.
+- `data-step-label` is the line of narration shown beside the controls. Write it as a sentence that teaches, not "Step 2".
+- Only add steps where order is the lesson. A diagram that is one static picture should stay one static picture.
+
 ## 5. Quiz JSON — `<id>.quiz.json`
 
 ```json

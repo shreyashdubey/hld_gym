@@ -23,21 +23,29 @@
   <text class="dg-txt" x="248" y="134">Leader</text>
   <text class="dg-txt-s" x="248" y="152">all writes land here</text>
   <text class="dg-txt-s" x="248" y="170">appends to WAL / binlog</text>
-  <rect class="dg-node" x="530" y="30" width="170" height="66" rx="8"/>
-  <text class="dg-txt" x="548" y="56">Follower A</text>
-  <text class="dg-txt-s" x="548" y="76">replays log, serves reads</text>
-  <rect class="dg-node" x="530" y="204" width="170" height="66" rx="8"/>
-  <text class="dg-txt" x="548" y="230">Follower B</text>
-  <text class="dg-txt-s" x="548" y="250">replays log, serves reads</text>
-  <line class="dg-edge" x1="124" y1="136" x2="230" y2="136" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="138" y="126">1. write</text>
-  <line class="dg-edge" x1="124" y1="166" x2="230" y2="166" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="132" y="186">4. ack "saved"</text>
-  <line class="dg-edge" x1="400" y1="122" x2="530" y2="70" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="422" y="82">2. stream log entries</text>
-  <line class="dg-edge" x1="400" y1="174" x2="530" y2="228" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="422" y="222">2. stream log entries</text>
-  <text class="dg-txt-s" x="440" y="290">3. each follower applies entries in log order</text>
+  <g data-step="1" data-step-label="Every write goes to exactly one place: the leader">
+    <line class="dg-edge" x1="124" y1="136" x2="230" y2="136" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="138" y="126">1. write</text>
+  </g>
+  <g data-step="2" data-step-label="The leader ships its log to the followers">
+    <rect class="dg-node" x="530" y="30" width="170" height="66" rx="8"/>
+    <text class="dg-txt" x="548" y="56">Follower A</text>
+    <text class="dg-txt-s" x="548" y="76">replays log, serves reads</text>
+    <rect class="dg-node" x="530" y="204" width="170" height="66" rx="8"/>
+    <text class="dg-txt" x="548" y="230">Follower B</text>
+    <text class="dg-txt-s" x="548" y="250">replays log, serves reads</text>
+    <line class="dg-edge" x1="400" y1="122" x2="530" y2="70" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="422" y="82">2. stream log entries</text>
+    <line class="dg-edge" x1="400" y1="174" x2="530" y2="228" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="422" y="222">2. stream log entries</text>
+  </g>
+  <g data-step="3" data-step-label="Same entries, same order — that is the whole guarantee">
+    <text class="dg-txt-s" x="440" y="290">3. each follower applies entries in log order</text>
+  </g>
+  <g data-step="4" data-step-label="The ack. Notice it can leave before the followers have caught up">
+    <line class="dg-edge" x1="124" y1="166" x2="230" y2="166" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="132" y="186">4. ack "saved"</text>
+  </g>
 </svg>
 <figcaption>Log shipping: writes hit the leader, get appended to an ordered log, and every follower replays that log in order. Whether step 4 waits for step 3 is the whole sync-vs-async debate below.</figcaption>
 </figure>

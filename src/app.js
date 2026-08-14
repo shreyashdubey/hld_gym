@@ -257,6 +257,152 @@ function heatCells() {
   return cells.join('');
 }
 
+/* ---------- diagram animation ----------
+   Edges draw themselves, nodes fade in left-to-right as a diagram scrolls into
+   view. Diagrams that mark parts with data-step="N" also get a stepper.
+   Everything degrades to a plain static diagram: no JS, no motion preference,
+   or an unmeasurable SVG all leave the markup untouched. */
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DRAW_MS = 550;
+let dgObserver = null;
+let dgPrepared = [];
+
+// The CSS @media print rule cannot reach marker-end, which is an attribute, so
+// the arrowheads have to come back here.
+addEventListener('beforeprint', () => dgPrepared.forEach(svg => svg._dgEls.forEach(el => {
+  el.style.transitionDelay = '0ms';
+  el.style.opacity = '1';
+  if (el._dgLen) {
+    el.style.strokeDashoffset = '0';
+    if (el._dgMarker) { clearTimeout(el._dgTimer); el.setAttribute('marker-end', el._dgMarker); }
+  }
+})));
+
+function dgPrep(el) {
+  const drawable = /^(line|path|polyline)$/i.test(el.tagName)
+    && !el.hasAttribute('stroke-dasharray')
+    && !el.classList.contains('dg-zone');
+  if (drawable) {
+    let len = 0;
+    try { len = el.getTotalLength(); } catch (e) { }
+    if (len > 0) {
+      el._dgLen = len;
+      el.style.strokeDasharray = len;
+      el.style.strokeDashoffset = len;
+      // markers paint at full opacity regardless of the dash pattern, so an
+      // arrowhead would hang in mid-air while its line is still drawing
+      const mk = el.getAttribute('marker-end');
+      if (mk) { el._dgMarker = mk; el.setAttribute('marker-end', 'none'); }
+    }
+  }
+  el.style.opacity = '0';
+}
+
+function dgShow(el, delay) {
+  el.style.transitionDelay = delay + 'ms';
+  el.style.opacity = '1';
+  if (el._dgLen) {
+    el.style.strokeDashoffset = '0';
+    if (el._dgMarker) {
+      clearTimeout(el._dgTimer);
+      el._dgTimer = setTimeout(() => el.setAttribute('marker-end', el._dgMarker), delay + DRAW_MS - 60);
+    }
+  }
+}
+
+function dgHide(el) {
+  el.style.transitionDelay = '0ms';
+  el.style.opacity = '0';
+  if (el._dgLen) {
+    el.style.strokeDashoffset = el._dgLen;
+    if (el._dgMarker) { clearTimeout(el._dgTimer); el.setAttribute('marker-end', 'none'); }
+  }
+}
+
+function dgRun(svg, upto) {
+  const els = svg._dgEls;
+  els.forEach(el => { if (el._dgStep > upto && el._dgVisible) { el._dgVisible = false; dgHide(el); } });
+  const fresh = els.filter(el => el._dgStep <= upto && !el._dgVisible);
+  const gap = Math.min(45, 900 / Math.max(1, fresh.length));
+  fresh.forEach((el, i) => { el._dgVisible = true; dgShow(el, Math.round(i * gap)); });
+}
+
+function dgStepper(svg) {
+  const bar = document.createElement('div');
+  bar.className = 'dg-steps';
+  bar.innerHTML = `<button class="dg-prev" aria-label="Previous step">◀</button>` +
+    `<button class="dg-next" aria-label="Next step">▶</button>` +
+    `<button class="dg-replay" aria-label="Replay from the start">↻</button>` +
+    `<span class="dg-count"></span><span class="dg-label"></span>`;
+  svg.parentElement.insertBefore(bar, svg);
+  const labels = {};
+  svg.querySelectorAll('[data-step][data-step-label]')
+    .forEach(g => { labels[+g.dataset.step] = g.dataset.stepLabel; });
+  const sync = () => {
+    bar.querySelector('.dg-prev').disabled = svg._dgCur <= 1;
+    bar.querySelector('.dg-next').disabled = svg._dgCur >= svg._dgMax;
+    bar.querySelector('.dg-count').textContent = `${svg._dgCur} / ${svg._dgMax}`;
+    bar.querySelector('.dg-label').textContent = labels[svg._dgCur] || '';
+  };
+  const go = n => {
+    svg._dgCur = Math.min(svg._dgMax, Math.max(1, n));
+    dgRun(svg, svg._dgCur);
+    sync();
+  };
+  bar.querySelector('.dg-prev').addEventListener('click', () => go(svg._dgCur - 1));
+  bar.querySelector('.dg-next').addEventListener('click', () => go(svg._dgCur + 1));
+  bar.querySelector('.dg-replay').addEventListener('click', () => {
+    svg._dgEls.forEach(el => { el._dgVisible = false; dgHide(el); });
+    go(1);
+  });
+  // label only — the first reveal belongs to the observer, so the diagram
+  // animates when the reader reaches it rather than while it is off-screen
+  sync();
+}
+
+function initDiagrams(root) {
+  if (dgObserver) { dgObserver.disconnect(); dgObserver = null; }
+  dgPrepared = [];
+  if (REDUCED || !('IntersectionObserver' in window)) return;
+
+  const svgs = [...root.querySelectorAll('svg')]
+    .filter(s => s.querySelector('[class^="dg-"], [class*=" dg-"]'))
+    .filter(s => s.getBoundingClientRect().width > 0);
+  if (!svgs.length) return;
+
+  dgObserver = new IntersectionObserver((entries, obs) => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      obs.unobserve(e.target);
+      // class added here, not at prep time: the hidden state must already be
+      // painted or the transition would run backwards from visible
+      e.target.classList.add('dg-anim');
+      dgRun(e.target, e.target._dgCur);
+    });
+  }, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' });
+
+  svgs.forEach(svg => {
+    const els = [...svg.querySelectorAll('rect, circle, ellipse, line, path, polyline, polygon, text')]
+      .filter(el => !el.closest('defs'));
+    if (!els.length) return;
+    els.forEach(el => {
+      try { const b = el.getBBox(); el._dgx = b.x; el._dgy = b.y; }
+      catch (e) { el._dgx = 0; el._dgy = 0; }
+      const holder = el.closest('[data-step]');
+      el._dgStep = holder ? +holder.dataset.step : 0;
+      el._dgVisible = false;
+    });
+    els.sort((a, b) => (a._dgStep - b._dgStep) || (a._dgx - b._dgx) || (a._dgy - b._dgy));
+    els.forEach(dgPrep);
+    svg._dgEls = els;
+    svg._dgMax = els.reduce((m, el) => Math.max(m, el._dgStep), 0);
+    svg._dgCur = 1;
+    dgPrepared.push(svg);
+    if (svg._dgMax > 1) dgStepper(svg);
+    dgObserver.observe(svg);
+  });
+}
+
 function renderChapter(id) {
   const c = chById(id);
   const tpl = document.querySelector(`template[data-ch="${id}"]`);
@@ -273,7 +419,9 @@ function renderChapter(id) {
     <div class="q-level-tabs"></div><div class="q-zone"></div></div>
     <div class="ch-nav"></div>
   </div>`;
-  VIEW.querySelector('.ch-body').appendChild(tpl.content.cloneNode(true));
+  const body = VIEW.querySelector('.ch-body');
+  body.appendChild(tpl.content.cloneNode(true));
+  initDiagrams(body);
 
   // feynman blocks
   VIEW.querySelectorAll('.feynman').forEach(f => {

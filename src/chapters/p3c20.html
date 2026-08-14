@@ -214,39 +214,45 @@
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="Repair pipeline: three detectors feed a queue ordered by risk into repair workers">
-  <rect class="dg-node" x="10" y="26" width="152" height="44" rx="8"/>
-  <text class="dg-txt-s" x="24" y="46">heartbeat lost</text>
-  <text class="dg-txt-s" x="24" y="62">node or drive dead</text>
-  <rect class="dg-node" x="10" y="90" width="152" height="44" rx="8"/>
-  <text class="dg-txt-s" x="24" y="110">scrubber</text>
-  <text class="dg-txt-s" x="24" y="126">30-day full pass</text>
-  <rect class="dg-node" x="10" y="154" width="152" height="44" rx="8"/>
-  <text class="dg-txt-s" x="24" y="174">read verify failed</text>
-  <text class="dg-txt-s" x="24" y="190">customer hit it</text>
-  <rect class="dg-bad" x="220" y="26" width="216" height="42" rx="8"/>
-  <text class="dg-txt-s" x="234" y="44">lane 1: missing 3 — critical</text>
-  <text class="dg-txt-s" x="234" y="60">one loss from unreadable</text>
-  <rect class="dg-node-alt" x="220" y="82" width="216" height="42" rx="8"/>
-  <text class="dg-txt-s" x="234" y="100">lane 2: missing 2 — urgent</text>
-  <text class="dg-txt-s" x="234" y="116">drains after lane 1</text>
-  <rect class="dg-node" x="220" y="138" width="216" height="42" rx="8"/>
-  <text class="dg-txt-s" x="234" y="156">lane 3: missing 1 — routine</text>
-  <text class="dg-txt-s" x="234" y="172">rate-limited, off-peak</text>
-  <rect class="dg-node" x="490" y="60" width="216" height="112" rx="8"/>
-  <text class="dg-txt" x="504" y="84">Repair workers</text>
-  <text class="dg-txt-s" x="504" y="106">1. read 8 shards, verify</text>
-  <text class="dg-txt-s" x="504" y="124">2. re-derive missing shard</text>
-  <text class="dg-txt-s" x="504" y="142">3. place, honoring AZ rules</text>
-  <text class="dg-txt-s" x="504" y="160">4. update manifest location</text>
-  <line class="dg-edge" x1="162" y1="48" x2="220" y2="48" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="162" y1="112" x2="220" y2="103" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="162" y1="176" x2="220" y2="159" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="436" y1="47" x2="490" y2="90" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="436" y1="103" x2="490" y2="112" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="436" y1="159" x2="490" y2="136" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="10" y="236">Backlog in lane 1 is the durability alarm — page on it, not on lane 3.</text>
-  <text class="dg-txt-s" x="10" y="262">Repair reads are declustered across thousands of peers: a dead 20 TB drive rebuilds in minutes, not days.</text>
-  <text class="dg-txt-s" x="10" y="288">Repair bandwidth is capped below customer traffic — except lane 1, which is allowed to hurt.</text>
+  <g data-step="1" data-step-label="Three ways to notice damage — none of them is a customer complaint">
+    <rect class="dg-node" x="10" y="26" width="152" height="44" rx="8"/>
+    <text class="dg-txt-s" x="24" y="46">heartbeat lost</text>
+    <text class="dg-txt-s" x="24" y="62">node or drive dead</text>
+    <rect class="dg-node" x="10" y="90" width="152" height="44" rx="8"/>
+    <text class="dg-txt-s" x="24" y="110">scrubber</text>
+    <text class="dg-txt-s" x="24" y="126">30-day full pass</text>
+    <rect class="dg-node" x="10" y="154" width="152" height="44" rx="8"/>
+    <text class="dg-txt-s" x="24" y="174">read verify failed</text>
+    <text class="dg-txt-s" x="24" y="190">customer hit it</text>
+  </g>
+  <g data-step="2" data-step-label="Sorted by how close to unreadable it is, not by when it broke">
+    <line class="dg-edge" x1="162" y1="48" x2="220" y2="48" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="162" y1="112" x2="220" y2="103" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="162" y1="176" x2="220" y2="159" marker-end="url(#arrow)"/>
+    <rect class="dg-bad" x="220" y="26" width="216" height="42" rx="8"/>
+    <text class="dg-txt-s" x="234" y="44">lane 1: missing 3 — critical</text>
+    <text class="dg-txt-s" x="234" y="60">one loss from unreadable</text>
+    <rect class="dg-node-alt" x="220" y="82" width="216" height="42" rx="8"/>
+    <text class="dg-txt-s" x="234" y="100">lane 2: missing 2 — urgent</text>
+    <text class="dg-txt-s" x="234" y="116">drains after lane 1</text>
+    <rect class="dg-node" x="220" y="138" width="216" height="42" rx="8"/>
+    <text class="dg-txt-s" x="234" y="156">lane 3: missing 1 — routine</text>
+    <text class="dg-txt-s" x="234" y="172">rate-limited, off-peak</text>
+  </g>
+  <g data-step="3" data-step-label="Workers drain lane 1 first — and that lane is allowed to hurt">
+    <line class="dg-edge" x1="436" y1="47" x2="490" y2="90" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="436" y1="103" x2="490" y2="112" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="436" y1="159" x2="490" y2="136" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="490" y="60" width="216" height="112" rx="8"/>
+    <text class="dg-txt" x="504" y="84">Repair workers</text>
+    <text class="dg-txt-s" x="504" y="106">1. read 8 shards, verify</text>
+    <text class="dg-txt-s" x="504" y="124">2. re-derive missing shard</text>
+    <text class="dg-txt-s" x="504" y="142">3. place, honoring AZ rules</text>
+    <text class="dg-txt-s" x="504" y="160">4. update manifest location</text>
+    <text class="dg-txt-s" x="10" y="236">Backlog in lane 1 is the durability alarm — page on it, not on lane 3.</text>
+    <text class="dg-txt-s" x="10" y="262">Repair reads are declustered across thousands of peers: a dead 20 TB drive rebuilds in minutes, not days.</text>
+    <text class="dg-txt-s" x="10" y="288">Repair bandwidth is capped below customer traffic — except lane 1, which is allowed to hurt.</text>
+  </g>
 </svg>
 <figcaption>Risk-ordered repair. The lane structure is a few lines of code and worth more than a second copy of your data.</figcaption>
 </figure>

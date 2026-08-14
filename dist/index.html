@@ -263,6 +263,33 @@ figure.diagram figcaption {
 .dg-txt { fill: var(--ink); font-family: "IBM Plex Mono", monospace; font-size: 13px; }
 .dg-txt-s { fill: var(--ink-3); font-family: "IBM Plex Mono", monospace; font-size: 11px; }
 .dg-zone { fill: none; stroke: var(--ink-3); stroke-dasharray: 5 5; stroke-width: 1.2; rx: 10; }
+/* Diagram animation. The hidden start state is applied by JS, never here — if the
+   script never runs, every diagram stays fully visible. */
+.dg-anim :is(rect, circle, ellipse, line, path, polyline, polygon, text) {
+  transition: opacity .4s ease, stroke-dashoffset .55s cubic-bezier(.4, 0, .2, 1);
+}
+.dg-steps {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 4px 0 2px; font-family: "IBM Plex Mono", monospace; font-size: .76rem; color: var(--ink-2);
+}
+.dg-steps button {
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 8px; width: 30px; height: 28px; cursor: pointer; font-size: .7rem; line-height: 1; padding: 0;
+}
+.dg-steps button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.dg-steps button:disabled { opacity: .3; cursor: default; }
+.dg-steps .dg-count { color: var(--ink-3); letter-spacing: .06em; }
+.dg-steps .dg-label { color: var(--ink); }
+.dg-steps .dg-replay { width: auto; padding: 0 9px; }
+/* Printing must never capture a diagram mid-reveal, and a stepped diagram has
+   to print whole rather than frozen on step 1. !important beats the inline
+   opacity the script sets. */
+@media print {
+  .dg-anim :is(rect, circle, ellipse, line, path, polyline, polygon, text) {
+    opacity: 1 !important; stroke-dashoffset: 0 !important;
+  }
+  .dg-steps { display: none; }
+}
 text.dg-bad, tspan.dg-bad { fill: var(--bad); stroke: none; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
 text.dg-good, tspan.dg-good { fill: var(--good); stroke: none; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
 .dg-bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.6; rx: 8; }
@@ -2511,16 +2538,26 @@ return value                           # hit path: one fast lookup, done</code><
   <line class="dg-edge" x1="105" y1="64" x2="105" y2="235"/>
   <line class="dg-edge" x1="365" y1="64" x2="365" y2="235"/>
   <line class="dg-edge" x1="625" y1="64" x2="625" y2="235"/>
-  <line class="dg-edge" x1="105" y1="95" x2="365" y2="95" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="150" y="88">1. GET product:88871</text>
-  <line class="dg-edge" x1="365" y1="125" x2="105" y2="125" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="180" y="118">2. miss</text>
-  <line class="dg-edge" x1="105" y1="160" x2="625" y2="160" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="280" y="153">3. run the expensive queries</text>
-  <line class="dg-edge" x1="625" y1="190" x2="105" y2="190" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="300" y="183">4. rows</text>
-  <line class="dg-edge" x1="105" y1="222" x2="365" y2="222" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="140" y="215">5. SET product:88871, ttl 300s</text>
+  <g data-step="1" data-step-label="App asks the cache first — always the cache first">
+    <line class="dg-edge" x1="105" y1="95" x2="365" y2="95" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="150" y="88">1. GET product:88871</text>
+  </g>
+  <g data-step="2" data-step-label="Miss. The cache does not fetch anything on your behalf">
+    <line class="dg-edge" x1="365" y1="125" x2="105" y2="125" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="180" y="118">2. miss</text>
+  </g>
+  <g data-step="3" data-step-label="Only now does the app pay for the expensive query">
+    <line class="dg-edge" x1="105" y1="160" x2="625" y2="160" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="280" y="153">3. run the expensive queries</text>
+  </g>
+  <g data-step="4" data-step-label="Rows come back to the app, not to the cache">
+    <line class="dg-edge" x1="625" y1="190" x2="105" y2="190" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="300" y="183">4. rows</text>
+  </g>
+  <g data-step="5" data-step-label="The app writes the cache itself — that is what 'aside' means">
+    <line class="dg-edge" x1="105" y1="222" x2="365" y2="222" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="140" y="215">5. SET product:88871, ttl 300s</text>
+  </g>
 </svg>
 <figcaption>The miss path: get, miss, compute, fill. On a hit, steps 2–5 vanish and the whole read is one round trip.</figcaption>
 </figure>
@@ -2875,26 +2912,34 @@ width, height, created_at, ...</code></pre>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="Presigned upload flow: client gets a signed URL from the app server then uploads directly to blob storage">
-  <rect class="dg-node" x="30" y="110" width="130" height="56" rx="8"/>
-  <text class="dg-txt" x="60" y="143">Client</text>
-  <rect class="dg-node" x="295" y="30" width="150" height="56" rx="8"/>
-  <text class="dg-txt" x="318" y="56">App server</text>
-  <text class="dg-txt-s" x="318" y="73">has S3 credentials</text>
-  <rect class="dg-node-alt" x="540" y="110" width="150" height="56" rx="8"/>
-  <text class="dg-txt" x="580" y="137">S3 bucket</text>
-  <text class="dg-txt-s" x="562" y="154">takes the bytes</text>
-  <line class="dg-edge" x1="140" y1="110" x2="300" y2="70" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="130" y="76">1. "I want to upload cat.jpg"</text>
-  <line class="dg-edge" x1="330" y1="86" x2="170" y2="126" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="205" y="115">2. presigned URL (expires in 10 min)</text>
-  <line class="dg-edge" x1="160" y1="145" x2="540" y2="145" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="255" y="136">3. PUT 3 MB directly — bypasses app server</text>
-  <line class="dg-edge" x1="560" y1="166" x2="430" y2="220" marker-end="url(#arrow)"/>
-  <rect class="dg-node" x="295" y="200" width="150" height="56" rx="8"/>
-  <text class="dg-txt" x="318" y="226">App server</text>
-  <text class="dg-txt-s" x="318" y="243">writes metadata row</text>
-  <text class="dg-txt-s" x="455" y="200">4. event / confirm:</text>
-  <text class="dg-txt-s" x="455" y="216">"object exists"</text>
+  <g data-step="1" data-step-label="Client asks the app server for permission">
+    <rect class="dg-node" x="30" y="110" width="130" height="56" rx="8"/>
+    <text class="dg-txt" x="60" y="143">Client</text>
+    <rect class="dg-node" x="295" y="30" width="150" height="56" rx="8"/>
+    <text class="dg-txt" x="318" y="56">App server</text>
+    <text class="dg-txt-s" x="318" y="73">has S3 credentials</text>
+    <line class="dg-edge" x1="140" y1="110" x2="300" y2="70" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="130" y="76">1. "I want to upload cat.jpg"</text>
+  </g>
+  <g data-step="2" data-step-label="Server signs a short-lived slip — a few hundred bytes">
+    <line class="dg-edge" x1="330" y1="86" x2="170" y2="126" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="205" y="115">2. presigned URL (expires in 10 min)</text>
+  </g>
+  <g data-step="3" data-step-label="The 3 MB goes straight to S3 — your server never sees it">
+    <rect class="dg-node-alt" x="540" y="110" width="150" height="56" rx="8"/>
+    <text class="dg-txt" x="580" y="137">S3 bucket</text>
+    <text class="dg-txt-s" x="562" y="154">takes the bytes</text>
+    <line class="dg-edge" x1="160" y1="145" x2="540" y2="145" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="255" y="136">3. PUT 3 MB directly — bypasses app server</text>
+  </g>
+  <g data-step="4" data-step-label="Metadata row written only after the object verifiably exists">
+    <line class="dg-edge" x1="560" y1="166" x2="430" y2="220" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="295" y="200" width="150" height="56" rx="8"/>
+    <text class="dg-txt" x="318" y="226">App server</text>
+    <text class="dg-txt-s" x="318" y="243">writes metadata row</text>
+    <text class="dg-txt-s" x="455" y="200">4. event / confirm:</text>
+    <text class="dg-txt-s" x="455" y="216">"object exists"</text>
+  </g>
 </svg>
 <figcaption>The heavy arrow (3) never touches your servers. Steps 1 and 2 move a few hundred bytes of JSON; step 4 creates the metadata row only after the object verifiably exists.</figcaption>
 </figure>
@@ -3039,21 +3084,29 @@ width, height, created_at, ...</code></pre>
   <text class="dg-txt" x="248" y="134">Leader</text>
   <text class="dg-txt-s" x="248" y="152">all writes land here</text>
   <text class="dg-txt-s" x="248" y="170">appends to WAL / binlog</text>
-  <rect class="dg-node" x="530" y="30" width="170" height="66" rx="8"/>
-  <text class="dg-txt" x="548" y="56">Follower A</text>
-  <text class="dg-txt-s" x="548" y="76">replays log, serves reads</text>
-  <rect class="dg-node" x="530" y="204" width="170" height="66" rx="8"/>
-  <text class="dg-txt" x="548" y="230">Follower B</text>
-  <text class="dg-txt-s" x="548" y="250">replays log, serves reads</text>
-  <line class="dg-edge" x1="124" y1="136" x2="230" y2="136" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="138" y="126">1. write</text>
-  <line class="dg-edge" x1="124" y1="166" x2="230" y2="166" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="132" y="186">4. ack "saved"</text>
-  <line class="dg-edge" x1="400" y1="122" x2="530" y2="70" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="422" y="82">2. stream log entries</text>
-  <line class="dg-edge" x1="400" y1="174" x2="530" y2="228" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="422" y="222">2. stream log entries</text>
-  <text class="dg-txt-s" x="440" y="290">3. each follower applies entries in log order</text>
+  <g data-step="1" data-step-label="Every write goes to exactly one place: the leader">
+    <line class="dg-edge" x1="124" y1="136" x2="230" y2="136" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="138" y="126">1. write</text>
+  </g>
+  <g data-step="2" data-step-label="The leader ships its log to the followers">
+    <rect class="dg-node" x="530" y="30" width="170" height="66" rx="8"/>
+    <text class="dg-txt" x="548" y="56">Follower A</text>
+    <text class="dg-txt-s" x="548" y="76">replays log, serves reads</text>
+    <rect class="dg-node" x="530" y="204" width="170" height="66" rx="8"/>
+    <text class="dg-txt" x="548" y="230">Follower B</text>
+    <text class="dg-txt-s" x="548" y="250">replays log, serves reads</text>
+    <line class="dg-edge" x1="400" y1="122" x2="530" y2="70" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="422" y="82">2. stream log entries</text>
+    <line class="dg-edge" x1="400" y1="174" x2="530" y2="228" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="422" y="222">2. stream log entries</text>
+  </g>
+  <g data-step="3" data-step-label="Same entries, same order — that is the whole guarantee">
+    <text class="dg-txt-s" x="440" y="290">3. each follower applies entries in log order</text>
+  </g>
+  <g data-step="4" data-step-label="The ack. Notice it can leave before the followers have caught up">
+    <line class="dg-edge" x1="124" y1="166" x2="230" y2="166" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="132" y="186">4. ack "saved"</text>
+  </g>
 </svg>
 <figcaption>Log shipping: writes hit the leader, get appended to an ordered log, and every follower replays that log in order. Whether step 4 waits for step 3 is the whole sync-vs-async debate below.</figcaption>
 </figure>
@@ -5148,28 +5201,38 @@ COMMIT;</code></pre>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="Saga: three forward local transactions, step three fails, compensations run in reverse">
-  <text class="dg-txt-s" x="24" y="28">Forward: each step is its own committed local transaction</text>
-  <rect class="dg-node" x="24" y="44" width="180" height="56" rx="8"/>
-  <text class="dg-txt" x="44" y="68">1. Create order</text>
-  <text class="dg-txt-s" x="44" y="86">status = PENDING</text>
-  <rect class="dg-node" x="264" y="44" width="180" height="56" rx="8"/>
-  <text class="dg-txt" x="284" y="68">2. Charge card</text>
-  <text class="dg-txt-s" x="284" y="86">committed ✓</text>
-  <rect class="dg-node" x="504" y="44" width="190" height="56" rx="8"/>
-  <text class="dg-txt" x="524" y="68">3. Reserve stock</text>
-  <text class="dg-txt-s" x="524" y="86">FAILS after retries</text>
-  <line class="dg-edge" x1="204" y1="72" x2="260" y2="72" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="444" y1="72" x2="500" y2="72" marker-end="url(#arrow)"/>
-  <path class="dg-bad" fill="none" d="M582 30 L610 58 M610 30 L582 58"/>
-  <text class="dg-txt-s" x="24" y="146">Backward: compensations, newest first</text>
-  <rect class="dg-node-alt" x="264" y="162" width="180" height="56" rx="8"/>
-  <text class="dg-txt" x="284" y="186">Refund charge</text>
-  <text class="dg-txt-s" x="284" y="204">undoes step 2</text>
-  <rect class="dg-node-alt" x="24" y="162" width="180" height="56" rx="8"/>
-  <text class="dg-txt" x="44" y="186">Cancel order</text>
-  <text class="dg-txt-s" x="44" y="204">undoes step 1</text>
-  <line class="dg-edge" x1="560" y1="104" x2="430" y2="162" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="264" y1="190" x2="208" y2="190" marker-end="url(#arrow)"/>
+  <g data-step="1" data-step-label="Step one commits. There is no outer transaction to roll it back">
+    <text class="dg-txt-s" x="24" y="28">Forward: each step is its own committed local transaction</text>
+    <rect class="dg-node" x="24" y="44" width="180" height="56" rx="8"/>
+    <text class="dg-txt" x="44" y="68">1. Create order</text>
+    <text class="dg-txt-s" x="44" y="86">status = PENDING</text>
+  </g>
+  <g data-step="2" data-step-label="Step two commits too — the customer's card is now genuinely charged">
+    <line class="dg-edge" x1="204" y1="72" x2="260" y2="72" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="264" y="44" width="180" height="56" rx="8"/>
+    <text class="dg-txt" x="284" y="68">2. Charge card</text>
+    <text class="dg-txt-s" x="284" y="86">committed ✓</text>
+  </g>
+  <g data-step="3" data-step-label="Step three fails. Two committed steps are now stranded">
+    <line class="dg-edge" x1="444" y1="72" x2="500" y2="72" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="504" y="44" width="190" height="56" rx="8"/>
+    <text class="dg-txt" x="524" y="68">3. Reserve stock</text>
+    <text class="dg-txt-s" x="524" y="86">FAILS after retries</text>
+    <path class="dg-bad" fill="none" d="M582 30 L610 58 M610 30 L582 58"/>
+  </g>
+  <g data-step="4" data-step-label="Undo runs newest first — a refund, not a rollback">
+    <text class="dg-txt-s" x="24" y="146">Backward: compensations, newest first</text>
+    <line class="dg-edge" x1="560" y1="104" x2="430" y2="162" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="264" y="162" width="180" height="56" rx="8"/>
+    <text class="dg-txt" x="284" y="186">Refund charge</text>
+    <text class="dg-txt-s" x="284" y="204">undoes step 2</text>
+  </g>
+  <g data-step="5" data-step-label="And back to step one. Every forward step needs its own undo">
+    <line class="dg-edge" x1="264" y1="190" x2="208" y2="190" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="24" y="162" width="180" height="56" rx="8"/>
+    <text class="dg-txt" x="44" y="186">Cancel order</text>
+    <text class="dg-txt-s" x="44" y="204">undoes step 1</text>
+  </g>
 </svg>
 <figcaption>A saga failing at step 3. The already-committed steps aren't rolled back — they're compensated, in reverse order, by new transactions.</figcaption>
 </figure>
@@ -8042,26 +8105,36 @@ COMMIT;</code></pre>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="SWIM failure detection: direct probe times out, indirect probes through peers, suspicion with refutation">
-  <rect class="dg-node" x="40" y="40" width="90" height="40" rx="8"/>
-  <text class="dg-txt" x="76" y="65">A</text>
-  <rect class="dg-node" x="580" y="40" width="90" height="40" rx="8"/>
-  <text class="dg-txt" x="600" y="65">B (slow)</text>
-  <line class="dg-bad" x1="130" y1="55" x2="576" y2="55" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="270" y="46">1. ping — no ack</text>
-  <rect class="dg-node" x="250" y="180" width="90" height="40" rx="8"/>
-  <text class="dg-txt" x="288" y="205">C</text>
-  <rect class="dg-node" x="420" y="180" width="90" height="40" rx="8"/>
-  <text class="dg-txt" x="458" y="205">D</text>
-  <line class="dg-edge" x1="100" y1="80" x2="270" y2="176" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="118" y1="80" x2="432" y2="176" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="36" y="120">2. ping-req(B)</text>
-  <line class="dg-edge" x1="344" y1="184" x2="588" y2="84" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="512" y1="188" x2="598" y2="84" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="600" y="150">3. C, D ping B</text>
-  <line class="dg-good" x1="612" y1="84" x2="348" y2="196" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="452" y="230">4. ack → relayed to A: "B lives"</text>
-  <text class="dg-txt-s" x="40" y="258">If nobody gets an ack: B is gossiped as SUSPECT, not dead — a probation window, not a verdict.</text>
-  <text class="dg-txt-s" x="40" y="278">B refutes by gossiping "alive" with a higher incarnation number; the higher number wins everywhere.</text>
+  <g data-step="1" data-step-label="A's direct probe gets nothing back. A knows almost nothing yet">
+    <rect class="dg-node" x="40" y="40" width="90" height="40" rx="8"/>
+    <text class="dg-txt" x="76" y="65">A</text>
+    <rect class="dg-node" x="580" y="40" width="90" height="40" rx="8"/>
+    <text class="dg-txt" x="600" y="65">B (slow)</text>
+    <line class="dg-bad" x1="130" y1="55" x2="576" y2="55" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="270" y="46">1. ping — no ack</text>
+  </g>
+  <g data-step="2" data-step-label="Instead of declaring B dead, A asks two peers to try">
+    <rect class="dg-node" x="250" y="180" width="90" height="40" rx="8"/>
+    <text class="dg-txt" x="288" y="205">C</text>
+    <rect class="dg-node" x="420" y="180" width="90" height="40" rx="8"/>
+    <text class="dg-txt" x="458" y="205">D</text>
+    <line class="dg-edge" x1="100" y1="80" x2="270" y2="176" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="118" y1="80" x2="432" y2="176" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="36" y="120">2. ping-req(B)</text>
+  </g>
+  <g data-step="3" data-step-label="C and D probe from different network paths than A's">
+    <line class="dg-edge" x1="344" y1="184" x2="588" y2="84" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="512" y1="188" x2="598" y2="84" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="600" y="150">3. C, D ping B</text>
+  </g>
+  <g data-step="4" data-step-label="One ack is enough: the fault was A's path, not B">
+    <line class="dg-good" x1="612" y1="84" x2="348" y2="196" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="452" y="230">4. ack → relayed to A: "B lives"</text>
+  </g>
+  <g data-step="5" data-step-label="And if nobody gets an ack — suspicion, not a death certificate">
+    <text class="dg-txt-s" x="40" y="258">If nobody gets an ack: B is gossiped as SUSPECT, not dead — a probation window, not a verdict.</text>
+    <text class="dg-txt-s" x="40" y="278">B refutes by gossiping "alive" with a higher incarnation number; the higher number wins everywhere.</text>
+  </g>
 </svg>
 <figcaption>SWIM separates "I can't reach B" from "B is dead": borrow other nodes' network paths first, then suspect, and let the accused overrule the rumor with a fresher incarnation number.</figcaption>
 </figure>
@@ -8162,30 +8235,38 @@ COMMIT;</code></pre>
 <svg viewBox="0 0 720 240" role="img" aria-label="Timeline of the four migration phases with a rollback plan under each">
   <text class="dg-txt-s" x="12" y="30">reads served from the OLD store this whole time</text>
   <line class="dg-edge" x1="12" y1="38" x2="520" y2="38"/>
-  <rect class="dg-node" x="10" y="52" width="155" height="60" rx="8"/>
-  <text class="dg-txt" x="24" y="76">1. EXPAND</text>
-  <text class="dg-txt-s" x="24" y="96">dual writes on</text>
-  <rect class="dg-node" x="185" y="52" width="155" height="60" rx="8"/>
-  <text class="dg-txt" x="199" y="76">2. MIGRATE</text>
-  <text class="dg-txt-s" x="199" y="96">backfill history</text>
-  <rect class="dg-node" x="360" y="52" width="155" height="60" rx="8"/>
-  <text class="dg-txt" x="374" y="76">3. VERIFY</text>
-  <text class="dg-txt-s" x="374" y="96">shadow reads</text>
-  <rect class="dg-node-alt" x="535" y="52" width="175" height="60" rx="8"/>
-  <text class="dg-txt" x="549" y="76">4. CONTRACT</text>
-  <text class="dg-txt-s" x="549" y="96">flip reads, drop old</text>
-  <line class="dg-edge" x1="165" y1="82" x2="185" y2="82" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="340" y1="82" x2="360" y2="82" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="515" y1="82" x2="535" y2="82" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="14" y="150">rollback: flag off,</text>
-  <text class="dg-txt-s" x="14" y="166">stop dual writes</text>
-  <text class="dg-txt-s" x="189" y="150">rollback: pause job,</text>
-  <text class="dg-txt-s" x="189" y="166">nothing is lost</text>
-  <text class="dg-txt-s" x="364" y="150">rollback: keep serving</text>
-  <text class="dg-txt-s" x="364" y="166">from old, investigate</text>
-  <text class="dg-txt-s" x="539" y="150">rollback: flip the read</text>
-  <text class="dg-txt-s" x="539" y="166">flag back in seconds</text>
-  <text class="dg-txt-s" x="14" y="210">Each phase ships on its own, gets watched for days, and can be undone without touching the phases before it.</text>
+  <g data-step="1" data-step-label="Write to both stores. Nothing reads the new one yet">
+    <rect class="dg-node" x="10" y="52" width="155" height="60" rx="8"/>
+    <text class="dg-txt" x="24" y="76">1. EXPAND</text>
+    <text class="dg-txt-s" x="24" y="96">dual writes on</text>
+    <text class="dg-txt-s" x="14" y="150">rollback: flag off,</text>
+    <text class="dg-txt-s" x="14" y="166">stop dual writes</text>
+  </g>
+  <g data-step="2" data-step-label="Backfill the history behind the live dual writes">
+    <line class="dg-edge" x1="165" y1="82" x2="185" y2="82" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="185" y="52" width="155" height="60" rx="8"/>
+    <text class="dg-txt" x="199" y="76">2. MIGRATE</text>
+    <text class="dg-txt-s" x="199" y="96">backfill history</text>
+    <text class="dg-txt-s" x="189" y="150">rollback: pause job,</text>
+    <text class="dg-txt-s" x="189" y="166">nothing is lost</text>
+  </g>
+  <g data-step="3" data-step-label="Read both, compare, serve the old one. Users see nothing">
+    <line class="dg-edge" x1="340" y1="82" x2="360" y2="82" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="360" y="52" width="155" height="60" rx="8"/>
+    <text class="dg-txt" x="374" y="76">3. VERIFY</text>
+    <text class="dg-txt-s" x="374" y="96">shadow reads</text>
+    <text class="dg-txt-s" x="364" y="150">rollback: keep serving</text>
+    <text class="dg-txt-s" x="364" y="166">from old, investigate</text>
+  </g>
+  <g data-step="4" data-step-label="Only now do reads flip — and the flip is one flag">
+    <line class="dg-edge" x1="515" y1="82" x2="535" y2="82" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="535" y="52" width="175" height="60" rx="8"/>
+    <text class="dg-txt" x="549" y="76">4. CONTRACT</text>
+    <text class="dg-txt-s" x="549" y="96">flip reads, drop old</text>
+    <text class="dg-txt-s" x="539" y="150">rollback: flip the read</text>
+    <text class="dg-txt-s" x="539" y="166">flag back in seconds</text>
+    <text class="dg-txt-s" x="14" y="210">Each phase ships on its own, gets watched for days, and can be undone without touching the phases before it.</text>
+  </g>
 </svg>
 <figcaption>The expand → migrate → contract timeline. Notice the second row: every phase carries its own escape hatch.</figcaption>
 </figure>
@@ -9221,34 +9302,44 @@ ORDER BY freq DESC LIMIT 10;</code></pre>
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="Gates funnel: one million recipients shrink through dedup, preferences, quiet hours, and rate limit before rendering">
   <text class="dg-txt" x="10" y="30">campaign event × 1,000,000 recipients</text>
-  <rect class="dg-node" x="10" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="24" y="83">1. Dedup</text>
-  <text class="dg-txt-s" x="24" y="100">retries out</text>
-  <rect class="dg-node" x="138" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="152" y="83">2. Prefs</text>
-  <text class="dg-txt-s" x="152" y="100">opt-outs out</text>
-  <rect class="dg-node" x="266" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="280" y="83">3. Quiet hrs</text>
-  <text class="dg-txt-s" x="280" y="100">defer to 8am</text>
-  <rect class="dg-node" x="394" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="408" y="83">4. Rate limit</text>
-  <text class="dg-txt-s" x="408" y="100">cap N/day</text>
-  <rect class="dg-node-alt" x="522" y="60" width="104" height="54" rx="8"/>
-  <text class="dg-txt-s" x="536" y="83">5. Render</text>
-  <text class="dg-txt-s" x="536" y="100">per channel</text>
-  <rect class="dg-node" x="650" y="60" width="62" height="54" rx="8"/>
-  <text class="dg-txt-s" x="660" y="91">queue</text>
-  <line class="dg-edge" x1="114" y1="87" x2="138" y2="87" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="242" y1="87" x2="266" y2="87" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="370" y1="87" x2="394" y2="87" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="498" y1="87" x2="522" y2="87" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="626" y1="87" x2="650" y2="87" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="24" y="150">in: 1.00M</text>
-  <text class="dg-txt-s" x="152" y="150">in: 0.99M</text>
-  <text class="dg-txt-s" x="280" y="150">in: 0.64M</text>
-  <text class="dg-txt-s" x="408" y="150">in: 0.58M (60K deferred)</text>
-  <text class="dg-txt-s" x="24" y="180">P0 skips gates 3 and 4 — critical messages are never silenced or budgeted.</text>
-  <text class="dg-txt-s" x="24" y="205">All gates are O(1) Redis/cache lookups: ~4 ops × 100K/sec = 400K ops/sec at burst.</text>
+  <g data-step="1" data-step-label="Cheapest gate first: drop the retries before anything else runs">
+    <rect class="dg-node" x="10" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="24" y="83">1. Dedup</text>
+    <text class="dg-txt-s" x="24" y="100">retries out</text>
+    <text class="dg-txt-s" x="24" y="150">in: 1.00M</text>
+  </g>
+  <g data-step="2" data-step-label="Opt-outs leave. This is the gate that keeps you out of court">
+    <line class="dg-edge" x1="114" y1="87" x2="138" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="138" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="152" y="83">2. Prefs</text>
+    <text class="dg-txt-s" x="152" y="100">opt-outs out</text>
+    <text class="dg-txt-s" x="152" y="150">in: 0.99M</text>
+  </g>
+  <g data-step="3" data-step-label="Quiet hours defer rather than drop — 350K people are asleep">
+    <line class="dg-edge" x1="242" y1="87" x2="266" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="266" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="280" y="83">3. Quiet hrs</text>
+    <text class="dg-txt-s" x="280" y="100">defer to 8am</text>
+    <text class="dg-txt-s" x="280" y="150">in: 0.64M</text>
+  </g>
+  <g data-step="4" data-step-label="Per-user daily cap: the gate that stops you becoming spam">
+    <line class="dg-edge" x1="370" y1="87" x2="394" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="394" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="408" y="83">4. Rate limit</text>
+    <text class="dg-txt-s" x="408" y="100">cap N/day</text>
+    <text class="dg-txt-s" x="408" y="150">in: 0.58M (60K deferred)</text>
+  </g>
+  <g data-step="5" data-step-label="Rendering happens last, on 58% of the original volume">
+    <line class="dg-edge" x1="498" y1="87" x2="522" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="522" y="60" width="104" height="54" rx="8"/>
+    <text class="dg-txt-s" x="536" y="83">5. Render</text>
+    <text class="dg-txt-s" x="536" y="100">per channel</text>
+    <line class="dg-edge" x1="626" y1="87" x2="650" y2="87" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="650" y="60" width="62" height="54" rx="8"/>
+    <text class="dg-txt-s" x="660" y="91">queue</text>
+    <text class="dg-txt-s" x="24" y="180">P0 skips gates 3 and 4 — critical messages are never silenced or budgeted.</text>
+    <text class="dg-txt-s" x="24" y="205">All gates are O(1) Redis/cache lookups: ~4 ops × 100K/sec = 400K ops/sec at burst.</text>
+  </g>
 </svg>
 <figcaption>The funnel — each label is what arrives at that gate. Over 40% of the blast never becomes a message, which is exactly why gates run before rendering and queueing, not after.</figcaption>
 </figure>
@@ -9513,40 +9604,48 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 
 <figure class="diagram">
 <svg viewBox="0 0 720 330" role="img" aria-label="Message routing from sender through gateways and registry to recipient">
-  <rect class="dg-node" x="10" y="40" width="95" height="46" rx="8"/>
-  <text class="dg-txt" x="22" y="62">Phone A</text>
-  <text class="dg-txt-s" x="22" y="78">sender</text>
-  <rect class="dg-node" x="145" y="40" width="70" height="46" rx="8"/>
-  <text class="dg-txt" x="160" y="68">LB</text>
-  <rect class="dg-node-alt" x="255" y="40" width="115" height="46" rx="8"/>
-  <text class="dg-txt" x="267" y="62">Gateway 17</text>
-  <text class="dg-txt-s" x="267" y="78">A's socket</text>
-  <rect class="dg-node-alt" x="470" y="40" width="115" height="46" rx="8"/>
-  <text class="dg-txt" x="482" y="62">Gateway 42</text>
-  <text class="dg-txt-s" x="482" y="78">B's socket</text>
-  <rect class="dg-node" x="620" y="40" width="90" height="46" rx="8"/>
-  <text class="dg-txt" x="632" y="62">Phone B</text>
-  <text class="dg-txt-s" x="632" y="78">recipient</text>
-  <line class="dg-edge" x1="105" y1="63" x2="145" y2="63" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="215" y1="63" x2="255" y2="63" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="370" y1="63" x2="470" y2="63" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="385" y="55">3. route</text>
-  <line class="dg-edge" x1="585" y1="63" x2="620" y2="63" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="588" y="55">4.</text>
-  <rect class="dg-node" x="330" y="150" width="185" height="52" rx="8"/>
-  <text class="dg-txt" x="342" y="172">Registry (Redis)</text>
-  <text class="dg-txt-s" x="342" y="190">user+device → gateway</text>
-  <line class="dg-edge" x1="330" y1="98" x2="370" y2="150" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="255" y="130">2. where is B?</text>
-  <rect class="dg-node" x="40" y="240" width="235" height="56" rx="8"/>
-  <text class="dg-txt" x="52" y="262">Message svc + Cassandra</text>
-  <text class="dg-txt-s" x="52" y="280">durable write, assigns seq</text>
-  <line class="dg-edge" x1="295" y1="86" x2="180" y2="240" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="128" y="150">1. persist FIRST</text>
-  <rect class="dg-node" x="470" y="240" width="170" height="56" rx="8"/>
-  <text class="dg-txt" x="482" y="262">Push (FCM/APNs)</text>
-  <text class="dg-txt-s" x="482" y="280">if B is offline</text>
-  <line class="dg-edge" stroke-dasharray="5,4" x1="595" y1="240" x2="660" y2="90" marker-end="url(#arrow)"/>
+  <g data-step="1" data-step-label="Durability before delivery — the message is safe before anyone is told">
+    <rect class="dg-node" x="10" y="40" width="95" height="46" rx="8"/>
+    <text class="dg-txt" x="22" y="62">Phone A</text>
+    <text class="dg-txt-s" x="22" y="78">sender</text>
+    <rect class="dg-node" x="145" y="40" width="70" height="46" rx="8"/>
+    <text class="dg-txt" x="160" y="68">LB</text>
+    <rect class="dg-node-alt" x="255" y="40" width="115" height="46" rx="8"/>
+    <text class="dg-txt" x="267" y="62">Gateway 17</text>
+    <text class="dg-txt-s" x="267" y="78">A's socket</text>
+    <line class="dg-edge" x1="105" y1="63" x2="145" y2="63" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="215" y1="63" x2="255" y2="63" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="40" y="240" width="235" height="56" rx="8"/>
+    <text class="dg-txt" x="52" y="262">Message svc + Cassandra</text>
+    <text class="dg-txt-s" x="52" y="280">durable write, assigns seq</text>
+    <line class="dg-edge" x1="295" y1="86" x2="180" y2="240" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="128" y="150">1. persist FIRST</text>
+  </g>
+  <g data-step="2" data-step-label="B holds a socket somewhere. The registry knows which box">
+    <rect class="dg-node" x="330" y="150" width="185" height="52" rx="8"/>
+    <text class="dg-txt" x="342" y="172">Registry (Redis)</text>
+    <text class="dg-txt-s" x="342" y="190">user+device → gateway</text>
+    <line class="dg-edge" x1="330" y1="98" x2="370" y2="150" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="255" y="130">2. where is B?</text>
+  </g>
+  <g data-step="3" data-step-label="Gateway to gateway, inside your own network">
+    <rect class="dg-node-alt" x="470" y="40" width="115" height="46" rx="8"/>
+    <text class="dg-txt" x="482" y="62">Gateway 42</text>
+    <text class="dg-txt-s" x="482" y="78">B's socket</text>
+    <line class="dg-edge" x1="370" y1="63" x2="470" y2="63" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="385" y="55">3. route</text>
+  </g>
+  <g data-step="4" data-step-label="Down the open socket — or via push if B closed the app">
+    <rect class="dg-node" x="620" y="40" width="90" height="46" rx="8"/>
+    <text class="dg-txt" x="632" y="62">Phone B</text>
+    <text class="dg-txt-s" x="632" y="78">recipient</text>
+    <line class="dg-edge" x1="585" y1="63" x2="620" y2="63" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="588" y="55">4.</text>
+    <rect class="dg-node" x="470" y="240" width="170" height="56" rx="8"/>
+    <text class="dg-txt" x="482" y="262">Push (FCM/APNs)</text>
+    <text class="dg-txt-s" x="482" y="280">if B is offline</text>
+    <line class="dg-edge" stroke-dasharray="5,4" x1="595" y1="240" x2="660" y2="90" marker-end="url(#arrow)"/>
+  </g>
 </svg>
 <figcaption>One message's journey. Step 1 — the durable write — happens before anything else. Steps 3–4 are just delivery attempts; if they fail, the inbox and a push notification catch B later.</figcaption>
 </figure>
@@ -9836,41 +9935,49 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 
 <figure class="diagram">
 <svg viewBox="0 0 720 285" role="img" aria-label="Hybrid fanout write path: post service persists then emits event; fanout workers push to follower feed lists for normal accounts and skip celebrities">
-  <rect class="dg-node" x="8" y="118" width="76" height="44" rx="8"/>
-  <text class="dg-txt" x="22" y="144">Client</text>
-  <rect class="dg-node" x="116" y="118" width="104" height="44" rx="8"/>
-  <text class="dg-txt" x="122" y="136">Post service</text>
-  <text class="dg-txt-s" x="124" y="152">durable write</text>
-  <rect class="dg-node" x="116" y="24" width="104" height="44" rx="8"/>
-  <text class="dg-txt" x="130" y="42">Posts DB</text>
-  <text class="dg-txt-s" x="124" y="58">author outbox</text>
-  <rect class="dg-node" x="252" y="118" width="96" height="44" rx="8"/>
-  <text class="dg-txt" x="270" y="136">Queue</text>
-  <text class="dg-txt-s" x="262" y="152">post events</text>
-  <rect class="dg-node" x="380" y="118" width="112" height="44" rx="8"/>
-  <text class="dg-txt" x="388" y="136">Fanout</text>
-  <text class="dg-txt-s" x="388" y="152">workers</text>
-  <rect class="dg-node" x="380" y="24" width="112" height="44" rx="8"/>
-  <text class="dg-txt" x="390" y="42">Social graph</text>
-  <text class="dg-txt-s" x="390" y="58">who follows A?</text>
-  <rect class="dg-node" x="556" y="64" width="156" height="52" rx="8"/>
-  <text class="dg-txt" x="566" y="84">Follower feeds</text>
-  <text class="dg-txt-s" x="566" y="102">Redis, post IDs only</text>
-  <rect class="dg-node-alt" x="556" y="196" width="156" height="52" rx="8"/>
-  <text class="dg-txt" x="566" y="216">Celebrity path</text>
-  <text class="dg-txt-s" x="566" y="234">pulled at read time</text>
-  <line class="dg-edge" x1="84" y1="140" x2="116" y2="140" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="168" y1="118" x2="168" y2="68" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="176" y="98">1. store</text>
-  <line class="dg-edge" x1="220" y1="140" x2="252" y2="140" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="222" y="130">2. event</text>
-  <line class="dg-edge" x1="348" y1="140" x2="380" y2="140" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="436" y1="118" x2="436" y2="68" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="444" y="98">3. follower list</text>
-  <line class="dg-edge" x1="492" y1="130" x2="556" y2="98" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="490" y="86">4a. under 1M: push</text>
-  <line class="dg-edge" x1="492" y1="150" x2="556" y2="214" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="466" y="192">4b. 1M+: skip push</text>
+  <g data-step="1" data-step-label="The post is durable before any fanout is attempted">
+    <rect class="dg-node" x="8" y="118" width="76" height="44" rx="8"/>
+    <text class="dg-txt" x="22" y="144">Client</text>
+    <rect class="dg-node" x="116" y="118" width="104" height="44" rx="8"/>
+    <text class="dg-txt" x="122" y="136">Post service</text>
+    <text class="dg-txt-s" x="124" y="152">durable write</text>
+    <rect class="dg-node" x="116" y="24" width="104" height="44" rx="8"/>
+    <text class="dg-txt" x="130" y="42">Posts DB</text>
+    <text class="dg-txt-s" x="124" y="58">author outbox</text>
+    <line class="dg-edge" x1="84" y1="140" x2="116" y2="140" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="168" y1="118" x2="168" y2="68" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="176" y="98">1. store</text>
+  </g>
+  <g data-step="2" data-step-label="The write returns here. Everything after this is asynchronous">
+    <line class="dg-edge" x1="220" y1="140" x2="252" y2="140" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="252" y="118" width="96" height="44" rx="8"/>
+    <text class="dg-txt" x="270" y="136">Queue</text>
+    <text class="dg-txt-s" x="262" y="152">post events</text>
+    <text class="dg-txt-s" x="222" y="130">2. event</text>
+  </g>
+  <g data-step="3" data-step-label="Workers look up who follows the author">
+    <line class="dg-edge" x1="348" y1="140" x2="380" y2="140" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="380" y="118" width="112" height="44" rx="8"/>
+    <text class="dg-txt" x="388" y="136">Fanout</text>
+    <text class="dg-txt-s" x="388" y="152">workers</text>
+    <rect class="dg-node" x="380" y="24" width="112" height="44" rx="8"/>
+    <text class="dg-txt" x="390" y="42">Social graph</text>
+    <text class="dg-txt-s" x="390" y="58">who follows A?</text>
+    <line class="dg-edge" x1="436" y1="118" x2="436" y2="68" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="444" y="98">3. follower list</text>
+  </g>
+  <g data-step="4" data-step-label="The fork: normal accounts get pushed, celebrities get skipped">
+    <rect class="dg-node" x="556" y="64" width="156" height="52" rx="8"/>
+    <text class="dg-txt" x="566" y="84">Follower feeds</text>
+    <text class="dg-txt-s" x="566" y="102">Redis, post IDs only</text>
+    <line class="dg-edge" x1="492" y1="130" x2="556" y2="98" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="490" y="86">4a. under 1M: push</text>
+    <rect class="dg-node-alt" x="556" y="196" width="156" height="52" rx="8"/>
+    <text class="dg-txt" x="566" y="216">Celebrity path</text>
+    <text class="dg-txt-s" x="566" y="234">pulled at read time</text>
+    <line class="dg-edge" x1="492" y1="150" x2="556" y2="214" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="466" y="192">4b. 1M+: skip push</text>
+  </g>
 </svg>
 <figcaption>The write path. The post is durable in step 1 — everything after is asynchronous and allowed to lag. Step 4 is the fork the whole interview is about.</figcaption>
 </figure>
@@ -10587,28 +10694,36 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="Upload flow: hash locally, check which blocks are new, upload only those, then commit the manifest atomically">
-  <rect class="dg-node" x="15" y="60" width="150" height="70" rx="8"/>
-  <text class="dg-txt" x="32" y="86">1. Chunk + hash</text>
-  <text class="dg-txt-s" x="32" y="104">256 blocks, SHA-256</text>
-  <text class="dg-txt-s" x="32" y="120">no network yet</text>
-  <rect class="dg-node" x="200" y="60" width="150" height="70" rx="8"/>
-  <text class="dg-txt" x="217" y="86">2. check(hashes)</text>
-  <text class="dg-txt-s" x="217" y="104">server: "254 known,</text>
-  <text class="dg-txt-s" x="217" y="120">send 2"</text>
-  <rect class="dg-node" x="385" y="60" width="150" height="70" rx="8"/>
-  <text class="dg-txt" x="402" y="86">3. Send 2 blocks</text>
-  <text class="dg-txt-s" x="402" y="104">8 MB, not 1 GB</text>
-  <text class="dg-txt-s" x="402" y="120">parallel, resumable</text>
-  <rect class="dg-node-alt" x="570" y="50" width="140" height="90" rx="8"/>
-  <text class="dg-txt" x="586" y="78">4. Commit</text>
-  <text class="dg-txt-s" x="586" y="96">manifest, base ver</text>
-  <text class="dg-txt-s" x="586" y="112">= linearization</text>
-  <text class="dg-txt-s" x="586" y="128">point</text>
-  <line class="dg-edge" x1="165" y1="95" x2="200" y2="95" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="350" y1="95" x2="385" y2="95" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="535" y1="95" x2="570" y2="95" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="15" y="180">Crash anywhere before step 4: nothing visible changed. Worst case = a few orphan</text>
-  <text class="dg-txt-s" x="15" y="200">blocks in the store, cleaned by GC. Retry re-runs check and sends only what's missing.</text>
+  <g data-step="1" data-step-label="All of this happens on the client, before a single byte leaves">
+    <rect class="dg-node" x="15" y="60" width="150" height="70" rx="8"/>
+    <text class="dg-txt" x="32" y="86">1. Chunk + hash</text>
+    <text class="dg-txt-s" x="32" y="104">256 blocks, SHA-256</text>
+    <text class="dg-txt-s" x="32" y="120">no network yet</text>
+  </g>
+  <g data-step="2" data-step-label="Ask before you send — the hashes are tiny, the file is not">
+    <line class="dg-edge" x1="165" y1="95" x2="200" y2="95" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="200" y="60" width="150" height="70" rx="8"/>
+    <text class="dg-txt" x="217" y="86">2. check(hashes)</text>
+    <text class="dg-txt-s" x="217" y="104">server: "254 known,</text>
+    <text class="dg-txt-s" x="217" y="120">send 2"</text>
+  </g>
+  <g data-step="3" data-step-label="Only the blocks that actually changed cross the wire">
+    <line class="dg-edge" x1="350" y1="95" x2="385" y2="95" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="385" y="60" width="150" height="70" rx="8"/>
+    <text class="dg-txt" x="402" y="86">3. Send 2 blocks</text>
+    <text class="dg-txt-s" x="402" y="104">8 MB, not 1 GB</text>
+    <text class="dg-txt-s" x="402" y="120">parallel, resumable</text>
+  </g>
+  <g data-step="4" data-step-label="One atomic commit is the moment the new version exists">
+    <line class="dg-edge" x1="535" y1="95" x2="570" y2="95" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="570" y="50" width="140" height="90" rx="8"/>
+    <text class="dg-txt" x="586" y="78">4. Commit</text>
+    <text class="dg-txt-s" x="586" y="96">manifest, base ver</text>
+    <text class="dg-txt-s" x="586" y="112">= linearization</text>
+    <text class="dg-txt-s" x="586" y="128">point</text>
+    <text class="dg-txt-s" x="15" y="180">Crash anywhere before step 4: nothing visible changed. Worst case = a few orphan</text>
+    <text class="dg-txt-s" x="15" y="200">blocks in the store, cleaned by GC. Retry re-runs check and sends only what's missing.</text>
+  </g>
 </svg>
 <figcaption>Manifest-last is the whole safety story: steps 1–3 are freely retryable because step 4 is the only step the world can see.</figcaption>
 </figure>
@@ -13866,16 +13981,26 @@ DEL  key                -&gt; OK</code></pre>
   <line class="dg-zone" x1="85" y1="96" x2="85" y2="315"/>
   <line class="dg-zone" x1="370" y1="96" x2="370" y2="315"/>
   <line class="dg-zone" x1="635" y1="96" x2="635" y2="315"/>
-  <line class="dg-edge" x1="85" y1="125" x2="370" y2="125" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="110" y="117">1. GET feed:hot ×1000 (expired)</text>
-  <line class="dg-edge" x1="370" y1="160" x2="85" y2="160" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="110" y="152">2. first: MISS lease=7291 · rest: WAIT</text>
-  <line class="dg-edge" x1="85" y1="205" x2="635" y2="205" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="180" y="197">3. one client queries — 1 query, not 1,000</text>
-  <line class="dg-edge" x1="85" y1="250" x2="370" y2="250" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="110" y="242">4. SET feed:hot LEASE 7291 → OK</text>
-  <line class="dg-edge" x1="370" y1="290" x2="85" y2="290" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="110" y="282">5. everyone retries → HIT</text>
+  <g data-step="1" data-step-label="A thousand servers hit the same expired key in the same millisecond">
+    <line class="dg-edge" x1="85" y1="125" x2="370" y2="125" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="110" y="117">1. GET feed:hot ×1000 (expired)</text>
+  </g>
+  <g data-step="2" data-step-label="Exactly one caller gets a token. The other 999 are told to wait">
+    <line class="dg-edge" x1="370" y1="160" x2="85" y2="160" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="110" y="152">2. first: MISS lease=7291 · rest: WAIT</text>
+  </g>
+  <g data-step="3" data-step-label="This is the whole point — the database sees one query">
+    <line class="dg-edge" x1="85" y1="205" x2="635" y2="205" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="180" y="197">3. one client queries — 1 query, not 1,000</text>
+  </g>
+  <g data-step="4" data-step-label="The write is accepted only because the token still matches">
+    <line class="dg-edge" x1="85" y1="250" x2="370" y2="250" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="110" y="242">4. SET feed:hot LEASE 7291 → OK</text>
+  </g>
+  <g data-step="5" data-step-label="The waiters wake to a warm cache instead of a stampede">
+    <line class="dg-edge" x1="370" y1="290" x2="85" y2="290" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="110" y="282">5. everyone retries → HIT</text>
+  </g>
 </svg>
 <figcaption>The lease coalesces a thousand concurrent misses into exactly one database query. Clients that sent <code>STALE_OK</code> get the just-expired value instead of waiting. The token also acts as a version guard: a DEL invalidates outstanding leases, so a late SET from a stale reader is refused.</figcaption>
 </figure>
@@ -14080,28 +14205,34 @@ DEL  key                -&gt; OK</code></pre>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 268" role="img" aria-label="Reading offset 368281: find segment by filename, sparse index seek, short forward scan, then sendfile">
-  <rect class="dg-node" x="8" y="40" width="200" height="150" rx="8"/>
-  <text class="dg-txt" x="20" y="66">1. Which segment?</text>
-  <text class="dg-txt-s" x="20" y="94">…000245760.log</text>
-  <text class="dg-txt-s" x="20" y="116">…000368000.log  (hit)</text>
-  <text class="dg-txt-s" x="20" y="138">…000491520.log</text>
-  <text class="dg-txt-s" x="20" y="170">binary search on names</text>
-  <rect class="dg-node-alt" x="248" y="40" width="204" height="150" rx="8"/>
-  <text class="dg-txt" x="260" y="66">2. .index seek</text>
-  <text class="dg-txt-s" x="260" y="94">368000 -&gt; byte 0</text>
-  <text class="dg-txt-s" x="260" y="116">368150 -&gt; byte 4096</text>
-  <text class="dg-txt-s" x="260" y="138">368281 -&gt; not listed</text>
-  <text class="dg-txt-s" x="260" y="170">so start at 368150</text>
-  <rect class="dg-node" x="492" y="40" width="216" height="150" rx="8"/>
-  <text class="dg-txt" x="504" y="66">3. scan + send</text>
-  <text class="dg-txt-s" x="504" y="94">seek to byte 4096</text>
-  <text class="dg-txt-s" x="504" y="116">read batches in order</text>
-  <text class="dg-txt-s" x="504" y="138">reach 368281</text>
-  <text class="dg-txt-s" x="504" y="170">sendfile to socket</text>
-  <line class="dg-edge" x1="208" y1="115" x2="248" y2="115" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="452" y1="115" x2="492" y2="115" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="8" y="222">One entry per ~4 KB keeps the index tiny enough to memory-map.</text>
-  <text class="dg-txt-s" x="8" y="244">The cost is a few KB of forward scan — sequential, from page cache, nearly free.</text>
+  <g data-step="1" data-step-label="The filename is the index — no lookup structure needed">
+    <rect class="dg-node" x="8" y="40" width="200" height="150" rx="8"/>
+    <text class="dg-txt" x="20" y="66">1. Which segment?</text>
+    <text class="dg-txt-s" x="20" y="94">…000245760.log</text>
+    <text class="dg-txt-s" x="20" y="116">…000368000.log  (hit)</text>
+    <text class="dg-txt-s" x="20" y="138">…000491520.log</text>
+    <text class="dg-txt-s" x="20" y="170">binary search on names</text>
+  </g>
+  <g data-step="2" data-step-label="The sparse index gets you close, not exact — on purpose">
+    <line class="dg-edge" x1="208" y1="115" x2="248" y2="115" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="248" y="40" width="204" height="150" rx="8"/>
+    <text class="dg-txt" x="260" y="66">2. .index seek</text>
+    <text class="dg-txt-s" x="260" y="94">368000 -&gt; byte 0</text>
+    <text class="dg-txt-s" x="260" y="116">368150 -&gt; byte 4096</text>
+    <text class="dg-txt-s" x="260" y="138">368281 -&gt; not listed</text>
+    <text class="dg-txt-s" x="260" y="170">so start at 368150</text>
+  </g>
+  <g data-step="3" data-step-label="A short forward scan, then the kernel ships the bytes itself">
+    <line class="dg-edge" x1="452" y1="115" x2="492" y2="115" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="492" y="40" width="216" height="150" rx="8"/>
+    <text class="dg-txt" x="504" y="66">3. scan + send</text>
+    <text class="dg-txt-s" x="504" y="94">seek to byte 4096</text>
+    <text class="dg-txt-s" x="504" y="116">read batches in order</text>
+    <text class="dg-txt-s" x="504" y="138">reach 368281</text>
+    <text class="dg-txt-s" x="504" y="170">sendfile to socket</text>
+    <text class="dg-txt-s" x="8" y="222">One entry per ~4 KB keeps the index tiny enough to memory-map.</text>
+    <text class="dg-txt-s" x="8" y="244">The cost is a few KB of forward scan — sequential, from page cache, nearly free.</text>
+  </g>
 </svg>
 <figcaption>Three cheap steps and no random I/O. The sparse index trades a much smaller index for a short sequential scan.</figcaption>
 </figure>
@@ -14214,34 +14345,40 @@ DEL  key                -&gt; OK</code></pre>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 290" role="img" aria-label="Leader epoch fencing: a returning stale leader is rejected because its epoch number is old">
-  <rect class="dg-zone" x="8" y="20" width="220" height="180" rx="10"/>
-  <text class="dg-txt" x="20" y="44">1. Normal</text>
-  <rect class="dg-node-alt" x="22" y="58" width="190" height="48" rx="8"/>
-  <text class="dg-txt" x="34" y="80">Broker A</text>
-  <text class="dg-txt-s" x="34" y="98">leader, epoch 5</text>
-  <rect class="dg-node" x="22" y="122" width="190" height="48" rx="8"/>
-  <text class="dg-txt" x="34" y="144">Broker B</text>
-  <text class="dg-txt-s" x="34" y="162">follower, in ISR</text>
-  <rect class="dg-zone" x="250" y="20" width="220" height="180" rx="10"/>
-  <text class="dg-txt" x="262" y="44">2. A is cut off</text>
-  <rect class="dg-node" x="264" y="58" width="190" height="48" rx="8"/>
-  <text class="dg-txt" x="276" y="80">Broker A</text>
-  <text class="dg-txt-s" x="276" y="98">still believes: leader</text>
-  <rect class="dg-node-alt" x="264" y="122" width="190" height="48" rx="8"/>
-  <text class="dg-txt" x="276" y="144">Broker B</text>
-  <text class="dg-txt-s" x="276" y="162">new leader, epoch 6</text>
-  <rect class="dg-zone" x="492" y="20" width="220" height="180" rx="10"/>
-  <text class="dg-txt" x="504" y="44">3. A returns</text>
-  <rect class="dg-node" x="506" y="58" width="190" height="48" rx="8"/>
-  <text class="dg-txt-s" x="518" y="80">A acts with epoch 5</text>
-  <text class="dg-bad" x="518" y="98">rejected: stale epoch</text>
-  <rect class="dg-node" x="506" y="122" width="190" height="48" rx="8"/>
-  <text class="dg-txt-s" x="518" y="144">A truncates to B's</text>
-  <text class="dg-txt-s" x="518" y="162">epoch-5 end offset</text>
-  <line class="dg-edge" x1="228" y1="110" x2="250" y2="110" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="470" y1="110" x2="492" y2="110" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="8" y="240">Every leadership change bumps the epoch, and every request carries it.</text>
-  <text class="dg-txt-s" x="8" y="262">An older number is refused, so a zombie leader physically cannot append.</text>
+  <g data-step="1" data-step-label="Healthy: one leader, one follower, everyone agrees on epoch 5">
+    <rect class="dg-zone" x="8" y="20" width="220" height="180" rx="10"/>
+    <text class="dg-txt" x="20" y="44">1. Normal</text>
+    <rect class="dg-node-alt" x="22" y="58" width="190" height="48" rx="8"/>
+    <text class="dg-txt" x="34" y="80">Broker A</text>
+    <text class="dg-txt-s" x="34" y="98">leader, epoch 5</text>
+    <rect class="dg-node" x="22" y="122" width="190" height="48" rx="8"/>
+    <text class="dg-txt" x="34" y="144">Broker B</text>
+    <text class="dg-txt-s" x="34" y="162">follower, in ISR</text>
+  </g>
+  <g data-step="2" data-step-label="Now there are two leaders — and A has no way to know">
+    <line class="dg-edge" x1="228" y1="110" x2="250" y2="110" marker-end="url(#arrow)"/>
+    <rect class="dg-zone" x="250" y="20" width="220" height="180" rx="10"/>
+    <text class="dg-txt" x="262" y="44">2. A is cut off</text>
+    <rect class="dg-node" x="264" y="58" width="190" height="48" rx="8"/>
+    <text class="dg-txt" x="276" y="80">Broker A</text>
+    <text class="dg-txt-s" x="276" y="98">still believes: leader</text>
+    <rect class="dg-node-alt" x="264" y="122" width="190" height="48" rx="8"/>
+    <text class="dg-txt" x="276" y="144">Broker B</text>
+    <text class="dg-txt-s" x="276" y="162">new leader, epoch 6</text>
+  </g>
+  <g data-step="3" data-step-label="The number settles it. A's writes bounce before they can do damage">
+    <line class="dg-edge" x1="470" y1="110" x2="492" y2="110" marker-end="url(#arrow)"/>
+    <rect class="dg-zone" x="492" y="20" width="220" height="180" rx="10"/>
+    <text class="dg-txt" x="504" y="44">3. A returns</text>
+    <rect class="dg-node" x="506" y="58" width="190" height="48" rx="8"/>
+    <text class="dg-txt-s" x="518" y="80">A acts with epoch 5</text>
+    <text class="dg-bad" x="518" y="98">rejected: stale epoch</text>
+    <rect class="dg-node" x="506" y="122" width="190" height="48" rx="8"/>
+    <text class="dg-txt-s" x="518" y="144">A truncates to B's</text>
+    <text class="dg-txt-s" x="518" y="162">epoch-5 end offset</text>
+    <text class="dg-txt-s" x="8" y="240">Every leadership change bumps the epoch, and every request carries it.</text>
+    <text class="dg-txt-s" x="8" y="262">An older number is refused, so a zombie leader physically cannot append.</text>
+  </g>
 </svg>
 <figcaption>The same fencing pattern as chapter 2.3, per partition. The epoch also tells the returning replica where its log diverged, so it truncates the right amount.</figcaption>
 </figure>
@@ -15423,39 +15560,45 @@ DEL  key                -&gt; OK</code></pre>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="Repair pipeline: three detectors feed a queue ordered by risk into repair workers">
-  <rect class="dg-node" x="10" y="26" width="152" height="44" rx="8"/>
-  <text class="dg-txt-s" x="24" y="46">heartbeat lost</text>
-  <text class="dg-txt-s" x="24" y="62">node or drive dead</text>
-  <rect class="dg-node" x="10" y="90" width="152" height="44" rx="8"/>
-  <text class="dg-txt-s" x="24" y="110">scrubber</text>
-  <text class="dg-txt-s" x="24" y="126">30-day full pass</text>
-  <rect class="dg-node" x="10" y="154" width="152" height="44" rx="8"/>
-  <text class="dg-txt-s" x="24" y="174">read verify failed</text>
-  <text class="dg-txt-s" x="24" y="190">customer hit it</text>
-  <rect class="dg-bad" x="220" y="26" width="216" height="42" rx="8"/>
-  <text class="dg-txt-s" x="234" y="44">lane 1: missing 3 — critical</text>
-  <text class="dg-txt-s" x="234" y="60">one loss from unreadable</text>
-  <rect class="dg-node-alt" x="220" y="82" width="216" height="42" rx="8"/>
-  <text class="dg-txt-s" x="234" y="100">lane 2: missing 2 — urgent</text>
-  <text class="dg-txt-s" x="234" y="116">drains after lane 1</text>
-  <rect class="dg-node" x="220" y="138" width="216" height="42" rx="8"/>
-  <text class="dg-txt-s" x="234" y="156">lane 3: missing 1 — routine</text>
-  <text class="dg-txt-s" x="234" y="172">rate-limited, off-peak</text>
-  <rect class="dg-node" x="490" y="60" width="216" height="112" rx="8"/>
-  <text class="dg-txt" x="504" y="84">Repair workers</text>
-  <text class="dg-txt-s" x="504" y="106">1. read 8 shards, verify</text>
-  <text class="dg-txt-s" x="504" y="124">2. re-derive missing shard</text>
-  <text class="dg-txt-s" x="504" y="142">3. place, honoring AZ rules</text>
-  <text class="dg-txt-s" x="504" y="160">4. update manifest location</text>
-  <line class="dg-edge" x1="162" y1="48" x2="220" y2="48" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="162" y1="112" x2="220" y2="103" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="162" y1="176" x2="220" y2="159" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="436" y1="47" x2="490" y2="90" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="436" y1="103" x2="490" y2="112" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="436" y1="159" x2="490" y2="136" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="10" y="236">Backlog in lane 1 is the durability alarm — page on it, not on lane 3.</text>
-  <text class="dg-txt-s" x="10" y="262">Repair reads are declustered across thousands of peers: a dead 20 TB drive rebuilds in minutes, not days.</text>
-  <text class="dg-txt-s" x="10" y="288">Repair bandwidth is capped below customer traffic — except lane 1, which is allowed to hurt.</text>
+  <g data-step="1" data-step-label="Three ways to notice damage — none of them is a customer complaint">
+    <rect class="dg-node" x="10" y="26" width="152" height="44" rx="8"/>
+    <text class="dg-txt-s" x="24" y="46">heartbeat lost</text>
+    <text class="dg-txt-s" x="24" y="62">node or drive dead</text>
+    <rect class="dg-node" x="10" y="90" width="152" height="44" rx="8"/>
+    <text class="dg-txt-s" x="24" y="110">scrubber</text>
+    <text class="dg-txt-s" x="24" y="126">30-day full pass</text>
+    <rect class="dg-node" x="10" y="154" width="152" height="44" rx="8"/>
+    <text class="dg-txt-s" x="24" y="174">read verify failed</text>
+    <text class="dg-txt-s" x="24" y="190">customer hit it</text>
+  </g>
+  <g data-step="2" data-step-label="Sorted by how close to unreadable it is, not by when it broke">
+    <line class="dg-edge" x1="162" y1="48" x2="220" y2="48" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="162" y1="112" x2="220" y2="103" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="162" y1="176" x2="220" y2="159" marker-end="url(#arrow)"/>
+    <rect class="dg-bad" x="220" y="26" width="216" height="42" rx="8"/>
+    <text class="dg-txt-s" x="234" y="44">lane 1: missing 3 — critical</text>
+    <text class="dg-txt-s" x="234" y="60">one loss from unreadable</text>
+    <rect class="dg-node-alt" x="220" y="82" width="216" height="42" rx="8"/>
+    <text class="dg-txt-s" x="234" y="100">lane 2: missing 2 — urgent</text>
+    <text class="dg-txt-s" x="234" y="116">drains after lane 1</text>
+    <rect class="dg-node" x="220" y="138" width="216" height="42" rx="8"/>
+    <text class="dg-txt-s" x="234" y="156">lane 3: missing 1 — routine</text>
+    <text class="dg-txt-s" x="234" y="172">rate-limited, off-peak</text>
+  </g>
+  <g data-step="3" data-step-label="Workers drain lane 1 first — and that lane is allowed to hurt">
+    <line class="dg-edge" x1="436" y1="47" x2="490" y2="90" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="436" y1="103" x2="490" y2="112" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="436" y1="159" x2="490" y2="136" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="490" y="60" width="216" height="112" rx="8"/>
+    <text class="dg-txt" x="504" y="84">Repair workers</text>
+    <text class="dg-txt-s" x="504" y="106">1. read 8 shards, verify</text>
+    <text class="dg-txt-s" x="504" y="124">2. re-derive missing shard</text>
+    <text class="dg-txt-s" x="504" y="142">3. place, honoring AZ rules</text>
+    <text class="dg-txt-s" x="504" y="160">4. update manifest location</text>
+    <text class="dg-txt-s" x="10" y="236">Backlog in lane 1 is the durability alarm — page on it, not on lane 3.</text>
+    <text class="dg-txt-s" x="10" y="262">Repair reads are declustered across thousands of peers: a dead 20 TB drive rebuilds in minutes, not days.</text>
+    <text class="dg-txt-s" x="10" y="288">Repair bandwidth is capped below customer traffic — except lane 1, which is allowed to hurt.</text>
+  </g>
 </svg>
 <figcaption>Risk-ordered repair. The lane structure is a few lines of code and worth more than a second copy of your data.</figcaption>
 </figure>
@@ -17620,6 +17763,152 @@ function heatCells() {
   return cells.join('');
 }
 
+/* ---------- diagram animation ----------
+   Edges draw themselves, nodes fade in left-to-right as a diagram scrolls into
+   view. Diagrams that mark parts with data-step="N" also get a stepper.
+   Everything degrades to a plain static diagram: no JS, no motion preference,
+   or an unmeasurable SVG all leave the markup untouched. */
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DRAW_MS = 550;
+let dgObserver = null;
+let dgPrepared = [];
+
+// The CSS @media print rule cannot reach marker-end, which is an attribute, so
+// the arrowheads have to come back here.
+addEventListener('beforeprint', () => dgPrepared.forEach(svg => svg._dgEls.forEach(el => {
+  el.style.transitionDelay = '0ms';
+  el.style.opacity = '1';
+  if (el._dgLen) {
+    el.style.strokeDashoffset = '0';
+    if (el._dgMarker) { clearTimeout(el._dgTimer); el.setAttribute('marker-end', el._dgMarker); }
+  }
+})));
+
+function dgPrep(el) {
+  const drawable = /^(line|path|polyline)$/i.test(el.tagName)
+    && !el.hasAttribute('stroke-dasharray')
+    && !el.classList.contains('dg-zone');
+  if (drawable) {
+    let len = 0;
+    try { len = el.getTotalLength(); } catch (e) { }
+    if (len > 0) {
+      el._dgLen = len;
+      el.style.strokeDasharray = len;
+      el.style.strokeDashoffset = len;
+      // markers paint at full opacity regardless of the dash pattern, so an
+      // arrowhead would hang in mid-air while its line is still drawing
+      const mk = el.getAttribute('marker-end');
+      if (mk) { el._dgMarker = mk; el.setAttribute('marker-end', 'none'); }
+    }
+  }
+  el.style.opacity = '0';
+}
+
+function dgShow(el, delay) {
+  el.style.transitionDelay = delay + 'ms';
+  el.style.opacity = '1';
+  if (el._dgLen) {
+    el.style.strokeDashoffset = '0';
+    if (el._dgMarker) {
+      clearTimeout(el._dgTimer);
+      el._dgTimer = setTimeout(() => el.setAttribute('marker-end', el._dgMarker), delay + DRAW_MS - 60);
+    }
+  }
+}
+
+function dgHide(el) {
+  el.style.transitionDelay = '0ms';
+  el.style.opacity = '0';
+  if (el._dgLen) {
+    el.style.strokeDashoffset = el._dgLen;
+    if (el._dgMarker) { clearTimeout(el._dgTimer); el.setAttribute('marker-end', 'none'); }
+  }
+}
+
+function dgRun(svg, upto) {
+  const els = svg._dgEls;
+  els.forEach(el => { if (el._dgStep > upto && el._dgVisible) { el._dgVisible = false; dgHide(el); } });
+  const fresh = els.filter(el => el._dgStep <= upto && !el._dgVisible);
+  const gap = Math.min(45, 900 / Math.max(1, fresh.length));
+  fresh.forEach((el, i) => { el._dgVisible = true; dgShow(el, Math.round(i * gap)); });
+}
+
+function dgStepper(svg) {
+  const bar = document.createElement('div');
+  bar.className = 'dg-steps';
+  bar.innerHTML = `<button class="dg-prev" aria-label="Previous step">◀</button>` +
+    `<button class="dg-next" aria-label="Next step">▶</button>` +
+    `<button class="dg-replay" aria-label="Replay from the start">↻</button>` +
+    `<span class="dg-count"></span><span class="dg-label"></span>`;
+  svg.parentElement.insertBefore(bar, svg);
+  const labels = {};
+  svg.querySelectorAll('[data-step][data-step-label]')
+    .forEach(g => { labels[+g.dataset.step] = g.dataset.stepLabel; });
+  const sync = () => {
+    bar.querySelector('.dg-prev').disabled = svg._dgCur <= 1;
+    bar.querySelector('.dg-next').disabled = svg._dgCur >= svg._dgMax;
+    bar.querySelector('.dg-count').textContent = `${svg._dgCur} / ${svg._dgMax}`;
+    bar.querySelector('.dg-label').textContent = labels[svg._dgCur] || '';
+  };
+  const go = n => {
+    svg._dgCur = Math.min(svg._dgMax, Math.max(1, n));
+    dgRun(svg, svg._dgCur);
+    sync();
+  };
+  bar.querySelector('.dg-prev').addEventListener('click', () => go(svg._dgCur - 1));
+  bar.querySelector('.dg-next').addEventListener('click', () => go(svg._dgCur + 1));
+  bar.querySelector('.dg-replay').addEventListener('click', () => {
+    svg._dgEls.forEach(el => { el._dgVisible = false; dgHide(el); });
+    go(1);
+  });
+  // label only — the first reveal belongs to the observer, so the diagram
+  // animates when the reader reaches it rather than while it is off-screen
+  sync();
+}
+
+function initDiagrams(root) {
+  if (dgObserver) { dgObserver.disconnect(); dgObserver = null; }
+  dgPrepared = [];
+  if (REDUCED || !('IntersectionObserver' in window)) return;
+
+  const svgs = [...root.querySelectorAll('svg')]
+    .filter(s => s.querySelector('[class^="dg-"], [class*=" dg-"]'))
+    .filter(s => s.getBoundingClientRect().width > 0);
+  if (!svgs.length) return;
+
+  dgObserver = new IntersectionObserver((entries, obs) => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      obs.unobserve(e.target);
+      // class added here, not at prep time: the hidden state must already be
+      // painted or the transition would run backwards from visible
+      e.target.classList.add('dg-anim');
+      dgRun(e.target, e.target._dgCur);
+    });
+  }, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' });
+
+  svgs.forEach(svg => {
+    const els = [...svg.querySelectorAll('rect, circle, ellipse, line, path, polyline, polygon, text')]
+      .filter(el => !el.closest('defs'));
+    if (!els.length) return;
+    els.forEach(el => {
+      try { const b = el.getBBox(); el._dgx = b.x; el._dgy = b.y; }
+      catch (e) { el._dgx = 0; el._dgy = 0; }
+      const holder = el.closest('[data-step]');
+      el._dgStep = holder ? +holder.dataset.step : 0;
+      el._dgVisible = false;
+    });
+    els.sort((a, b) => (a._dgStep - b._dgStep) || (a._dgx - b._dgx) || (a._dgy - b._dgy));
+    els.forEach(dgPrep);
+    svg._dgEls = els;
+    svg._dgMax = els.reduce((m, el) => Math.max(m, el._dgStep), 0);
+    svg._dgCur = 1;
+    dgPrepared.push(svg);
+    if (svg._dgMax > 1) dgStepper(svg);
+    dgObserver.observe(svg);
+  });
+}
+
 function renderChapter(id) {
   const c = chById(id);
   const tpl = document.querySelector(`template[data-ch="${id}"]`);
@@ -17636,7 +17925,9 @@ function renderChapter(id) {
     <div class="q-level-tabs"></div><div class="q-zone"></div></div>
     <div class="ch-nav"></div>
   </div>`;
-  VIEW.querySelector('.ch-body').appendChild(tpl.content.cloneNode(true));
+  const body = VIEW.querySelector('.ch-body');
+  body.appendChild(tpl.content.cloneNode(true));
+  initDiagrams(body);
 
   // feynman blocks
   VIEW.querySelectorAll('.feynman').forEach(f => {

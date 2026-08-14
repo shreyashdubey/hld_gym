@@ -99,28 +99,36 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="Upload flow: hash locally, check which blocks are new, upload only those, then commit the manifest atomically">
-  <rect class="dg-node" x="15" y="60" width="150" height="70" rx="8"/>
-  <text class="dg-txt" x="32" y="86">1. Chunk + hash</text>
-  <text class="dg-txt-s" x="32" y="104">256 blocks, SHA-256</text>
-  <text class="dg-txt-s" x="32" y="120">no network yet</text>
-  <rect class="dg-node" x="200" y="60" width="150" height="70" rx="8"/>
-  <text class="dg-txt" x="217" y="86">2. check(hashes)</text>
-  <text class="dg-txt-s" x="217" y="104">server: "254 known,</text>
-  <text class="dg-txt-s" x="217" y="120">send 2"</text>
-  <rect class="dg-node" x="385" y="60" width="150" height="70" rx="8"/>
-  <text class="dg-txt" x="402" y="86">3. Send 2 blocks</text>
-  <text class="dg-txt-s" x="402" y="104">8 MB, not 1 GB</text>
-  <text class="dg-txt-s" x="402" y="120">parallel, resumable</text>
-  <rect class="dg-node-alt" x="570" y="50" width="140" height="90" rx="8"/>
-  <text class="dg-txt" x="586" y="78">4. Commit</text>
-  <text class="dg-txt-s" x="586" y="96">manifest, base ver</text>
-  <text class="dg-txt-s" x="586" y="112">= linearization</text>
-  <text class="dg-txt-s" x="586" y="128">point</text>
-  <line class="dg-edge" x1="165" y1="95" x2="200" y2="95" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="350" y1="95" x2="385" y2="95" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="535" y1="95" x2="570" y2="95" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="15" y="180">Crash anywhere before step 4: nothing visible changed. Worst case = a few orphan</text>
-  <text class="dg-txt-s" x="15" y="200">blocks in the store, cleaned by GC. Retry re-runs check and sends only what's missing.</text>
+  <g data-step="1" data-step-label="All of this happens on the client, before a single byte leaves">
+    <rect class="dg-node" x="15" y="60" width="150" height="70" rx="8"/>
+    <text class="dg-txt" x="32" y="86">1. Chunk + hash</text>
+    <text class="dg-txt-s" x="32" y="104">256 blocks, SHA-256</text>
+    <text class="dg-txt-s" x="32" y="120">no network yet</text>
+  </g>
+  <g data-step="2" data-step-label="Ask before you send — the hashes are tiny, the file is not">
+    <line class="dg-edge" x1="165" y1="95" x2="200" y2="95" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="200" y="60" width="150" height="70" rx="8"/>
+    <text class="dg-txt" x="217" y="86">2. check(hashes)</text>
+    <text class="dg-txt-s" x="217" y="104">server: "254 known,</text>
+    <text class="dg-txt-s" x="217" y="120">send 2"</text>
+  </g>
+  <g data-step="3" data-step-label="Only the blocks that actually changed cross the wire">
+    <line class="dg-edge" x1="350" y1="95" x2="385" y2="95" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="385" y="60" width="150" height="70" rx="8"/>
+    <text class="dg-txt" x="402" y="86">3. Send 2 blocks</text>
+    <text class="dg-txt-s" x="402" y="104">8 MB, not 1 GB</text>
+    <text class="dg-txt-s" x="402" y="120">parallel, resumable</text>
+  </g>
+  <g data-step="4" data-step-label="One atomic commit is the moment the new version exists">
+    <line class="dg-edge" x1="535" y1="95" x2="570" y2="95" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="570" y="50" width="140" height="90" rx="8"/>
+    <text class="dg-txt" x="586" y="78">4. Commit</text>
+    <text class="dg-txt-s" x="586" y="96">manifest, base ver</text>
+    <text class="dg-txt-s" x="586" y="112">= linearization</text>
+    <text class="dg-txt-s" x="586" y="128">point</text>
+    <text class="dg-txt-s" x="15" y="180">Crash anywhere before step 4: nothing visible changed. Worst case = a few orphan</text>
+    <text class="dg-txt-s" x="15" y="200">blocks in the store, cleaned by GC. Retry re-runs check and sends only what's missing.</text>
+  </g>
 </svg>
 <figcaption>Manifest-last is the whole safety story: steps 1–3 are freely retryable because step 4 is the only step the world can see.</figcaption>
 </figure>

@@ -240,26 +240,36 @@
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="SWIM failure detection: direct probe times out, indirect probes through peers, suspicion with refutation">
-  <rect class="dg-node" x="40" y="40" width="90" height="40" rx="8"/>
-  <text class="dg-txt" x="76" y="65">A</text>
-  <rect class="dg-node" x="580" y="40" width="90" height="40" rx="8"/>
-  <text class="dg-txt" x="600" y="65">B (slow)</text>
-  <line class="dg-bad" x1="130" y1="55" x2="576" y2="55" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="270" y="46">1. ping — no ack</text>
-  <rect class="dg-node" x="250" y="180" width="90" height="40" rx="8"/>
-  <text class="dg-txt" x="288" y="205">C</text>
-  <rect class="dg-node" x="420" y="180" width="90" height="40" rx="8"/>
-  <text class="dg-txt" x="458" y="205">D</text>
-  <line class="dg-edge" x1="100" y1="80" x2="270" y2="176" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="118" y1="80" x2="432" y2="176" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="36" y="120">2. ping-req(B)</text>
-  <line class="dg-edge" x1="344" y1="184" x2="588" y2="84" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="512" y1="188" x2="598" y2="84" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="600" y="150">3. C, D ping B</text>
-  <line class="dg-good" x1="612" y1="84" x2="348" y2="196" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="452" y="230">4. ack → relayed to A: "B lives"</text>
-  <text class="dg-txt-s" x="40" y="258">If nobody gets an ack: B is gossiped as SUSPECT, not dead — a probation window, not a verdict.</text>
-  <text class="dg-txt-s" x="40" y="278">B refutes by gossiping "alive" with a higher incarnation number; the higher number wins everywhere.</text>
+  <g data-step="1" data-step-label="A's direct probe gets nothing back. A knows almost nothing yet">
+    <rect class="dg-node" x="40" y="40" width="90" height="40" rx="8"/>
+    <text class="dg-txt" x="76" y="65">A</text>
+    <rect class="dg-node" x="580" y="40" width="90" height="40" rx="8"/>
+    <text class="dg-txt" x="600" y="65">B (slow)</text>
+    <line class="dg-bad" x1="130" y1="55" x2="576" y2="55" stroke-dasharray="6 4" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="270" y="46">1. ping — no ack</text>
+  </g>
+  <g data-step="2" data-step-label="Instead of declaring B dead, A asks two peers to try">
+    <rect class="dg-node" x="250" y="180" width="90" height="40" rx="8"/>
+    <text class="dg-txt" x="288" y="205">C</text>
+    <rect class="dg-node" x="420" y="180" width="90" height="40" rx="8"/>
+    <text class="dg-txt" x="458" y="205">D</text>
+    <line class="dg-edge" x1="100" y1="80" x2="270" y2="176" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="118" y1="80" x2="432" y2="176" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="36" y="120">2. ping-req(B)</text>
+  </g>
+  <g data-step="3" data-step-label="C and D probe from different network paths than A's">
+    <line class="dg-edge" x1="344" y1="184" x2="588" y2="84" marker-end="url(#arrow)"/>
+    <line class="dg-edge" x1="512" y1="188" x2="598" y2="84" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="600" y="150">3. C, D ping B</text>
+  </g>
+  <g data-step="4" data-step-label="One ack is enough: the fault was A's path, not B">
+    <line class="dg-good" x1="612" y1="84" x2="348" y2="196" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="452" y="230">4. ack → relayed to A: "B lives"</text>
+  </g>
+  <g data-step="5" data-step-label="And if nobody gets an ack — suspicion, not a death certificate">
+    <text class="dg-txt-s" x="40" y="258">If nobody gets an ack: B is gossiped as SUSPECT, not dead — a probation window, not a verdict.</text>
+    <text class="dg-txt-s" x="40" y="278">B refutes by gossiping "alive" with a higher incarnation number; the higher number wins everywhere.</text>
+  </g>
 </svg>
 <figcaption>SWIM separates "I can't reach B" from "B is dead": borrow other nodes' network paths first, then suspect, and let the accused overrule the rumor with a fresher incarnation number.</figcaption>
 </figure>

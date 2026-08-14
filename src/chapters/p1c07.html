@@ -144,26 +144,34 @@ width, height, created_at, ...</code></pre>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="Presigned upload flow: client gets a signed URL from the app server then uploads directly to blob storage">
-  <rect class="dg-node" x="30" y="110" width="130" height="56" rx="8"/>
-  <text class="dg-txt" x="60" y="143">Client</text>
-  <rect class="dg-node" x="295" y="30" width="150" height="56" rx="8"/>
-  <text class="dg-txt" x="318" y="56">App server</text>
-  <text class="dg-txt-s" x="318" y="73">has S3 credentials</text>
-  <rect class="dg-node-alt" x="540" y="110" width="150" height="56" rx="8"/>
-  <text class="dg-txt" x="580" y="137">S3 bucket</text>
-  <text class="dg-txt-s" x="562" y="154">takes the bytes</text>
-  <line class="dg-edge" x1="140" y1="110" x2="300" y2="70" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="130" y="76">1. "I want to upload cat.jpg"</text>
-  <line class="dg-edge" x1="330" y1="86" x2="170" y2="126" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="205" y="115">2. presigned URL (expires in 10 min)</text>
-  <line class="dg-edge" x1="160" y1="145" x2="540" y2="145" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="255" y="136">3. PUT 3 MB directly — bypasses app server</text>
-  <line class="dg-edge" x1="560" y1="166" x2="430" y2="220" marker-end="url(#arrow)"/>
-  <rect class="dg-node" x="295" y="200" width="150" height="56" rx="8"/>
-  <text class="dg-txt" x="318" y="226">App server</text>
-  <text class="dg-txt-s" x="318" y="243">writes metadata row</text>
-  <text class="dg-txt-s" x="455" y="200">4. event / confirm:</text>
-  <text class="dg-txt-s" x="455" y="216">"object exists"</text>
+  <g data-step="1" data-step-label="Client asks the app server for permission">
+    <rect class="dg-node" x="30" y="110" width="130" height="56" rx="8"/>
+    <text class="dg-txt" x="60" y="143">Client</text>
+    <rect class="dg-node" x="295" y="30" width="150" height="56" rx="8"/>
+    <text class="dg-txt" x="318" y="56">App server</text>
+    <text class="dg-txt-s" x="318" y="73">has S3 credentials</text>
+    <line class="dg-edge" x1="140" y1="110" x2="300" y2="70" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="130" y="76">1. "I want to upload cat.jpg"</text>
+  </g>
+  <g data-step="2" data-step-label="Server signs a short-lived slip — a few hundred bytes">
+    <line class="dg-edge" x1="330" y1="86" x2="170" y2="126" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="205" y="115">2. presigned URL (expires in 10 min)</text>
+  </g>
+  <g data-step="3" data-step-label="The 3 MB goes straight to S3 — your server never sees it">
+    <rect class="dg-node-alt" x="540" y="110" width="150" height="56" rx="8"/>
+    <text class="dg-txt" x="580" y="137">S3 bucket</text>
+    <text class="dg-txt-s" x="562" y="154">takes the bytes</text>
+    <line class="dg-edge" x1="160" y1="145" x2="540" y2="145" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="255" y="136">3. PUT 3 MB directly — bypasses app server</text>
+  </g>
+  <g data-step="4" data-step-label="Metadata row written only after the object verifiably exists">
+    <line class="dg-edge" x1="560" y1="166" x2="430" y2="220" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="295" y="200" width="150" height="56" rx="8"/>
+    <text class="dg-txt" x="318" y="226">App server</text>
+    <text class="dg-txt-s" x="318" y="243">writes metadata row</text>
+    <text class="dg-txt-s" x="455" y="200">4. event / confirm:</text>
+    <text class="dg-txt-s" x="455" y="216">"object exists"</text>
+  </g>
 </svg>
 <figcaption>The heavy arrow (3) never touches your servers. Steps 1 and 2 move a few hundred bytes of JSON; step 4 creates the metadata row only after the object verifiably exists.</figcaption>
 </figure>

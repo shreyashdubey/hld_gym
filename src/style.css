@@ -241,6 +241,33 @@ figure.diagram figcaption {
 .dg-txt { fill: var(--ink); font-family: "IBM Plex Mono", monospace; font-size: 13px; }
 .dg-txt-s { fill: var(--ink-3); font-family: "IBM Plex Mono", monospace; font-size: 11px; }
 .dg-zone { fill: none; stroke: var(--ink-3); stroke-dasharray: 5 5; stroke-width: 1.2; rx: 10; }
+/* Diagram animation. The hidden start state is applied by JS, never here — if the
+   script never runs, every diagram stays fully visible. */
+.dg-anim :is(rect, circle, ellipse, line, path, polyline, polygon, text) {
+  transition: opacity .4s ease, stroke-dashoffset .55s cubic-bezier(.4, 0, .2, 1);
+}
+.dg-steps {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 4px 0 2px; font-family: "IBM Plex Mono", monospace; font-size: .76rem; color: var(--ink-2);
+}
+.dg-steps button {
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 8px; width: 30px; height: 28px; cursor: pointer; font-size: .7rem; line-height: 1; padding: 0;
+}
+.dg-steps button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.dg-steps button:disabled { opacity: .3; cursor: default; }
+.dg-steps .dg-count { color: var(--ink-3); letter-spacing: .06em; }
+.dg-steps .dg-label { color: var(--ink); }
+.dg-steps .dg-replay { width: auto; padding: 0 9px; }
+/* Printing must never capture a diagram mid-reveal, and a stepped diagram has
+   to print whole rather than frozen on step 1. !important beats the inline
+   opacity the script sets. */
+@media print {
+  .dg-anim :is(rect, circle, ellipse, line, path, polyline, polygon, text) {
+    opacity: 1 !important; stroke-dashoffset: 0 !important;
+  }
+  .dg-steps { display: none; }
+}
 text.dg-bad, tspan.dg-bad { fill: var(--bad); stroke: none; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
 text.dg-good, tspan.dg-good { fill: var(--good); stroke: none; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
 .dg-bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.6; rx: 8; }

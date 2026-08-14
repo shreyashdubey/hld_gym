@@ -21,30 +21,38 @@
 <svg viewBox="0 0 720 240" role="img" aria-label="Timeline of the four migration phases with a rollback plan under each">
   <text class="dg-txt-s" x="12" y="30">reads served from the OLD store this whole time</text>
   <line class="dg-edge" x1="12" y1="38" x2="520" y2="38"/>
-  <rect class="dg-node" x="10" y="52" width="155" height="60" rx="8"/>
-  <text class="dg-txt" x="24" y="76">1. EXPAND</text>
-  <text class="dg-txt-s" x="24" y="96">dual writes on</text>
-  <rect class="dg-node" x="185" y="52" width="155" height="60" rx="8"/>
-  <text class="dg-txt" x="199" y="76">2. MIGRATE</text>
-  <text class="dg-txt-s" x="199" y="96">backfill history</text>
-  <rect class="dg-node" x="360" y="52" width="155" height="60" rx="8"/>
-  <text class="dg-txt" x="374" y="76">3. VERIFY</text>
-  <text class="dg-txt-s" x="374" y="96">shadow reads</text>
-  <rect class="dg-node-alt" x="535" y="52" width="175" height="60" rx="8"/>
-  <text class="dg-txt" x="549" y="76">4. CONTRACT</text>
-  <text class="dg-txt-s" x="549" y="96">flip reads, drop old</text>
-  <line class="dg-edge" x1="165" y1="82" x2="185" y2="82" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="340" y1="82" x2="360" y2="82" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="515" y1="82" x2="535" y2="82" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="14" y="150">rollback: flag off,</text>
-  <text class="dg-txt-s" x="14" y="166">stop dual writes</text>
-  <text class="dg-txt-s" x="189" y="150">rollback: pause job,</text>
-  <text class="dg-txt-s" x="189" y="166">nothing is lost</text>
-  <text class="dg-txt-s" x="364" y="150">rollback: keep serving</text>
-  <text class="dg-txt-s" x="364" y="166">from old, investigate</text>
-  <text class="dg-txt-s" x="539" y="150">rollback: flip the read</text>
-  <text class="dg-txt-s" x="539" y="166">flag back in seconds</text>
-  <text class="dg-txt-s" x="14" y="210">Each phase ships on its own, gets watched for days, and can be undone without touching the phases before it.</text>
+  <g data-step="1" data-step-label="Write to both stores. Nothing reads the new one yet">
+    <rect class="dg-node" x="10" y="52" width="155" height="60" rx="8"/>
+    <text class="dg-txt" x="24" y="76">1. EXPAND</text>
+    <text class="dg-txt-s" x="24" y="96">dual writes on</text>
+    <text class="dg-txt-s" x="14" y="150">rollback: flag off,</text>
+    <text class="dg-txt-s" x="14" y="166">stop dual writes</text>
+  </g>
+  <g data-step="2" data-step-label="Backfill the history behind the live dual writes">
+    <line class="dg-edge" x1="165" y1="82" x2="185" y2="82" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="185" y="52" width="155" height="60" rx="8"/>
+    <text class="dg-txt" x="199" y="76">2. MIGRATE</text>
+    <text class="dg-txt-s" x="199" y="96">backfill history</text>
+    <text class="dg-txt-s" x="189" y="150">rollback: pause job,</text>
+    <text class="dg-txt-s" x="189" y="166">nothing is lost</text>
+  </g>
+  <g data-step="3" data-step-label="Read both, compare, serve the old one. Users see nothing">
+    <line class="dg-edge" x1="340" y1="82" x2="360" y2="82" marker-end="url(#arrow)"/>
+    <rect class="dg-node" x="360" y="52" width="155" height="60" rx="8"/>
+    <text class="dg-txt" x="374" y="76">3. VERIFY</text>
+    <text class="dg-txt-s" x="374" y="96">shadow reads</text>
+    <text class="dg-txt-s" x="364" y="150">rollback: keep serving</text>
+    <text class="dg-txt-s" x="364" y="166">from old, investigate</text>
+  </g>
+  <g data-step="4" data-step-label="Only now do reads flip — and the flip is one flag">
+    <line class="dg-edge" x1="515" y1="82" x2="535" y2="82" marker-end="url(#arrow)"/>
+    <rect class="dg-node-alt" x="535" y="52" width="175" height="60" rx="8"/>
+    <text class="dg-txt" x="549" y="76">4. CONTRACT</text>
+    <text class="dg-txt-s" x="549" y="96">flip reads, drop old</text>
+    <text class="dg-txt-s" x="539" y="150">rollback: flip the read</text>
+    <text class="dg-txt-s" x="539" y="166">flag back in seconds</text>
+    <text class="dg-txt-s" x="14" y="210">Each phase ships on its own, gets watched for days, and can be undone without touching the phases before it.</text>
+  </g>
 </svg>
 <figcaption>The expand → migrate → contract timeline. Notice the second row: every phase carries its own escape hatch.</figcaption>
 </figure>
