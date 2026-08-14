@@ -280,7 +280,30 @@ figure.diagram figcaption {
 .dg-steps button:disabled { opacity: .3; cursor: default; }
 .dg-steps .dg-count { color: var(--ink-3); letter-spacing: .06em; }
 .dg-steps .dg-label { color: var(--ink); }
-.dg-steps .dg-replay { width: auto; padding: 0 9px; }
+.dg-steps .dg-replay, .dg-steps .dg-expand { width: auto; padding: 0 9px; }
+/* A pulse that keeps running along each arrow once the draw has finished, so a
+   diagram reads as live rather than as a picture that happened to fade in. */
+.dg-flow { fill: none; stroke: var(--accent); stroke-width: 2.6; stroke-linecap: round; opacity: 0; pointer-events: none; }
+.dg-live .dg-flow { opacity: .9; animation: dg-flow 2.8s linear infinite; }
+@keyframes dg-flow { from { stroke-dashoffset: var(--flow-from); } to { stroke-dashoffset: 0; } }
+.dg-zoomable { cursor: zoom-in; }
+
+.dg-overlay {
+  position: fixed; inset: 0; z-index: 300; overflow: auto;
+  background: var(--paper);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 56px 24px 28px;
+}
+.dg-stage { width: 100%; max-width: 1500px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.dg-stage svg { width: 100%; height: auto; max-height: 72vh; }
+.dg-overlay .dg-cap { max-width: 860px; margin: 0; text-align: center; color: var(--ink-2); font-size: .92rem; }
+.dg-close {
+  position: absolute; top: 16px; right: 18px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 8px; padding: 7px 13px; cursor: pointer;
+  font-family: "IBM Plex Mono", monospace; font-size: .75rem;
+}
+.dg-close:hover { border-color: var(--accent); color: var(--accent); }
 /* Printing must never capture a diagram mid-reveal, and a stepped diagram has
    to print whole rather than frozen on step 1. !important beats the inline
    opacity the script sets. */
@@ -17814,6 +17837,10 @@ function dgShow(el, delay) {
       el._dgTimer = setTimeout(() => el.setAttribute('marker-end', el._dgMarker), delay + DRAW_MS - 60);
     }
   }
+  if (el._dgFlow) {
+    clearTimeout(el._dgFlowTimer);
+    el._dgFlowTimer = setTimeout(() => { el._dgFlow.style.display = ''; }, delay + DRAW_MS);
+  }
 }
 
 function dgHide(el) {
@@ -17823,6 +17850,30 @@ function dgHide(el) {
     el.style.strokeDashoffset = el._dgLen;
     if (el._dgMarker) { clearTimeout(el._dgTimer); el.setAttribute('marker-end', 'none'); }
   }
+  if (el._dgFlow) { clearTimeout(el._dgFlowTimer); el._dgFlow.style.display = 'none'; }
+}
+
+// A pulse that keeps travelling along each arrow after the draw finishes. This
+// is what stops a diagram going dead the moment it has finished appearing.
+// Only directional edges get one — lifelines and grouping boxes stay quiet.
+function dgAddFlow(svg) {
+  svg.querySelectorAll('.dg-flow').forEach(f => f.remove());
+  svg._dgEls.forEach((el, i) => {
+    if (!el._dgLen || !el._dgMarker) return;
+    const f = el.cloneNode(false);
+    f.removeAttribute('marker-end');
+    f.removeAttribute('stroke-dasharray');
+    // the source already carries the hidden inline state from dgPrep, and an
+    // inline opacity:0 would outrank the stylesheet rule that lights the pulse
+    f.removeAttribute('style');
+    f.setAttribute('class', 'dg-flow');
+    f.style.strokeDasharray = `12 ${el._dgLen}`;
+    f.style.setProperty('--flow-from', el._dgLen + 12);
+    f.style.animationDelay = `-${(i % 7) * 0.4}s`;
+    f.style.display = 'none';
+    el.after(f);
+    el._dgFlow = f;
+  });
 }
 
 function dgRun(svg, upto) {
@@ -17833,18 +17884,52 @@ function dgRun(svg, upto) {
   fresh.forEach((el, i) => { el._dgVisible = true; dgShow(el, Math.round(i * gap)); });
 }
 
-function dgStepper(svg) {
+function dgPrepare(svg) {
+  const els = [...svg.querySelectorAll('rect, circle, ellipse, line, path, polyline, polygon, text')]
+    .filter(el => !el.closest('defs') && !el.classList.contains('dg-flow'));
+  if (!els.length) return false;
+  els.forEach(el => {
+    try { const b = el.getBBox(); el._dgx = b.x; el._dgy = b.y; }
+    catch (e) { el._dgx = 0; el._dgy = 0; }
+    const holder = el.closest('[data-step]');
+    el._dgStep = holder ? +holder.dataset.step : 0;
+    el._dgVisible = false;
+  });
+  els.sort((a, b) => (a._dgStep - b._dgStep) || (a._dgx - b._dgx) || (a._dgy - b._dgy));
+  els.forEach(dgPrep);
+  svg._dgEls = els;
+  svg._dgMax = els.reduce((m, el) => Math.max(m, el._dgStep), 0);
+  svg._dgCur = 1;
+  dgAddFlow(svg);
+  return true;
+}
+
+function dgReplay(svg) {
+  svg._dgEls.forEach(el => { el._dgVisible = false; dgHide(el); });
+  svg._dgCur = 1;
+  svg.classList.add('dg-anim');
+  dgRun(svg, 1);
+  if (svg._dgSync) svg._dgSync();
+}
+
+// One control row per diagram. Every diagram gets replay and expand; only the
+// ones authored with data-step get the step controls and narration.
+function dgControls(svg, { expandable }) {
+  const stepped = svg._dgMax > 1;
   const bar = document.createElement('div');
   bar.className = 'dg-steps';
-  bar.innerHTML = `<button class="dg-prev" aria-label="Previous step">◀</button>` +
-    `<button class="dg-next" aria-label="Next step">▶</button>` +
-    `<button class="dg-replay" aria-label="Replay from the start">↻</button>` +
+  bar.innerHTML =
+    (stepped ? `<button class="dg-prev" aria-label="Previous step">◀</button>` +
+      `<button class="dg-next" aria-label="Next step">▶</button>` : '') +
+    `<button class="dg-replay" aria-label="Replay the animation">↻</button>` +
+    (expandable ? `<button class="dg-expand" aria-label="Open this diagram full screen">⤢</button>` : '') +
     `<span class="dg-count"></span><span class="dg-label"></span>`;
-  svg.parentElement.insertBefore(bar, svg);
+
   const labels = {};
   svg.querySelectorAll('[data-step][data-step-label]')
     .forEach(g => { labels[+g.dataset.step] = g.dataset.stepLabel; });
   const sync = () => {
+    if (!stepped) return;
     bar.querySelector('.dg-prev').disabled = svg._dgCur <= 1;
     bar.querySelector('.dg-next').disabled = svg._dgCur >= svg._dgMax;
     bar.querySelector('.dg-count').textContent = `${svg._dgCur} / ${svg._dgMax}`;
@@ -17855,15 +17940,66 @@ function dgStepper(svg) {
     dgRun(svg, svg._dgCur);
     sync();
   };
-  bar.querySelector('.dg-prev').addEventListener('click', () => go(svg._dgCur - 1));
-  bar.querySelector('.dg-next').addEventListener('click', () => go(svg._dgCur + 1));
-  bar.querySelector('.dg-replay').addEventListener('click', () => {
-    svg._dgEls.forEach(el => { el._dgVisible = false; dgHide(el); });
-    go(1);
-  });
-  // label only — the first reveal belongs to the observer, so the diagram
-  // animates when the reader reaches it rather than while it is off-screen
+  if (stepped) {
+    bar.querySelector('.dg-prev').addEventListener('click', () => go(svg._dgCur - 1));
+    bar.querySelector('.dg-next').addEventListener('click', () => go(svg._dgCur + 1));
+  }
+  bar.querySelector('.dg-replay').addEventListener('click', () => dgReplay(svg));
+  if (expandable) bar.querySelector('.dg-expand').addEventListener('click', () => dgOpen(svg));
+  svg._dgGo = go;
+  svg._dgSync = sync;
+  // the first reveal belongs to the observer, so the diagram animates when the
+  // reader reaches it rather than while it is still off-screen
   sync();
+  return bar;
+}
+
+function dgOpen(source) {
+  const fig = source.closest('figure');
+  const caption = fig && fig.querySelector('figcaption');
+  const svg = source.cloneNode(true);
+  svg.querySelectorAll('.dg-flow').forEach(f => f.remove());
+  svg.classList.remove('dg-anim');
+
+  const overlay = document.createElement('div');
+  overlay.className = 'dg-overlay';
+  overlay.innerHTML = `<button class="dg-close" aria-label="Close">✕ close</button>`;
+  const stage = document.createElement('div');
+  stage.className = 'dg-stage';
+  stage.appendChild(svg);
+  overlay.appendChild(stage);
+  if (caption) {
+    const cap = document.createElement('p');
+    cap.className = 'dg-cap';
+    cap.textContent = caption.textContent;
+    overlay.appendChild(cap);
+  }
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+
+  const close = () => {
+    document.body.style.overflow = '';
+    removeEventListener('keydown', onKey);
+    overlay.remove();
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => { });
+  };
+  const onKey = e => {
+    if (e.key === 'Escape') close();
+    else if (svg._dgMax > 1 && e.key === 'ArrowRight') svg._dgGo(svg._dgCur + 1);
+    else if (svg._dgMax > 1 && e.key === 'ArrowLeft') svg._dgGo(svg._dgCur - 1);
+  };
+  overlay.querySelector('.dg-close').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  addEventListener('keydown', onKey);
+
+  // measurable only once it is in the document and laid out
+  if (dgPrepare(svg)) {
+    stage.appendChild(dgControls(svg, { expandable: false }));
+    svg.classList.add('dg-anim');
+    dgRun(svg, 1);
+    setTimeout(() => svg.classList.add('dg-live'), 1500);
+  }
+  overlay.requestFullscreen && overlay.requestFullscreen().catch(() => { });
 }
 
 function initDiagrams(root) {
@@ -17876,35 +18012,32 @@ function initDiagrams(root) {
     .filter(s => s.getBoundingClientRect().width > 0);
   if (!svgs.length) return;
 
-  dgObserver = new IntersectionObserver((entries, obs) => {
+  dgObserver = new IntersectionObserver(entries => {
     entries.forEach(e => {
-      if (!e.isIntersecting) return;
-      obs.unobserve(e.target);
-      // class added here, not at prep time: the hidden state must already be
-      // painted or the transition would run backwards from visible
-      e.target.classList.add('dg-anim');
-      dgRun(e.target, e.target._dgCur);
+      const svg = e.target;
+      if (e.isIntersecting) {
+        // class added here, not at prep time: the hidden state must already be
+        // painted or the transition would run backwards from visible
+        svg.classList.add('dg-anim');
+        dgRun(svg, svg._dgCur);
+        clearTimeout(svg._dgLiveTimer);
+        svg._dgLiveTimer = setTimeout(() => svg.classList.add('dg-live'), 1500);
+      } else if (e.intersectionRatio === 0) {
+        // fully gone: stop the pulses, and rearm the reveal so scrolling back
+        // replays it instead of finding a diagram that already happened
+        clearTimeout(svg._dgLiveTimer);
+        svg.classList.remove('dg-live');
+        if (svg._dgMax <= 1) svg._dgEls.forEach(el => { el._dgVisible = false; dgHide(el); });
+      }
     });
-  }, { threshold: 0.12, rootMargin: '0px 0px -6% 0px' });
+  }, { threshold: [0, 0.12], rootMargin: '0px 0px -6% 0px' });
 
   svgs.forEach(svg => {
-    const els = [...svg.querySelectorAll('rect, circle, ellipse, line, path, polyline, polygon, text')]
-      .filter(el => !el.closest('defs'));
-    if (!els.length) return;
-    els.forEach(el => {
-      try { const b = el.getBBox(); el._dgx = b.x; el._dgy = b.y; }
-      catch (e) { el._dgx = 0; el._dgy = 0; }
-      const holder = el.closest('[data-step]');
-      el._dgStep = holder ? +holder.dataset.step : 0;
-      el._dgVisible = false;
-    });
-    els.sort((a, b) => (a._dgStep - b._dgStep) || (a._dgx - b._dgx) || (a._dgy - b._dgy));
-    els.forEach(dgPrep);
-    svg._dgEls = els;
-    svg._dgMax = els.reduce((m, el) => Math.max(m, el._dgStep), 0);
-    svg._dgCur = 1;
+    if (!dgPrepare(svg)) return;
     dgPrepared.push(svg);
-    if (svg._dgMax > 1) dgStepper(svg);
+    svg.classList.add('dg-zoomable');
+    svg.parentElement.insertBefore(dgControls(svg, { expandable: true }), svg);
+    svg.addEventListener('click', () => dgOpen(svg));
     dgObserver.observe(svg);
   });
 }

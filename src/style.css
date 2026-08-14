@@ -258,7 +258,30 @@ figure.diagram figcaption {
 .dg-steps button:disabled { opacity: .3; cursor: default; }
 .dg-steps .dg-count { color: var(--ink-3); letter-spacing: .06em; }
 .dg-steps .dg-label { color: var(--ink); }
-.dg-steps .dg-replay { width: auto; padding: 0 9px; }
+.dg-steps .dg-replay, .dg-steps .dg-expand { width: auto; padding: 0 9px; }
+/* A pulse that keeps running along each arrow once the draw has finished, so a
+   diagram reads as live rather than as a picture that happened to fade in. */
+.dg-flow { fill: none; stroke: var(--accent); stroke-width: 2.6; stroke-linecap: round; opacity: 0; pointer-events: none; }
+.dg-live .dg-flow { opacity: .9; animation: dg-flow 2.8s linear infinite; }
+@keyframes dg-flow { from { stroke-dashoffset: var(--flow-from); } to { stroke-dashoffset: 0; } }
+.dg-zoomable { cursor: zoom-in; }
+
+.dg-overlay {
+  position: fixed; inset: 0; z-index: 300; overflow: auto;
+  background: var(--paper);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 56px 24px 28px;
+}
+.dg-stage { width: 100%; max-width: 1500px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.dg-stage svg { width: 100%; height: auto; max-height: 72vh; }
+.dg-overlay .dg-cap { max-width: 860px; margin: 0; text-align: center; color: var(--ink-2); font-size: .92rem; }
+.dg-close {
+  position: absolute; top: 16px; right: 18px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  border-radius: 8px; padding: 7px 13px; cursor: pointer;
+  font-family: "IBM Plex Mono", monospace; font-size: .75rem;
+}
+.dg-close:hover { border-color: var(--accent); color: var(--accent); }
 /* Printing must never capture a diagram mid-reveal, and a stepped diagram has
    to print whole rather than frozen on step 1. !important beats the inline
    opacity the script sets. */
