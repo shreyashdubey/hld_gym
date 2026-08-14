@@ -1,0 +1,730 @@
+{
+  "chapter": "p3c24",
+  "items": [
+    {
+      "id": "p3c24-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "version-skew",
+      "q": "Your corpus was embedded with model v7. A deploy quietly upgrades the query service to model v8. What happens?",
+      "options": [
+        {
+          "t": "Nothing errors — results keep coming back, and they're meaningless",
+          "correct": true,
+          "why": "This is the silent killer. Each model defines its own geometry, so v8 query vectors and v7 document vectors are maps of different countries. Distances still compute, results still rank, quality is garbage. That's why every vector carries a model_version and the query path asserts a match."
+        },
+        {
+          "t": "The vector database rejects the query with a dimension mismatch error",
+          "correct": false,
+          "why": "Only if the two models happen to have different dimensions — and many don't. Same dimension, different geometry is the dangerous case, and nothing in the math notices."
+        },
+        {
+          "t": "Recall degrades by roughly 5-10%, about the same as turning compression up a notch",
+          "correct": false,
+          "why": "This isn't a gentle degradation. Cross-model distances aren't slightly worse, they're unrelated to meaning — the ranking is effectively random."
+        },
+        {
+          "t": "The index auto-migrates vectors to the new model on read",
+          "correct": false,
+          "why": "There is no such thing as translating a v7 vector into a v8 vector. Upgrading a model means re-running the whole corpus through it — a full re-embed migration."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "estimation",
+      "q": "1 billion chunks, 768-dimension embeddings stored as fp32. Roughly how much raw vector data is that?",
+      "options": [
+        {
+          "t": "About 3 TB",
+          "correct": true,
+          "why": "768 × 4 bytes = 3,072 bytes per vector, times 1B ≈ 3 TB. This single multiplication forces three decisions: shard it, compress it, and give up on exact search."
+        },
+        {
+          "t": "About 30 GB",
+          "correct": false,
+          "why": "Off by 100×. That's roughly what a billion vectors cost after product quantization squeezes them to ~32 bytes each — a useful number, but not the raw one."
+        },
+        {
+          "t": "About 300 GB",
+          "correct": false,
+          "why": "Off by 10×. Check the per-vector size: 768 dimensions × 4 bytes is 3 KB, not 300 bytes."
+        },
+        {
+          "t": "About 30 TB",
+          "correct": false,
+          "why": "Off by 10× the other way. 3 KB per vector × 1B is 3 TB. Getting this magnitude right is what tells you whether one machine is even in the conversation."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "hnsw",
+      "q": "In HNSW, what is the sparse top layer for?",
+      "options": [
+        {
+          "t": "Making big jumps so the search lands near the target fast",
+          "correct": true,
+          "why": "Highways before streets. The top layer holds a small sample of nodes with long-range links, so a few hops cover enormous distance; each lower layer refines the position until layer 0 walks the last few steps."
+        },
+        {
+          "t": "Storing the most frequently queried vectors as a cache",
+          "correct": false,
+          "why": "The layers have nothing to do with popularity. Membership in upper layers is assigned randomly at insert, exactly like a skip list's coin flips."
+        },
+        {
+          "t": "Holding the cluster centroids that the denser layers underneath are grouped around",
+          "correct": false,
+          "why": "That's IVF's coarse quantizer, a different family. HNSW has no centroids — every upper-layer node is a real vector that also exists in layer 0."
+        },
+        {
+          "t": "Keeping a backup copy of the graph for recovery",
+          "correct": false,
+          "why": "No redundancy role at all. Durability comes from replicas and snapshots; the layers exist purely to speed up navigation."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "quantization",
+      "q": "What does product quantization actually store in place of a full vector?",
+      "options": [
+        {
+          "t": "One codebook ID per sub-vector slice — a handful of bytes standing in for the whole vector",
+          "correct": true,
+          "why": "Chop 768 dims into 96 slices of 8, learn 256 representative patterns per slice, store the nearest pattern's ID as one byte. 96 bytes instead of 3,072 — about 32× smaller, at the cost of some precision."
+        },
+        {
+          "t": "The vector with low-order bits truncated",
+          "correct": false,
+          "why": "That's scalar quantization (fp32 → int8), a real and simpler technique — but it buys ~4×, not ~30×. PQ replaces slices with codebook entries, which is a different and much stronger compression."
+        },
+        {
+          "t": "A hash of the vector",
+          "correct": false,
+          "why": "Hashing appears in LSH-style methods, but a hash can't support distance computation the way PQ codes can. PQ keeps approximate geometry; a hash throws it away."
+        },
+        {
+          "t": "The vector's cluster ID only",
+          "correct": false,
+          "why": "That's what IVF's inverted lists record — which cluster a vector belongs to. PQ is orthogonal and usually layered on top of it."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "two-stage",
+      "q": "Why fetch full-precision vectors for the top ~100 candidates and recompute distances exactly?",
+      "options": [
+        {
+          "t": "To recover ranking accuracy lost to compression, for 100 comparisons not a billion",
+          "correct": true,
+          "why": "The compressed index is good at finding the right neighborhood and sloppy about ordering inside it. Re-ranking the shortlist exactly claws back most of PQ's recall loss at negligible cost."
+        },
+        {
+          "t": "To verify the stored vectors haven't been silently corrupted on disk since they were written",
+          "correct": false,
+          "why": "Checksums do integrity. The re-rank exists for ranking quality, not data validation."
+        },
+        {
+          "t": "To refresh vectors whose documents changed since indexing",
+          "correct": false,
+          "why": "Freshness comes from the upsert pipeline, not from query-time reads. The re-rank reads the same vectors the index already knows about, just uncompressed."
+        },
+        {
+          "t": "Because the LLM requires full-precision inputs",
+          "correct": false,
+          "why": "The LLM never sees vectors at all — it receives chunk text. Vectors are purely a retrieval mechanism."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "fusion",
+      "q": "Reciprocal rank fusion merges a BM25 list and a dense list using:",
+      "options": [
+        {
+          "t": "Each document's position in each list, ignoring the raw scores",
+          "correct": true,
+          "why": "Score = sum of 1/(60 + rank) across lists. BM25 scores and cosine similarities aren't on comparable scales, so RRF throws scores away and trusts only ordering — no calibration, no tuning, which is why it's the industry default."
+        },
+        {
+          "t": "A weighted average of the two similarity scores",
+          "correct": false,
+          "why": "Tempting, and it's exactly the trap RRF avoids. A BM25 score of 14.2 and a cosine of 0.81 have no shared unit; averaging them makes one engine silently dominate."
+        },
+        {
+          "t": "Whichever list the query router predicted would be better",
+          "correct": false,
+          "why": "That's query routing — a real technique, but it picks one engine and forfeits the other's coverage. Fusion's whole point is keeping both."
+        },
+        {
+          "t": "A cross-encoder scoring pass over both lists",
+          "correct": false,
+          "why": "The cross-encoder comes after fusion, on the merged shortlist. Fusion is the cheap step that decides which ~100 candidates deserve the expensive model."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "hybrid",
+      "q": "A user searches for the exact error code ERR_CONN_RESET_4012. Which retriever is most likely to find the one runbook containing it?",
+      "options": [
+        {
+          "t": "BM25 keyword search",
+          "correct": true,
+          "why": "Arbitrary identifiers have no semantic neighborhood — the embedding model has nothing to grip. Lexical matching on the exact token is precisely what BM25 is good at, and it's why dense-only systems fail on IDs, SKUs, and function names."
+        },
+        {
+          "t": "Dense vector search",
+          "correct": false,
+          "why": "Dense retrieval will confidently return passages about connection problems in general. Semantically reasonable, practically useless — the one document that matters is the one with that literal string."
+        },
+        {
+          "t": "The cross-encoder reranker",
+          "correct": false,
+          "why": "A reranker can only reorder candidates it's given. If neither retriever surfaced the runbook, no amount of reranking conjures it — you can't rerank what wasn't retrieved."
+        },
+        {
+          "t": "The LLM, from its training data",
+          "correct": false,
+          "why": "An internal error code almost certainly isn't in the model's training data, and inviting the model to answer from memory is how you get a fluent invented runbook."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "rerank",
+      "q": "What makes a cross-encoder more accurate than the bi-encoder that built your index — and too slow to use as the index?",
+      "options": [
+        {
+          "t": "It reads query and document together, so nothing can be precomputed",
+          "correct": true,
+          "why": "Bi-encoders embed query and document separately and meet only at a dot product — which is exactly what lets you index a billion documents in advance. A cross-encoder attends across both texts jointly: far more accurate, but it must run per candidate pair at query time."
+        },
+        {
+          "t": "It uses a much larger model with more parameters",
+          "correct": false,
+          "why": "Cross-encoders are often similar in size. The cost is structural — one forward pass per query-document pair — not parameter count."
+        },
+        {
+          "t": "It produces higher-dimensional vectors",
+          "correct": false,
+          "why": "A cross-encoder typically emits a single relevance score, not a vector at all. That's why its output can't be indexed."
+        },
+        {
+          "t": "It searches the entire corpus instead of one shard, so it sees candidates the retrievers missed",
+          "correct": false,
+          "why": "Backwards — the reranker sees only about 100 candidates. The retrievers are what search broadly."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "over-engineering",
+      "q": "At roughly what corpus size does building an ANN index stop being over-engineering?",
+      "options": [
+        {
+          "t": "Past a few million vectors — below that, brute force is exact and fast enough",
+          "correct": true,
+          "why": "1M vectors × 3 KB = 3 GB, and a SIMD or GPU scan over that takes single-digit milliseconds. You get 100% recall, no build time, no tuning knobs, and appends for inserts. Saying this out loud before designing the big machine is a senior signal."
+        },
+        {
+          "t": "Immediately — exact search is never viable in production",
+          "correct": false,
+          "why": "Plenty of production systems brute-force a few million vectors happily, and pgvector inside your existing Postgres ends the conversation for most startups. 'Never viable' is the buzzword-architecture reflex."
+        },
+        {
+          "t": "Above a few thousand vectors",
+          "correct": false,
+          "why": "A few thousand vectors is a rounding error — a Python loop would do. Deploying an ANN cluster here buys an on-call rotation for nothing."
+        },
+        {
+          "t": "Only above a billion vectors, where a single machine genuinely cannot hold the data anymore",
+          "correct": false,
+          "why": "Too far the other way. By 100M vectors an exact scan per query is minutes of CPU across the fleet; ANN is clearly earning its keep well before a billion."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q10",
+      "level": 2,
+      "type": "mcq",
+      "tag": "acl-filtering",
+      "q": "Support agents at one tenant report \"search returns nothing\" for topics they can partly see. 95% of that tenant's documents are lead-only. Your pipeline retrieves top-100 by similarity, then drops chunks the user can't read. What's happening?",
+      "options": [
+        {
+          "t": "Post-filter starvation — all 100 candidates were restricted, and readable chunks never got fetched",
+          "correct": true,
+          "why": "Permissions correlate with topic, so the nearest neighbors are exactly the documents this user can't see. 100 retrieved → 0 survivors, while a readable chunk waits at rank 140. Log pre-filter vs post-filter counts and the smoking gun is obvious."
+        },
+        {
+          "t": "The ACL data attached to those chunks is stale, so the filter is rejecting documents the agents can in fact read",
+          "correct": false,
+          "why": "Worth checking, but the symptom pattern gives it away: users see nothing on topics they partially can access, which is the signature of filtering after ranking, not of wrong permissions."
+        },
+        {
+          "t": "Recall loss from PQ compression",
+          "correct": false,
+          "why": "Compression costs a few percent of ranking accuracy, not every result. It never turns 100 hits into zero."
+        },
+        {
+          "t": "The tenant's shard is down",
+          "correct": false,
+          "why": "A dead shard would fail broadly and show in shard health metrics, not selectively on restricted topics for specific users."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "index-choice",
+      "q": "Requirement: an edited document must be retrievable within 5 minutes, forever, with no maintenance window. How should that shape your index choice between HNSW and IVF?",
+      "options": [
+        {
+          "t": "It favors HNSW — new vectors link into the graph immediately, while IVF centroids drift and need rebuilds",
+          "correct": true,
+          "why": "Freshness is the tiebreaker here. HNSW inserts are incremental, so edit-to-searchable is just pipeline lag. IVF accepts inserts too, but a corpus that keeps shifting slowly degrades a fixed clustering — and the rebuild is a recurring operational tax that fights the freshness story."
+        },
+        {
+          "t": "It doesn't affect index choice at all; freshness is decided entirely by ingest queue depth and embedding batch size",
+          "correct": false,
+          "why": "Half true and dangerous. The pipeline dominates the 5-minute budget, but an index that needs periodic full rebuilds makes 'always fresh, no windows' much harder to promise."
+        },
+        {
+          "t": "It favors IVF, because clusters can be updated one at a time",
+          "correct": false,
+          "why": "Updating a list is cheap, but the centroids themselves were fit to yesterday's data. As the corpus drifts, vectors land in increasingly wrong clusters and recall erodes until you retrain."
+        },
+        {
+          "t": "It rules out both — only brute force gives instant freshness",
+          "correct": false,
+          "why": "Brute force is instantly fresh, but a billion vectors per query isn't a design, it's a bill. This is the small-corpus answer applied to the wrong scale."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "backpressure",
+      "q": "Traffic doubles unexpectedly. Your rerank GPU pool is saturated and p99 retrieval latency is climbing past budget. First move?",
+      "options": [
+        {
+          "t": "Shrink rerank depth 100 → 30, then bypass reranking entirely if needed",
+          "correct": true,
+          "why": "Degrade quality gradually instead of latency catastrophically. Each step is a flag you can flip back and a metric you can watch, and the retrieval stage still returns sane results — RRF order is decent, just not as good."
+        },
+        {
+          "t": "Lower ef_search on the ANN index",
+          "correct": false,
+          "why": "Reasonable-sounding, wrong bottleneck. The ANN stage is ~20 ms of a ~75 ms budget; the reranker is ~35 ms and the saturated resource. Tune where the queue actually is."
+        },
+        {
+          "t": "Shed the excess traffic with 503s so the queries you do accept stay comfortably inside the latency budget",
+          "correct": false,
+          "why": "Load shedding is the right tool when there's no cheaper way to serve, but here there is one. Answer everyone slightly worse before you answer some people not at all."
+        },
+        {
+          "t": "Scale the GPU pool and wait",
+          "correct": false,
+          "why": "Do it, but it's not a first move — capacity arrives in minutes and your p99 is bleeding now. A design with no graceful-degradation lever reads as happy-path-only."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "chunking",
+      "q": "A retrieved chunk reads: \"...and the limit is $50 per day, receipts required.\" Users complain the assistant can't answer travel-expense questions. Cheapest high-impact fix?",
+      "options": [
+        {
+          "t": "Prepend document title and section path to each chunk before embedding",
+          "correct": true,
+          "why": "\"Travel Policy > International > Meals: the limit is $50...\" embeds near travel-expense queries; the bare sentence embeds near nothing useful. Cheap to implement, measurable recall win, no new infrastructure."
+        },
+        {
+          "t": "Increase chunk size to 2,000 tokens so surrounding policy context travels with every retrieved passage",
+          "correct": false,
+          "why": "It would drag more context along, but a big chunk blends many topics into one vector, which blurs it and burns prompt budget. Attach context as metadata rather than by inflating chunks."
+        },
+        {
+          "t": "Switch to a larger embedding model",
+          "correct": false,
+          "why": "No model can infer what \"the limit\" is a limit on when the text never says. That's a chunking defect, and the upgrade costs a full corpus re-embed to fix nothing."
+        },
+        {
+          "t": "Raise top_k from 10 to 50",
+          "correct": false,
+          "why": "Retrieving more of the same badly-embedded chunks doesn't help, and it hands the LLM more distractors while raising token cost."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "migration",
+      "q": "A better embedding model ships. Your 1B-vector index is live 24/7. How do you upgrade?",
+      "options": [
+        {
+          "t": "Build a v8 index alongside v7, dual-write, backfill, gate on eval, cut over per tenant, keep v7 warm",
+          "correct": true,
+          "why": "The p2c11 playbook, applied verbatim. There's no in-place upgrade because a v8 query can't search v7 vectors, so the two indexes must coexist. Price the honesty out loud: roughly double embedding compute and double index RAM for the migration window."
+        },
+        {
+          "t": "Re-embed chunks in place, oldest first, over a few weeks, so the upgrade never needs a second index or extra RAM",
+          "correct": false,
+          "why": "This is the trap. During the rollout the index holds a mix of geometries and every query is partly nonsense — worse, nothing errors, so the damage is invisible until quality complaints arrive."
+        },
+        {
+          "t": "Re-embed only new and edited documents, letting old ones age out",
+          "correct": false,
+          "why": "Same mixed-geometry problem, stretched over months. Enterprise corpora are mostly old documents; they never age out."
+        },
+        {
+          "t": "Take a maintenance window and re-embed everything",
+          "correct": false,
+          "why": "Honest, but the backfill is a day-plus GPU job at this size and you'd be offline the whole time — with no rollback if the new model turns out worse on your corpus."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "monitoring",
+      "q": "Yesterday's chunker deploy quietly hurt retrieval quality. Which monitor catches it before users do?",
+      "options": [
+        {
+          "t": "Canary queries with known-correct documents, alerting when a known doc leaves the top ten",
+          "correct": true,
+          "why": "Recall regressions throw no exceptions — this is the whole problem. A synthetic golden set running in production converts a silent quality rot into a page, the same way a health check converts a silent hang into an alert."
+        },
+        {
+          "t": "p99 retrieval latency",
+          "correct": false,
+          "why": "Latency will look perfect. A pipeline returning the wrong chunks returns them just as fast as the right ones — that's exactly why RAG needs quality monitoring, not just performance monitoring."
+        },
+        {
+          "t": "Error rate on the query endpoint",
+          "correct": false,
+          "why": "Nothing errored. Bad retrieval is a 200 OK with the wrong body, and downstream the LLM will happily dress it up in fluent prose."
+        },
+        {
+          "t": "Index freshness lag — the gap between a chunk's upsert timestamp and the moment it becomes searchable",
+          "correct": false,
+          "why": "Worth watching, and it would catch a stalled pipeline — but the chunks here were indexed promptly, just split badly."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "failure",
+      "q": "One shard of 32 loses all its replicas mid-incident. What should the query path do?",
+      "options": [
+        {
+          "t": "Answer from the surviving 31 shards, flagged degraded, and say so in the response",
+          "correct": true,
+          "why": "In RAG a missing shard doesn't error — it silently narrows what the LLM knows, and the model will still answer confidently from an incomplete corpus. Honest partial recall beats silent partial recall; users forgive 'some sources unavailable' and never forgive invented answers."
+        },
+        {
+          "t": "Fail the whole query with a 503 until the shard is restored, so no user ever sees an answer built on partial data",
+          "correct": false,
+          "why": "Defensible for a payments ledger, heavy-handed here. 31/32 of the corpus still answers most questions well — refusing everything trades a small quality dip for a total outage."
+        },
+        {
+          "t": "Return the partial results normally; users won't notice",
+          "correct": false,
+          "why": "They won't notice, and that's the danger. An answer built on a silently truncated corpus reads exactly like a good answer, which is how a product loses trust permanently."
+        },
+        {
+          "t": "Rebuild the shard synchronously before answering",
+          "correct": false,
+          "why": "Rebuilding 30M vectors takes hours. Recovery runs in the background; the query path needs a decision now."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "sizing",
+      "q": "A legal-tech startup: 2M documents → ~20M chunks, 50 queries/sec, growing 2% a month. What do you build?",
+      "options": [
+        {
+          "t": "Single-node HNSW plus a replica, no compression, hybrid search on the Postgres they already run",
+          "correct": true,
+          "why": "20M × 3 KB = 60 GB — one large-memory box holds it uncompressed, so skip the recall loss you don't have to pay. Then name the escalation trigger: shard when the corpus passes ~100M chunks. Simplicity plus a trigger reads senior."
+        },
+        {
+          "t": "The 32-shard quantized cluster from the chapter, sized down — same architecture, fewer machines, room to grow into",
+          "correct": false,
+          "why": "Sharding machinery against 60 GB is the over-engineering pattern from p0c01. Every shard is an on-call burden bought against imaginary load — at 2% monthly growth, 20M chunks takes about seven years to reach 100M."
+        },
+        {
+          "t": "Brute-force exact search over all 20M chunks per query",
+          "correct": false,
+          "why": "Closer to reasonable than the cluster, but 20M exact comparisons × 50 QPS is real CPU for no benefit — HNSW gives ~99% recall at a fraction of the cost, on the same single machine."
+        },
+        {
+          "t": "A managed vector database, so scale is someone else's problem",
+          "correct": false,
+          "why": "Fine operationally, but it dodges the design question and doesn't excuse skipping the sizing math. Do the arithmetic first, then decide who runs the box."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "consistency",
+      "q": "Your BM25 index and your vector index disagree about whether a document exists. What's the most likely root cause, and the structural fix?",
+      "options": [
+        {
+          "t": "Two ingest paths drifted — one pipeline should write both indexes from the same event",
+          "correct": true,
+          "why": "Whenever two stores are written independently, they eventually diverge — one retried, one dropped, one deployed while the other was down. One event stream driving both writes, with a reconciliation job comparing counts by document, is the structural answer."
+        },
+        {
+          "t": "The vector index has a recall miss — raise ef_search",
+          "correct": false,
+          "why": "Recall misses mean a document exists but wasn't returned for a particular query. 'Doesn't exist at all' is an ingest problem, and tuning search hides it rather than fixing it."
+        },
+        {
+          "t": "The document's ACLs differ between the two indexes",
+          "correct": false,
+          "why": "A real bug class worth checking, but a permissions mismatch is a different symptom — visible to some users, not an existence disagreement."
+        },
+        {
+          "t": "Expected behavior — the two indexes are eventually consistent, and they will converge on their own once ingest catches up",
+          "correct": false,
+          "why": "Some lag is fine; permanent divergence is not, and calling it 'eventual consistency' is how drift becomes invisible. Bound the lag, then alert when it's exceeded."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q19",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Interviewer: \"Which index would you use for 1B vectors at 5K QPS with 5-minute freshness?\" Which answer grades senior?",
+      "options": [
+        {
+          "t": "\"HNSW over PQ codes, 32 shards, exact re-rank on the top 100. HNSW because incremental inserts carry the freshness requirement; PQ because 3 TB of fp32 in RAM isn't affordable. The costs I accept: highest RAM in the family, slow builds, tombstone deletes. If the fleet bill bites, DiskANN is my escape hatch.\"",
+          "correct": true,
+          "why": "Commitment, a reason tied to a stated requirement, an honest price, and a named alternative held in reserve. That's the full senior package — and notice the reason is a requirement, not a benchmark result."
+        },
+        {
+          "t": "\"HNSW, IVF and DiskANN are all viable here. HNSW gives the best recall-latency profile but wants a lot of RAM; IVF is cheaper in memory but has a recall cliff; DiskANN pushes the graph to SSD and saves hardware at some cost in tail latency. Each has real trade-offs, so it depends on what the workload prioritizes.\"",
+          "correct": false,
+          "why": "Every sentence is true and nothing is decided. This is the option-listing pattern that caps candidates at mid-level — the workload numbers were given, so 'it depends' has no excuse."
+        },
+        {
+          "t": "\"HNSW — it's what every vector database uses.\"",
+          "correct": false,
+          "why": "Right call, no mechanism. Popularity isn't a justification, and the follow-up ('why?') will expose whether you know what the choice costs."
+        },
+        {
+          "t": "\"IVF-PQ — it's the most memory-efficient at a billion vectors.\"",
+          "correct": false,
+          "why": "A commitment, and defensible on memory alone — but it ignores the freshness requirement that the question deliberately included. Centroid drift and periodic rebuilds fight a no-maintenance-window promise, and not naming that gap is what loses the point."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "crux",
+      "q": "Five minutes into the RAG question, which opening statement shows you've found the crux?",
+      "options": [
+        {
+          "t": "\"The hard part is approximate search at a billion vectors — recall, latency and memory pull against each other, and retrieval quality gates whether the LLM tells the truth. I want most of our time there.\"",
+          "correct": true,
+          "why": "Names the technical crux (the ANN triangle) and why it matters (bad retrieval produces confident wrong answers), then claims the agenda. Triage plus driving, in one sentence."
+        },
+        {
+          "t": "\"The hard part is picking the right LLM for the answering step.\"",
+          "correct": false,
+          "why": "That's the part you rent. Model selection is a procurement decision with an API in front of it — the system you were asked to design is everything upstream of it."
+        },
+        {
+          "t": "\"The hard part is prompt engineering — getting the model to cite its sources, to refuse when the retrieved context doesn't actually support an answer, and to format citations consistently enough that the product can render them as links back to the source documents.\"",
+          "correct": false,
+          "why": "All real product work, and all of it is a prompt plus a chunk-ID passthrough. None of it is a distributed systems problem, and none of it rescues a retrieval stage that handed the model the wrong chunks in the first place."
+        },
+        {
+          "t": "\"The hard part is scaling the API gateway to 5,000 requests per second.\"",
+          "correct": false,
+          "why": "5K QPS through a stateless gateway is a solved, routine problem — this is touring the room with curtains while the search room burns."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Product says recall@10 is 91% and they need 96%. Which response reads senior?",
+      "options": [
+        {
+          "t": "\"Three knobs, priced: raise ef_search (latency, no new hardware), deepen rerank 100 → 300 (GPU, ~20 ms), or prepend section context when chunking (a re-embed, free at query time). I'd run all three against the eval set and ship the best recall per millisecond.\"",
+          "correct": true,
+          "why": "Enumerates the actual levers, attaches a cost to each, and lets the measurement decide instead of intuition. Notice the eval suite is what makes this answer possible — without it, every option is a guess."
+        },
+        {
+          "t": "\"I'd upgrade to a stronger embedding model — the retrieval quality ceiling is set by the embeddings, so a better model lifts every query at once rather than trading latency for recall the way tuning does.\"",
+          "correct": false,
+          "why": "The most expensive lever reached for first — a full corpus re-embed and dual-index migration — with no evidence the embeddings are what's failing. Diagnose before you migrate."
+        },
+        {
+          "t": "\"Increase top_k so more chunks reach the LLM.\"",
+          "correct": false,
+          "why": "This changes what the LLM sees, not what retrieval finds; recall@10 is defined at ten. And stuffing more context costs tokens forever while adding distractors that measurably hurt answers."
+        },
+        {
+          "t": "\"91% is already strong — I'd push back on the target.\"",
+          "correct": false,
+          "why": "Sometimes right in real life, but here it declines the engineering question. If you're going to push back, do it with the cost curve in hand: 'the last 5% costs X ms and Y dollars, here's the trade.'"
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "cost",
+      "q": "Interviewer: \"Context windows are huge now. Why not skip retrieval quality work and stuff the top 1,000 chunks into the prompt?\"",
+      "options": [
+        {
+          "t": "\"That's the worst corner of the cost triangle: maximum token spend on every query forever, and measurably worse answers, because irrelevant context distracts the model. Five right chunks beat fifty hopeful ones on both cost and faithfulness.\"",
+          "correct": true,
+          "why": "Names the trade honestly and points out that precision is the rare investment paying on both axes at once — cheaper and more accurate. That's the virtuous loop the whole pipeline exists to buy."
+        },
+        {
+          "t": "\"Because context windows aren't actually that large yet.\"",
+          "correct": false,
+          "why": "Factually shaky and beside the point. Even with unlimited context the economics and the distraction effect still argue for precision."
+        },
+        {
+          "t": "\"Because retrieving 1,000 chunks would be too slow.\"",
+          "correct": false,
+          "why": "Retrieving 1,000 candidates is barely slower than 100 — the ANN search dominates either way. The real costs are per-token spend and answer quality, not retrieval time."
+        },
+        {
+          "t": "\"Fair — if tokens keep getting cheaper the retrieval quality work stops paying for itself, and stuffing the window becomes the simpler architecture with fewer moving parts to operate.\"",
+          "correct": false,
+          "why": "Concedes the wrong half. Even at zero token cost, burying the answer among 999 irrelevant passages produces worse answers — quality isn't only a budget argument."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "debugging",
+      "q": "A user reports a confidently wrong answer with a real-looking citation. What's your first diagnostic step?",
+      "options": [
+        {
+          "t": "Pull the retrieved context for that query and check whether the correct chunk was in the prompt at all",
+          "correct": true,
+          "why": "One question splits the debugging space in half. Not in the prompt → retrieval bug (embedding, chunking, filters, recall). In the prompt but ignored or contradicted → generation bug (prompt assembly or the model). Teams that skip this split argue about the LLM for a week."
+        },
+        {
+          "t": "Re-run the query and see whether it reproduces",
+          "correct": false,
+          "why": "Worth doing, but reproduction alone tells you nothing about which half is broken — and retrieval is deterministic enough that it usually reproduces without explaining anything."
+        },
+        {
+          "t": "Tune the prompt to instruct the model not to hallucinate",
+          "correct": false,
+          "why": "Jumping to a fix before the diagnosis. If retrieval never surfaced the right passage, no instruction saves the answer — you've asked the model to be truthful about facts it was never given."
+        },
+        {
+          "t": "Add the correct document to the index, since the model clearly didn't have access to it when it answered",
+          "correct": false,
+          "why": "Assumes the answer without checking. It might already be indexed and simply unretrieved — patching one document also leaves every similar query broken."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "scale",
+      "q": "\"Now 10x it — 10 billion chunks.\" What breaks first, and what's your response?",
+      "options": [
+        {
+          "t": "\"RAM does. PQ codes alone reach ~1 TB plus graph links, and the fleet bill turns hostile — so I exercise the DiskANN escape hatch: codes in RAM, graph and exact vectors on NVMe. Hot tenants stay resident, cold tenants serve from SSD, and ingest gets a near-duplicate pass, because enterprise corpora are full of repeated boilerplate.\"",
+          "correct": true,
+          "why": "Names what breaks and in what order, exercises a hatch that was declared before it was needed, and adds a corpus-shaped optimization. Calmly evolving a design under a 10x push is exactly what the push exists to elicit."
+        },
+        {
+          "t": "\"Query latency breaks first. HNSW search cost grows with the number of vectors in the graph, so ten times the corpus means noticeably deeper graph walks on every query, p99 drifts past the 100 ms budget, and the response is to keep raising the shard count until each shard's graph is back to the size it is today.\"",
+          "correct": false,
+          "why": "Graph search cost grows roughly logarithmically, not linearly, and sharding keeps per-shard size flat anyway — so latency is the resilient part here. The memory bill is what actually falls over, and this answer never prices it."
+        },
+        {
+          "t": "\"Add more shards — the design is horizontally scalable, so ten times the vectors is just ten times the shard count, and each shard keeps serving the same per-query latency it does today.\"",
+          "correct": false,
+          "why": "More shards is the mechanism, not the analysis, and 'horizontally scalable' as an incantation is a shield interviewers push straight through. Ten times the shards is also ten times the RAM bill you haven't priced."
+        },
+        {
+          "t": "\"Redesign around a fully disk-based architecture from scratch.\"",
+          "correct": false,
+          "why": "Throwing away a working design reads as panic. The escape hatch was already named for this moment — swap the storage tier, keep the pipeline, and state what it costs in p99."
+        }
+      ]
+    },
+    {
+      "id": "p3c24-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "evaluation",
+      "q": "You inherit a live RAG system with no labeled evaluation set. Leadership wants three quality improvements shipped this quarter. First move?",
+      "options": [
+        {
+          "t": "Build the golden set first — a few hundred labeled queries — then let it pick the three changes",
+          "correct": true,
+          "why": "Every knob in this system trades quality against cost, so without measurement all three 'improvements' are coin flips you can't even grade afterwards. The labeling effort is the cheapest component in the whole system and it gates every later decision, including model migrations."
+        },
+        {
+          "t": "Ship the three highest-confidence fixes now and build the evaluation harness afterwards, once the quarter's commitments are already delivered",
+          "correct": false,
+          "why": "Speed sounds pragmatic until a change regresses quality silently — and with no baseline you can't tell which of the three did it, or even that anything got worse."
+        },
+        {
+          "t": "Upgrade the embedding model, the reranker, and the chunker together for maximum impact",
+          "correct": false,
+          "why": "Three simultaneous changes with no measurement is the least debuggable move available. Even with an eval set you'd stage these; without one it's pure superstition."
+        },
+        {
+          "t": "Instrument thumbs-up/thumbs-down feedback and wait for signal",
+          "correct": false,
+          "why": "Useful long-term and worth adding, but the signal is sparse, biased, and slow — and it never tells you whether a bad answer was a retrieval failure or a generation failure. A labeled set answers that in an afternoon."
+        }
+      ]
+    }
+  ]
+}

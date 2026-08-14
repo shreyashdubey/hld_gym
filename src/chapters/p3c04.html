@@ -16,7 +16,7 @@
 <li><strong>Never lose an accepted message.</strong> Once the server acknowledges, the message survives crashes, restarts, deploys. This is the load-bearing sentence of the design.</li>
 <li><strong>Ordered within a conversation.</strong> Everyone sees the same messages in the same order. Across different chats we don't care — and saying so is a senior move, because global ordering is expensive and useless here.</li>
 <li><strong>Fast when online:</strong> send-to-deliver under 500&nbsp;ms at p95 when both parties are connected.</li>
-<li><strong>Scale:</strong> 1&nbsp;billion users, 50&nbsp;billion messages a day. (Real WhatsApp passed 2 billion users and 100 billion messages a day in 2020 — we're designing at a conservative half of reality.)</li>
+<li><strong>Scale:</strong> 1&nbsp;billion users, 50&nbsp;billion messages a day. (Real WhatsApp passed 2 billion users and 100 billion messages a day back in 2020 and has only grown since — we're designing at a conservative fraction of reality.)</li>
 <li><strong>Availability over consistency for presence</strong> — a stale "online" dot is harmless. <strong>The opposite for messages</strong> — a lost message is a broken promise.</li>
 </ul>
 
@@ -26,7 +26,7 @@
 
 <p><strong>Message rate.</strong> 50 billion over 86,400 seconds ≈ 580K messages per second average. Evenings peak around 3x — call it <strong>1.5–2 million per second</strong>, and New Year's Eve blows past even that. Conclusion: no single anything sits on the message path. Every tier shards.</p>
 
-<p><strong>Concurrent connections.</strong> The number most candidates miss, and the one that shapes the architecture. Sub-second delivery means no polling — every online user holds a <em>persistent connection</em>. If 40% of a billion users are connected at any moment, that's <strong>400 million open sockets</strong>. A well-tuned server holds 1–2 million idle connections (an idle socket costs memory and a heartbeat, not CPU). So the connection tier is roughly <strong>400–500 machines, sized by socket count, not request throughput</strong>. A different scaling axis than anything we've designed before — it's why this chapter exists.</p>
+<p><strong>Concurrent connections.</strong> The number most candidates miss, and the one that shapes the architecture. Sub-second delivery means no polling — every online user holds a <em>persistent connection</em>. If 40% of a billion users are connected at any moment, that's <strong>400 million open sockets</strong>. A well-tuned server holds 1–2 million idle connections (an idle socket costs memory and a heartbeat, not CPU). Take the conservative end: 400M ÷ 1M is <strong>400 gateways to carry the load, ~500 with failure headroom — a tier sized by socket count, not request throughput</strong>. A different scaling axis than anything we've designed before — it's why this chapter exists.</p>
 
 <p><strong>Storage.</strong> A text message is ~200 bytes with metadata. 50B/day × 200B ≈ <strong>10&nbsp;TB/day</strong>, ~3.6&nbsp;PB/year before replication. Write-heavy, append-only, never updated, read as "recent messages in one conversation." That shape screams wide-column LSM store (Cassandra/HBase-class — Chapter 1.13), not a relational database. Media is 100x bigger but boring: blob storage behind a CDN (Chapter 1.7), message carries a pointer. Decision made; media never appears again.</p>
 
@@ -57,10 +57,10 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
   <text class="dg-txt" x="160" y="68">LB</text>
   <rect class="dg-node-alt" x="255" y="40" width="115" height="46" rx="8"/>
   <text class="dg-txt" x="267" y="62">Gateway 17</text>
-  <text class="dg-txt-s" x="267" y="78">holds A's socket</text>
+  <text class="dg-txt-s" x="267" y="78">A's socket</text>
   <rect class="dg-node-alt" x="470" y="40" width="115" height="46" rx="8"/>
   <text class="dg-txt" x="482" y="62">Gateway 42</text>
-  <text class="dg-txt-s" x="482" y="78">holds B's socket</text>
+  <text class="dg-txt-s" x="482" y="78">B's socket</text>
   <rect class="dg-node" x="620" y="40" width="90" height="46" rx="8"/>
   <text class="dg-txt" x="632" y="62">Phone B</text>
   <text class="dg-txt-s" x="632" y="78">recipient</text>
@@ -79,7 +79,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
   <text class="dg-txt" x="52" y="262">Message svc + Cassandra</text>
   <text class="dg-txt-s" x="52" y="280">durable write, assigns seq</text>
   <line class="dg-edge" x1="295" y1="86" x2="180" y2="240" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="150" y="150">1. persist FIRST</text>
+  <text class="dg-txt-s" x="128" y="150">1. persist FIRST</text>
   <rect class="dg-node" x="470" y="240" width="170" height="56" rx="8"/>
   <text class="dg-txt" x="482" y="262">Push (FCM/APNs)</text>
   <text class="dg-txt-s" x="482" y="280">if B is offline</text>
@@ -119,10 +119,10 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
   <line class="dg-edge" stroke-dasharray="3,5" x1="600" y1="42" x2="600" y2="360"/>
   <line class="dg-edge" x1="120" y1="75" x2="360" y2="75" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="150" y="67">send m1 (id a1b2) — retries until ✓</text>
-  <rect class="dg-node-alt" x="310" y="88" width="120" height="24" rx="6"/>
-  <text class="dg-txt-s" x="320" y="104">durable write, seq 42</text>
+  <rect class="dg-node-alt" x="298" y="88" width="154" height="24" rx="6"/>
+  <text class="dg-txt-s" x="308" y="104">durable write, seq 42</text>
   <line class="dg-edge" x1="360" y1="135" x2="120" y2="135" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="180" y="127">✓  ack (seq 42) — the promise</text>
+  <text class="dg-txt-s" x="148" y="127">✓  ack (seq 42) — the promise</text>
   <line class="dg-edge" x1="360" y1="175" x2="600" y2="175" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="410" y="167">deliver m1 (seq 42)</text>
   <line class="dg-edge" x1="600" y1="210" x2="360" y2="210" marker-end="url(#arrow)"/>
@@ -186,7 +186,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
   <text class="dg-txt-s" x="332" y="208">drains in seq order</text>
   <line class="dg-edge" x1="255" y1="150" x2="320" y2="185" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="470" y1="194" x2="580" y2="115" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="480" y="160">43, 44, 17…</text>
+  <text class="dg-txt-s" x="476" y="212">43, 44, 17…</text>
   <line class="dg-edge" x1="625" y1="103" x2="480" y2="180" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="560" y="180">ack highest</text>
   <text class="dg-txt-s" x="560" y="196">→ rows trimmed</text>
@@ -196,7 +196,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 
 <h2>Deep dive 3: storage that survives years of messages</h2>
 
-<p>Commit: Cassandra-class wide-column store. Why: 580K writes/sec is bread and butter for an LSM engine that turns writes into sequential appends; the read pattern ("latest N of one conversation") maps onto one partition read; and messages are immutable, so we give up nothing by giving up transactions. Postgres would need heroic sharding to take this write volume; Cassandra takes it natively — essentially Discord's design, which moved trillions of messages through Cassandra and later ScyllaDB on the same data model.</p>
+<p>Commit: Cassandra-class wide-column store. Why: 580K writes/sec is bread and butter for an LSM engine that turns writes into sequential appends; the read pattern ("latest N of one conversation") maps onto one partition read; and messages are immutable, so we give up nothing by giving up transactions. Postgres would need heroic sharding to take this write volume; Cassandra takes it natively. This is Discord's design, near enough: they moved trillions of messages through Cassandra and later ScyllaDB on the same data model.</p>
 
 <p>The trap is the partition key. <code>conversation_id</code> alone means one partition holds a conversation's <em>entire history</em> — and a busy group grows that partition forever. Unbounded partitions are the Chapter 2.6 disease: multi-gigabyte partitions, compaction pain, one hot node. The fix is worth naming precisely: partition by <strong><code>(conversation_id, time_bucket)</code></strong> — say one bucket per month — clustered by <code>seq</code> descending. Every partition is now bounded, "recent messages" reads the newest bucket, and paging history walks backwards bucket by bucket.</p>
 
@@ -239,7 +239,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 <p><strong>What I'd watch</strong> (Chapter 2.8 discipline): send→delivered p50/p99 for online pairs — the product-truth metric; ack latency (server health); reconnect rate (storm detector); inbox backlog depth and <em>age</em> (is offline delivery draining?); per-gateway connection count; push success rate. Page on delivery p99 and reconnect spikes; dashboard the rest. <strong>At 10x:</strong> gateways and Cassandra scale by adding boxes, since partitions stay bounded — the real pain is amplification: group fan-out multiplying inbox writes, and the registry under 10x-sized reconnect herds. I'd invest there first.</p>
 
 <div class="box story"><div class="box-tag">War story — WhatsApp's New Year's Eve</div>
-<p>New Year's Eve is chat's Super Bowl: the whole planet sends "Happy New Year" inside the same rolling midnight hour, time zone by time zone. On December 31, 2017, WhatsApp processed a record <strong>75 billion messages in one day</strong> — 13 billion images, 5 billion videos — with about <strong>20 billion from India alone</strong>, whose midnight lands in one synchronized burst. The previous record, 63 billion, was set exactly one year earlier: the peak grows double-digit percent every year, on schedule. And that same night the pressure showed — WhatsApp went down for around an hour across several regions, users fleeing to other apps with their midnight wishes. Both halves belong in your interview: chat load is brutally calendar-driven, so capacity-plan for the year's known worst hour, not the average second — and even the best-run messaging system on Earth still buckled at its peak. Design the degradation path before midnight does it for you.</p>
+<p>New Year's Eve is chat's Super Bowl: the whole planet sends "Happy New Year" inside the same rolling midnight hour, time zone by time zone. On December 31, 2017, WhatsApp processed a record <strong>75 billion messages in one day</strong> — 13 billion images, 5 billion videos — with about <strong>20 billion from India alone</strong>, whose midnight lands in one synchronized burst. The previous record, 63 billion, was set exactly one year earlier: the peak grows double-digit percent every year, on schedule. And on that same New Year's Eve the service went dark for roughly an hour across several countries — WhatsApp never published a cause, so nobody outside the company can pin it on the load, but the timing is a useful piece of theatre. Both halves belong in your interview: chat load is brutally calendar-driven, so capacity-plan for the year's known worst hour rather than the average second, and design the degradation path yourself — because the one night everybody is watching is the worst night to be improvising it.</p>
 </div>
 
 <div class="box lens"><div class="box-tag">At the whiteboard</div>

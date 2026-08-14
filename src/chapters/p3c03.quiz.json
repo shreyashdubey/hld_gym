@@ -5,9 +5,9 @@
       "id": "p3c03-q01", "level": 1, "type": "mcq", "tag": "estimation",
       "q": "When estimating load for a notification system, what is the real unit of work?",
       "options": [
-        {"t": "Events per second arriving from producers", "correct": false,
+        {"t": "Events per second arriving from producers, since that is what the ingest API counts", "correct": false,
          "why": "Events are tiny — one marketing campaign is one event. The work explodes after that: one campaign row can mean 40 million individual sends."},
-        {"t": "Event × recipients — every recipient needs their own gates, tokens, and rendered payload", "correct": true,
+        {"t": "Event × recipients — every recipient needs their own gates, tokens, and payload", "correct": true,
          "why": "Right. Each recipient gets their own preference check, dedup key, and payload. One event addressing 40M users at a 10-minute deadline is ~70K sends/sec — that product is what you size for."},
         {"t": "Bytes of notification content per day", "correct": false,
          "why": "Payloads are small (a push is ~1KB). Storage matters for the tracking log, but throughput — sends per second — is what shapes this architecture."},
@@ -21,9 +21,9 @@
       "options": [
         {"t": "Queues make delivery faster than direct API calls", "correct": false,
          "why": "Queues add a hop — they don't speed anything up. Their value is absorbing bursts and outages, not latency."},
-        {"t": "No synchronous path survives one event becoming 40 million sends, and queues absorb provider outages for free", "correct": true,
+        {"t": "No synchronous path survives one event becoming 40 million sends", "correct": true,
          "why": "Exactly. A producer can't wait for 40M deliveries, and when APNs goes down for an hour, the queue holds 72M messages while workers back off. Burst absorption is the queue's whole job here."},
-        {"t": "Third-party gateways only accept messages from message queues", "correct": false,
+        {"t": "Gateways like APNs and FCM only accept traffic from a message queue, never from a service directly", "correct": false,
          "why": "Gateways accept plain HTTP requests from anything. The queue is our architecture choice, invisible to APNs or Twilio."},
         {"t": "Synchronous sends can't be logged for tracking", "correct": false,
          "why": "You can log anything. The problem with synchronous fan-out is scale and failure absorption, not logging."}
@@ -61,11 +61,11 @@
       "id": "p3c03-q05", "level": 1, "type": "mcq", "tag": "receipts",
       "q": "In the tracking store, why are 'sent' and 'delivered' separate statuses?",
       "options": [
-        {"t": "Because a gateway accepting a message doesn't mean the phone got it — the truth arrives later, via receipts, or never", "correct": true,
+        {"t": "A gateway accepting a message doesn't mean the phone ever got it", "correct": true,
          "why": "Right. A 200 from APNs means 'accepted.' Delivery is confirmed (if ever) by asynchronous receipts — DLRs for SMS, feedback for push. Conflating the two poisons every metric built on top."},
         {"t": "To make the database schema more normalized", "correct": false,
          "why": "This isn't a data-modeling nicety. The two statuses describe genuinely different facts learned at different times from different sources."},
-        {"t": "'Sent' is for push and 'delivered' is for SMS", "correct": false,
+        {"t": "'Sent' applies to push notifications and 'delivered' applies to SMS, which reports differently", "correct": false,
          "why": "Both statuses apply to every channel. Every channel has a hand-off moment and a (possibly never-arriving) confirmation moment."},
         {"t": "Legal compliance requires storing both", "correct": false,
          "why": "Compliance cares about suppression lists and consent, not this. The sent/delivered split exists because providers accept messages they'll never deliver."}
@@ -91,11 +91,11 @@
       "options": [
         {"t": "Phones are offline too often for any guarantee to hold", "correct": false,
          "why": "Offline phones delay delivery; they don't create the duplicate-vs-loss dilemma. The impossibility lives on the server side, in the hand-off."},
-        {"t": "No transaction spans our system and the third-party gateway, so a crash between 'send' and 'record' leaves us unable to know whether to retry", "correct": true,
+        {"t": "No transaction spans our system and the third-party gateway", "correct": true,
          "why": "That's the heart of it. Send-then-record risks a duplicate on crash; record-then-send risks a silent loss. Two systems, no shared transaction — you pick which mistake to make, you don't eliminate both."},
         {"t": "Redis is too slow to track every message", "correct": false,
          "why": "Redis handles the load fine (~400K ops/sec at burst is routine for a cluster). The problem is logical, not performance: no atomic commit across our datastore and Apple's servers."},
-        {"t": "Message queues can only provide at-most-once delivery", "correct": false,
+        {"t": "Message queues can only offer at-most-once delivery, so a retry is never safe to attempt", "correct": false,
          "why": "Modern queues happily give at-least-once — that's what we build on. The gap is the final hop into infrastructure we don't control."}
       ]
     },
@@ -105,11 +105,11 @@
       "options": [
         {"t": "To reduce queue storage costs for the critical lane", "correct": false,
          "why": "Critical queues are tiny — storage is irrelevant there. The short TTL is about meaning, not bytes."},
-        {"t": "Because an OTP older than its validity window is worthless or harmful: the code expired, the user already retried, and a late burst of stale codes is confusing and an attack surface", "correct": true,
+        {"t": "An expired code is worthless or harmful — the user has already retried", "correct": true,
          "why": "Right. 'Never lose a P0' means never lose it while it's still meaningful. Delivering hour-old login codes after an outage recovery helps nobody and can actively mislead."},
         {"t": "Short TTLs make the retry logic simpler to implement", "correct": false,
          "why": "TTL and retry logic are orthogonal — you still retry hard inside the window. The TTL encodes when the message stops being worth delivering."},
-        {"t": "Providers charge more for messages that sit in their systems longer", "correct": false,
+        {"t": "Providers charge more for messages that sit queued in their systems for longer", "correct": false,
          "why": "Pricing doesn't work that way — and the TTL is enforced in OUR queue (and via headers like apns-expiration), before the provider is involved at all."}
       ]
     },
@@ -119,7 +119,7 @@
       "options": [
         {"t": "Compresses the payload to save bandwidth", "correct": false,
          "why": "Nothing to do with compression. It's about which notifications the user's device keeps visible, not their size on the wire."},
-        {"t": "Makes a newer notification replace an older one with the same key on the device, instead of stacking", "correct": true,
+        {"t": "Makes a newer notification replace an older one with the same key on the device", "correct": true,
          "why": "Right. '37 people liked your post' replaces '12 people liked your post' rather than piling up. It's the device-side half of digest/batching logic."},
         {"t": "Merges several users' notifications into one API call to the gateway", "correct": false,
          "why": "That's request batching at the transport layer — a different (and provider-specific) optimization. Collapse keys operate per device, on display."},
@@ -133,7 +133,7 @@
       "options": [
         {"t": "It is the fix — sorting by priority is exactly what priority queues do", "correct": false,
          "why": "In a single process, sure. In a distributed log like Kafka, partitions are FIFO — there is no global sort — and even where sorting exists, the blast still shares workers and provider quota with the OTP."},
-        {"t": "Queue position is latency, and a field can't stop head-of-line blocking behind 40M messages — you need separate queues, worker pools, and provider budgets", "correct": true,
+        {"t": "Queue position is latency — stopping head-of-line blocking takes separate queues, worker pools, and provider budgets", "correct": true,
          "why": "Right. Priority must be physical infrastructure, not metadata. Separate lanes mean the blast deepens only its own queue, and a reserved slice of SMS throughput stays untouchable."},
         {"t": "Priority fields make messages too large", "correct": false,
          "why": "One extra field is bytes — size was never the issue. The issue is that shared resources (queue, workers, provider quota) transmit the blast's delay onto the OTP."},
@@ -145,11 +145,11 @@
       "id": "p3c03-q11", "level": 2, "type": "mcq", "tag": "dedup",
       "q": "The order service POSTs a notification, times out waiting for your 202, and re-POSTs the identical request. What stops the user's phone from buzzing twice?",
       "options": [
-        {"t": "The dedup gate: both requests carry the same producer-chosen event_id, so the second (event_id, user, channel) key is already claimed and gets dropped", "correct": true,
+        {"t": "The dedup gate — both requests carry the same event_id, so the second one is dropped", "correct": true,
          "why": "Exactly the p2c02 pattern. The producer picks a stable event_id, so retries are recognizable. This is also why dedup runs first in the gate order — producer retries are the common case."},
         {"t": "The rate limit gate catches the second send", "correct": false,
          "why": "Rate limits cap bulk volume per day — they'd happily pass two transactional messages. And P0/P1 traffic is exempt anyway. Wrong gate for this job."},
-        {"t": "The ingest API rejects duplicate HTTP requests automatically", "correct": false,
+        {"t": "The ingest API detects and rejects duplicate HTTP requests before they are enqueued", "correct": false,
          "why": "HTTP has no built-in duplicate detection — idempotency is something you build, keyed on the producer's event_id, which is exactly what the dedup gate does."},
         {"t": "Nothing — at-least-once means duplicates are always delivered", "correct": false,
          "why": "At-least-once means duplicates are always POSSIBLE, not always delivered. The whole point of the idempotency layer is making them rare enough to be a non-event."}
@@ -159,9 +159,9 @@
       "id": "p3c03-q12", "level": 2, "type": "mcq", "tag": "dedup",
       "q": "A channel worker claims the dedup lease, sends the push to APNs, then crashes before marking the key 'sent' and acking the queue. The lease expires. What happens next, and is that acceptable?",
       "options": [
-        {"t": "The queue redelivers, a new worker sees the expired lease, retries — and the user may get a duplicate. Acceptable, and for P0 it's the failure direction we chose on purpose", "correct": true,
+        {"t": "The queue redelivers, the retry sends again, and the user may get a duplicate — acceptable for P0", "correct": true,
          "why": "Right. This is the unclosable window: send succeeded but nothing recorded it. Retrying risks a duplicate; not retrying risks a loss. For OTPs we bias toward duplicates — two codes beats zero codes."},
-        {"t": "The message is lost forever because the queue already deleted it", "correct": false,
+        {"t": "The message is lost forever — the queue dropped it the moment the worker pulled it, and nothing recorded the send", "correct": false,
          "why": "The worker never acked, so the queue still has the message — that's exactly why we ack only after recording. Redelivery is guaranteed; the question is what the new worker does with it."},
         {"t": "Redis automatically detects that the send succeeded and marks it sent", "correct": false,
          "why": "Redis knows only what workers write to it. No component can observe 'APNs actually got this' after the fact — that missing knowledge IS the crash window."},
@@ -173,9 +173,9 @@
       "id": "p3c03-q13", "level": 2, "type": "mcq", "tag": "providers",
       "q": "SMS delivery rate in one country drops 20% overnight, but your SMS provider's API keeps returning 200 for every send. How does the well-designed system notice and react?",
       "options": [
-        {"t": "It can't — if the API says 200, the system believes delivery succeeded", "correct": false,
+        {"t": "It can't — the provider's API returns 200 for every send, so every message looks delivered from our side", "correct": false,
          "why": "That's the naive design, and this scenario is exactly why it fails. Providers accept messages that carriers then drop; accept-rate is a vanity metric."},
-        {"t": "Per-route health scores built on delivery receipts (DLRs) fall below threshold, the circuit opens for that provider+country, and traffic shifts to the backup provider — before a human wakes up", "correct": true,
+        {"t": "Per-route health scores from delivery receipts trip the circuit and shift traffic to the backup", "correct": true,
          "why": "Right. Failover triggers on the DELIVERED rate, not the accept rate, because receipts are the only vote that counts. This is why multi-provider routing exists at all."},
         {"t": "On-call notices the support tickets in the morning and switches providers manually", "correct": false,
          "why": "That's an outcome, not a design — hours of failed 2FA logins in one country. The system should act on receipt data automatically; humans get the override, not the night shift."},
@@ -231,11 +231,11 @@
       "options": [
         {"t": "APNs and FCM have degraded their service quality", "correct": false,
          "why": "A slow, steady, months-long decline with no incidents doesn't look like provider trouble — provider problems are usually sharp and route-specific."},
-        {"t": "Dead device tokens accumulating because 410/UNREGISTERED feedback isn't being processed", "correct": true,
+        {"t": "Dead device tokens accumulating because 410/UNREGISTERED feedback isn't processed", "correct": true,
          "why": "Right — tokens rot a few percent per month as users uninstall and switch phones. Skip the cleanup loop and an ever-growing share of sends go to nowhere. It's a slow-motion outage, and it also risks provider throttling."},
         {"t": "The dedup gate is dropping too many legitimate messages", "correct": false,
          "why": "Dedup drops would reduce SENDS, not the delivered fraction of sends that happen. The symptom here is sends that go out and never land — the signature of dead tokens."},
-        {"t": "Users are disabling notifications in their OS settings", "correct": false,
+        {"t": "Users are switching notifications off in their OS settings faster than new users switch them on", "correct": false,
          "why": "OS-level opt-outs affect whether notifications display, and trends do drift — but the classic cause of a steady delivered-rate decline is token rot, which your own feedback loop is supposed to prevent."}
       ]
     },
@@ -243,7 +243,7 @@
       "id": "p3c03-q18", "level": 2, "type": "mcq", "tag": "ops",
       "q": "Which alert should page a human at 3am?",
       "options": [
-        {"t": "Bulk queue depth exceeds 10 million messages", "correct": false,
+        {"t": "Bulk queue depth exceeds 10 million messages while a campaign drains", "correct": false,
          "why": "A deep bulk queue during a campaign is the system working as designed — bulk latency is allowed to stretch to hours. Depth alone on the bulk lane is a dashboard, not a page."},
         {"t": "Age of the oldest message in a critical queue exceeds 30 seconds", "correct": true,
          "why": "Right. Age-of-oldest directly measures the promise being broken — P0 delivery under 30 seconds. An old critical message means OTPs are late RIGHT NOW; that's exactly what 3am pages are for."},
@@ -257,7 +257,7 @@
       "id": "p3c03-q19", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Interviewer: 'Can you guarantee a user never receives the same notification twice?' The senior answer is:",
       "options": [
-        {"t": "\"No — and here's the exact window: a worker that sends, then crashes before recording, forces a retry-or-lose choice. My dedup design makes duplicates rare, and for OTPs I deliberately bias toward duplicates over loss.\"", "correct": true,
+        {"t": "\"No — a worker can send and then crash before recording it, and that window can't be closed. Dedup makes duplicates rare, and for OTPs I bias toward a duplicate over a loss.\"", "correct": true,
          "why": "Honest impossibility, a named mechanism, a bounded window, and a per-class policy choice. This is commit-and-justify applied to a guarantee you CAN'T give — which is itself a senior skill."},
         {"t": "\"Yes — idempotency keys in Redis guarantee exactly-once delivery.\"", "correct": false,
          "why": "Overclaiming a known impossibility is the worst answer at this level — one follow-up ('worker crashes after the send, before the Redis write?') collapses it and taints everything before it."},
@@ -273,9 +273,9 @@
       "options": [
         {"t": "The notification_log schema and its indexes", "correct": false,
          "why": "Routine room. A competent mid-level candidate designs that table in five minutes; it's not what the question was invented to probe."},
-        {"t": "At-least-once delivery into third-party gateways (dedup, crash windows, TTLs) and physical priority isolation", "correct": true,
+        {"t": "At-least-once delivery into third-party gateways, and physical priority isolation", "correct": true,
          "why": "That's the fire. The last mile runs on infrastructure you don't control, multiplied by fan-out — and the 2FA-behind-marketing failure is the incident this system exists to prevent. Everything else is plumbing."},
-        {"t": "Choosing between Kafka, RabbitMQ, and SQS for the queues", "correct": false,
+        {"t": "Comparing Kafka, RabbitMQ, and SQS in depth before defending the queue technology choice", "correct": false,
          "why": "Tool selection is a two-sentence commit ('Kafka, for partitioned durable logs at this volume'), not a deep dive. Dwelling on brand comparison reads as breadth where depth was requested."},
         {"t": "The websocket design for the in-app channel", "correct": false,
          "why": "In-app is explicitly the easy channel — no third party, just your own inbox table and a socket. Deep-diving the easiest room while the gateway problems sit untouched is crux-blindness."}
@@ -285,13 +285,13 @@
       "id": "p3c03-q21", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "The interviewer 10x's the problem: 500M-user breaking-news pushes, delivered within 5 minutes (~1.7M sends/sec). What breaks FIRST?",
       "options": [
-        {"t": "Audience resolution — a single scanner reading 500M users takes over an hour before the first push leaves; you need precomputed, chunked segment files fanned to thousands of checkpointed workers", "correct": true,
+        {"t": "Audience resolution — one scanner reading 500M users takes over an hour before the first push leaves", "correct": true,
          "why": "Right. At 100K rows/sec, one scanner needs ~83 minutes just to READ the audience — the 5-minute deadline is dead before delivery even starts. The feeding of the pipeline breaks before the pipeline does."},
         {"t": "Kafka can't store that many messages", "correct": false,
          "why": "500M × ~1KB is ~500GB — routine for a Kafka-class cluster. Durable log storage is one of the few components that shrugs at this scale."},
         {"t": "The phones can't handle notifications arriving that fast", "correct": false,
          "why": "Each phone receives exactly one push. The aggregate rate is our problem and the gateways' — never the individual device's."},
-        {"t": "The priority queue design stops working at this scale", "correct": false,
+        {"t": "The priority lane design collapses, because one breaking-news blast saturates every queue and worker pool at once", "correct": false,
          "why": "The lanes hold fine — breaking news is just a very deep queue draining fast. The chapter's point: the skeleton survives 10x; audience resolution and gate-store throughput are what need redesign."}
       ]
     },
@@ -313,9 +313,9 @@
       "id": "p3c03-q23", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Interviewer: 'Marketing sends to 50M users at 9:00; a user requests an OTP at 9:01 — trace both.' What single property of a candidate's design makes this answer fail?",
       "options": [
-        {"t": "The two messages share ANY resource — a queue, a worker pool, or a provider quota — anywhere along their paths", "correct": true,
+        {"t": "The two messages share ANY resource — a queue, a worker pool, or a provider quota", "correct": true,
          "why": "That's the whole test. One shared stage is enough for the blast's backlog to become the OTP's latency. The passing trace shows two lanes that touch only at the stateless ingest API."},
-        {"t": "The design lacks a caching layer for rendered templates", "correct": false,
+        {"t": "The design lacks a caching layer for rendered templates, so every payload is built from scratch", "correct": false,
          "why": "Render caching is a pleasant optimization — it saves CPU, not the OTP. The probe is about isolation, and no cache fixes a shared queue."},
         {"t": "The OTP path doesn't have a dedicated database", "correct": false,
          "why": "Databases aren't the contended resource in this trace — queues, workers, and provider throughput are. Adding a database per priority is isolation theater in the wrong layer."},
@@ -341,7 +341,7 @@
       "id": "p3c03-q25", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "A staff engineer argues: 'Ramp-ups, audience-size confirmations, and kill switches belong in the campaign tool's UI, not in the notification platform — keep the platform simple.' The strongest counter:",
       "options": [
-        {"t": "\"The platform is the last line of defense against every producer's worst day — HBO Max's test email reached millions because nothing between 'send' and the gateway could stop it. Guardrails in one producer's UI protect against one producer.\"", "correct": true,
+        {"t": "\"The platform is the last line of defense against every producer's worst day — HBO Max's test email reached millions because nothing between 'send' and the gateway could stop it.\"", "correct": true,
          "why": "Right. Producers multiply (auth, orders, marketing, tomorrow's new service) and each will eventually misfire — a test event resolving to production, a bad segment, a retry loop. Enforcement at the choke point covers all of them; UI checks cover one, until someone uses the API directly."},
         {"t": "\"Agreed — platform teams shouldn't second-guess product teams' sends.\"", "correct": false,
          "why": "This optimizes for org politeness over blast-radius control. Notifications have no undo; the system that can actually stop a bad blast mid-flight is the one holding the queues."},

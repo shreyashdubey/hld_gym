@@ -67,7 +67,7 @@
       "q": "The URL-seen Bloom filter returns a false positive for a brand-new URL. What actually happens?",
       "options": [
         {
-          "t": "A never-fetched page gets skipped",
+          "t": "A page nobody has ever fetched is dropped and never enters the frontier",
           "correct": true,
           "why": "Correct. 'Seen' for a genuinely new URL means it gets dropped unfetched. That's the trade: ~1% of new URLs missed at first sight, usually recovered when the URL appears again via other links or the recrawl sweep."
         },
@@ -270,7 +270,7 @@
       "q": "A host starts returning 429 Too Many Requests on 30% of fetches. The correct crawler behavior is:",
       "options": [
         {
-          "t": "Back off that host and honor Retry-After",
+          "t": "Widen that one host's delay, backing off exponentially, and honor Retry-After",
           "correct": true,
           "why": "Yes. The server explicitly told you it's overloaded; the polite (and pragmatic) response is to widen that host's timer-heap delay. Only this host slows — the frontier keeps every other host flowing."
         },
@@ -328,7 +328,7 @@
       "q": "A fetcher node crashes holding 5,000 leased URLs, 200 fetches mid-flight. What is lost?",
       "options": [
         {
-          "t": "Nothing durable is lost",
+          "t": "Nothing durable — those leases expire and the URLs get dispensed again",
           "correct": true,
           "why": "Right. Fetchers are stateless; the frontier is the durable record. At-least-once delivery plus idempotent, content-addressed writes means a crash costs a few re-downloads — pennies, not corruption."
         },
@@ -415,7 +415,7 @@
       "q": "Logs show one domain feeding you thousands of new URLs that all resolve to the same content hash. Which mechanism should be containing the damage already?",
       "options": [
         {
-          "t": "The per-domain budget",
+          "t": "The per-domain crawl budget, sized by that domain's reputation",
           "correct": true,
           "why": "Right. Pattern heuristics and content-seen help you notice, but the budget is what caps the spend: a trap can generate infinite URLs, yet it can't force you to allocate fetches to them. Containment beats detection."
         },
@@ -502,7 +502,7 @@
       "q": "Your per-hostname delays are all honored, yet one operator reports 30 req/s hitting their server. The likely cause:",
       "options": [
         {
-          "t": "Shared backend behind many hostnames",
+          "t": "Dozens of their hostnames resolve to one shared backend server",
           "correct": true,
           "why": "Right — 60 subdomains × 0.5 req/s each = 30 req/s at one origin. The fix is a second, looser politeness layer keyed by resolved IP, applied carefully so you don't collapse a whole CDN into one queue."
         },
@@ -618,7 +618,7 @@
       "q": "Requirement flip: the crawler now feeds a legal web-archive with contractual completeness. Which committed choice must you revisit first?",
       "options": [
         {
-          "t": "The Bloom-only URL-seen decision",
+          "t": "The URL-seen decision to trust the Bloom filter and drop 'maybe seen' URLs",
           "correct": true,
           "why": "Right. For search, a skipped page is invisible noise; under a completeness contract it's a breach. Same architecture, one dial flipped: 'maybe seen' now triggers a batched exact-store check before any drop. Knowing which requirement invalidates which trade IS the senior skill."
         },

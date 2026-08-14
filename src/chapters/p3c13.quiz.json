@@ -189,7 +189,7 @@
       "options": [
         {"t": "Trust the stream — it saw the events first, closest to the source", "correct": false,
          "why": "Seeing events first means seeing an incomplete set — the stream by construction misses side-output stragglers. Recency of observation is not correctness."},
-        {"t": "Trust the batch — complete input, global dedup. The invoice is already safe; root-cause the stream, starting with late-event volume and recent fraud-rule changes", "correct": true,
+        {"t": "Trust the batch — complete input, global dedup. The invoice is safe; root-cause the stream: late-event volume, fraud-rule changes", "correct": true,
          "why": "Right. The batch is correct by construction, and billing from settled means this alarm signals a stream-side quality issue, not a billing emergency. Investigate calmly — the money was never at risk."},
         {"t": "Re-run both paths from scratch and bill from whichever number two independent runs agree on — majority vote establishes the truth", "correct": false,
          "why": "The batch already reproduces itself — it's deterministic over an immutable log. Voting between paths with different input completeness is noise, not verification."},
@@ -287,7 +287,7 @@
       "options": [
         {"t": "\"A billion clicks a day will need serious horizontal scale, so let me start with the sharding strategy\"", "correct": false,
          "why": "The estimation says the opposite — 12K/sec average is a non-problem. Leading with scale on a correctness question signals the numbers never ran, which is the crux-miss this chapter exists to train away."},
-        {"t": "\"These counts are money, so the hard part is the delivery guarantee: every hop retries, and one duplicate reaching billing is a double charge. My depth goes there and on late events\"", "correct": true,
+        {"t": "\"These counts are money — one duplicate reaching billing is a double charge. Depth goes on delivery guarantees and late events\"", "correct": true,
          "why": "That's the fire. Throughput is routine; effectively-once into the billing store across crashes and retries — plus what 'complete' means on an infinite stream — is what the question was invented to probe. Announcing it and steering there is the senior pattern."},
         {"t": "\"The interesting challenge is choosing between ClickHouse, Druid, and Pinot for the analytics store — that choice shapes everything downstream\"", "correct": false,
          "why": "Store selection is a solvable, low-stakes choice here — any columnar OLAP store works, and nothing downstream hinges on which. Treating a product comparison as the crux confuses tool trivia with design difficulty."},
@@ -299,7 +299,7 @@
       "id": "p3c13-q22", "level": 3, "type": "mcq", "tag": "commit",
       "q": "The interviewer asks you to commit: 2PC transactional sink or at-least-once with idempotent upserts, for the billing store? The strongest answer:",
       "options": [
-        {"t": "\"Upsert keyed by (window, ad): replay recomputes identical rows, so duplicates are absorbed — no coordinator, no wedged transactions. I'd reach for 2PC only if the sink couldn't upsert\"", "correct": true,
+        {"t": "\"Upsert keyed by (window, ad) — replay recomputes identical rows, so duplicates are absorbed. 2PC only if the sink can't upsert\"", "correct": true,
          "why": "Commitment, the mechanism that makes it safe (stable key + deterministic recompute), the operational reason to prefer it, and a named boundary where the alternative wins — append-only ledgers and Kafka output topics genuinely need the transactional sink. The full senior package."},
         {"t": "\"The 2PC sink — it's the only true exactly-once, and a billing pipeline deserves the strongest guarantee that money can buy\"", "correct": false,
          "why": "'Strongest available' isn't a reason when a simpler mechanism achieves the same end effect. The 2PC sink adds a coordinator in the hot path, commit-latency coupling to checkpoints, and a stuck-pre-commit failure mode — costs paid for no additional correctness here."},
@@ -319,22 +319,22 @@
          "why": "A dormant job rots — and while it sleeps, you've lost the daily independent check. The comparator only detects drift if the second opinion is actually computed every day."},
         {"t": "Compromise: bill from the stream but sample-audit 1% of ad-days with the batch recount, escalating to a full audit whenever the sample disagrees", "correct": false,
          "why": "Sampling catches broad drift but misses the concentrated errors that trigger disputes — one SDK's retry bug hitting one advertiser. And a sampled audit can't answer 'reproduce my invoice' for the unsampled 99%."},
-        {"t": "Refuse: effectively-once fixes duplicates, not completeness — late clicks beyond grace never entered the stream's numbers. Settlement is also the drift alarm and the auditor's answer", "correct": true,
+        {"t": "Refuse: effectively-once fixes duplicates, not completeness — late clicks never entered the stream's numbers. Settlement is also the drift alarm", "correct": true,
          "why": "Right — the conflated guarantee is the tell. Effectively-once means no double-counting of what arrived; it says nothing about what hasn't arrived yet. Plus the Facebook lesson: without an independently computed second opinion, a quiet aggregation bug runs for years."}
       ]
     },
     {
       "id": "p3c13-q24", "level": 3, "type": "mcq", "tag": "judgment",
-      "q": "Why does this chapter set a different correctness bar than Top-K/Trending (p3c12), when both count events on a stream?",
+      "q": "A teammate proposes reusing the Top-K chapter's count-min sketch pipeline (p3c12) for click counting — same stream shape, a fraction of the state. What do you say?",
       "options": [
-        {"t": "Ad clicks arrive at much higher volume than trending events", "correct": false,
-         "why": "Volume is comparable or lower — and the estimation explicitly concludes scale isn't the issue. The difference lives in what an error costs, not in events per second."},
-        {"t": "The error bar has a dollar sign: at ~$500M/day flowing through the counters, 0.1% error is real money and legal exposure", "correct": true,
-         "why": "Right. Same stream shapes, different stakes: a trending list off by one rank harms nobody; a bill off by 0.1% is $180M/year misallocated, so sketches and approximation are inadmissible on the billing path. Pricing the error bar is the estimation move that changes the architecture."},
-        {"t": "Trending tolerates minutes of staleness, but invoices must be generated in real time the instant a billing period closes, which demands a faster pipeline", "correct": false,
-         "why": "Inverted — billing is the path that can wait (T+1 settlement), and dashboards are the ones needing freshness. The bar that differs is accuracy-and-provability, not speed."},
-        {"t": "Count-min sketches can't count above a few million", "correct": false,
-         "why": "Sketches count arbitrarily high — their issue is bounded overestimation error, which is fine for ranking and fatal for invoicing. The tool didn't hit a limit; the requirement changed."}
+        {"t": "Yes — tune the sketch's width and depth until its error is under 0.1%, which is far smaller than any advertiser would ever notice on an invoice", "correct": false,
+         "why": "A sketch's error bound is probabilistic and one-directional: it never undercounts, it overcounts by an amount that depends on the key distribution. 'Under 0.1%' is not a promise you can make to an auditor about one specific ad — and 0.1% of $500M/day is $500K/day anyway."},
+        {"t": "No on the billing path — sketch error is revenue error at ~$500M/day. Sketches stay welcome on the dashboard's top-movers panel", "correct": true,
+         "why": "Right, and the nuance is what makes it senior: the sketch didn't get worse, the requirement changed. Approximation is fine where a human reads a ranking, inadmissible where every count is a line item — and the exact alternative (RocksDB state, minute rows) is cheap at this volume, which the estimation already proved."},
+        {"t": "Yes, and reconcile the sketched counts against the raw log at settlement so any drift gets corrected on the following month's invoice cycle", "correct": false,
+         "why": "If you recount from the raw log anyway, the sketch bought nothing — you pay for approximation and then throw it away. And 'corrected next cycle' still means the invoice you already sent was wrong."},
+        {"t": "No — a count-min sketch can't count past a few million", "correct": false,
+         "why": "Sketches count arbitrarily high; their issue is bounded overestimation, not a ceiling. Rejecting the right tool for a wrong reason is as damaging as accepting it for one — the interviewer hears that you don't know what the structure does."}
       ]
     },
     {
@@ -357,7 +357,7 @@
       "options": [
         {"t": "\"I'll tighten the pipeline until stream and batch always agree\"", "correct": false,
          "why": "Promising the impossible. A click sitting on an offline phone cannot appear in any real-time number — no engineering closes that gap without redefining when a click 'exists'."},
-        {"t": "\"The mismatch is late-arriving data made visible, not sloppiness. I'd label both numbers — live provisional, billable settled. Forcing a match means billing on processing time, i.e. invoices shaped by our queue lag\"", "correct": true,
+        {"t": "\"That gap is late-arriving data, not sloppiness. Label both — live provisional, billable settled. Forcing a match means billing on processing time\"", "correct": true,
          "why": "Right: name the physics, offer the honest UI fix that mature ad platforms actually use, and state the real cost of the demanded alternative. Defending a correct design with mechanism rather than assertion is a pure senior signal."},
         {"t": "\"Fair point — I'll switch dashboards to read only settled data, so they always match invoices exactly; advertisers value consistency over freshness anyway\"", "correct": false,
          "why": "It technically satisfies the demand, but silently sacrifices the requirement dashboards exist for — campaign feedback within minutes, which is how advertisers tune live campaigns. Conceding a core requirement to close a cosmetic gap is the wrong trade, and a senior says so."},
@@ -369,7 +369,7 @@
       "id": "p3c13-q27", "level": 3, "type": "mcq", "tag": "what-breaks",
       "q": "Traffic goes 10x: 10 billion clicks/day, 500K/sec peaks. What's the honest assessment of this architecture?",
       "options": [
-        {"t": "Nothing structural changes if partition count was over-provisioned up front; the work is operational — incremental checkpoints for grown state, more hot-ad salting", "correct": true,
+        {"t": "Nothing structural breaks if partitions were over-provisioned up front — the rest is operational: incremental checkpoints, more hot-ad salting", "correct": true,
          "why": "Right, and the meta-point matters at the whiteboard: a design whose hard parts were guarantees scales boringly, because guarantees don't get harder with volume. The one decision that couldn't wait was partition count, since repartitioning breaks key stickiness."},
         {"t": "The single Postgres billing store becomes the write bottleneck at 10x and must be sharded by advertiser before the traffic arrives", "correct": false,
          "why": "Run the numbers before declaring emergencies: the sink writes checkpoint-aligned batches of minute-aggregates, not per-click rows. 10x the ads' activity is still bulk upserts every few seconds — well within one well-kept Postgres."},

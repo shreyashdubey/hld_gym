@@ -54,36 +54,39 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 <p>The spine of this design is the split the estimation demanded: a <strong>metadata plane</strong> and a <strong>data plane</strong>.</p>
 
 <figure class="diagram">
-<svg viewBox="0 0 720 330" role="img" aria-label="Architecture: client talks to metadata plane for small strongly consistent operations and directly to the blob store data plane for bytes">
-  <rect class="dg-node" x="15" y="130" width="120" height="60" rx="8"/>
-  <text class="dg-txt" x="35" y="155">Client</text>
-  <text class="dg-txt-s" x="28" y="174">chunks + hashes</text>
-  <rect class="dg-zone" x="205" y="20" width="250" height="295" rx="10"/>
-  <text class="dg-txt-s" x="220" y="42">METADATA PLANE (strongly consistent)</text>
-  <rect class="dg-node" x="230" y="60" width="200" height="48" rx="8"/>
-  <text class="dg-txt" x="248" y="80">Metadata API</text>
-  <text class="dg-txt-s" x="248" y="97">check / commit / ACL</text>
-  <rect class="dg-node" x="230" y="140" width="200" height="48" rx="8"/>
-  <text class="dg-txt" x="248" y="160">Metadata DB</text>
-  <text class="dg-txt-s" x="248" y="177">sharded by namespace</text>
-  <rect class="dg-node" x="230" y="220" width="200" height="48" rx="8"/>
-  <text class="dg-txt" x="248" y="240">Journal + notifier</text>
-  <text class="dg-txt-s" x="248" y="257">cursor per namespace</text>
-  <rect class="dg-zone" x="495" y="20" width="210" height="295" rx="10"/>
-  <text class="dg-txt-s" x="510" y="42">DATA PLANE (immutable)</text>
-  <rect class="dg-node-alt" x="520" y="110" width="165" height="80" rx="8"/>
-  <text class="dg-txt" x="538" y="140">Blob store</text>
-  <text class="dg-txt-s" x="538" y="158">blocks keyed by</text>
-  <text class="dg-txt-s" x="538" y="174">SHA-256 hash</text>
-  <line class="dg-edge" x1="135" y1="145" x2="230" y2="90" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="130" y="105">check / commit (KB)</text>
-  <line class="dg-edge" x1="135" y1="180" x2="520" y2="165" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="200" y="205">blocks via presigned URL (the big bytes)</text>
-  <line class="dg-edge" x1="330" y1="108" x2="330" y2="140" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="330" y1="188" x2="330" y2="220" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="230" y1="255" x2="90" y2="255" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="90" y1="255" x2="75" y2="192" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="95" y="275">long-poll: "anything new since cursor C?"</text>
+<svg viewBox="0 0 720 360" role="img" aria-label="Architecture: client talks to the metadata plane for small strongly consistent operations and separately to the blob store data plane for bytes, which never pass through the metadata servers">
+  <rect class="dg-node" x="20" y="145" width="140" height="76" rx="8"/>
+  <text class="dg-txt" x="40" y="175">Client</text>
+  <text class="dg-txt-s" x="34" y="196">chunks + hashes</text>
+  <text class="dg-txt-s" x="34" y="212">keeps a cursor</text>
+  <rect class="dg-zone" x="230" y="15" width="470" height="150" rx="10"/>
+  <text class="dg-txt-s" x="244" y="38">METADATA PLANE — small, strongly consistent</text>
+  <rect class="dg-node" x="248" y="55" width="134" height="62" rx="8"/>
+  <text class="dg-txt" x="262" y="82">Metadata API</text>
+  <text class="dg-txt-s" x="262" y="101">check / commit</text>
+  <rect class="dg-node" x="416" y="55" width="134" height="62" rx="8"/>
+  <text class="dg-txt" x="430" y="82">Metadata DB</text>
+  <text class="dg-txt-s" x="430" y="101">shard per ns</text>
+  <rect class="dg-node" x="584" y="55" width="102" height="62" rx="8"/>
+  <text class="dg-txt" x="598" y="82">Journal</text>
+  <text class="dg-txt-s" x="598" y="101">+ notifier</text>
+  <line class="dg-edge" x1="382" y1="86" x2="416" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="550" y1="86" x2="584" y2="86" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="230" y="225" width="470" height="115" rx="10"/>
+  <text class="dg-txt-s" x="244" y="248">DATA PLANE — immutable, content-addressed</text>
+  <rect class="dg-node-alt" x="248" y="262" width="210" height="62" rx="8"/>
+  <text class="dg-txt" x="262" y="289">Blob store</text>
+  <text class="dg-txt-s" x="262" y="308">blocks keyed by SHA-256</text>
+  <text class="dg-txt-s" x="486" y="285">presigned URLs —</text>
+  <text class="dg-txt-s" x="486" y="303">no app server</text>
+  <text class="dg-txt-s" x="486" y="319">touches bytes</text>
+  <line class="dg-edge" x1="160" y1="168" x2="248" y2="90" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="136" y="100">check / commit</text>
+  <line class="dg-edge" x1="160" y1="200" x2="248" y2="285" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="52" y="246">blocks up + down</text>
+  <line class="dg-edge" x1="635" y1="117" x2="635" y2="180"/>
+  <line class="dg-edge" x1="635" y1="180" x2="162" y2="180" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="250" y="198">long-poll: anything new since cursor C?</text>
 </svg>
 <figcaption>The spine: tiny strongly consistent metadata operations on the left plane; huge immutable content-addressed bytes on the right. Bytes never pass through the metadata servers.</figcaption>
 </figure>
@@ -99,13 +102,13 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
   <rect class="dg-node" x="15" y="60" width="150" height="70" rx="8"/>
   <text class="dg-txt" x="32" y="86">1. Chunk + hash</text>
   <text class="dg-txt-s" x="32" y="104">256 blocks, SHA-256</text>
-  <text class="dg-txt-s" x="32" y="120">all local, no network</text>
+  <text class="dg-txt-s" x="32" y="120">no network yet</text>
   <rect class="dg-node" x="200" y="60" width="150" height="70" rx="8"/>
   <text class="dg-txt" x="217" y="86">2. check(hashes)</text>
   <text class="dg-txt-s" x="217" y="104">server: "254 known,</text>
   <text class="dg-txt-s" x="217" y="120">send 2"</text>
   <rect class="dg-node" x="385" y="60" width="150" height="70" rx="8"/>
-  <text class="dg-txt" x="402" y="86">3. Upload 2 blocks</text>
+  <text class="dg-txt" x="402" y="86">3. Send 2 blocks</text>
   <text class="dg-txt-s" x="402" y="104">8 MB, not 1 GB</text>
   <text class="dg-txt-s" x="402" y="120">parallel, resumable</text>
   <rect class="dg-node-alt" x="570" y="50" width="140" height="90" rx="8"/>
@@ -125,7 +128,7 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 <p><strong>The read/sync path.</strong> Every device keeps one cursor per namespace — its position in that namespace's journal. Devices hold a long-poll connection to the notifier; when a commit lands, the notifier pokes every device subscribed to that namespace, and each device pulls <code>changes?cursor=C</code>, gets the new manifests, diffs them against local state, downloads only the blocks it doesn't already have, assembles the new file version in a temp file, and renames it into place — the local filesystem's own atomic swap, mirroring the server's. Cursors make sync stateless-server and resumable: a laptop closed for three weeks just replays the journal from its old cursor. Same protocol whether you were gone three seconds or three weeks.</p>
 
 <div class="box story"><div class="box-tag">War story — Dropbox's Magic Pocket</div>
-<p>The metadata/data split isn't academic — it's what let Dropbox pull off one of the boldest infrastructure moves of the decade. From its founding, Dropbox kept file blocks in Amazon S3 and metadata on its own servers. Around 2013 they decided the economics no longer worked at their scale and spent two and a half years building Magic Pocket, a custom exabyte-scale blob store, then quietly moved more than 90% of over 500 petabytes of user data onto their own hardware, finishing in early 2016. The migration ran a custom data mover for months while the sync product kept working — possible only because blocks are immutable and content-addressed, so the data plane could be swapped underneath the sync logic like changing warehouses without reprinting a single instruction sheet. Their 2018 IPO filing put the payoff on paper: roughly $75M in infrastructure cost savings over the two years after the migration, with gross margins climbing from 46% to 67%. When your interviewer asks why you're splitting metadata from data, this is the answer with a dollar sign on it.</p>
+<p>The metadata/data split isn't academic — it's what let Dropbox pull off one of the boldest infrastructure moves of the decade. From its founding, Dropbox kept file blocks in Amazon S3 and metadata on its own servers. Around 2013 they decided the economics no longer worked at their scale and spent two and a half years building Magic Pocket, a custom exabyte-scale blob store, then quietly moved more than 90% of over 500 petabytes of user data onto their own hardware, finishing in early 2016. The migration ran a custom data mover for months while the sync product kept working — possible only because blocks are immutable and content-addressed, so the data plane could be swapped underneath the sync logic like changing warehouses without reprinting a single instruction sheet. Their 2018 IPO filing put the payoff on paper: infrastructure costs fell $39.5M in 2016 and another $35.1M in 2017 — about $75M over two years — and gross margin climbed from 33% in 2015 to 54% in 2016 to 67% in 2017, with the filing naming the migration as a main cause. When your interviewer asks why you're splitting metadata from data, this is the answer with a dollar sign on it.</p>
 </div>
 
 <h2>Deep dive 1: chunking and dedup — where the money is</h2>
@@ -184,7 +187,7 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
   <line class="dg-edge" x1="140" y1="130" x2="250" y2="65" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="140" y1="165" x2="250" y2="230" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="420" y1="58" x2="510" y2="58" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="420" y1="240" x2="530" y2="160" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="238" x2="506" y2="159" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="600" y1="180" x2="600" y2="215" marker-end="url(#arrow)"/>
 </svg>
 <figcaption>The base-version compare-and-swap turns "two people edited concurrently" from a silent overwrite into a detected fork. The reject path creates work for a human; the accept path would have destroyed some.</figcaption>
@@ -195,7 +198,7 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 <p>Edge policies, stated fast because the interviewer will probe them: edit-vs-delete conflict → the edit wins and the file resurrects (deleting content someone is actively editing is the destructive guess; trash makes real deletes recoverable anyway). Concurrent renames → one wins by CAS, the other becomes a second name conflict-copied the same way. Two devices creating the same path independently → first commit wins, second forks. One policy generates all of these: <strong>when in doubt, keep both; never destroy content on a guess.</strong></p>
 
 <div class="box story"><div class="box-tag">War story — rewriting the sync engine, Dropbox 2020</div>
-<p>How hard is this state machine really? Dropbox's original sync engine ("Sync Engine Classic," ~2007) accumulated a decade of edge cases — shared folders, selective sync, case-insensitive filesystems, offline forks — until its own engineers described it as nearly impossible to reason about or extend. In 2020 they shipped Nucleus, a ground-up rewrite in Rust, and the published design centers on exactly the concept this deep dive is built on: the client keeps <em>three trees</em> — the Remote Tree (server's latest state), the Local Tree (what's on disk), and the Synced Tree (the last state both sides agreed on — the recorded base). Diff Remote against Synced: that's what the server changed. Diff Local against Synced: that's what you changed. Both differ for the same node: that's a conflict, detected structurally rather than guessed. They validated the engine with randomized simulation testing — millions of generated offline/online interleavings replayed against the state machine, hunting for any sequence that loses a file. When a company rewrites the heart of a 700-million-user product mostly to make <em>this</em> logic provable, believe them about where the crux is.</p>
+<p>How hard is this state machine really? Dropbox's original sync engine ("Sync Engine Classic," ~2007) accumulated a decade of edge cases — shared folders, selective sync, case-insensitive filesystems, offline forks — until its own engineers described it as nearly impossible to reason about or extend. In 2020 they shipped Nucleus, a ground-up rewrite in Rust, and the published design centers on exactly the concept this deep dive is built on: the client keeps <em>three trees</em> — the Remote Tree (server's latest state), the Local Tree (what's on disk), and the Synced Tree (the last state both sides agreed on — the recorded base). Diff Remote against Synced: that's what the server changed. Diff Local against Synced: that's what you changed. Both differ for the same node: that's a conflict, detected structurally rather than guessed. They validated the engine with randomized simulation testing — millions of generated offline/online interleavings replayed against the state machine, hunting for any sequence that loses a file. When a company rewrites the heart of a product serving hundreds of millions of users mostly to make <em>this</em> logic provable, believe them about where the crux is.</p>
 </div>
 
 <h2>Deep dive 3: version history is free — until the garbage collector races an upload</h2>
@@ -222,10 +225,10 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
   <text class="dg-txt-s" x="304" y="169">refcount(h) = 0</text>
   <text class="dg-txt-s" x="304" y="185">delete h</text>
   <line class="dg-edge" x1="180" y1="91" x2="180" y2="150" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="370" y1="150" x2="370" y2="100" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="370" y1="150" x2="370" y2="100"/>
   <line class="dg-edge" x1="370" y1="100" x2="480" y2="68" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="90" y="230">Fix: check() grants a lease pinning h; GC deletes only blocks at refcount 0 whose</text>
-  <text class="dg-txt-s" x="90" y="248">grace window (&gt; max lease) has expired, after re-checking the count. Delete late, never early.</text>
+  <text class="dg-txt-s" x="90" y="248">grace window (longer than any lease) has expired. Delete late, never early.</text>
 </svg>
 <figcaption>The dedup answer "already exists" is a promise the GC must be forbidden to break. Same shape as every fencing problem: two actors, one resource, and a stale belief.</figcaption>
 </figure>

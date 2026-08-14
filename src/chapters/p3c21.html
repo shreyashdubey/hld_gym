@@ -1,0 +1,457 @@
+<p>"Design YouTube." You almost relax. You know this one: upload to blob storage, write a row, transcode it, stick a CDN in front. Six boxes, twelve minutes — and then thirty minutes of silence you have to fill.</p>
+
+<p>That silence is the interview. Every box on that first diagram is a weekend project. What isn't is the thing living between "user pressed upload" and "someone in Jakarta on a 3 Mbps phone presses play": a machine that turns one 4 GB file into forty files, and a second machine that moves an exabyte a day without the bandwidth bill eating the company. The CRUD is trivial. The pipeline and the delivery <em>are</em> the exam.</p>
+
+<p>So the first thing I say out loud, before drawing anything: <strong>which shape of video company are we?</strong> YouTube is a user-generated firehose — hundreds of hours of unknown-quality video arriving every minute, almost all of it destined to be watched by nine people. Netflix is a curated catalog — tens of thousands of titles, professionally mastered, each watched millions of times, each known about weeks before anyone can press play. That single difference pushes every later decision in opposite directions: compute spent per title, whether you can pre-position bytes before demand exists, what your cache hit rate looks like. I'll design the UGC version because it's strictly harder, and flag every place where a curated catalog buys a better answer.</p>
+
+<h2>Requirements: what I'm building, with numbers attached</h2>
+
+<p>Functional, scoped out loud: <strong>upload a video, process it, stream it back at adaptive quality, count views.</strong> Playback works on a phone, a laptop, and a TV, across a bad network. Live I'll treat as a variant at the end — it shares 70% of the pipeline and breaks the other 30% in interesting ways.</p>
+
+<p>Out of scope, said before the interviewer has to ask: recommendations, search, comments, monetization, copyright matching. Recommendations especially — that's a machine-learning system with its own chapter-length design; here it's a black box behind a 50 ms budget that returns video IDs, and if it times out I show trending. Saying that in one sentence beats twenty vague minutes on embeddings.</p>
+
+<p>Non-functional, committed rather than fished for:</p>
+
+<ul>
+<li><strong>Time to playable:</strong> a normal upload is watchable within 5 minutes at p95, not "eventually." For a UGC product that's a product metric — creators post and share the link immediately.</li>
+<li><strong>Startup latency:</strong> under 1 second from pressing play to first frame at p50, under 2 s at p95.</li>
+<li><strong>Rebuffer ratio under 0.5%</strong> — less than half a percent of playback time spent watching a spinner. This is <em>the</em> user metric for video.</li>
+<li><strong>Scale:</strong> ~500 hours uploaded per minute (the figure YouTube has publicly cited; it's only gone up, so I'll design for 500 and sanity-check at 2x). On playback, hundreds of millions of viewers and hundreds of terabits per second at peak.</li>
+<li><strong>Durability of the source file is absolute.</strong> Renditions are derived data and rebuildable; the original — the <dfn>mezzanine</dfn>, the master everything else is encoded from — must never be lost.</li>
+<li><strong>Availability:</strong> playback is the sacred path. Upload down for an hour is embarrassing. Playback down for an hour is the news.</li>
+</ul>
+
+<h2>Estimation: the three numbers that pick the architecture</h2>
+
+<p>Three calculations, each ending in a decision. Nothing else.</p>
+
+<p><strong>1. Ingest volume.</strong> 500 hours/minute = 30,000 hours/hour = <strong>720,000 hours of new video per day</strong>. Average upload bitrate across phones and cameras, call it 5 Mbps: one hour ≈ 5 Mbps × 3,600 s = 18 Gbit ≈ 2.25 GB. So ingest ≈ 720,000 × 2.25 GB ≈ <strong>1.6 PB per day</strong> of source bytes. Now the ladder multiplies it: five or six renditions per codec, two codecs, total output roughly 3–5x the source. Call it <strong>6–8 PB stored per day, a few exabytes a year</strong>, growing forever.</p>
+
+<p><strong>2. Transcode compute.</strong> One modern CPU core encodes 1080p H.264 at roughly real time on a sane preset. A full ladder — lower rungs are cheap, the top rung isn't — costs maybe 3 core-hours per source hour for H.264. A modern codec like AV1 costs on the order of 10x that. So the cheap codec alone: 720,000 × 3 = 2.16 million core-hours per day ÷ 24 = <strong>~90,000 cores running flat out, forever, in steady state</strong> — before any backlog, before AV1, before a single re-encode campaign.</p>
+
+<p><strong>3. Egress and the bill.</strong> Use the Netflix side for this one, because the numbers are public-ish: 300 million-plus paid memberships × two hours of viewing a day = 600 million viewing-hours/day. At an average 4 Mbps (4K pulls 15, phones pull 1) that's 1.8 GB per hour → <strong>~1 exabyte delivered per day</strong>, ~100 Tbps averaged out and several times that at evening peak. Now price it: commercial CDN list prices run several cents per GB, so assume you negotiate brutally down to 1 cent. An exabyte is a billion GB → <strong>$10 million a day, ~$4 billion a year</strong>, against Netflix's 2024 revenue of roughly $39 billion. A tenth of the company's revenue, spent on someone else's bandwidth.</p>
+
+<p>Now the three decisions those numbers just made, said plainly:</p>
+
+<ul>
+<li><strong>Never encode the full ladder for everything up front.</strong> 90,000 cores is what the <em>cheap</em> path costs; the expensive path costs a million. Since almost every UGC upload is watched a handful of times, I'll encode a cheap baseline immediately (get it playable), and encode the high rungs and the expensive codec <em>lazily</em>, when a video's view count crosses a threshold. Compute follows attention.</li>
+<li><strong>Parallelize transcoding across chunks.</strong> A one-hour video that takes 3 core-hours serially cannot take 3 hours of wall clock — my SLA is 5 minutes. That forces a chunked <dfn>DAG</dfn> — a graph of tasks where each step feeds the next and nothing ever loops back — which is deep dive one.</li>
+<li><strong>At this scale you stop being a CDN customer and become a CDN.</strong> $4B/year of egress buys an enormous amount of hardware placed in other people's networks. That's deep dive two, and it's why Netflix built Open Connect instead of renewing a contract.</li>
+</ul>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Think of a national newspaper. Writing the story is cheap. The expensive parts are the presses — two million copies won't come off one press overnight, so you split the run across dozens in parallel — and the trucks, which is why you print regionally and drive short distances instead of shipping from one city to every doorstep. Transcoding is the presses. The CDN is the trucks. Where it breaks: a newspaper prints one edition, while we print six editions of every story in two languages of ink, because our readers' eyesight changes minute to minute.</p>
+</div>
+
+<h2>API and data model: two minutes, then move</h2>
+
+<p>The API's only interesting property is that <strong>bytes never travel through my application servers</strong> — chapter 1.7's payoff.</p>
+
+<ul>
+<li><code>POST /videos</code> → <code>{video_id, upload_id, part_urls[]}</code>. Creates the metadata row in state <code>uploading</code> and returns pre-signed URLs pointing straight at blob storage.</li>
+<li><code>PUT &lt;presigned part url&gt;</code> — the client uploads 8 MB parts directly to the blob store, in parallel, resumable: a dropped connection on a phone re-uploads one part, not 4 GB.</li>
+<li><code>POST /videos/{id}/complete</code> → the blob store assembles the parts; we enqueue the processing job. Idempotent by <code>upload_id</code> (chapter 2.2), so a retried "complete" doesn't launch two pipelines.</li>
+<li><code>GET /videos/{id}/playback</code> → <code>{manifest_url, license_url}</code>, where the manifest URL is short-lived and signed so it can't be hotlinked.</li>
+<li>Then the player talks only to the CDN: <code>GET /master.m3u8</code>, <code>GET /v3/seg-00042.m4s</code>. Millions of requests per second that never touch my services at all.</li>
+</ul>
+
+<p>Data model, two planes. <strong>Bytes plane:</strong> object storage holds the mezzanine, the per-rung segments, and the manifests — all immutable objects. <strong>Metadata plane:</strong> <code>videos(video_id PK, owner_id, title, duration_s, status, visibility, created_at)</code>, <code>renditions(video_id, rung_id, codec, height, bitrate, state, path)</code>, <code>upload_sessions</code>. Metadata is small — a billion videos × 1 KB ≈ 1 TB — but read on every playback start, so it wants sharding by <code>video_id</code> and a cache in front. I'll commit to <strong>sharded MySQL</strong>: relational access patterns, a tiny working set, and a sharding problem that is completely solved — which is a story worth telling.</p>
+
+<div class="box story"><div class="box-tag">War story — YouTube's metadata pain became Vitess</div>
+<p>YouTube's video bytes lived in Google's storage systems, but its <em>metadata</em> — the rows describing every video and channel — ran on MySQL, and by 2010 it was buckling. Not from data volume: a billion rows is small. It buckled from connection counts (thousands of app threads each holding a MySQL connection), from single accidental queries that scanned huge tables and took replicas down with them, and from the need to shard horizontally without rewriting every query in the app. So YouTube's engineers built <strong>Vitess</strong>: a proxy layer presenting one logical database while routing to many MySQL shards underneath, pooling connections, rewriting and de-duplicating queries, and killing expensive ones before they kill a replica. Vitess was open-sourced in 2012, joined the CNCF, and graduated in 2019; it now runs under companies like Slack and Square. The lesson: in a video system the database is <em>not</em> the hard part, and yet the industry's most famous MySQL sharding layer was born there. Mention it in one sentence and move to the pipeline, where the marks are.</p>
+</div>
+
+<h2>The complete machine</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 400" role="img" aria-label="End to end video architecture with upload, transcoding pipeline, CDN read path and metadata plane">
+  <rect class="dg-node" x="10" y="40" width="90" height="46" rx="8"/>
+  <text class="dg-txt" x="22" y="68">Uploader</text>
+  <rect class="dg-node" x="126" y="40" width="100" height="46" rx="8"/>
+  <text class="dg-txt" x="138" y="63">Upload API</text>
+  <text class="dg-txt-s" x="138" y="79">presign only</text>
+  <rect class="dg-node" x="252" y="40" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="264" y="63">Blob store</text>
+  <text class="dg-txt-s" x="264" y="79">mezzanine</text>
+  <rect class="dg-node" x="398" y="40" width="112" height="46" rx="8"/>
+  <text class="dg-txt" x="410" y="63">Job queue</text>
+  <text class="dg-txt-s" x="410" y="79">priority lanes</text>
+  <rect class="dg-node-alt" x="536" y="40" width="174" height="46" rx="8"/>
+  <text class="dg-txt" x="548" y="63">Transcode farm</text>
+  <text class="dg-txt-s" x="548" y="79">chunk x rung</text>
+  <rect class="dg-node-alt" x="536" y="112" width="174" height="46" rx="8"/>
+  <text class="dg-txt" x="548" y="135">Packager</text>
+  <text class="dg-txt-s" x="548" y="151">CMAF + DRM</text>
+  <rect class="dg-node" x="536" y="184" width="174" height="46" rx="8"/>
+  <text class="dg-txt" x="548" y="207">Origin</text>
+  <text class="dg-txt-s" x="548" y="223">segments+manifests</text>
+  <rect class="dg-node" x="336" y="184" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="348" y="207">Shield tier</text>
+  <text class="dg-txt-s" x="348" y="223">coalesces misses</text>
+  <rect class="dg-node" x="166" y="184" width="130" height="46" rx="8"/>
+  <text class="dg-txt" x="178" y="207">Edge cache</text>
+  <text class="dg-txt-s" x="178" y="223">~95% hits</text>
+  <rect class="dg-node-alt" x="20" y="184" width="112" height="46" rx="8"/>
+  <text class="dg-txt" x="32" y="212">Player</text>
+  <rect class="dg-node" x="166" y="286" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="178" y="309">Playback API</text>
+  <text class="dg-txt-s" x="178" y="325">signed URLs</text>
+  <rect class="dg-node" x="356" y="286" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="368" y="309">Metadata DB</text>
+  <text class="dg-txt-s" x="368" y="325">sharded MySQL</text>
+  <rect class="dg-node" x="20" y="330" width="120" height="44" rx="8"/>
+  <text class="dg-txt-s" x="30" y="352">view events</text>
+  <text class="dg-txt-s" x="30" y="367">to stream</text>
+  <line class="dg-edge" x1="100" y1="63" x2="126" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="226" y1="63" x2="252" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="372" y1="63" x2="398" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="510" y1="63" x2="536" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="623" y1="86" x2="623" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="623" y1="158" x2="623" y2="184" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="536" y1="207" x2="486" y2="207" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="336" y1="207" x2="296" y2="207" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="166" y1="207" x2="132" y2="207" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="60" y1="230" x2="60" y2="309"/>
+  <line class="dg-edge" x1="60" y1="309" x2="166" y2="309" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="316" y1="309" x2="356" y2="309" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="110" y1="230" x2="110" y2="330" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="128" y="26">direct PUT, resumable, bypasses app tier</text>
+  <text class="dg-txt-s" x="392" y="252">on miss</text>
+  <text class="dg-txt-s" x="212" y="252">on miss</text>
+  <text class="dg-txt-s" x="14" y="272">heartbeats</text>
+</svg>
+<figcaption>Write path across the top, read path across the middle right-to-left, metadata underneath. Notice what the app tier never touches: the bytes. It hands out permission and gets out of the way.</figcaption>
+</figure>
+
+<p><strong>Write path:</strong> client asks for an upload → gets pre-signed part URLs → pushes bytes straight into blob storage → calls complete → we enqueue a pipeline job → the video sits in <code>processing</code>, visible only to its owner. Before it goes public it passes a gate: malware scan plus content fingerprinting for copyright. That gate is asynchronous and part of the same DAG — make it synchronous and you've put a machine-learning model in the upload path, so uploads now fail whenever the model is slow.</p>
+
+<p><strong>Read path:</strong> player asks the Playback API for a manifest URL → the API checks entitlement in the metadata DB, signs a short-lived URL, returns it → from there the player talks only to the CDN, fetching a manifest and then a stream of small segment files. Every one of those is an immutable, cacheable GET. That property is not an accident; it's what makes both deep dives possible.</p>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Both hard parts here are the same problem wearing two hats: <strong>bytes at planetary scale — making them, then moving them.</strong> Making them is the transcoding DAG: one file becomes dozens of renditions, fast enough to share the link in five minutes, cheap enough that 720,000 hours a day doesn't cost more than the company earns. Moving them is CDN economics: an exabyte a day can't be pulled from a central origin and can't be rented at retail prices. Everything else — API, schema, view counter — is a competent afternoon's work. Spread your 45 minutes evenly across all of it and you'll produce something technically complete that reads as junior. Say which two boxes matter, then live in them.</p>
+</div>
+
+<h2>Deep dive 1: the transcoding DAG</h2>
+
+<p>Start with the question the interviewer is really asking: <em>why transcode at all?</em> Three reasons, each multiplying the output count. <strong>Devices:</strong> a 2016 smart TV decodes H.264 and nothing else; a 2024 phone decodes AV1 and saves you 30% of the bytes. <strong>Networks:</strong> the same viewer has 25 Mbps on the sofa and 1.5 Mbps on the train. <strong>Screens:</strong> pushing 4K to a phone burns money on pixels nobody can see. Multiply codecs × resolutions × bitrates and you get the <dfn>ladder</dfn> — the renditions of one video, each a rung the player can climb or fall down.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 340" role="img" aria-label="Bitrate ladder, manifest and per-segment quality switching">
+  <rect class="dg-node-alt" x="20" y="20" width="230" height="26" rx="6"/>
+  <text class="dg-txt-s" x="30" y="38">2160p AV1</text>
+  <text class="dg-txt-s" x="258" y="38">15 Mbps</text>
+  <rect class="dg-node" x="20" y="56" width="150" height="26" rx="6"/>
+  <text class="dg-txt-s" x="30" y="74">1080p</text>
+  <text class="dg-txt-s" x="258" y="74">5 Mbps</text>
+  <rect class="dg-node" x="20" y="92" width="100" height="26" rx="6"/>
+  <text class="dg-txt-s" x="30" y="110">720p</text>
+  <text class="dg-txt-s" x="258" y="110">2.5 Mbps</text>
+  <rect class="dg-node" x="20" y="128" width="66" height="26" rx="6"/>
+  <text class="dg-txt-s" x="30" y="146">480p</text>
+  <text class="dg-txt-s" x="258" y="146">1.2 Mbps</text>
+  <rect class="dg-node" x="20" y="164" width="44" height="26" rx="6"/>
+  <text class="dg-txt-s" x="30" y="182">360p</text>
+  <text class="dg-txt-s" x="258" y="182">0.6 Mbps</text>
+  <rect class="dg-node" x="360" y="20" width="180" height="120" rx="8"/>
+  <text class="dg-txt" x="372" y="42">master.m3u8</text>
+  <text class="dg-txt-s" x="372" y="66">2160p -&gt; v5/idx.m3u8</text>
+  <text class="dg-txt-s" x="372" y="86">1080p -&gt; v4/idx.m3u8</text>
+  <text class="dg-txt-s" x="372" y="106">720p  -&gt; v3/idx.m3u8</text>
+  <text class="dg-txt-s" x="372" y="126">360p  -&gt; v1/idx.m3u8</text>
+  <rect class="dg-node-alt" x="580" y="56" width="120" height="48" rx="8"/>
+  <text class="dg-txt" x="592" y="78">Player</text>
+  <text class="dg-txt-s" x="592" y="94">picks a rung</text>
+  <line class="dg-edge" x1="540" y1="80" x2="580" y2="80" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="250" y1="80" x2="360" y2="80" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="20" y="240" width="66" height="34" rx="6"/>
+  <text class="dg-txt-s" x="30" y="262">360p</text>
+  <rect class="dg-node" x="96" y="240" width="66" height="34" rx="6"/>
+  <text class="dg-txt-s" x="106" y="262">720p</text>
+  <rect class="dg-node" x="172" y="240" width="66" height="34" rx="6"/>
+  <text class="dg-txt-s" x="182" y="262">1080p</text>
+  <rect class="dg-node" x="248" y="240" width="66" height="34" rx="6"/>
+  <text class="dg-txt-s" x="258" y="262">1080p</text>
+  <rect class="dg-node" x="324" y="240" width="66" height="34" rx="6"/>
+  <text class="dg-txt-s" x="334" y="262">480p</text>
+  <rect class="dg-node" x="400" y="240" width="66" height="34" rx="6"/>
+  <text class="dg-txt-s" x="410" y="262">1080p</text>
+  <text class="dg-txt-s" x="20" y="228">each 4 s segment is a fresh decision</text>
+  <text class="dg-bad" x="324" y="228">buffer dip</text>
+  <text class="dg-txt-s" x="490" y="262">switches are seamless because</text>
+  <text class="dg-txt-s" x="490" y="278">every rung has keyframes at</text>
+  <text class="dg-txt-s" x="490" y="294">the same timestamps</text>
+</svg>
+<figcaption>The ladder, the manifest that advertises it, and the player walking up and down it segment by segment. The red moment is a network dip — the player steps down instead of stalling.</figcaption>
+</figure>
+
+<p>Now the engineering. A one-hour video costs ~3 core-hours for its H.264 ladder — hours of wall clock on one machine, against a five-minute SLA. So: <strong>split, fan out, stitch.</strong> Cut the mezzanine into temporal chunks — 30 seconds each, so an hour becomes 120 chunks — and hand every (chunk × rung) pair to a worker. That's 600 independent tasks sharing no state. Across a few hundred workers, 3 core-hours finishes in about <strong>90 seconds of wall clock</strong>, plus queueing and stitching. Hours to minutes — and the win grows with video length, which is backwards from most systems and exactly right here: the longest videos need the most parallelism and naturally offer the most.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 360" role="img" aria-label="Transcoding DAG: split into chunks, fan out per chunk per rung, stitch and package">
+  <rect class="dg-node" x="10" y="150" width="104" height="52" rx="8"/>
+  <text class="dg-txt" x="22" y="172">Mezzanine</text>
+  <text class="dg-txt-s" x="22" y="189">4 GB source</text>
+  <rect class="dg-node" x="146" y="150" width="118" height="52" rx="8"/>
+  <text class="dg-txt" x="158" y="172">Split</text>
+  <text class="dg-txt-s" x="158" y="189">at keyframes</text>
+  <rect class="dg-node-alt" x="300" y="26" width="150" height="38" rx="8"/>
+  <text class="dg-txt-s" x="312" y="50">chunk 1 x 5 rungs</text>
+  <rect class="dg-node-alt" x="300" y="80" width="150" height="38" rx="8"/>
+  <text class="dg-txt-s" x="312" y="104">chunk 2 x 5 rungs</text>
+  <rect class="dg-node-alt" x="300" y="134" width="150" height="38" rx="8"/>
+  <text class="dg-txt-s" x="312" y="158">chunk 3 x 5 rungs</text>
+  <text class="dg-txt" x="360" y="200">...</text>
+  <rect class="dg-node-alt" x="300" y="222" width="150" height="38" rx="8"/>
+  <text class="dg-txt-s" x="312" y="246">chunk 120 x 5 rungs</text>
+  <rect class="dg-node" x="492" y="150" width="102" height="52" rx="8"/>
+  <text class="dg-txt" x="504" y="172">Stitch</text>
+  <text class="dg-txt-s" x="504" y="189">per rung</text>
+  <rect class="dg-node" x="614" y="150" width="96" height="52" rx="8"/>
+  <text class="dg-txt" x="626" y="172">Package</text>
+  <text class="dg-txt-s" x="626" y="189">CMAF+DRM</text>
+  <line class="dg-edge" x1="114" y1="176" x2="146" y2="176" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="264" y1="170" x2="300" y2="48" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="264" y1="174" x2="300" y2="100" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="264" y1="176" x2="300" y2="152" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="264" y1="184" x2="300" y2="242" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="450" y1="48" x2="492" y2="168" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="450" y1="100" x2="492" y2="172" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="450" y1="152" x2="492" y2="176" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="450" y1="242" x2="492" y2="188" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="594" y1="176" x2="614" y2="176" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="10" y="300">600 independent tasks, keyed (video, chunk, rung) so a retry overwrites, never duplicates.</text>
+  <text class="dg-txt-s" x="10" y="322">3 core-hours serial becomes ~90 s of wall clock across a few hundred workers.</text>
+  <text class="dg-txt-s" x="10" y="344">Chunk too small and compression suffers; too large and the tail task decides your SLA.</text>
+</svg>
+<figcaption>The DAG that is the answer to "how is a two-hour movie ready in minutes." Every node is retryable and idempotent; the only serial parts are split and stitch.</figcaption>
+</figure>
+
+<p><strong>The subtlety that separates candidates: you cannot cut wherever you like.</strong> Compression stores occasional complete frames (<dfn>keyframes</dfn>, decodable on their own) and stores everything between them as differences from neighbouring frames. Cut mid-run and the decoder has nothing to start from — the chunk is garbage. So splits must land on keyframes, and to guarantee keyframes exist where you want them, the encoder is forced to emit a <strong>fixed keyframe interval in closed GOPs</strong> — a <dfn>GOP</dfn> is a group of pictures, one keyframe plus the frames that lean on it, and <em>closed</em> means none of those frames reference anything outside the group. One keyframe every 2 or 4 seconds, at identical timestamps across every rung.</p>
+
+<p>That last clause does enormous work. Because every rung has keyframes at the same timestamps, segment #42 of the 360p rung and segment #42 of the 1080p rung cover the same slice of time and each starts decodable. <em>That</em> is what lets a player switch quality mid-video without a stutter: it asks for the next segment from a different rung. Adaptive streaming isn't clever player code, it's a promise made by the encoder. Break the alignment and switches show up as visible glitches or hard stalls — a week-long debugging incident.</p>
+
+<p>Two costs I'd name before being asked. Chunking hurts compression: each chunk restarts rate control and loses lookahead across its boundary, so 5-second chunks produce measurably fatter output than 60-second ones. And the tail task rules the SLA — 599 chunks done in 40 seconds means nothing if one worker is stuck. So: chunks in the tens of seconds, hedged re-execution of stragglers (duplicate any task past p99, take the first result — idempotent writes make that safe), and a quality target per rung rather than per chunk so bitrate doesn't wobble at the seams.</p>
+
+<p><strong>Orchestration</strong> is chapter 3.11 collecting rent. The DAG runs on a workflow engine that tracks per-node state, retries with backoff, and dead-letters after a cap. Every task is keyed <code>(video_id, chunk_id, rung_id)</code> and writes a deterministic object path, so a retry <em>overwrites the same object</em> — duplicate execution is harmless, which turns at-least-once into effectively-once with no distributed transaction (chapter 2.2). And crucially, <strong>priority lanes.</strong> New uploads run in the fast lane; backfill — re-encoding ten years of catalog into a new codec — runs in a starvation-proof slow lane on preemptible capacity, with a weighted scheduler guaranteeing the fast lane a floor of the fleet. Without lanes, one enthusiastic backfill quietly pushes every creator's time-to-playable from 4 minutes to 4 hours, and nobody notices until Twitter does.</p>
+
+<div class="box story"><div class="box-tag">War story — Netflix's per-title ladder, and why YouTube can't copy it</div>
+<p>Until 2015 Netflix encoded every title with the same fixed bitrate ladder — the same rungs for a cartoon and for a shaky handheld action scene. Their engineers pointed out the obvious in a now-famous tech blog post: content complexity varies enormously, so a fixed ladder over-spends bytes on simple content and under-delivers quality on complex content. Their fix — <strong>per-title encode optimization</strong> — runs a grid of trial encodes across resolutions and bitrates for each title, scores each with VMAF (the perceptual quality metric Netflix built and open-sourced in 2016, which predicts what human eyes actually rate), and picks the ladder from the best points on the resulting quality curve. Animated and low-motion titles needed dramatically less bitrate for the same measured quality; Netflix reported large average bitrate savings at equal quality, and followed up in 2018 with shot-based optimization that tunes encodes per <em>shot</em>. Here's the senior insight to say out loud: Netflix can burn a hundred times the compute analyzing one title because that title is encoded once and streamed a hundred million times — the analysis is a rounding error per view. YouTube's economics are the mirror image: most uploads are watched a handful of times, so the same math says "encode cheap first, spend big only on the head." Identical reasoning, opposite architecture, purely because the catalog shape differs.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Google built a chip because software encoding wasn't enough</div>
+<p>By the late 2010s YouTube's transcoding fleet was one of Google's largest compute consumers, and newer codecs (VP9, then AV1) made the curve worse: better compression saves bandwidth but costs enormous encode compute. Google's answer, described in their 2021 paper on warehouse-scale video acceleration, was <strong>Argos</strong> — a custom video coding unit, an ASIC built for one job, transcoding, deployed at fleet scale in YouTube's data centers. The reported gain was roughly 20–33x in compute efficiency over their optimized software encoders. The point for an interview isn't chip design; it's that transcode-versus-egress is real money on both sides — you spend compute to make bytes smaller so you spend less shipping them, and past a certain scale the right move is to buy that compute in silicon. So when the interviewer asks "what if transcode cost doubles?", "move the hot path to hardware encoders and pay for software quality only on the popular head" is a senior answer.</p>
+</div>
+
+<h2>Deep dive 1b: packaging, ABR, and DRM</h2>
+
+<p>Encoding produced pixels; <strong>packaging</strong> makes them streamable. Each rendition is sliced into <strong>segments</strong> — self-contained files of 2–10 seconds, 4 s being a good default — plus a <strong>manifest</strong> (HLS's <code>.m3u8</code> or DASH's <code>.mpd</code>) listing the rungs and where their segments live. I'll package once as <strong>CMAF</strong> fragmented-MP4: one set of segment files that both HLS and DASH manifests point at, so I store one copy instead of two. Halving storage and doubling cache hit rate for the price of writing two small text files is the cheapest win in this design.</p>
+
+<p>Segment length is a real trade-off, not trivia. Short segments react to network changes faster and cut live latency, but cost more requests and compress worse (each one starts with an expensive keyframe). Long segments compress better and are gentler on the CDN, but the player is committed to its quality choice for longer. 4 seconds for VOD; 1–2 seconds when latency matters.</p>
+
+<p><strong>ABR — adaptive bitrate — lives entirely in the player</strong>, and that's worth defending: all the intelligence sits at the edge so the server can serve dumb static files, which is why one cached copy serves millions of viewers on wildly different networks. The naive algorithm measures throughput (bytes ÷ download time of the last segment) and takes the highest rung that fits. It works, and it oscillates: video traffic is bursty and on-off, so throughput samples lie and the player flip-flops between rungs, which annoys viewers more than steady lower quality would. The refinement Netflix researchers documented at SIGCOMM in 2014, from real player data, uses <strong>buffer occupancy</strong> as the control signal instead: 30 seconds of buffer means you can afford to step up whatever a noisy sample says; a buffer draining toward zero means step down now. Real players blend both, throughput dominating at startup when the buffer is empty, plus a rule to start low so playback begins fast, then climb.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Adaptive bitrate is a cyclist changing gears on a hill. A beginner watches the road ahead and guesses the slope — that's the throughput estimator, and it's wrong every time the wind shifts. An experienced rider goes by how the pedals feel right now and how much momentum they've banked: plenty of momentum, shift up; legs burning and speed falling, shift down immediately. Buffered seconds of video are that momentum. Where the analogy breaks: a cyclist can shift any time, while a player can only change rungs at a segment boundary — so a 6-second segment is a bike that lets you shift twice a minute.</p>
+</div>
+
+<p><strong>DRM</strong> gets exactly one paragraph. Segments are encrypted once under a common encryption scheme; keys are served separately by a license server speaking each platform's DRM (Widevine, FairPlay, PlayReady) after checking entitlement and device trust. The design-relevant consequence: <strong>the bytes stay identical for every viewer, so the CDN caches one encrypted copy and never touches a key.</strong> Watermark or personalize each stream instead and your hit rate collapses to zero, taking the entire delivery strategy with it. Security decisions have cache consequences — say that sentence and move on.</p>
+
+<h2>Deep dive 2: delivery, or why you become a CDN</h2>
+
+<p>An exabyte a day, hundreds of terabits at peak, a $4B/year retail bill. The escape route is one property of the content: <strong>popularity follows a brutal power law.</strong> A tiny head — a new season drop, the top few thousand videos of the day — serves the overwhelming majority of bytes. Get that head into a cache near the user and almost all traffic is served from a few kilometres away while the origin sees a trickle.</p>
+
+<p>So delivery is a hierarchy: <strong>edge cache → regional/shield cache → origin</strong>. Target 90–95% at the edge, most of the remainder absorbed regionally, under 1% reaching origin. Two things make that easier here than for a typical web app: segments are immutable, so they cache ~forever with no invalidation logic at all, and the object count per popular title is small.</p>
+
+<p>Put a number on "the head" for a curated catalog and the strategy writes itself. 100,000 hours at ~20 GB per source hour across all rungs and codecs is a <strong>2 PB</strong> catalog. If the top 5% drives 80% of viewing — a Zipf-ish assumption I'd validate against real logs rather than believe forever — the hot head is about <strong>100 TB: one dense storage box.</strong> Most of what a whole neighbourhood wants tonight fits on a single server you could ship to their ISP. Compare a UGC firehose adding 6–8 PB <em>per day</em> with a head that moves hourly. Same first principles, two different delivery systems.</p>
+
+<p>Then the two companies diverge, and the contrast is the answer to "what's your CDN strategy?"</p>
+
+<p><strong>YouTube</strong> can't predict what will be popular — a video that didn't exist an hour ago can be the most-watched thing on earth tonight. So its caching is <em>reactive</em>: Google's global edge network, plus caching nodes placed inside ISP networks, pull content on demand on first request and keep what's hot. The firehose makes pre-positioning nearly useless; popularity is only knowable minutes-to-hours after upload, so the system optimizes for how fast a cache fills, not for what's in it beforehand.</p>
+
+<p><strong>Netflix can predict, and that changes everything</strong> — this is the elegant bit of the entire chapter.</p>
+
+<div class="box story"><div class="box-tag">War story — Netflix Open Connect</div>
+<p>Around 2011 Netflix was a very large customer of commercial CDNs and the arithmetic above was heading somewhere unsustainable. So in 2012 it built its own: <strong>Open Connect</strong>. Instead of renting capacity, Netflix designed a purpose-built server — the Open Connect Appliance, a dense box of storage and network ports running FreeBSD and nginx — and gave them free to internet service providers to install inside their own networks, plus racks of them at internet exchange points. The ISP wins: Netflix traffic, often a large share of their evening peak, now originates inside their network instead of crossing expensive transit links. The truly clever part is the fill strategy. Because the catalog is curated and regional viewing is highly predictable, a central control plane computes for every appliance which titles that neighbourhood will want tomorrow, and pushes them during a nightly off-peak fill window when the network is idle and bandwidth is nearly free. By evening peak the bytes already sit on a box a few hops from the viewer; the client asks the control plane which appliances to use, gets a ranked list, probes them, and streams. Netflix serves nearly all its video this way. Read it as a pattern, not a Netflix fact: <em>if you can predict demand, you can convert expensive peak bandwidth into free off-peak bandwidth.</em> And that trick exists only because the catalog is finite — which is why YouTube, with the same engineers and the same money, could not build the same system.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="ISP-embedded appliance topology with nightly fill from control plane and cache hierarchy to origin">
+  <rect class="dg-zone" x="14" y="24" width="330" height="220" rx="10"/>
+  <text class="dg-txt-s" x="26" y="46">ISP network</text>
+  <rect class="dg-node-alt" x="30" y="86" width="112" height="46" rx="8"/>
+  <text class="dg-txt" x="42" y="114">Players</text>
+  <rect class="dg-node" x="188" y="62" width="136" height="46" rx="8"/>
+  <text class="dg-txt" x="200" y="84">Appliance</text>
+  <text class="dg-txt-s" x="200" y="100">flash: hot head</text>
+  <rect class="dg-node" x="188" y="152" width="136" height="46" rx="8"/>
+  <text class="dg-txt" x="200" y="174">Appliance</text>
+  <text class="dg-txt-s" x="200" y="190">disk: deep tail</text>
+  <line class="dg-edge" x1="142" y1="102" x2="188" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="142" y1="116" x2="188" y2="172" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="392" y="86" width="130" height="52" rx="8"/>
+  <text class="dg-txt" x="404" y="108">IXP cache</text>
+  <text class="dg-txt-s" x="404" y="125">regional</text>
+  <rect class="dg-node" x="566" y="86" width="132" height="52" rx="8"/>
+  <text class="dg-txt" x="578" y="108">Origin</text>
+  <text class="dg-txt-s" x="578" y="125">blob store</text>
+  <line class="dg-edge" x1="324" y1="112" x2="392" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="522" y1="112" x2="566" y2="112" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="332" y="80">miss</text>
+  <text class="dg-txt-s" x="524" y="80">rare miss</text>
+  <rect class="dg-node" x="392" y="230" width="306" height="48" rx="8"/>
+  <text class="dg-txt" x="404" y="252">Control plane</text>
+  <text class="dg-txt-s" x="404" y="269">predicts tomorrow, fills at 02:00 local</text>
+  <line class="dg-edge" x1="392" y1="254" x2="256" y2="254"/>
+  <line class="dg-edge" x1="256" y1="254" x2="256" y2="198" marker-end="url(#arrow)"/>
+  <text class="dg-good" x="30" y="176">peak bytes never</text>
+  <text class="dg-good" x="30" y="194">leave the ISP</text>
+  <text class="dg-txt-s" x="14" y="300">Curated catalog =&gt; predictable demand =&gt; peak bandwidth becomes off-peak bandwidth.</text>
+</svg>
+<figcaption>Pre-positioning is the whole trick. The nightly fill arrow is worth more than every other arrow on this page combined.</figcaption>
+</figure>
+
+<p>Two mechanisms hold the hierarchy together when things go wrong. <strong>Origin shielding:</strong> edges never talk to origin directly, only to a designated shield cache per region, so ten thousand edges missing the same new segment become a handful of origin reads. <strong>Request coalescing</strong> (chapter 1.6's single-flight, cashed in): inside one cache node, a thousand simultaneous requests for a segment that isn't there yet must produce <em>one</em> upstream fetch, with 999 requests parked until it lands. Skip it and a midnight premiere is a self-inflicted DDoS on your own origin — the classic cache stampede, just with 6 MB objects.</p>
+
+<h2>View counts, and scoping recommendations</h2>
+
+<p>Counting views is a solved problem I refuse to over-solve. The player sends heartbeats; a view counts only past a watch threshold of a few seconds and is deduplicated per session, which quietly kills the cheapest inflation. Events land in a stream; a stream processor keeps an <strong>approximate live counter</strong> (chapter 3.12's territory — fast, in-memory, occasionally slightly wrong) so creators see movement within seconds, while a nightly batch job recomputes the <strong>exact settled count</strong> from the event log with proper dedup and fraud filtering and overwrites it. YouTube's famous "301+" freeze was this seam made visible: the fast counter paused while verification caught up. Two counters — one fast, one true — is the right answer here because nobody is paid on the live number, only the settled one.</p>
+
+<p>Recommendations get one sentence and a boundary: a separate ranking service with its own models, called with a 50 ms budget on home-page load, falling back to a cached trending list if it misses. Naming the dependency, budgeting it, and defining the fallback is the whole senior move. The rest is a different interview.</p>
+
+<h2>The live variant</h2>
+
+<p>Live reuses the pipeline and deletes its luxuries. The creator's encoder pushes to an ingest endpoint over RTMP (ancient, universal) or SRT (modern, better on lossy networks); the ingest <dfn>PoP</dfn> — point of presence, one of your edge sites — transcodes the ladder <em>in real time</em> — no multi-pass, no per-title analysis, no lookahead, one shot at each frame — so you lean on hardware encoders and accept slightly worse compression. The packager emits segments continuously into a rolling manifest and the CDN fans out as before. Keep the last few hours of segments and the DVR window is free: rewinding live is just fetching older segments that are still cached.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Live pipeline stages and where end to end latency accumulates">
+  <rect class="dg-node" x="10" y="40" width="100" height="46" rx="8"/>
+  <text class="dg-txt" x="22" y="63">Streamer</text>
+  <text class="dg-txt-s" x="22" y="79">RTMP/SRT</text>
+  <rect class="dg-node" x="132" y="40" width="106" height="46" rx="8"/>
+  <text class="dg-txt" x="144" y="63">Ingest PoP</text>
+  <rect class="dg-node-alt" x="260" y="40" width="130" height="46" rx="8"/>
+  <text class="dg-txt" x="272" y="63">Live ladder</text>
+  <text class="dg-txt-s" x="272" y="79">no lookahead</text>
+  <rect class="dg-node" x="412" y="40" width="126" height="46" rx="8"/>
+  <text class="dg-txt" x="424" y="63">Packager</text>
+  <text class="dg-txt-s" x="424" y="79">rolling manifest</text>
+  <rect class="dg-node" x="560" y="40" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="572" y="63">Edge fan-out</text>
+  <text class="dg-txt-s" x="572" y="79">1 fetch, N viewers</text>
+  <line class="dg-edge" x1="110" y1="63" x2="132" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="238" y1="63" x2="260" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="63" x2="412" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="538" y1="63" x2="560" y2="63" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="10" y="140">Where the seconds actually go:</text>
+  <rect class="dg-node" x="10" y="152" width="80" height="30" rx="4"/>
+  <rect class="dg-node" x="90" y="152" width="60" height="30" rx="4"/>
+  <rect class="dg-node" x="150" y="152" width="110" height="30" rx="4"/>
+  <rect class="dg-node-alt" x="260" y="152" width="220" height="30" rx="4"/>
+  <rect class="dg-node" x="480" y="152" width="70" height="30" rx="4"/>
+  <rect class="dg-node-alt" x="550" y="152" width="160" height="30" rx="4"/>
+  <text class="dg-txt-s" x="14" y="202">encode</text>
+  <text class="dg-txt-s" x="94" y="220">ingest</text>
+  <text class="dg-txt-s" x="154" y="202">transcode</text>
+  <text class="dg-txt-s" x="264" y="220">segment wait (the big one)</text>
+  <text class="dg-txt-s" x="484" y="202">cdn</text>
+  <text class="dg-txt-s" x="554" y="220">buffer: 2-3 segs</text>
+  <text class="dg-txt-s" x="10" y="256">Standard HLS: 6 s segments + 3 buffered = 15-30 s behind live.</text>
+  <text class="dg-txt-s" x="10" y="276">LL-HLS ships 200-500 ms partial segments as they encode: 2-5 s.</text>
+  <text class="dg-txt-s" x="10" y="292">WebRTC goes under 1 s, and gives up the CDN.</text>
+</svg>
+<figcaption>Latency is dominated by two blocks, and both are choices: how long a segment is, and how many you insist on buffering before playing.</figcaption>
+</figure>
+
+<table>
+<thead><tr><th>Latency tier</th><th>How</th><th>Cost</th><th>Use it for</th></tr></thead>
+<tbody>
+<tr><td>15–30 s (standard)</td><td>6 s segments, 3-segment buffer, plain HLS/DASH</td><td>You're half a minute behind Twitter</td><td>Concerts, conference streams, anything one-way</td></tr>
+<tr><td>6–10 s (tuned)</td><td>2 s segments, 2-segment buffer</td><td>More requests, slightly worse compression</td><td>Sports where spoilers matter a bit</td></tr>
+<tr><td>2–5 s (LL-HLS / LL-DASH)</td><td>Partial segments streamed as they encode, blocking manifest requests</td><td>CDN must support chunked delivery; rebuffer risk rises</td><td>Live sports, auctions, interactive shows</td></tr>
+<tr><td>&lt; 1 s (WebRTC)</td><td>Real-time transport, no segments</td><td>Loses HTTP caching — you scale with relay servers, not a CDN, and cost per viewer jumps</td><td>Two-way, betting, small-audience interactivity</td></tr>
+</tbody>
+</table>
+
+<p>The failure mode unique to live is the <strong>synchronized start</strong> (chapters 2.6 and 2.7 in one place). Five million people press play at kickoff inside ten seconds — and worse, every player then polls the manifest on the same segment cadence, so the herd stays in lockstep forever. Fixes in order of value: cache the manifest at the edge even for one second (a million requests collapse into one origin hit per edge per second); jitter client refresh timers; use LL-HLS blocking playlist requests so the CDN holds the connection and answers when the next part exists instead of being polled; and start every player at a conservative rung with a randomized ramp-up, or a stadium of players all steps up to 4K in the same second and stampedes the same uplink.</p>
+
+<h2>Failure modes and operations</h2>
+
+<ul>
+<li><strong>Transcode backlog.</strong> The metric is <em>queue age per lane</em>, not queue depth — "the oldest fast-lane job is 14 minutes old" is actionable, "there are 40,000 jobs" is not. When the fast lane's age crosses the SLA, degrade gracefully: publish only the baseline rung so videos become watchable, and let the high rungs finish late (chapter 2.7's load shedding, applied to quality rather than requests).</li>
+<li><strong>Poison uploads.</strong> A malformed or adversarial file that hangs the decoder gets retried forever and eats the farm. Sandbox every transcoder, enforce a wall-clock timeout proportional to chunk duration, cap retries, dead-letter with an alert. A poison pill with infinite retries is how queue-based systems take themselves down (chapter 1.11).</li>
+<li><strong>Edge node death.</strong> Almost a non-event, and I'd say why: playback is independent HTTP GETs for immutable objects, so a player whose segment fails retries, gets steered to another edge, and at worst drops a rung while it recovers. That resilience is a <em>consequence of protocol design</em> — statelessness bought it. Compare WebRTC, where a lost relay drops the session.</li>
+<li><strong>Cache-miss storm on a premiere.</strong> Shield tier plus coalescing, and for scheduled events pre-position the first few minutes everywhere before release. Never let a launch be the first time your origin sees the object.</li>
+<li><strong>Region loss.</strong> Origin is multi-region and metadata fails over; in practice this shows up as a cache-hit-rate crater rather than an outage, because caches elsewhere still hold the head.</li>
+<li><strong>What I watch:</strong> rebuffer ratio (a 0.2% rise is a real incident), start failure rate, time to first frame, time-to-playable after upload at p95, transcode queue age per lane, CDN hit rate per tier, origin egress bytes (a spike means cache logic broke), and average delivered bitrate as a quality proxy.</li>
+<li><strong>Shipping encoder changes.</strong> Never a fleet-wide flip. A new ladder or codec goes out as an A/B on a slice of playback traffic, judged on rebuffer ratio and delivered bitrate rather than unit tests — "8% more efficient" and "viewers stall more" are entirely compatible statements. Keep old renditions until the new ones win, and never delete the mezzanine.</li>
+<li><strong>At 10x.</strong> Storage doesn't break (linear and boring) and the metadata DB doesn't break (sharding is a known move). The transcode farm's peak burst breaks — deeper priority lanes and hardware encoders on the hot path — and so does the egress bill, which is why the appliance fleet grows first. One counterintuitive point worth making unprompted: <em>the popular head does not grow 10x with traffic</em>, so cache hit rate improves as you scale. Video gets cheaper per viewer as it gets bigger, which is why this business works at all.</li>
+</ul>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Where interviewers push once your diagram is up. A passing senior answer names the mechanism and its cost, not just the component:</p>
+<ul>
+<li>"A two-hour movie is uploaded. Walk me through the timeline — when exactly is it playable?" (Split/fan-out/stitch, the tail-task problem, baseline rung first.)</li>
+<li>"Why does the player switch quality cleanly instead of stuttering? What guarantees that?" (Keyframe alignment across rungs. Miss this and you've described streaming without understanding it.)</li>
+<li>"Why not just put a commercial CDN in front of object storage and call it a day?" (Do the egress arithmetic out loud — then say what changes at what volume. Under a petabyte a day, renting is absolutely correct.)</li>
+<li>"Ten thousand people press play on a brand-new video in the same second." (Cache-miss storm → shield plus coalescing; pre-position for scheduled drops.)</li>
+<li>"Your transcode fleet is 40 minutes behind. What now, and what changes tomorrow?" (Shed to baseline rungs, pause the backfill lane; then lanes with guaranteed floors and lazy ladders.)</li>
+<li>"How would Netflix's design differ from what you drew?" (Curated catalog → predictable demand → pre-positioning and per-title encoding. This one is a gift; have the contrast ready.)</li>
+</ul>
+</div>
+
+<h2>The choices, and what each one costs</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Why</th><th>What it costs me</th></tr></thead>
+<tbody>
+<tr><td>Direct-to-blob resumable upload via pre-signed URLs</td><td>App tier never carries 4 GB files; mobile retries cost one part, not the whole file</td><td>Client complexity, and a second "complete" call that must be idempotent</td></tr>
+<tr><td>Chunked parallel transcode (30 s chunks)</td><td>Hours of wall clock become minutes; hits the 5-minute SLA</td><td>Slightly worse compression, keyframe-alignment discipline, straggler chunks decide the SLA</td></tr>
+<tr><td>Baseline rung now, high rungs lazily by popularity</td><td>Compute follows attention; most uploads never justify a full ladder</td><td>A video that goes viral in minutes streams at lower quality until the ladder catches up</td></tr>
+<tr><td>Own edge fleet / ISP-embedded appliances</td><td>At an exabyte a day, retail CDN pricing is a tenth of company revenue</td><td>Hardware, logistics, ISP relationships — only sane above a very high floor</td></tr>
+<tr><td>CMAF packaged once for HLS and DASH</td><td>One copy of the bytes, one set of cache entries, two manifests</td><td>Old devices that only speak legacy transport streams need a fallback pipeline</td></tr>
+<tr><td>Approximate live view counts + exact nightly settle</td><td>Creators see instant feedback; billing and rankings use the true number</td><td>Two numbers exist, and they disagree for a while — needs explaining in the UI</td></tr>
+<tr><td>Standard-latency HLS by default, LL-HLS only where it's worth it</td><td>Standard is cheaper, more robust, and rebuffers less</td><td>You're ~20 s behind live, which is unacceptable for sports and betting</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c21-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, why a video service can't just store the file you uploaded and stream that same file back to everyone.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Your uploaded file is one fixed size and quality, but the people watching are not: one is on a TV with fast fibre, one is on a phone on a train, and one has a device that can't even decode your file's format. So we re-encode the upload into a ladder of versions — several resolutions and bitrates, in more than one codec — and chop each version into a few seconds of video per file. The player fetches those little files one at a time and, between each one, decides whether the network can afford a better version or needs a cheaper one, which is why quality shifts mid-video instead of freezing. That only works because every version has its cut points at exactly the same timestamps, so the pieces are interchangeable. And because the pieces are plain immutable files fetched over HTTP, a cache near the viewer can serve the same piece to a million people, which is the only reason the bandwidth bill is survivable.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Uploads jump 10x overnight, from 500 to 5,000 hours per minute, and stay there. What breaks first, and what are your first three moves in the first hour?</p></div>
+<details><summary>Answer</summary><p>The transcode farm breaks first — everything else is linear and dull. Fast-lane queue age climbs, time-to-playable blows through the 5-minute SLA, and the backlog grows faster than autoscaling can add capacity (and you may hit real quota or hardware limits). Hour one: (1) pause the backfill/re-encode lane entirely to free the whole fleet; (2) degrade the ladder — publish only the 360p/720p baseline so videos become <em>watchable</em>, and queue everything else behind the fresh work; (3) raise the popularity threshold for high rungs and the expensive codec so almost nothing qualifies. All three are shedding quality to protect availability, which is the correct instinct. Then tomorrow: capacity, hardware encoders, and possibly admission control on upload for low-trust accounts. Note what you do <em>not</em> do — you don't drop uploads, because the mezzanine is already safely in blob storage and can be processed late.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>The requirement flips: every upload must be available in 4K AV1 within 10 minutes of upload. Redesign what you must, and estimate the damage.</p></div>
+<details><summary>Answer</summary><p>This deletes the single biggest cost-saving decision in the design (lazy popularity-tiered ladders) and replaces it with the most expensive rung on the most expensive codec, for content that mostly nobody will watch. Rough damage: AV1 runs on the order of 10x H.264's encode cost and the 4K rung dwarfs the lower ones, so fleet compute goes up by roughly an order of magnitude — the ~90,000-core steady state becomes something closer to a million cores in software. Real responses: hardware AV1 encoders (this is exactly the Argos-style argument), much finer chunking to hit the 10-minute wall clock (accepting the compression penalty), and pushing back on the requirement with the number — "this costs about 10x our transcode budget to serve a rendition that under 2% of views will ever request; can we make it a creator-tier feature instead?" Bringing a cost estimate to a product argument is the senior move; silently building it is not.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Now add: creators can edit a published video — trim the first 20 seconds, or replace the audio track — without changing its URL or losing its view count.</p></div>
+<details><summary>Answer</summary><p>Two things must be split apart: the identity of the video and the identity of its bytes. Keep <code>video_id</code> stable in metadata (view counts, comments, links all hang off it) and introduce a <code>version_id</code> for the rendition set; playback resolves <code>video_id</code> → current <code>version_id</code> → manifest path. Re-encode into a fresh version directory, then flip the pointer atomically when it's ready — no in-place mutation of segments, because immutability is what makes CDN caching work. Cache handling: the manifest URL must be versioned (or short-TTL) so players pick up the new version; the segment files are new paths, so they can't be stale. Mid-playback viewers keep the old version until they reload, which is fine and honest. And note the trim case can sometimes skip a full re-encode: if the cut lands on a segment boundary, you can republish a manifest that starts at segment N — a manifest edit instead of a compute job, which is the lazy and correct answer when it applies.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What if a requirement flips to sub-second latency for a live auction with 5 million concurrent viewers? Commit to an approach and name what it costs.</p></div>
+<details><summary>Answer</summary><p>Sub-second rules out segment-based delivery, so it rules out HTTP caching, so it rules out the CDN economics this entire design rests on. I'd commit to a hybrid: WebRTC (or a low-latency proprietary transport) for the interactive bidding surface, delivered through a tree of relay servers, while the <em>video</em> runs on LL-HLS at 2–3 s for everyone who is only watching. Costs and honesty: relay fan-out scales with viewers instead of being free at the edge, so cost per viewer is roughly linear rather than flat — 5M concurrent is a serious bill and a serious ops problem; a lost relay drops sessions rather than being retried away; and you now run two delivery stacks. I'd also push on the requirement, because in most auctions what actually needs sub-second delivery is the <em>bid state</em> (a few hundred bytes) and not the video — sending bid updates over a persistent connection while video stays 2 s behind is dramatically cheaper and usually indistinguishable to users. Separating the small urgent thing from the big heavy thing is the general form of this answer.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Ask early whether you're designing a UGC firehose or a curated catalog — that single fact decides transcode economics, cache strategy, and whether pre-positioning is even possible.</li>
+<li>The CRUD in a video system is trivial; the two hard parts are making bytes (the transcoding DAG) and moving them (CDN economics), and your time should go there.</li>
+<li>Chunked parallel transcoding turns hours of wall clock into minutes, and the same forced discipline it needs — keyframes at identical timestamps across every rung — is also what makes adaptive bitrate switching seamless, so ABR is a promise made by the encoder rather than cleverness in the player.</li>
+<li>Estimate egress in dollars, not just terabits: the bill is what justifies building your own edge fleet, and below a certain volume renting a CDN is the correct answer.</li>
+<li>Popularity power laws are the load-bearing fact of delivery — a small head of content serves most bytes, so a cache near the viewer absorbs almost everything and the origin sees a trickle.</li>
+<li>Netflix pre-positions predicted-popular content into ISP-embedded appliances during off-peak fill windows, converting expensive peak bandwidth into nearly free idle bandwidth; YouTube can't, because it cannot predict what will be popular.</li>
+<li>Spend compute where attention is: encode a cheap baseline for everything immediately, and expensive rungs only for content that earns them.</li>
+<li>Rebuffer ratio is the user metric, transcode queue age is the pipeline metric, and encoder changes ship as A/B tests judged on both — never as a fleet-wide flip.</li>
+</ul>
+</div>

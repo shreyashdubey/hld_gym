@@ -5,13 +5,13 @@
       "id": "p3c07-q01", "level": 1, "type": "mcq", "tag": "crux",
       "q": "What does this chapter identify as the crux of designing Dropbox?",
       "options": [
-        {"t": "Storing exabytes of file data cheaply", "correct": false,
+        {"t": "Storing exabytes of file data cheaply across thousands of spinning disks", "correct": false,
          "why": "Storage is the easy half — blob stores are a solved, buyable product. The question exists to probe the other half."},
-        {"t": "Making offline copies of a file converge without losing anyone's work", "correct": true,
+        {"t": "Making offline copies converge without losing work", "correct": true,
          "why": "Right. Two laptops edit the same file offline; the system must detect the divergence and preserve both edits. Chunking and dedup serve economics — conflict correctness is the fire."},
         {"t": "Achieving millisecond sync latency", "correct": false,
          "why": "Sync in seconds is fine — the chapter explicitly spends that latency headroom on correctness. Nobody's homework is lost by a five-second sync."},
-        {"t": "Building a global CDN for downloads", "correct": false,
+        {"t": "Building a global CDN so every download feels local", "correct": false,
          "why": "Downloads of immutable content-addressed blocks are routine (p1c07). The interviewer's fire is what happens when two devices commit conflicting versions."}
       ]
     },
@@ -19,9 +19,9 @@
       "id": "p3c07-q02", "level": 1, "type": "mcq", "tag": "architecture",
       "q": "Why does the design split into a metadata plane and a data plane?",
       "options": [
-        {"t": "Metadata needs strong consistency on tiny records; blocks are huge, immutable, and need neither — opposite workloads, separate systems", "correct": true,
+        {"t": "Opposite workloads: tiny strongly consistent records vs huge immutable bytes", "correct": true,
          "why": "Exactly. 'Which version is current' must never be stale; a 4 MB immutable block can be cached and replicated lazily anywhere. One system serving both would be wrong for each."},
-        {"t": "So different teams can own different services", "correct": false,
+        {"t": "So separate teams can own metadata and storage and ship on independent schedules", "correct": false,
          "why": "Org convenience is real but isn't the driver. The split falls out of the workloads: small-and-consistent vs huge-and-immutable."},
         {"t": "Because SQL databases cannot store binary data", "correct": false,
          "why": "They can (BLOBs exist) — it's just a terrible idea at exabyte scale. The reason is workload shape, not capability."},
@@ -33,28 +33,28 @@
       "id": "p3c07-q03", "level": 1, "type": "mcq", "tag": "manifest",
       "q": "In this design, what is a manifest?",
       "options": [
+        {"t": "The mapping from a user to their devices", "correct": false,
+         "why": "Device registration is account plumbing. The manifest is the file's recipe: which blocks, in which order."},
         {"t": "The change log a device replays after being offline", "correct": false,
          "why": "That's the journal, read via cursors. The manifest describes one version of one file, not a stream of changes."},
-        {"t": "A lock file preventing concurrent edits", "correct": false,
+        {"t": "A lock file that stops two devices from editing the same file at once", "correct": false,
          "why": "Nothing locks — offline devices couldn't hold a lock anyway. Concurrency is handled at commit time via the base-version check."},
-        {"t": "An immutable, ordered list of block hashes describing one version of a file", "correct": true,
-         "why": "Right — the IKEA instruction sheet. Each file version is a frozen list of (hash, size) pairs; versions share blocks by reference, which is why history is nearly free."},
-        {"t": "The mapping from a user to their devices", "correct": false,
-         "why": "Device registration is account plumbing. The manifest is the file's recipe: which blocks, in which order."}
+        {"t": "An ordered, immutable list of block hashes for one file version", "correct": true,
+         "why": "Right — the IKEA instruction sheet. Each file version is a frozen list of (hash, size) pairs; versions share blocks by reference, which is why history is nearly free."}
       ]
     },
     {
       "id": "p3c07-q04", "level": 1, "type": "mcq", "tag": "sync-protocol",
       "q": "Why is the manifest commit called the 'linearization point' of an upload?",
       "options": [
-        {"t": "It's the single instant the new version becomes visible to everyone — everything before it is invisible and freely retryable", "correct": true,
-         "why": "Yes. Blocks can be half-uploaded, duplicated, or abandoned with zero visible effect. The world changes only when the commit transaction lands — which is what makes crashes harmless."},
-        {"t": "It's where the file's blocks are arranged in linear order", "correct": false,
-         "why": "The manifest does order blocks, but 'linearization point' is a consistency term: the atomic instant an operation takes effect for all observers."},
-        {"t": "It's the slowest step, so it defines the upload's latency", "correct": false,
+        {"t": "It's the slowest step, so it defines the upload's total latency", "correct": false,
          "why": "It's actually the fastest step — one small DB transaction. Its importance is atomicity, not duration."},
-        {"t": "It's when the client's queue of pending uploads is flushed", "correct": false,
-         "why": "Client queue mechanics aren't the point. The commit is where 'hasn't happened' flips to 'happened' — atomically, for every device."}
+        {"t": "The moment the client flushes its queue of pending uploads to the server", "correct": false,
+         "why": "Client queue mechanics aren't the point. The commit is where 'hasn't happened' flips to 'happened' — atomically, for every device."},
+        {"t": "The single instant the new version becomes visible to everyone", "correct": true,
+         "why": "Yes. Blocks can be half-uploaded, duplicated, or abandoned with zero visible effect. The world changes only when the commit transaction lands — which is what makes crashes harmless."},
+        {"t": "The point where the file's blocks are arranged into linear order on disk", "correct": false,
+         "why": "The manifest does order blocks, but 'linearization point' is a consistency term: the atomic instant an operation takes effect for all observers."}
       ]
     },
     {
@@ -63,10 +63,10 @@
       "options": [
         {"t": "Fixed chunks are too slow to hash", "correct": false,
          "why": "Backwards — fixed chunking is the cheaper one on CPU. The rolling hash adds work; it's paid for by a different benefit."},
-        {"t": "Inserting bytes early in a file shifts every fixed boundary, changing every block hash and forcing a near-full re-upload", "correct": true,
+        {"t": "Inserting bytes early shifts every fixed boundary, changing every hash", "correct": true,
          "why": "Right. Content-defined boundaries are anchored to local content patterns, so an insertion changes only nearby chunks — later chunks keep their old boundaries and hashes."},
-        {"t": "Fixed chunks can't handle files smaller than the chunk size", "correct": false,
-         "why": "Small files are just one short block in either scheme. The weakness is byte-shifting edits, not small files."},
+        {"t": "Fixed chunks can't handle files smaller than the chunk size, so tiny files waste a whole block", "correct": false,
+         "why": "A small file is just one short block in either scheme — nothing is padded and nothing is wasted. The weakness of fixed chunking is byte-shifting edits, not small files."},
         {"t": "Fixed chunks make deduplication impossible", "correct": false,
          "why": "Fixed chunking dedups fine — it's what Dropbox shipped. It just dedups poorly for insert-heavy edit patterns, where boundaries drift off the content."}
       ]
@@ -75,28 +75,28 @@
       "id": "p3c07-q06", "level": 1, "type": "mcq", "tag": "conflicts",
       "q": "How does the server detect that two devices edited the same file concurrently?",
       "options": [
-        {"t": "By comparing the two files' timestamps", "correct": false,
-         "why": "Timestamps order events; they can't prove independence, and device clocks lie. The detector is the base-version check, not the clock."},
-        {"t": "Each commit names the version it was based on; if that's no longer current, the compare-and-swap fails — proof of a concurrent edit", "correct": true,
+        {"t": "Each commit names its base version; if that's no longer current, the CAS fails", "correct": true,
          "why": "Right. 'Advance 7 to mine only if still 7' failing means the committer provably never saw the newer version. That failed CAS is the conflict detector."},
-        {"t": "The client sends a diff and the server checks for overlapping byte ranges", "correct": false,
+        {"t": "The client sends a diff and the server checks whether the changed byte ranges overlap", "correct": false,
          "why": "The server treats files as opaque — it never inspects content. Detection happens on version lineage, which works for any file type."},
         {"t": "A background job scans for files with two recent writers", "correct": false,
-         "why": "Detection is synchronous, at the commit itself — the exact moment a wrong guess could destroy data. No scanning needed."}
+         "why": "Detection is synchronous, at the commit itself — the exact moment a wrong guess could destroy data. No scanning needed."},
+        {"t": "By comparing the two devices' file modification timestamps", "correct": false,
+         "why": "Timestamps order events; they can't prove independence, and device clocks lie. The detector is the base-version check, not the clock."}
       ]
     },
     {
       "id": "p3c07-q07", "level": 1, "type": "mcq", "tag": "conflicts",
       "q": "When a commit's base-version check fails, what does the system do with the losing edit?",
       "options": [
-        {"t": "Commits it as a new 'conflicted copy' file so both versions survive for a human to merge", "correct": true,
-         "why": "Yes — Dropbox's documented behavior, device name and date in the filename. Ugly and loud beats clean and lossy in a product whose one promise is never losing files."},
         {"t": "Discards it — the first commit won", "correct": false,
          "why": "That's last-write-wins by another name: someone's plane edits silently vanish. The whole design exists to prevent exactly this."},
-        {"t": "Merges the two versions automatically", "correct": false,
+        {"t": "Merges the two versions automatically, byte range by byte range", "correct": false,
          "why": "A .docx is a zip; byte-merging two zips produces garbage. Arbitrary binaries have no safe merge semantics, so the system refuses to guess."},
-        {"t": "Blocks the file until the user picks a winner", "correct": false,
-         "why": "Blocking sync on user input would strand every other change behind a dialog nobody sees. Fork-and-continue keeps sync flowing and loses nothing."}
+        {"t": "Blocks the file and shows a dialog until the user picks which version to keep", "correct": false,
+         "why": "Blocking sync on user input would strand every other change behind a dialog nobody sees. Fork-and-continue keeps sync flowing and loses nothing."},
+        {"t": "Commits it as a new 'conflicted copy' file so both versions survive", "correct": true,
+         "why": "Yes — Dropbox's documented behavior, device name and date in the filename. Ugly and loud beats clean and lossy in a product whose one promise is never losing files."}
       ]
     },
     {
@@ -105,11 +105,11 @@
       "options": [
         {"t": "To rank blocks for cache eviction", "correct": false,
          "why": "Caching uses recency/frequency (p1c06), not manifest references. Refcounts here answer a liveness question, not a popularity one."},
-        {"t": "To bill users for storage accurately", "correct": false,
+        {"t": "To bill each account accurately for the storage it actually consumes", "correct": false,
          "why": "Billing sums logical bytes per account. Refcounts track how many live manifests need a block — that's garbage collection, not accounting."},
-        {"t": "So GC can find blocks no live manifest references once old versions are pruned", "correct": true,
+        {"t": "So GC can find blocks no live manifest references any more", "correct": true,
          "why": "Right. Versions share blocks by reference, so nothing can be deleted until every referencing manifest is gone. Refcount zero marks a GC candidate — deleted only after a grace window."},
-        {"t": "To detect corrupted blocks by counting reads", "correct": false,
+        {"t": "To detect corrupted blocks by counting how often each one is read", "correct": false,
          "why": "Corruption detection comes free from content addressing: re-hash the block and compare to its name. Refcounts are about liveness."}
       ]
     },
@@ -117,14 +117,14 @@
       "id": "p3c07-q09", "level": 1, "type": "mcq", "tag": "sync-protocol",
       "q": "What role does the per-namespace cursor play for a device?",
       "options": [
-        {"t": "It marks the device's position in the namespace's change journal, so it can replay everything it missed", "correct": true,
+        {"t": "It's a lock token the device holds while it has the file open", "correct": false,
+         "why": "No locks anywhere — offline devices couldn't renew one. Concurrency is resolved at commit time, not prevented by tokens."},
+        {"t": "It marks the device's position in the namespace's change journal", "correct": true,
          "why": "Right. Offline three seconds or three weeks, the protocol is identical: pull changes since your cursor. It's what makes sync resumable and the server stateless about clients."},
         {"t": "It points to the block currently being downloaded", "correct": false,
          "why": "Block transfer progress is tracked per transfer session. The cursor is about namespace history — which changes you've seen, not which bytes."},
-        {"t": "It records where the user's cursor was in the file", "correct": false,
-         "why": "Nothing here knows about editing positions — files are opaque. Cursor means journal offset, like a Kafka consumer offset (p2c09)."},
-        {"t": "It's a lock token the device holds while editing", "correct": false,
-         "why": "No locks anywhere — offline devices couldn't renew one. Concurrency is resolved at commit time, not prevented by tokens."}
+        {"t": "It records where the user's text cursor was inside the file being edited", "correct": false,
+         "why": "Nothing here knows about editing positions — files are opaque. Cursor means journal offset, like a Kafka consumer offset (p2c09)."}
       ]
     },
     {
@@ -133,11 +133,11 @@
       "options": [
         {"t": "The p99 sync latency target", "correct": false,
          "why": "Latency tolerances here are generous (seconds). The case for chunking is economic and bandwidth-driven, not latency-driven."},
-        {"t": "The dedup ratio: at ~4 EB logical, even a one-third saving is over an exabyte — order of $100M/year in avoided storage", "correct": true,
+        {"t": "The dedup ratio: at ~4 EB logical, a one-third saving is ~$100M/year", "correct": true,
          "why": "Right — this is estimation gating a decision. If dedup saved 2%, whole files win on simplicity. At exabyte scale with real duplication, the complexity pays for itself many times over. Delta-sync bandwidth is the second, smaller win."},
-        {"t": "The number of files per user", "correct": false,
+        {"t": "The number of files per user, since metadata rows dominate the cost of the system", "correct": false,
          "why": "File counts stress metadata QPS but don't argue for or against chunking. The justifying number is bytes saved by dedup and delta sync."},
-        {"t": "The metadata DB's transaction throughput", "correct": false,
+        {"t": "The metadata DB's transaction throughput ceiling", "correct": false,
          "why": "Chunking actually adds metadata load (manifests, block rows). It wins despite that cost — because of the storage and bandwidth math."}
       ]
     },
@@ -145,13 +145,13 @@
       "id": "p3c07-q11", "level": 2, "type": "mcq", "tag": "chunking",
       "q": "You edit 3 slides of a 1 GB deck (changes land in 2 of its 256 4-MB blocks) on a 2 Mbps uplink. Roughly what does delta sync save?",
       "options": [
-        {"t": "Upload drops from ~67 minutes to ~32 seconds — 8 MB travels instead of 1 GB", "correct": true,
+        {"t": "Upload drops from ~67 minutes to ~32 seconds — 8 MB instead of 1 GB", "correct": true,
          "why": "Right: 1 GB at 2 Mbps ≈ 67 min; two blocks = 8 MB ≈ 32 s. This 125x is the difference between invisible sync and a progress bar — the worked example that justifies block-level transfer."},
         {"t": "About half the upload time", "correct": false,
          "why": "Far bigger. Only changed blocks travel: 2 of 256 blocks ≈ 0.8% of the bytes. The saving is two orders of magnitude, not 2x."},
         {"t": "Nothing — the whole file re-uploads because its hash changed", "correct": false,
          "why": "The whole-file hash did change, but transfer is per block. The 254 unchanged blocks hash identically and the check call skips them."},
-        {"t": "Bandwidth is saved but the server must re-store all 256 blocks", "correct": false,
+        {"t": "Bandwidth is saved, but the server still has to re-store all 256 blocks", "correct": false,
          "why": "Storage wins too: the new manifest references 254 existing blocks and 2 new ones. Manifests share blocks — that's why version history is cheap."}
       ]
     },
@@ -159,28 +159,28 @@
       "id": "p3c07-q12", "level": 2, "type": "mcq", "tag": "dedup",
       "q": "Why does the committed design answer 'already have it' in the check call only for blocks already referenced by YOUR account or namespaces, even though the store dedups globally?",
       "options": [
+        {"t": "Per-account answers make storage billing simpler to compute and explain to customers", "correct": false,
+         "why": "Billing works either way from logical bytes. The driver is that a content hash proves you know a file's name, not that you possess its bytes."},
+        {"t": "Cross-account dedup would break delta sync for your own file versions", "correct": false,
+         "why": "Delta sync only needs your own previous version's blocks, which per-account scope fully covers. What's sacrificed is first-upload bandwidth on popular files — a named, accepted cost."},
         {"t": "Cross-account lookups would be too slow at this scale", "correct": false,
          "why": "A global hash index is perfectly buildable — the store maintains one anyway for storage dedup. The constraint is a security property, not performance."},
-        {"t": "Otherwise a hash alone becomes a bearer token: anyone knowing a file's hashes could claim the file, and check becomes an oracle for what the service stores", "correct": true,
-         "why": "Right — exactly what Dropship exploited in 2011 against Dropbox's cross-user dedup. Scoping the client-visible answer to the account closes the hole while server-side global dedup keeps the storage savings."},
-        {"t": "Per-account answers make billing simpler", "correct": false,
-         "why": "Billing works either way from logical bytes. The driver is that a content hash proves you know a file's name, not that you possess its bytes."},
-        {"t": "Cross-account dedup would break delta sync", "correct": false,
-         "why": "Delta sync only needs your own previous version's blocks, which per-account scope fully covers. What's sacrificed is first-upload bandwidth on popular files — a named, accepted cost."}
+        {"t": "Otherwise a hash becomes a bearer token and check becomes an oracle", "correct": true,
+         "why": "Right — exactly what Dropship exploited in 2011 against Dropbox's cross-user dedup. Scoping the client-visible answer to the account closes the hole while server-side global dedup keeps the storage savings."}
       ]
     },
     {
       "id": "p3c07-q13", "level": 2, "type": "mcq", "tag": "sync-protocol",
       "q": "A laptop crashes after uploading 60 of 90 new blocks, before committing. What do other devices see, and what happens on restart?",
       "options": [
-        {"t": "Other devices see a partial file until the client finishes", "correct": false,
+        {"t": "The file is marked conflicted because the upload didn't finish cleanly", "correct": false,
+         "why": "Conflicts are about two divergent commits, not interrupted transfers. An unfinished upload is normal operation — laptops sleep constantly."},
+        {"t": "Other devices see a partially written file until the client finishes uploading", "correct": false,
          "why": "Impossible by construction: no other device learns anything until the manifest commits. Torn reads are what manifest-last exists to prevent."},
-        {"t": "Nothing changed for anyone; on restart the client re-runs check and uploads only the ~30 missing blocks, then commits", "correct": true,
+        {"t": "Nothing changed; restart re-runs check and sends only the missing blocks", "correct": true,
          "why": "Right. Pre-commit state is invisible, so the crash is harmless; check makes the retry resumable for free. Worst case is a few orphan blocks, swept by GC's grace-window pass."},
         {"t": "The server rolls back the 60 uploaded blocks", "correct": false,
-         "why": "No rollback needed — un-referenced blocks are inert and invisible. GC eventually sweeps orphans; nothing urgent happens."},
-        {"t": "The file is marked conflicted since the upload didn't finish", "correct": false,
-         "why": "Conflicts are about two divergent commits, not interrupted transfers. An unfinished upload is normal operation — laptops sleep constantly."}
+         "why": "No rollback needed — un-referenced blocks are inert and invisible. GC eventually sweeps orphans; nothing urgent happens."}
       ]
     },
     {
@@ -189,11 +189,11 @@
       "options": [
         {"t": "The delete wins — it synced first", "correct": false,
          "why": "Order of syncing is luck, and letting luck destroy an active edit is LWW thinking. The policy breaks every tie toward preserving content."},
-        {"t": "The edit wins and the file resurrects — never destroy content on a guess; real deletes are recoverable via trash anyway", "correct": true,
+        {"t": "The edit wins and the file resurrects — never destroy content on a guess", "correct": true,
          "why": "Right. Destroying an actively edited file is the irreversible guess; resurrecting an intended delete costs one more delete. Asymmetric stakes decide the policy."},
-        {"t": "Both operations are rejected and the file is frozen for review", "correct": false,
+        {"t": "Both operations are rejected and the file is frozen pending human review", "correct": false,
          "why": "Freezing sync behind human review strands the namespace. The system resolves automatically — but always toward keeping work."},
-        {"t": "The server diffs the edit to decide if it was significant", "correct": false,
+        {"t": "The server inspects the edit to decide whether the change was significant enough to keep", "correct": false,
          "why": "The server can't judge significance of opaque bytes, and shouldn't try. Policy must work for any file type without inspecting content."}
       ]
     },
@@ -201,41 +201,41 @@
       "id": "p3c07-q15", "level": 2, "type": "mcq", "tag": "metadata",
       "q": "Why shard the metadata DB by namespace_id rather than by user_id or file path hash?",
       "options": [
-        {"t": "Namespace IDs distribute more evenly than user IDs", "correct": false,
-         "why": "Distribution is similar — and namespace sharding actually has the worse hot-spot risk (giant shared folders). It wins for a transactional reason, not a balance reason."},
-        {"t": "Every row a commit touches — file row, manifest, journal entry — lives in one namespace, so the CAS commit stays a single-shard transaction", "correct": true,
+        {"t": "Every row a commit touches lives in one namespace, keeping the CAS single-shard", "correct": true,
          "why": "Right. The correctness anchor is an atomic compare-and-swap plus journal append; keeping it on one shard avoids distributed transactions (p2c01) on the hottest path. Shared folders co-locate for free since they're namespaces."},
-        {"t": "Path-hash sharding would break because paths change on rename", "correct": false,
+        {"t": "Path-hash sharding would break because a rename moves a file to a different shard", "correct": false,
          "why": "True and it's a real annoyance (renames would move rows across shards), but it's the secondary argument. The primary one is keeping the commit transaction single-shard."},
         {"t": "User-id sharding can't support sharing at all", "correct": false,
-         "why": "It could, with cross-shard reads for shared folders — clumsy but possible. Namespace sharding is chosen because commits and shared-folder activity both stay shard-local."}
+         "why": "It could, with cross-shard reads for shared folders — clumsy but possible. Namespace sharding is chosen because commits and shared-folder activity both stay shard-local."},
+        {"t": "Namespace IDs distribute more evenly across shards than user IDs do", "correct": false,
+         "why": "Distribution is similar — and namespace sharding actually has the worse hot-spot risk (giant shared folders). It wins for a transactional reason, not a balance reason."}
       ]
     },
     {
       "id": "p3c07-q16", "level": 2, "type": "mcq", "tag": "ops",
       "q": "The conflict-rate metric jumps 40x overnight, worldwide. Users didn't suddenly start collaborating more. Most likely cause?",
       "options": [
-        {"t": "A newly rolled-out client build is mishandling base versions — committing against stale bases and manufacturing false conflicts", "correct": true,
-         "why": "Right instinct: a step change in a behavioral metric across all geographies at once points at your own deploy, not at users. This is exactly why conflict rate is on the dashboard and why client rollouts are staged."},
         {"t": "A popular shared folder got very active", "correct": false,
          "why": "That would raise conflicts in one namespace, not a 40x global step. Magnitude and uniformity are the tells that it's systemic."},
-        {"t": "The metadata DB is refusing writes", "correct": false,
+        {"t": "The metadata DB started refusing writes across every shard at once", "correct": false,
          "why": "DB failures produce errors and sync lag, not successful-but-conflicted commits. The conflict path requires commits to be flowing."},
-        {"t": "GC deleted blocks too aggressively", "correct": false,
-         "why": "A GC race corrupts downloads (missing blocks) — a different, scarier signature. Conflict rate measures failed base-version checks."}
+        {"t": "GC deleted blocks too aggressively and clients are re-uploading them", "correct": false,
+         "why": "A GC race corrupts downloads (missing blocks) — a different, scarier signature. Conflict rate measures failed base-version checks."},
+        {"t": "A new client build is committing against stale base versions", "correct": true,
+         "why": "Right instinct: a step change in a behavioral metric across all geographies at once points at your own deploy, not at users. This is exactly why conflict rate is on the dashboard and why client rollouts are staged."}
       ]
     },
     {
       "id": "p3c07-q17", "level": 2, "type": "mcq", "tag": "metadata",
       "q": "A 10,000-employee customer puts everything in one shared folder. Which mitigation does the chapter reach for FIRST when that namespace's shard runs hot?",
       "options": [
-        {"t": "Split the namespace across multiple shards", "correct": false,
+        {"t": "Split the namespace across multiple metadata shards", "correct": false,
          "why": "Last resort — it breaks the single-shard commit property that anchors correctness. The ladder starts with cheaper moves that preserve the invariant."},
-        {"t": "Move the customer to a dedicated database", "correct": false,
+        {"t": "Move the customer onto a dedicated database instance of their own", "correct": false,
          "why": "Vertical isolation buys time but doesn't fix the fan-out pattern, and every big customer becomes a snowflake. There's a cheaper first step."},
-        {"t": "Cache the journal tail and batch notifications — the load is thousands of identical reads and pokes, which caching and coalescing absorb", "correct": true,
+        {"t": "Cache the journal tail and batch notifications", "correct": true,
          "why": "Right. Fan-out load is read-heavy and identical for all listeners: the textbook hot-read fix (p2c06) is cache-plus-coalesce. Escalate to splitting only if that fails, because splitting costs correctness simplicity."},
-        {"t": "Rate-limit commits to that folder", "correct": false,
+        {"t": "Rate-limit commits into that folder until the shard recovers", "correct": false,
          "why": "Throttling a paying customer's writes to protect your own architecture is backwards — the pressure is fan-out reads, which caching absorbs without degrading anyone."}
       ]
     },
@@ -243,83 +243,83 @@
       "id": "p3c07-q18", "level": 2, "type": "mcq", "tag": "sync-protocol",
       "q": "The notification tier goes down for 20 minutes. What's the user-visible impact in this design?",
       "options": [
-        {"t": "Sync stops entirely until it recovers", "correct": false,
-         "why": "The notifier is an accelerator, not a dependency. Clients fall back to polling the changes endpoint; cursors don't care how they learned to check."},
-        {"t": "Changes made during the outage are lost", "correct": false,
+        {"t": "Changes made during the outage are lost and must be re-saved", "correct": false,
          "why": "Nothing is lost — the journal is durable and cursors mark position. Notification is 'you have mail', never the mail itself."},
-        {"t": "Sync latency degrades from seconds to minutes as clients fall back to periodic polling; nothing is lost", "correct": true,
+        {"t": "Sync latency degrades from seconds to minutes; nothing is lost", "correct": true,
          "why": "Right — graceful degradation designed in. The pull-with-cursor protocol is the source of truth; push only makes it fast. The scary moment is actually recovery: millions of reconnections at once need jitter."},
         {"t": "Conflicted copies spike because devices can't see each other's commits", "correct": false,
-         "why": "Slower change propagation widens the conflict window slightly, but commits still flow and CAS still detects everything. No correctness impact — that's the point of the design."}
+         "why": "Slower change propagation widens the conflict window slightly, but commits still flow and CAS still detects everything. No correctness impact — that's the point of the design."},
+        {"t": "Sync stops entirely until it recovers", "correct": false,
+         "why": "The notifier is an accelerator, not a dependency. Clients fall back to polling the changes endpoint; cursors don't care how they learned to check."}
       ]
     },
     {
       "id": "p3c07-q19", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "The interviewer pushes: 'Timestamps would be so much simpler than all this version machinery. Newest write wins. Why not?' The strongest senior answer:",
       "options": [
-        {"t": "\"LWW answers 'who wins' with a clock, but the loser's edits vanish silently — whoever syncs second, not edits second, gets erased, and the user finds out weeks later. In a product whose single promise is never losing files, silent loss is the one unacceptable failure. I'll pay the version-tracking complexity for a detector that never guesses.\"", "correct": true,
+        {"t": "\"Timestamps are fine for most files; we'd only need real version tracking for office documents and the other formats where people actually collaborate, so the expensive path applies selectively.\"", "correct": false,
+         "why": "Splitting correctness policy by file type doubles the machinery while keeping the data-loss hole open for every 'most files' case. The invariant must hold for opaque bytes, uniformly."},
+        {"t": "\"LWW picks the winner by clock, and the loser's edits vanish with no signal — whoever syncs second is erased, not whoever edited second. In a product whose one promise is never losing files, that is the one unacceptable failure.\"", "correct": true,
          "why": "Commits, ties the choice to the product's core promise, and names the precise failure (sync order, not edit order, picks the victim — and the victim gets no signal). That's the E5 shape: mechanism, consequence, decision."},
-        {"t": "\"Clocks skew between devices, so timestamps are unreliable.\"", "correct": false,
+        {"t": "\"Clocks skew between devices, so timestamps are unreliable. We'd want NTP discipline or hybrid logical clocks before trusting last-write-wins, and even then VM pauses, leap seconds, and users with manually wrong system clocks would keep electing the wrong winner.\"", "correct": false,
          "why": "True but insufficient — it invites 'use NTP or hybrid clocks' and the debate continues. Even with perfect clocks, LWW silently destroys a real human's work. Argue from the invariant, not the clock."},
-        {"t": "\"We could offer LWW as a per-folder setting for users who prefer simplicity.\"", "correct": false,
-         "why": "A configuration dodge — shipping a data-loss mode as an option is not a resolution, and 'make it a setting' instead of making the call reads junior."},
-        {"t": "\"Timestamps are fine for most files; we'd only need versions for office documents.\"", "correct": false,
-         "why": "Splitting correctness policy by file type doubles the machinery while keeping the data-loss hole open for every 'most files' case. The invariant must hold for opaque bytes, uniformly."}
+        {"t": "\"We could offer LWW as a per-folder setting for teams that prefer simplicity, and keep versioning as the default for everyone else, so each customer picks the trade-off that fits their workflow.\"", "correct": false,
+         "why": "A configuration dodge — shipping a data-loss mode as an option is not a resolution, and 'make it a setting' instead of making the call reads junior."}
       ]
     },
     {
       "id": "p3c07-q20", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Interviewer: 'Your check call said the block exists, so the client skipped uploading it. Could that answer be wrong by commit time?' What is the senior-grade response?",
       "options": [
-        {"t": "\"No — content-addressed blocks are immutable, so existence can't change.\"", "correct": false,
-         "why": "Immutable means the bytes can't change; the block can absolutely be deleted. This answer confuses immutability with permanence and walks straight past the trap."},
-        {"t": "\"Yes — GC can delete it if the last other reference is pruned before my commit lands. Check must grant a lease pinning the hash, and GC only deletes after a grace window longer than any lease, re-verifying first. Delete late, never early.\"", "correct": true,
+        {"t": "\"Yes — GC can delete it if the last other reference is pruned before my commit lands. So check must grant a lease pinning the hash, and GC deletes only after a grace window longer than any lease. Delete late, never early.\"", "correct": true,
          "why": "Identifies the race unprompted, names the two-part fix, and states the governing principle (late deletion is cost; early deletion is data loss). This is the fencing pattern (p2c03) applied to storage — exactly what the probe is fishing for."},
-        {"t": "\"Yes, so the client should re-run check right before committing.\"", "correct": false,
+        {"t": "\"Yes, so the client should re-run check immediately before committing, and upload the block if it has disappeared in the meantime — one cheap extra round trip closes the window.\"", "correct": false,
          "why": "Shrinks the window without closing it — GC can still fire between the re-check and the commit. Race conditions aren't fixed by checking faster; they're fixed by leases and ordering."},
-        {"t": "\"We'd catch it in the nightly integrity scan and re-request the block from the client.\"", "correct": false,
-         "why": "By nightly, the client may have deleted its local copy or left forever — the bytes can be unrecoverable. Detection after the fact is not a substitute for preventing the loss."}
+        {"t": "\"Yes, and the nightly integrity scan catches it: walk the live manifests, find any hash missing from the store, and ask the client that uploaded it to send the bytes again.\"", "correct": false,
+         "why": "By nightly, the client may have deleted its local copy or left forever — the bytes can be unrecoverable. Detection after the fact is not a substitute for preventing the loss."},
+        {"t": "\"No — blocks are content-addressed and immutable, so once the store reports it has a hash, it has it forever. That is the whole point of content addressing: the name is the content, nothing changes underneath you, and the client can safely skip the upload.\"", "correct": false,
+         "why": "Immutable means the bytes can't change; the block can absolutely be deleted. This answer confuses immutability with permanence and walks straight past the trap."}
       ]
     },
     {
       "id": "p3c07-q21", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "You committed to fixed 4 MB blocks over content-defined chunking. The interviewer raises an eyebrow: 'But insertions force re-uploads.' The strongest defense of the commitment:",
       "options": [
-        {"t": "\"True, and I accept it: most real edits are in-place or appends, which fixed blocks handle; fixed offsets keep ranged downloads and server logic trivial. I'll watch fleet dedup ratio and bytes-per-edit — if insert-heavy files show up big in telemetry, CDC swaps into the client cutter without touching the server contract, since the server only ever sees hashes.\"", "correct": true,
-         "why": "Owns the cost, gives workload reasons, names the metric that would flip the decision, and shows the escape hatch is cheap because of where the abstraction boundary sits. Commit-with-tripwire is the senior pattern."},
-        {"t": "\"Good point — let me switch the design to content-defined chunking.\"", "correct": false,
+        {"t": "\"Good point — let me switch the design to content-defined chunking with a rolling hash, since it strictly dominates fixed blocks on dedup quality and the extra client CPU is cheap on modern hardware anyway.\"", "correct": false,
          "why": "Folding at the first pushback signals the original commitment was ungrounded. If your reasons were real, defend them; interviewers probe commitments precisely to see if reasons exist."},
-        {"t": "\"Insertions are rare enough that it doesn't matter.\"", "correct": false,
+        {"t": "\"Insertions are rare enough that it doesn't matter. Almost everything users edit is either rewritten wholesale by the application that owns the format or appended to at the end, so the fixed-block penalty almost never fires in practice and optimizing for it now would be premature work.\"", "correct": false,
          "why": "The right claim with no instrumentation behind it. Without naming the telemetry that would prove or disprove 'rare,' this is an assumption wearing a conclusion's clothes."},
-        {"t": "\"We can run both: CDC for documents, fixed for everything else.\"", "correct": false,
-         "why": "Doubles client complexity and splits the dedup universe (a block chunked two ways gets two hashes, so copies stop deduplicating across the schemes) — a real cost this answer doesn't see, taken on to avoid making a call."}
+        {"t": "\"We can run both: content-defined chunking for documents and text, fixed blocks for media and archives, choosing the cutter per file type so each workload gets the scheme that suits it.\"", "correct": false,
+         "why": "Doubles client complexity and splits the dedup universe (a block chunked two ways gets two hashes, so copies stop deduplicating across the schemes) — a real cost this answer doesn't see, taken on to avoid making a call."},
+        {"t": "\"True, and I accept it: most edits are in-place or appends, which fixed blocks handle, and fixed offsets keep ranged downloads trivial. I'll watch dedup ratio and bytes-per-edit — if insert-heavy files show up big, CDC swaps into the client cutter and the server contract never changes.\"", "correct": true,
+         "why": "Owns the cost, gives workload reasons, names the metric that would flip the decision, and shows the escape hatch is cheap because of where the abstraction boundary sits. Commit-with-tripwire is the senior pattern."}
       ]
     },
     {
       "id": "p3c07-q22", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "A PM proposes: 'Auto-merge text files at least — diff3 both versions against the base; only fork when hunks overlap. Word docs still get conflicted copies.' Your call as the senior engineer on sync:",
       "options": [
-        {"t": "\"No for the sync engine: it must treat bytes as opaque — 'is this really mergeable text' is a guess (encodings, CSVs where non-overlapping row edits still corrupt semantics), and a wrong guess is silent data loss inside the one component whose job is never to lose data. Merge assistance belongs a layer up, as a user-confirmed action on the two copies the engine faithfully preserved.\"", "correct": true,
-         "why": "Draws the architectural line from the invariant: the engine's guarantee stays absolute; smart-but-fallible features build on top of preserved copies, where a bad merge is undoable. Layering by failure consequence is senior judgment."},
-        {"t": "\"Yes — git proves three-way merge is safe for text.\"", "correct": false,
-         "why": "Git's merges are proposals reviewed by a human before landing, with reflog underneath. Sync auto-merge would commit the guess with nobody looking — same algorithm, completely different consent model."},
-        {"t": "\"Yes, but only for files under 1 MB to limit the blast radius.\"", "correct": false,
+        {"t": "\"Yes, but only for files under 1 MB, so the blast radius of a bad merge stays small and we can roll the feature back quickly if the support queue tells us it is corrupting documents.\"", "correct": false,
          "why": "Size doesn't bound the damage — a 2 KB config or CSV merged wrongly can be catastrophic. The risk axis is semantic mergeability, which the engine cannot determine from bytes."},
-        {"t": "\"No, because merge code is too expensive to maintain.\"", "correct": false,
-         "why": "Right verdict, junior reasoning. Cost isn't the issue — correctness placement is. Rejecting a feature without engaging its actual risk profile wastes the chance to show judgment."}
+        {"t": "\"No, because merge code is expensive to write and maintain, and every new text format users care about means another parser and another round of edge cases for the sync team to own.\"", "correct": false,
+         "why": "Right verdict, junior reasoning. Cost isn't the issue — correctness placement is. Rejecting a feature without engaging its actual risk profile wastes the chance to show judgment."},
+        {"t": "\"No for the sync engine: it must treat bytes as opaque, and 'is this really mergeable text' is a guess — a wrong guess is silent data loss inside the one component whose job is never to lose data. Merge assistance belongs a layer up, on the two copies we preserved.\"", "correct": true,
+         "why": "Draws the architectural line from the invariant: the engine's guarantee stays absolute; smart-but-fallible features build on top of preserved copies, where a bad merge is undoable. Layering by failure consequence is senior judgment."},
+        {"t": "\"Yes — git proves three-way merge is safe for text, and diff3 is a well-understood algorithm with decades of production use behind it. We would be adopting a solved problem rather than inventing one, and users would stop complaining about conflicted copies on the formats they hit most.\"", "correct": false,
+         "why": "Git's merges are proposals reviewed by a human before landing, with reflog underneath. Sync auto-merge would commit the guess with nobody looking — same algorithm, completely different consent model."}
       ]
     },
     {
       "id": "p3c07-q23", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Post-launch, storage spend is 3x forecast. The dedup-ratio dashboard reads 1.05x (near-zero saving) while your design doc assumed ~1.5x. The senior first move:",
       "options": [
-        {"t": "Ship content-defined chunking — clearly fixed blocks aren't dedup-friendly enough", "correct": false,
+        {"t": "Ship content-defined chunking — fixed blocks clearly are not dedup-friendly enough, and the rolling-hash cutter is a well-understood change we can land in the client within a quarter", "correct": false,
          "why": "Solution before diagnosis. CDC helps insert-pattern dedup specifically; if the real cause is elsewhere (GC not running, telemetry bug, encryption change breaking identity), CDC ships months of work at the wrong target."},
-        {"t": "Instrument before acting: is the ratio real or a measurement bug? Is GC actually reclaiming (orphan and zero-ref counts)? Did a client change alter block identity (compression or encryption before hashing)? Each cause has a different fix — find which fire you have first", "correct": true,
+        {"t": "Instrument before acting: is the ratio real or a measurement bug? Is GC actually reclaiming? Did a client change alter block identity? Each cause has a different fix", "correct": true,
          "why": "A 30% miss vs a 3x miss don't even suggest the same culprit — a wrong assumption differs from a broken mechanism. Diagnose-then-commit beats reflex-fixing; naming the candidate causes and their distinguishing signals is what operating a system looks like."},
-        {"t": "Cut version-history retention from 30 days to 7 to reclaim space fast", "correct": false,
+        {"t": "Cut version-history retention from 30 days to 7 to reclaim space fast, then re-measure once the storage pressure has eased and we can think clearly about the underlying cause", "correct": false,
          "why": "Degrades a user-facing promise to paper over an undiagnosed anomaly — and if the cause is GC not running, shorter retention reclaims nothing. Product concessions are a last resort, after understanding."},
-        {"t": "Renegotiate storage pricing with the hardware vendor", "correct": false,
+        {"t": "Renegotiate storage pricing with the hardware vendor, since a 3x overrun is large enough to justify reopening the contract and our volume gives us real leverage this year", "correct": false,
          "why": "Treats an engineering anomaly as a procurement problem. A 3x forecast miss with a flatlined dedup metric is a signal about your system; the dashboard is telling you where to look."}
       ]
     },
@@ -327,13 +327,13 @@
       "id": "p3c07-q24", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Interviewer: 'You have 5 minutes left. Your design works. What's its weakest point, and what breaks first at 10x?' The strongest close for THIS system:",
       "options": [
-        {"t": "\"Weakest point: correctness rides on single-writer-per-namespace in the metadata plane — a botched shard failover that lets a stale primary accept one commit breaks the CAS guarantee, so failover needs fencing and that's where I'd invest testing. At 10x, notifier fan-out and hot shared-namespace shards melt first — cell-based notifier, cache and coalesce the journal tails. Blob storage mostly just buys disks.\"", "correct": true,
+        {"t": "\"Weakest point: correctness rides on single-writer-per-namespace — a botched failover that lets a stale primary accept one commit breaks the CAS guarantee, so fencing is where I'd invest testing. At 10x, notifier fan-out and hot namespace shards melt first; blob storage just buys disks.\"", "correct": true,
          "why": "Names the true correctness anchor and its sharpest failure, then ranks scaling pain by which tier actually breaks — with fixes attached. Self-critique plus failure ordering, unprompted, is the closing that moves grades."},
-        {"t": "\"At 10x we'd need to shard the databases and add more servers.\"", "correct": false,
+        {"t": "\"At 10x we'd shard the databases further, add more application servers, and put a bigger cache in front of the hot paths — the standard horizontal scaling playbook applies cleanly to a system shaped like this one.\"", "correct": false,
          "why": "Generic — true of every system ever designed, so it demonstrates nothing about this one. The question is which component breaks first and why."},
-        {"t": "\"Honestly, the design handles 10x already — everything shards horizontally.\"", "correct": false,
+        {"t": "\"Honestly the design handles 10x already: every tier shards horizontally, the blob store is content-addressed so it spreads by hash, and the metadata layer splits cleanly by namespace. We would mostly just add capacity, which is a budgeting problem rather than an architecture problem.\"", "correct": false,
          "why": "Deflects the invitation to self-critique, and it's false: the notifier's held connections and hot namespaces are visibly nonlinear costs. 'Nothing breaks' reads as 'I haven't looked.'"},
-        {"t": "\"I'd rewrite the sync client in Rust like Dropbox did, for reliability.\"", "correct": false,
+        {"t": "\"I'd rewrite the sync client in Rust the way Dropbox did with Nucleus, because the client state machine is where reliability problems concentrate and a stronger type system rules out whole classes of bugs.\"", "correct": false,
          "why": "Name-dropping a war story isn't self-critique of your design. Dropbox's rewrite addressed their engine's state-machine complexity; your five minutes should name your system's weakest invariant."}
       ]
     },
@@ -341,14 +341,14 @@
       "id": "p3c07-q25", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Late in the interview: 'What if we required end-to-end encryption — server never sees plaintext?' Which response shows senior command of the design's dependency structure?",
       "options": [
-        {"t": "\"E2E mainly kills cross-account dedup — different keys make identical files distinct ciphertexts — so I'd quote the storage-economics hit from estimation. Per-account dedup and delta sync survive since the client sees plaintext before encrypting. And I'd refuse convergent encryption as the rescue: deriving keys from content hashes rebuilds the 'does anyone store this file' oracle we closed. Conflict handling is untouched — CAS never needed plaintext.\"", "correct": true,
-         "why": "Traces the requirement through each subsystem, quantifies via the earlier estimate, kills the tempting-but-flawed rescue with the chapter's own security reasoning, and notices what doesn't change. Knowing what your design depends on — and what it doesn't — is the deepest signal here."},
-        {"t": "\"Encrypt everything client-side; the architecture is unaffected since blocks were already opaque to the server.\"", "correct": false,
+        {"t": "\"Encrypt everything client-side and the architecture is unaffected, since blocks were already opaque to the server — it never parsed them, it only ever stored them and handed them back by hash.\"", "correct": false,
          "why": "Misses that dedup depends on identical plaintext producing identical stored bytes — 'opaque' and 'identical across users' are different properties, and E2E destroys the second. The storage economics quietly collapse."},
-        {"t": "\"That's a product decision above my pay grade; technically anything is encryptable.\"", "correct": false,
+        {"t": "\"That's a product decision above my pay grade, but technically anything is encryptable, so I'd take the requirement to the security team and design around whatever key-management model they land on.\"", "correct": false,
          "why": "The interviewer is asking which architectural assumptions the requirement invalidates — a pure dependency-analysis question. Deferring it declines the exact skill being tested."},
-        {"t": "\"Use convergent encryption — key derived from the content hash — and dedup keeps working across accounts.\"", "correct": false,
-         "why": "Technically real and the classic trap: identical plaintexts now produce identical ciphertexts, so anyone can test whether a specific known file exists in the store — the Dropship-class oracle reborn. Proposing it without its leak shows the pattern was memorized, not understood."}
+        {"t": "\"Use convergent encryption — derive each block's key from its content hash — so identical plaintexts still produce identical ciphertexts and cross-account dedup keeps working exactly as it does today. The server stores only ciphertext, and the storage economics from the estimation survive intact.\"", "correct": false,
+         "why": "Technically real and the classic trap: identical plaintexts now produce identical ciphertexts, so anyone can test whether a specific known file exists in the store — the Dropship-class oracle reborn. Proposing it without its leak shows the pattern was memorized, not understood."},
+        {"t": "\"E2E mainly kills cross-account dedup — different keys make identical files distinct ciphertexts — so I'd quote the storage hit from estimation. Per-account dedup and delta sync survive, since the client sees plaintext before encrypting. And I'd refuse convergent encryption: it rebuilds the oracle we closed.\"", "correct": true,
+         "why": "Traces the requirement through each subsystem, quantifies via the earlier estimate, kills the tempting-but-flawed rescue with the chapter's own security reasoning, and notices what doesn't change. Knowing what your design depends on — and what it doesn't — is the deepest signal here."}
       ]
     }
   ]

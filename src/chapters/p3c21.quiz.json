@@ -1,0 +1,730 @@
+{
+  "chapter": "p3c21",
+  "items": [
+    {
+      "id": "p3c21-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "ladder",
+      "q": "What is a bitrate ladder in a video system?",
+      "options": [
+        {
+          "t": "The order in which segments are downloaded",
+          "correct": false,
+          "why": "Segments are downloaded in playback order. The ladder is about which quality version you download, not the sequence."
+        },
+        {
+          "t": "The set of renditions of one video: several resolutions and bitrates",
+          "correct": true,
+          "why": "Right. Each rung is one encoded version; the player climbs or drops between rungs as the network changes."
+        },
+        {
+          "t": "The priority queue used by the transcode farm",
+          "correct": false,
+          "why": "That's the job scheduler's priority lanes. The ladder is output, not scheduling."
+        },
+        {
+          "t": "The CDN cache hierarchy that decides where bytes are stored, from edge to origin",
+          "correct": false,
+          "why": "That hierarchy is real but separate — it's about where bytes are stored, not what versions exist."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "mezzanine",
+      "q": "What is the mezzanine file, and why must it never be deleted?",
+      "options": [
+        {
+          "t": "The 1080p rendition, kept because it is the most-watched one and the cheapest to re-serve",
+          "correct": false,
+          "why": "The most-watched rendition is derived data — it can always be re-encoded. The mezzanine is the thing it is derived from."
+        },
+        {
+          "t": "The manifest that lists all renditions",
+          "correct": false,
+          "why": "That's the manifest (m3u8/mpd), a small text file that is trivially regenerated from the segments."
+        },
+        {
+          "t": "The original master the uploader sent",
+          "correct": true,
+          "why": "Exactly. Renditions are rebuildable; the source is not. Lose it and you can never re-encode into a new codec."
+        },
+        {
+          "t": "A cached copy of the video held at the edge",
+          "correct": false,
+          "why": "Edge copies are disposable by design — that's the point of a cache."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "keyframes",
+      "q": "Why must the transcoder split a video into chunks only at keyframe boundaries?",
+      "options": [
+        {
+          "t": "To keep every chunk exactly the same number of bytes",
+          "correct": false,
+          "why": "Chunks are never equal in bytes — complex scenes compress worse. Equal size isn't a goal anywhere in this pipeline."
+        },
+        {
+          "t": "Frames between keyframes are stored as differences from their neighbours",
+          "correct": true,
+          "why": "Correct. A keyframe is decodable alone; everything after it references neighbours, so a cut mid-run produces garbage."
+        },
+        {
+          "t": "Because HTTP range requests can only address byte offsets that fall on keyframe boundaries",
+          "correct": false,
+          "why": "HTTP knows nothing about video. Range requests work on any byte offset — the constraint comes from the codec."
+        },
+        {
+          "t": "So the audio and video tracks stay in sync",
+          "correct": false,
+          "why": "A/V sync is handled by timestamps in the container. Keyframe cuts are about decodability."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "abr",
+      "q": "What makes a mid-video quality switch seamless instead of a visible stutter?",
+      "options": [
+        {
+          "t": "Every rung has keyframes at the same timestamps",
+          "correct": true,
+          "why": "Yes — adaptive streaming is a promise made by the encoder. Aligned keyframes make the pieces swappable."
+        },
+        {
+          "t": "The player downloads both qualities for a moment and cross-fades between them at the switch",
+          "correct": false,
+          "why": "Nobody downloads two rungs at once — that would double bandwidth exactly when bandwidth is scarce."
+        },
+        {
+          "t": "The CDN re-encodes on the fly to the requested bitrate",
+          "correct": false,
+          "why": "CDNs serve static files. Transcoding at the edge would destroy cacheability and cost a fortune."
+        },
+        {
+          "t": "DRM keys rotate at each switch point",
+          "correct": false,
+          "why": "Key rotation is a security mechanism unrelated to how smoothly quality changes."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "abr",
+      "q": "Where does the adaptive-bitrate decision actually get made?",
+      "options": [
+        {
+          "t": "At the CDN edge, based on the viewer's IP",
+          "correct": false,
+          "why": "The edge just serves files. It has no view of the player's buffer, which is the signal that matters most."
+        },
+        {
+          "t": "In the player",
+          "correct": true,
+          "why": "Right, and that's what lets the server stay dumb: static files, one cached copy for millions of different networks."
+        },
+        {
+          "t": "In the packager, when segments are written",
+          "correct": false,
+          "why": "The packager produces all rungs ahead of time; it can't know any individual viewer's conditions."
+        },
+        {
+          "t": "In the origin, per playback session",
+          "correct": false,
+          "why": "Per-session origin logic would defeat caching entirely, which is the whole basis of video delivery economics."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "packaging",
+      "q": "What does a streaming manifest (.m3u8 or .mpd) contain?",
+      "options": [
+        {
+          "t": "The encoded video data itself, base64-encoded",
+          "correct": false,
+          "why": "Manifests are tiny text files. Putting media in them would make them uncacheable and enormous."
+        },
+        {
+          "t": "The DRM keys needed to decrypt the stream",
+          "correct": false,
+          "why": "Keys come from a separate license server after an entitlement check — never from a publicly cacheable file."
+        },
+        {
+          "t": "A list of available rungs and where each rung's segments live",
+          "correct": true,
+          "why": "Correct — it's the map the player reads to know what qualities exist and which URLs to fetch next."
+        },
+        {
+          "t": "The viewer's playback history, so the session can resume exactly where it stopped",
+          "correct": false,
+          "why": "Resume position is per-user state in your own service; manifests are identical for everyone, which is why they cache."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "cdn",
+      "q": "What is origin shielding?",
+      "options": [
+        {
+          "t": "Encrypting traffic between the edge and the origin",
+          "correct": false,
+          "why": "That's transport security. Shielding is about who is allowed to talk to the origin, not about encryption."
+        },
+        {
+          "t": "Rate limiting playback requests per viewer",
+          "correct": false,
+          "why": "Per-viewer rate limits protect against abuse, but do nothing about thousands of edges all missing the same object."
+        },
+        {
+          "t": "Blocking direct downloads and hotlinking with signed URLs that expire after a few minutes",
+          "correct": false,
+          "why": "Signed URLs stop hotlinking. They don't reduce the number of upstream fetches on a cache miss."
+        },
+        {
+          "t": "A regional cache tier sitting between the edges and the origin",
+          "correct": true,
+          "why": "Right. The shield absorbs and consolidates misses so the origin sees a trickle instead of a stampede."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "segments",
+      "q": "You shorten segments from 6 seconds to 2 seconds. What do you gain and lose?",
+      "options": [
+        {
+          "t": "Faster quality reaction and lower live latency; worse compression, more requests",
+          "correct": true,
+          "why": "Exactly the trade. Each segment starts with an expensive keyframe, so shorter segments cost bytes and request overhead."
+        },
+        {
+          "t": "Better compression efficiency, at the cost of a lower CDN hit rate across more objects",
+          "correct": false,
+          "why": "Backwards on compression — shorter segments compress worse because keyframes come more often."
+        },
+        {
+          "t": "Nothing changes except file naming",
+          "correct": false,
+          "why": "Segment length is one of the most consequential knobs in the whole system, especially for live latency."
+        },
+        {
+          "t": "Gain DRM strength; lose startup speed",
+          "correct": false,
+          "why": "Segment length has nothing to do with DRM, and shorter segments usually help startup, not hurt it."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "open-connect",
+      "q": "In Netflix's Open Connect, what is the nightly fill window for?",
+      "options": [
+        {
+          "t": "Copying viewing history and logs from the appliances back to the central data center",
+          "correct": false,
+          "why": "Fill is about pushing video content outward, not pulling user data inward."
+        },
+        {
+          "t": "Pushing predicted-popular content onto appliances while the network is idle",
+          "correct": true,
+          "why": "Yes — it converts expensive peak-time bandwidth into nearly free off-peak bandwidth, which only works with a predictable catalog."
+        },
+        {
+          "t": "Re-encoding the catalog on the appliances themselves",
+          "correct": false,
+          "why": "Appliances serve bytes; encoding happens centrally where the mezzanine and the compute live."
+        },
+        {
+          "t": "Rotating DRM keys on cached content",
+          "correct": false,
+          "why": "Keys are served by the license service, not shipped with cached segments."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q10",
+      "level": 2,
+      "type": "mcq",
+      "tag": "transcode-dag",
+      "q": "A 4-hour documentary is uploaded. One core would grind out its full H.264 ladder in about 12 hours, but your SLA says playable in 5 minutes. What's the move?",
+      "options": [
+        {
+          "t": "Buy a far bigger machine with many more cores and encode the whole file on that single box",
+          "correct": false,
+          "why": "A 64-core box gets you to roughly 11 minutes, at enormous cost, and still misses. Worse, the next 8-hour upload breaks the SLA all over again — one machine doesn't scale with content length."
+        },
+        {
+          "t": "Split at keyframes, fan (chunk x rung) tasks across workers, then stitch",
+          "correct": true,
+          "why": "Correct — and the win grows with video length, which is exactly the property you need. Watch the tail task: one stuck chunk sets your SLA."
+        },
+        {
+          "t": "Serve the mezzanine directly until the ladder finishes",
+          "correct": false,
+          "why": "The mezzanine is huge and in a format many devices can't play. You'd blow the viewer's bandwidth and still fail on some devices."
+        },
+        {
+          "t": "Encode only 360p and never build the rest",
+          "correct": false,
+          "why": "Baseline-first is right; never building the rest isn't. Popular content must earn its higher rungs, not be denied them."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "chunking",
+      "q": "An engineer proposes 2-second chunks instead of 30-second chunks, to maximize parallelism. What's the strongest objection?",
+      "options": [
+        {
+          "t": "Workers cannot start fast enough for 2-second tasks, so scheduling overhead dominates the run",
+          "correct": false,
+          "why": "Worker startup is a real overhead but a solvable one — warm pools exist. There's a deeper cost."
+        },
+        {
+          "t": "The manifest would become too large to cache",
+          "correct": false,
+          "why": "Chunk size for transcoding is independent of the segment size you publish; and manifests stay small either way."
+        },
+        {
+          "t": "Each chunk restarts rate control and loses lookahead, so output is permanently fatter",
+          "correct": true,
+          "why": "Right. You'd trade a one-time wall-clock win for a permanent egress cost, which is the expensive side of this system."
+        },
+        {
+          "t": "Keyframes can't occur every 2 seconds",
+          "correct": false,
+          "why": "They can — a 2-second keyframe interval is common. The problem is compression efficiency, not feasibility."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "ops",
+      "q": "Your transcode dashboard shows 60,000 queued jobs. Your manager asks if that's bad. What's the right answer?",
+      "options": [
+        {
+          "t": "Yes — 60,000 is far above normal, so scale the fleet",
+          "correct": false,
+          "why": "Depth without context means nothing. A big fleet may be draining 60,000 jobs in two minutes."
+        },
+        {
+          "t": "It depends on queue age per priority lane, not depth",
+          "correct": true,
+          "why": "Right. 'The oldest fast-lane job is 14 minutes old' is actionable against the SLA; a raw count is not."
+        },
+        {
+          "t": "No — queues are meant to absorb bursts, so depth never matters",
+          "correct": false,
+          "why": "Half true and dangerously complacent: queues absorb bursts, but a queue that never drains is an outage in slow motion."
+        },
+        {
+          "t": "Yes, and the fix is to drop the oldest jobs to protect latency",
+          "correct": false,
+          "why": "Dropping uploads loses creator work for no reason — the mezzanine is safe in blob storage, so late is fine, lost is not."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "cache-storm",
+      "q": "A hit series drops at midnight. In the first 30 seconds, tens of thousands of edges request the same first segment, and your origin falls over. What fixes it?",
+      "options": [
+        {
+          "t": "Increase origin capacity 100x for launch nights",
+          "correct": false,
+          "why": "Brute force that you pay for every night for one minute of load, and it still melts on a bigger launch."
+        },
+        {
+          "t": "Give each edge a longer cache TTL",
+          "correct": false,
+          "why": "TTL helps after the first fetch. The stampede is precisely the moment before anyone has the object."
+        },
+        {
+          "t": "Shield tier plus request coalescing, and pre-position before release",
+          "correct": true,
+          "why": "Correct on both timescales: coalescing collapses simultaneous misses into one fetch, and pre-positioning means there's no miss at all."
+        },
+        {
+          "t": "Tell players to stagger their start with a few seconds of random delay at midnight",
+          "correct": false,
+          "why": "You cannot ask viewers to wait to watch the thing they stayed up for. Fix it in the infrastructure."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "abr",
+      "q": "Users on stable connections complain that quality flips up and down constantly, which they hate more than steady lower quality. What's the fix?",
+      "options": [
+        {
+          "t": "Lock each session to the rung chosen at startup so quality never changes mid-video",
+          "correct": false,
+          "why": "That trades flapping for stalls — a network dip mid-session now means buffering instead of a graceful step down."
+        },
+        {
+          "t": "Use buffer occupancy as the control signal in steady state",
+          "correct": true,
+          "why": "Right. Video traffic is bursty and on-off, so throughput samples lie; a healthy buffer is direct evidence you can hold a higher rung."
+        },
+        {
+          "t": "Reduce the number of rungs to two",
+          "correct": false,
+          "why": "Fewer rungs means coarser adaptation — the switches get less frequent but far more jarring."
+        },
+        {
+          "t": "Move ABR decisions to the server",
+          "correct": false,
+          "why": "The server can't see the buffer, and per-viewer server logic breaks the caching model the whole design rests on."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "drm",
+      "q": "Product wants a per-user visible watermark burned into every stream to deter piracy. What do you tell them?",
+      "options": [
+        {
+          "t": "Fine — it's just a filter in the encoder",
+          "correct": false,
+          "why": "The filter is easy; the consequence is not. Per-user pixels mean per-user files."
+        },
+        {
+          "t": "Unique bytes per viewer means the CDN hit rate goes to zero",
+          "correct": true,
+          "why": "Correct — this is the security-decision-with-cache-consequences moment. If you must, watermark only the top rung for a small high-risk cohort."
+        },
+        {
+          "t": "It is impossible to combine with DRM, since the segments are encrypted before delivery",
+          "correct": false,
+          "why": "It's technically possible and some studios require it. The blocker is economics, not feasibility."
+        },
+        {
+          "t": "Do it at the edge instead",
+          "correct": false,
+          "why": "Watermarking at the edge means the edge is transcoding per viewer — the same cost problem, moved somewhere more expensive."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "priorities",
+      "q": "Overnight, you start re-encoding the back catalog into AV1. By morning, creators report uploads taking 3 hours to become playable. What went wrong and what's the fix?",
+      "options": [
+        {
+          "t": "AV1 is slower per job; switch the backfill to H.264",
+          "correct": false,
+          "why": "The codec isn't the bug. Any large backfill in the same pool would have starved new uploads the same way."
+        },
+        {
+          "t": "The autoscaler reacted too slowly overnight; raise the scaling ceiling and pre-warm capacity",
+          "correct": false,
+          "why": "More capacity delays the symptom. Without lanes, backfill will happily consume whatever ceiling you set."
+        },
+        {
+          "t": "They share one queue; split into priority lanes with a floor for uploads",
+          "correct": true,
+          "why": "Right. Backfill has no deadline, uploads do, and only a weighted scheduler with a floor keeps that true under load."
+        },
+        {
+          "t": "Run the backfill during business hours instead",
+          "correct": false,
+          "why": "Now you starve uploads at the busiest time. Timing is not isolation."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "live",
+      "q": "At kickoff, 5 million players start a live stream and then poll the manifest on the same cadence forever. What's the highest-value fix?",
+      "options": [
+        {
+          "t": "Cache the manifest at the edge briefly, and jitter client refreshes",
+          "correct": true,
+          "why": "Even a one-second TTL collapses a million requests into one per edge per second, and jitter breaks the lockstep."
+        },
+        {
+          "t": "Add more origin replicas",
+          "correct": false,
+          "why": "Scaling origin to absorb a herd you could have collapsed at the edge is paying full price for an avoidable problem."
+        },
+        {
+          "t": "Switch the whole event to WebRTC so there is no manifest polling happening at all",
+          "correct": false,
+          "why": "That trades a cacheable protocol for one that scales with relay servers — vastly more expensive for a one-way broadcast."
+        },
+        {
+          "t": "Increase segment length to 30 seconds",
+          "correct": false,
+          "why": "It reduces polling but puts viewers a minute behind live, which is unacceptable for sport."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "view-counts",
+      "q": "A creator says their view count read 41,200 last night and 39,850 this morning, and is furious. What is the honest engineering explanation?",
+      "options": [
+        {
+          "t": "A shard failed over and lost writes",
+          "correct": false,
+          "why": "Possible in general, but you don't reach for data loss when a designed-in reconciliation explains it exactly."
+        },
+        {
+          "t": "The live counter is approximate; the nightly settle recomputed it",
+          "correct": true,
+          "why": "Correct, and the product fix is to label the fast number as provisional rather than pretend both are exact."
+        },
+        {
+          "t": "The CDN double-counted cached segment requests during the evening peak",
+          "correct": false,
+          "why": "Views come from player heartbeats, not segment fetches — counting cache hits would be wildly wrong in both directions."
+        },
+        {
+          "t": "Views expire after 24 hours",
+          "correct": false,
+          "why": "Nothing in the design expires counted views; totals only get corrected, never aged out."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q19",
+      "level": 3,
+      "type": "mcq",
+      "tag": "commit",
+      "q": "You're designing video for a startup delivering 50 TB a day. A staff engineer suggests building ISP-embedded appliances 'because that's what Netflix does'. Your call?",
+      "options": [
+        {
+          "t": "Agree — owning delivery is always cheaper at scale, and it is what the biggest players do",
+          "correct": false,
+          "why": "'At scale' is doing all the work in that sentence, and 50 TB/day isn't it. Copying a solution without its precondition is the classic buzzword failure."
+        },
+        {
+          "t": "Rent a commercial CDN: at 50 TB/day the bill is a few hundred dollars a day",
+          "correct": true,
+          "why": "Right — the number gates the decision. Say the threshold out loud too: revisit when egress spend rivals a team plus hardware, not before."
+        },
+        {
+          "t": "Build a hybrid: half rented, half owned",
+          "correct": false,
+          "why": "You'd take on the entire operational burden of the owned half for a bill that isn't hurting yet. Hedging isn't judgment."
+        },
+        {
+          "t": "Defer the decision until traffic grows",
+          "correct": false,
+          "why": "Deferring without committing to today's choice or naming the trigger is exactly the option-listing that reads junior."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "crux",
+      "q": "Ten minutes into 'design YouTube', you have a complete diagram. Where do you spend the remaining time to read as senior?",
+      "options": [
+        {
+          "t": "Detail the metadata schema, indexes, and channel-page queries",
+          "correct": false,
+          "why": "That's the easy part done thoroughly, which is exactly the mid-level trap: complete, competent, and aimed at the wrong room."
+        },
+        {
+          "t": "The transcoding pipeline and the delivery economics",
+          "correct": true,
+          "why": "Yes — making bytes and moving bytes are the two hard parts, and announcing that agenda yourself is the senior signal."
+        },
+        {
+          "t": "Recommendations, since that's what users experience",
+          "correct": false,
+          "why": "It's a different system with its own interview. Scoping it out with a latency budget and a fallback is the correct 20 seconds."
+        },
+        {
+          "t": "Comments, moderation, and the notification fan-out",
+          "correct": false,
+          "why": "All real features, none of them why this question is asked. You'd finish having never touched the crux."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "scaling",
+      "q": "The interviewer asks what breaks first if traffic and uploads both go 10x. Which answer shows the most production judgment?",
+      "options": [
+        {
+          "t": "Storage — an exabyte a year becomes ten, so we would need a new storage and tiering strategy",
+          "correct": false,
+          "why": "Storage growth is linear, boring and budgeted for. Naming the least surprising component suggests you haven't operated one of these."
+        },
+        {
+          "t": "The CDN — hit rates fall as content volume grows",
+          "correct": false,
+          "why": "It's the opposite, and that's the interesting bit: the popular head doesn't grow with traffic, so hit rate improves as you scale."
+        },
+        {
+          "t": "The transcode farm's peak burst and the egress bill — and cache hit rate improves",
+          "correct": true,
+          "why": "Correct on both halves. Naming the counterintuitive improvement unprompted is what separates recall from having thought about the economics."
+        },
+        {
+          "t": "The metadata database, which will need sharding",
+          "correct": false,
+          "why": "A billion rows is small and sharding is a solved move here. Reaching for the database is the reflex from other problems, not this one."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "contrast",
+      "q": "'Netflix tunes an encoding ladder per title and pre-positions content overnight. Why doesn't YouTube just do the same?'",
+      "options": [
+        {
+          "t": "YouTube's engineers optimize for upload latency rather than for playback quality",
+          "correct": false,
+          "why": "Both companies care about both. Framing it as a preference misses that the constraint is structural."
+        },
+        {
+          "t": "A curated catalog is finite and predictable; a UGC firehose is neither",
+          "correct": true,
+          "why": "Right. Netflix amortizes heavy analysis over a hundred million views and knows tomorrow's demand; YouTube's median upload gets a handful of views and its popular head moves hourly."
+        },
+        {
+          "t": "AV1 makes per-title optimization unnecessary",
+          "correct": false,
+          "why": "A better codec shifts the curve but doesn't remove per-content complexity variation, which is what per-title tuning exploits."
+        },
+        {
+          "t": "YouTube's CDN can't hold predicted content",
+          "correct": false,
+          "why": "Capacity isn't the blocker — predictability is. You can't pre-position what nobody can predict."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "rollout",
+      "q": "Your team has a new encoder configuration that measures 8% more efficient offline. How do you ship it?",
+      "options": [
+        {
+          "t": "Roll it out fleet-wide once the offline benchmarks and quality checks have all passed",
+          "correct": false,
+          "why": "Offline efficiency and viewer experience are different measurements, and you're betting every stream on them being the same."
+        },
+        {
+          "t": "Ship to one region first, then the rest a week later",
+          "correct": false,
+          "why": "Better, but region-by-region without a control group leaves you guessing whether a rebuffer change was the encoder or the region."
+        },
+        {
+          "t": "A/B it on a slice of playback traffic, judged on rebuffer ratio",
+          "correct": true,
+          "why": "Right — '8% more efficient' and 'viewers stall more' are entirely compatible statements, so the user metric decides."
+        },
+        {
+          "t": "Ship it only for new uploads, so nothing existing changes",
+          "correct": false,
+          "why": "Safer on blast radius, but you still learn nothing measurable until you compare against a control on real playback."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "storage",
+      "q": "Finance points out that mezzanine files are 20% of your storage bill and are 'never served to anyone'. A teammate proposes deleting them for videos older than a year. What do you say?",
+      "options": [
+        {
+          "t": "Agree, but keep mezzanines for videos above a view threshold and cold-store the rest",
+          "correct": false,
+          "why": "Closer, and tempting — but popularity can return years later, and a codec migration needs the whole catalog, not just today's head."
+        },
+        {
+          "t": "Refuse — the mezzanine is the source every future re-encode reads from",
+          "correct": true,
+          "why": "Correct. Renditions are derived data; the master is not. Move it to cold storage — that captures most of the saving without the one-way door."
+        },
+        {
+          "t": "Agree — renditions can always be re-encoded from the highest rung",
+          "correct": false,
+          "why": "Re-encoding from a lossy rendition compounds artifacts. Generation loss is real, and you can't undo it later."
+        },
+        {
+          "t": "Agree, and rely on CDN copies as backup",
+          "correct": false,
+          "why": "Caches are disposable by definition, hold only renditions, and evict the long tail first — exactly the content this would affect."
+        }
+      ]
+    },
+    {
+      "id": "p3c21-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "requirement-flip",
+      "q": "A live auction product demands sub-second end-to-end latency for 5 million concurrent viewers. What's the senior response?",
+      "options": [
+        {
+          "t": "Ship LL-HLS at 2 seconds and tell them it's close enough",
+          "correct": false,
+          "why": "Quietly missing a stated requirement isn't a trade-off, it's a surprise for someone else to discover in production."
+        },
+        {
+          "t": "Use WebRTC for everything and scale the relay tier up to five million viewers",
+          "correct": false,
+          "why": "Technically it works, and it puts every passive viewer on a cost curve that scales linearly with audience. You'd be paying real-time prices for one-way video."
+        },
+        {
+          "t": "Bid state over a persistent connection; video on LL-HLS at 2-3 s",
+          "correct": true,
+          "why": "Right. Sub-second is genuinely needed for a few hundred bytes of bid state, not for pixels — and naming the two-stack operational cost keeps it honest."
+        },
+        {
+          "t": "Refuse the requirement as technically impossible",
+          "correct": false,
+          "why": "It isn't impossible, it's expensive. Pushing back with numbers and a cheaper alternative beats refusing."
+        }
+      ]
+    }
+  ]
+}

@@ -49,8 +49,8 @@
       "options": [
         {"t": "To detect dead workers without killing long-running jobs — beats extend the lease; silence past expiry triggers reclaim", "correct": true,
          "why": "Right. The lease is a claim with a shelf life. A 6-hour job stays claimed through periodic renewals; a dead worker stops renewing and the reaper re-enqueues its run. Same idea as SQS visibility timeout."},
-        {"t": "To limit how long any job is allowed to run", "correct": false,
-         "why": "That's the separate timeout_s config. The lease isn't a runtime cap — heartbeats can extend it indefinitely for legitimately long jobs."},
+        {"t": "To cap total runtime — when the lease window elapses the scheduler kills the process, which is how a runaway job gets stopped before it eats the fleet", "correct": false,
+         "why": "That's the separate timeout_s knob. The lease isn't a runtime cap — heartbeats extend it indefinitely for legitimately long jobs, and reaching expiry means 'presumed dead', not 'ran too long'."},
         {"t": "To measure job duration for billing", "correct": false,
          "why": "Duration comes from started_at/finished_at on the run row. The lease exists for failure detection, not metering."},
         {"t": "To prevent two users from editing the same job spec", "correct": false,
@@ -89,8 +89,8 @@
       "id": "p3c11-q07", "level": 1, "type": "mcq", "tag": "thundering-minute",
       "q": "Why is a job scheduler's load a 'heartbeat' rather than a smooth stream?",
       "options": [
-        {"t": "Databases batch their writes on second boundaries", "correct": false,
-         "why": "DB write batching is internal and unrelated. The spikes come from what humans type into schedule fields, not from storage mechanics."},
+        {"t": "Databases flush their write-ahead log on second boundaries, so committed work only becomes visible to readers in bursts rather than continuously", "correct": false,
+         "why": "Write-ahead-log flushing is internal storage mechanics and has nothing to do with when jobs come due. The spikes come from what humans type into schedule fields."},
         {"t": "Humans schedule on round numbers — 0 * * * *, */5, and midnight — so firings pile up at minute, hour, and day boundaries", "correct": true,
          "why": "Exactly. Real crontab collections cluster brutally at round times; Google found it severe enough to add a '?' syntax so the system could smear the midnight mob. The wave, not the average, sizes your design."},
         {"t": "Retries synchronize jobs into waves", "correct": false,
@@ -123,8 +123,8 @@
          "why": "Workers get the run_id from the queue and read the row either way. Transaction membership doesn't change read speed — it changes what crashes can lose."},
         {"t": "The row is an outbox: if the scanner crashes after commit but before enqueueing, a sweeper finds the pending run and re-enqueues it — the firing can be delayed but never silently lost", "correct": true,
          "why": "Exactly. Advancing next_run_at means 'this occurrence is handled,' so the same commit must durably record the occurrence. The pending run row is the recoverable proof, and the sweeper is its safety net."},
-        {"t": "Postgres requires inserts and updates to share a transaction", "correct": false,
-         "why": "No such requirement — you can split them freely. We choose not to, because atomicity between 'occurrence claimed' and 'occurrence recorded' is the whole guarantee."}
+        {"t": "Postgres refuses to let an INSERT into runs and an UPDATE to jobs land in separate transactions when the two rows are joined by a foreign key, so the engine forces both statements into a single unit of work", "correct": false,
+         "why": "No such rule exists — you can split them freely, foreign key or not. We choose not to, because atomicity between 'occurrence claimed' and 'occurrence recorded' is the whole guarantee."}
       ]
     },
     {
@@ -149,8 +149,8 @@
          "why": "The second delivery wasn't a queue duplicate — the reaper legitimately re-enqueued after lease expiry. The queue did its job by delivering; the guard has to live in the job's effects."},
         {"t": "A conditional write keyed on the firing — e.g. set invoice to 'paid' where still 'due', or the payment provider deduping on an idempotency key", "correct": true,
          "why": "Right. The re-run executed fully — at-least-once promises nothing less. It reached the side effect, found the (job_id, scheduled_for) guard already tripped, and became a no-op. This is the cookbook working as designed."},
-        {"t": "The lease prevented the second worker from starting", "correct": false,
-         "why": "The lease had already expired — that's precisely why the re-run happened. Leases make duplicates rare; they cannot make them impossible."},
+        {"t": "The lease prevented the second worker from starting until the first worker's claim was provably released, serialising the two attempts", "correct": false,
+         "why": "The lease had already expired — that's precisely why the re-run happened, and expiry is a guess about death, not proof of it. Leases make duplicates rare; they cannot make them impossible."},
         {"t": "The scheduler detected the first execution succeeded", "correct": false,
          "why": "It structurally couldn't — the ack never arrived, and silence is ambiguous (Two Generals). If the scheduler could detect success through silence, none of this machinery would exist."}
       ]
@@ -231,8 +231,8 @@
       "options": [
         {"t": "Each completion does an atomic conditional decrement of the child's unmet-dependency counter in the database; only the update that lands on zero triggers the child", "correct": true,
          "why": "Right. Atomicity pushes the race into the database, where one decrement serializes after the other — exactly one observes the transition to zero. Fan-in is 'counter hits zero exactly once,' and that's a conditional-write problem."},
-        {"t": "Each parent's handler reads the counter, and whoever reads zero fires the child", "correct": false,
-         "why": "Read-then-write is the race: both handlers read 1 simultaneously, both decrement, and either both fire the child (duplicate) or each thinks the other will (never fires). This is the exact bug conditional writes exist to kill."},
+        {"t": "Each parent's handler reads the child's unmet-dependency counter, subtracts one, writes the new value back, and whichever handler sees zero after its own write goes on to trigger the child", "correct": false,
+         "why": "Read-then-write is the race: both handlers read 1 simultaneously, both write 0, and either both fire the child (duplicate) or each assumes the other will (never fires). This is the exact bug conditional writes exist to kill."},
         {"t": "Parents are forced to run sequentially so completions can't collide", "correct": false,
          "why": "Works, but you just serialized a fan-in whose entire point is parallel extracts — tripling the pipeline's wall-clock time to dodge a one-line atomic update is the wrong trade."},
         {"t": "The child subscribes to the queue and fires on the third completion event it sees", "correct": false,
@@ -285,8 +285,8 @@
       "id": "p3c11-q21", "level": 3, "type": "mcq", "tag": "10x",
       "q": "At 10x (100M jobs, ~17K firings/sec), what saturates first, and what's the fix that preserves the design?",
       "options": [
-        {"t": "The queue brokers — switch to a faster message bus", "correct": false,
-         "why": "17K msgs/sec is a light morning for Kafka or SQS — orders of magnitude of headroom remain. Naming the queue here suggests guessing rather than tracing the load to where coordination actually concentrates."},
+        {"t": "The queue brokers — 17K messages a second fanned across three priority topics is where a single broker cluster starts shedding, so the fix is a faster bus with more partitions, more brokers, and a bigger retention budget", "correct": false,
+         "why": "17K msgs/sec is a light morning for Kafka or SQS — orders of magnitude of headroom remain, and adding brokers buys nothing. Naming the queue here suggests guessing rather than tracing the load to where coordination actually concentrates."},
         {"t": "The claim path: tens of thousands of contended row locks/sec on one store's index range. Hash-partition jobs into shards, scanners sweep disjoint shards — claims stop contending and the design multiplies instead of reshaping", "correct": true,
          "why": "Right. The arbiter is where all coordination funnels, so it's where 10x lands. Sharding the claim keeps every property — transactional claims, rollback recovery, outbox — per shard. Knowing which bottleneck arrives first, and that the fix is multiplication not redesign, is the senior read."},
         {"t": "The cron parser — 100M expressions is too many to evaluate", "correct": false,
@@ -317,8 +317,8 @@
          "why": "A wedged scanner emits no errors — it emits nothing. When the failure is absence of action, error-rate alarms are structurally blind; there are no failed requests because there are no requests."},
         {"t": "DLQ arrival rate", "correct": false,
          "why": "The DLQ fills when jobs run and fail. Nothing running means a DLQ flatlining at zero — which looks identical to a perfectly healthy day."},
-        {"t": "Worker CPU utilization dropping", "correct": false,
-         "why": "It does drop — along with every other metric, ambiguously. Low CPU also means a quiet Sunday. You'd be inferring the outage from a shadow instead of measuring the thing itself."},
+        {"t": "Worker CPU utilization dropping — with nothing left to execute the fleet goes idle, so a sustained drop below the normal floor is the signal that firing has stopped", "correct": false,
+         "why": "It does drop — along with every other metric, ambiguously. Low CPU also means a quiet Sunday, or a fleet that just scaled in. You'd be inferring the outage from a shadow instead of measuring the thing itself."},
         {"t": "An 'oldest unclaimed due job' gauge that climbs when firing stops, plus a dead-man's-switch canary whose absence pages via an external monitor", "correct": true,
          "why": "Right — alert on the absence of expected events, with one watcher outside the system's own blast radius. The gauge measures 'firing has stopped' directly; the external canary survives even the database or metrics pipeline dying with the scanners."}
       ]
@@ -331,8 +331,8 @@
          "why": "A parser bug doesn't error — it happily computes a wrong next_run_at and corrupts schedules for every job that canary touches. Canarying catches crashes; it's blind to silent wrongness, which is this change's actual risk."},
         {"t": "Shadow mode: new parser computes next occurrences alongside the old for days of real schedules, diff the outputs, ship only at zero diffs — because the failure mode is silent corruption of next_run_at, not crashes", "correct": true,
          "why": "Right. Name the failure mode first, then pick the rollout that can see it. Diffing shadow computations turns 'millions of jobs silently drift to wrong times' into a boring report before any production write happens."},
-        {"t": "Ship behind a feature flag and flip it globally after a week of soak", "correct": false,
-         "why": "The flag gives you fast rollback of the code, but not of the data: wrong next_run_at values written during the soak stay wrong after the flip back. Reversible deploy, irreversible corruption."},
+        {"t": "Ship behind a feature flag, soak for a week on a small slice of jobs while watching the schedule-drift dashboards, then flip it globally, keeping the flag as an instant rollback lever if anything looks wrong afterwards", "correct": false,
+         "why": "The flag gives you fast rollback of the code, but not of the data: wrong next_run_at values written during the soak stay wrong after you flip back. Reversible deploy, irreversible corruption."},
         {"t": "Rely on the test suite — cron parsing is pure logic with full coverage", "correct": false,
          "why": "Tests cover the expressions you thought of; 10M users have submitted the ones you didn't. Shadow-diffing against production's actual expressions is the test suite reality writes for you."}
       ]

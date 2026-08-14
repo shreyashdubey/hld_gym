@@ -1,0 +1,759 @@
+{
+  "chapter": "p3c22",
+  "items": [
+    {
+      "id": "p3c22-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "sequencer",
+      "q": "What is the sequencer's job in an exchange pipeline?",
+      "options": [
+        {
+          "t": "Stamp every message with a global sequence number",
+          "correct": true,
+          "why": "That's it — no business logic, no validation, just one authority stamping order. Everything downstream is a deterministic replay of that stamped stream."
+        },
+        {
+          "t": "Match buy orders against sell orders",
+          "correct": false,
+          "why": "That's the matching engine, which sits after the sequencer. Keeping the two separate is what makes the sequencer simple enough to be reliable."
+        },
+        {
+          "t": "Spread incoming orders evenly across a fleet of matching engines",
+          "correct": false,
+          "why": "Backwards. The sequencer's whole purpose is to funnel many inputs into one ordered stream, not to spread them out."
+        },
+        {
+          "t": "Persist orders to the database before matching",
+          "correct": false,
+          "why": "There is no database in this hot path. The journal nodes persist the sequenced stream, but that's a consumer of the sequencer, not its job."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "single-thread",
+      "q": "Why is the matching engine a single thread rather than a thread pool?",
+      "options": [
+        {
+          "t": "Coordination between threads would cost more than the matching itself",
+          "correct": true,
+          "why": "Exactly the chapter's thesis. A contended cache line costs about as much as a whole match; a network hop costs fifty times more. You'd pay more in coordination than you'd gain in parallelism."
+        },
+        {
+          "t": "Multi-threaded matching is impossible to write correctly",
+          "correct": false,
+          "why": "It's writable — it's just slower and non-deterministic. The argument is economic and about determinism, not about difficulty."
+        },
+        {
+          "t": "Because a single thread uses less memory",
+          "correct": false,
+          "why": "Memory isn't the constraint here; the whole market is about 1.3 GB. The constraints are latency, determinism and fair ordering."
+        },
+        {
+          "t": "Because operating systems can't schedule more than one low-latency thread",
+          "correct": false,
+          "why": "They can, and exchanges run many threads on other tiers. It's the matching core specifically that stays single-threaded."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "matching",
+      "q": "Under price-time priority, two resting sell orders sit at the same price. Which one trades first?",
+      "options": [
+        {
+          "t": "The larger one",
+          "correct": false,
+          "why": "Size doesn't break the tie in a price-time book. Some venues use pro-rata allocation, but that's a different, explicitly chosen model."
+        },
+        {
+          "t": "The one that arrived first, by sequence number",
+          "correct": true,
+          "why": "Price picks the level, time picks the order inside it — and 'time' means the smaller sequence number, since it's FIFO within a price level."
+        },
+        {
+          "t": "The one from the account with more credit headroom",
+          "correct": false,
+          "why": "Credit is a pre-trade risk concern at the gateway. It never influences matching priority — that would be a fairness violation."
+        },
+        {
+          "t": "Whichever the engine reaches first while scanning",
+          "correct": false,
+          "why": "Nothing in this engine is left to scan order. Each price level is an explicit FIFO queue precisely so priority is a defensible fact."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "order-book",
+      "q": "The order book is a flat array of price levels indexed by tick. What does that buy you?",
+      "options": [
+        {
+          "t": "Compression of the order data",
+          "correct": false,
+          "why": "No compression involved. The array is about access speed and memory layout, not size reduction."
+        },
+        {
+          "t": "O(1) access to any price level, in contiguous memory",
+          "correct": true,
+          "why": "Right — the index is arithmetic rather than a search, and contiguous memory lets the CPU prefetcher guess right. A tree would be correct but slower on both counts."
+        },
+        {
+          "t": "Automatic sorting of orders by size",
+          "correct": false,
+          "why": "Orders inside a level are ordered by arrival, not size. The array only orders levels by price."
+        },
+        {
+          "t": "The ability to cover any price range without extra memory cost",
+          "correct": false,
+          "why": "The opposite is the honest cost: memory scales with the price range, so wide-range instruments waste slots and may need a sparse fallback."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "audit",
+      "q": "In this design, what serves as the regulator-grade audit trail?",
+      "options": [
+        {
+          "t": "A nightly report generated from the trades database",
+          "correct": false,
+          "why": "There is no trades database in the hot path, and a generated report is a summary — it can't reproduce the exact state at an exact moment."
+        },
+        {
+          "t": "The sequenced input log itself, replayed",
+          "correct": true,
+          "why": "The log is the system of record. Because engine state is a pure function of it, replaying the log reproduces any millisecond of the day exactly."
+        },
+        {
+          "t": "The market data feed archive",
+          "correct": false,
+          "why": "Useful evidence, but it's an output — it shows what happened, not the inputs that caused it, and it omits rejected and cancelled activity."
+        },
+        {
+          "t": "Application logs from the gateways",
+          "correct": false,
+          "why": "Gateway logs are per-node and unordered relative to each other. The whole point of one sequenced stream is that the ordering question has one answer."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "mechanical-sympathy",
+      "q": "Why does the matching engine allocate no memory at runtime?",
+      "options": [
+        {
+          "t": "Allocation is illegal in low-latency systems by convention",
+          "correct": false,
+          "why": "It's not a convention, it's arithmetic about pause times. The rule exists because of what allocation eventually triggers."
+        },
+        {
+          "t": "To avoid running out of RAM during the session",
+          "correct": false,
+          "why": "RAM headroom is fine at 1.3 GB. The problem isn't capacity, it's the pause that reclaiming memory introduces."
+        },
+        {
+          "t": "A garbage collection pause dwarfs the latency budget",
+          "correct": true,
+          "why": "A 10 ms collection against a 10 µs budget is a 1000x overshoot. So objects come from pools built at startup — that's what 'no-garbage Java' or a C++ arena buys you."
+        },
+        {
+          "t": "Pre-allocated objects are easier to serialize to disk",
+          "correct": false,
+          "why": "Fixed layouts do help serialization, but that's a side benefit. The driving reason is eliminating collection pauses on the hot path."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "failover",
+      "q": "What does epoch fencing prevent during a matching engine failover?",
+      "options": [
+        {
+          "t": "The old primary waking up and emitting trades too",
+          "correct": true,
+          "why": "Yes. Publishers accept only the current epoch, so anything stamped with the dead epoch is discarded. Two engines printing different trades for the same shares is a market-integrity event, not an outage."
+        },
+        {
+          "t": "Clients from sending new orders while the failover completes",
+          "correct": false,
+          "why": "Clients keep sending; the sequencer keeps stamping. Fencing is about which engine's output is believed, not about pausing inputs."
+        },
+        {
+          "t": "The standby falling behind the stream",
+          "correct": false,
+          "why": "That's what sequence-number gap detection and journal retransmits handle. Fencing addresses a different danger: the old primary speaking again."
+        },
+        {
+          "t": "Data loss in the journal",
+          "correct": false,
+          "why": "Journal durability comes from replicating to memory on multiple racks. Fencing protects correctness of output, not persistence of input."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "market-data",
+      "q": "The market data feed is UDP multicast, which can drop packets. How does a client recover a missing message?",
+      "options": [
+        {
+          "t": "The engine retransmits it on request",
+          "correct": false,
+          "why": "Never. Asking the matching engine to repeat itself puts a subscriber's problem on the critical path — the one thing this design forbids."
+        },
+        {
+          "t": "It spots the gap and asks the retransmit service",
+          "correct": true,
+          "why": "Right. Every feed message is numbered, so the client sees its own gap and fetches from the retransmit service or re-bootstraps from the snapshot channel."
+        },
+        {
+          "t": "TCP retransmission handles it automatically",
+          "correct": false,
+          "why": "Multicast rides on UDP precisely because one packet must reach thousands of listeners; there's no TCP session to retransmit on."
+        },
+        {
+          "t": "The client waits for the next full snapshot and ignores the gap",
+          "correct": false,
+          "why": "Waiting silently on a stale book is dangerous. A client must detect the gap immediately, even if snapshot recovery is what it eventually does."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "matching",
+      "q": "A trader modifies a resting order. Which change costs them their place in the queue?",
+      "options": [
+        {
+          "t": "Reducing the quantity",
+          "correct": false,
+          "why": "Reducing keeps your place — you're taking liquidity away, not asking for more, so there's nothing to game."
+        },
+        {
+          "t": "Increasing the quantity",
+          "correct": true,
+          "why": "Yes, and changing price does too. Otherwise you could hold a great queue position with 100 shares and inflate it the instant it's about to trade."
+        },
+        {
+          "t": "Adding a client reference tag",
+          "correct": false,
+          "why": "Metadata that doesn't affect price or size has no bearing on priority. Only economically meaningful changes reset your place."
+        },
+        {
+          "t": "Any modification at all",
+          "correct": false,
+          "why": "Too blunt. Quantity reductions deliberately keep priority — the rule targets changes that would let someone game the queue."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q10",
+      "level": 1,
+      "type": "mcq",
+      "tag": "durability",
+      "q": "How is an order made durable before the sequencer publishes it?",
+      "options": [
+        {
+          "t": "fsync to a local NVMe drive",
+          "correct": false,
+          "why": "fsync costs 100 µs to several milliseconds — 500 to 10,000 times the cost of a match. It's the single most expensive thing you could put in this path."
+        },
+        {
+          "t": "Written to a replicated database with quorum acknowledgment",
+          "correct": false,
+          "why": "A database round trip is 50x the match cost even before quorum. There's no database in the hot path at all."
+        },
+        {
+          "t": "It's in memory on two of three journal nodes",
+          "correct": true,
+          "why": "About 10–20 µs on a kernel-bypass network, with disk writes continuing asynchronously behind the ack. The honest exposure: three simultaneous power failures lose the tail."
+        },
+        {
+          "t": "It isn't — durability is handled at end of day",
+          "correct": false,
+          "why": "End-of-day reconciliation is the backstop, not the mechanism. The stream is replicated in real time; reconciliation only covers the rare tail loss."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "anti-distributed",
+      "q": "A candidate puts Kafka between the gateways and the matching engine 'for durability and buffering.' What's the strongest objection?",
+      "options": [
+        {
+          "t": "Kafka isn't durable enough for financial data",
+          "correct": false,
+          "why": "Durability isn't the issue — Kafka is durable. The problem is what it costs on a path budgeted in microseconds."
+        },
+        {
+          "t": "It adds milliseconds to a microsecond path, and orders worse",
+          "correct": true,
+          "why": "Both halves matter. A broker hop through the kernel plus a persistence acknowledgment is orders of magnitude over budget, and partitioned ordering is weaker than one authority stamping a single stream."
+        },
+        {
+          "t": "Kafka can't handle 1 million messages per second",
+          "correct": false,
+          "why": "It can, at this volume. Throughput was never the constraint here — per-message latency and strict global ordering were."
+        },
+        {
+          "t": "The broker fleet needed at this volume wouldn't be cost-effective to run",
+          "correct": false,
+          "why": "Cost is a side issue. Even a free broker would be wrong, because the hop itself is the problem."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "backpressure",
+      "q": "A market data subscriber's connection is congested and its outbound buffer is full. What should happen?",
+      "options": [
+        {
+          "t": "Slow the publishing rate until the subscriber catches up",
+          "correct": false,
+          "why": "This is the standard backpressure reflex from chapter 2.7, and here it's catastrophic — one slow customer would throttle the whole market's data."
+        },
+        {
+          "t": "Conflate, then disconnect it and let it re-bootstrap",
+          "correct": true,
+          "why": "Shed subscribers, never shed orders. The subscriber's problem stays its problem, and the snapshot channel gives it a documented way back."
+        },
+        {
+          "t": "Buffer indefinitely until it recovers",
+          "correct": false,
+          "why": "Unbounded buffering just moves the failure to your memory and eventually takes down the feed handler for everyone on it."
+        },
+        {
+          "t": "Pause matching so the book stops changing",
+          "correct": false,
+          "why": "This is the nightmare case — a design where a subscriber's TCP window can halt a national market. It's exactly what separating the feed tier prevents."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "determinism",
+      "q": "Code review turns up an order-expiry check that calls the machine's clock. Why is that a serious defect here?",
+      "options": [
+        {
+          "t": "Clock calls are too slow for the hot path",
+          "correct": false,
+          "why": "A clock read is cheap in cycles. The damage is to determinism, not latency."
+        },
+        {
+          "t": "It breaks replay, so recovery and audit stop being trustworthy",
+          "correct": true,
+          "why": "Replay runs at a different wall-clock time, so the order expires at a different point and the standby's state diverges. That silently rewrites history — the nightly byte-compare exists to catch exactly this."
+        },
+        {
+          "t": "The clock might be a few milliseconds out of sync",
+          "correct": false,
+          "why": "Drift is a real regulatory concern, but the fatal issue is that any clock read makes the output depend on something the log doesn't contain."
+        },
+        {
+          "t": "Nothing serious, as long as PTP synchronization keeps the clocks aligned",
+          "correct": false,
+          "why": "PTP makes clocks agree with each other, not with the past. Replay tomorrow still reads a different 'now'."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "risk",
+      "q": "One account's credit limit must be enforced across three gateways it connects to. What do you commit to?",
+      "options": [
+        {
+          "t": "Check a shared in-memory credit service on every order",
+          "correct": false,
+          "why": "That's a network round trip per order — 50x the match cost — inserted into the path you spent the whole design keeping local."
+        },
+        {
+          "t": "Lease each gateway a slice of the credit",
+          "correct": true,
+          "why": "The leased-block trick from chapter 3.1: local O(1) checks, no coordination per order. The honest cost is over-reservation, so the account can be rejected while it technically had room elsewhere."
+        },
+        {
+          "t": "Skip pre-trade credit checks and enforce limits post-trade",
+          "correct": false,
+          "why": "Not available to you — pre-trade controls are a regulatory requirement, and after the trade the exposure already exists."
+        },
+        {
+          "t": "Let each gateway enforce the full limit independently",
+          "correct": false,
+          "why": "Then three gateways each allow the full amount and the account can take on triple its limit. This is the failure mode leases exist to prevent."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "operations",
+      "q": "Your dashboards show engine input queue depth climbing steadily, while p99 latency still looks normal. What's going on?",
+      "options": [
+        {
+          "t": "A metrics glitch — depth and latency should move together",
+          "correct": false,
+          "why": "They move together only after the fact. Depth is the leading indicator; latency is the lagging one."
+        },
+        {
+          "t": "The engine is falling behind; latency follows next",
+          "correct": true,
+          "why": "Depth leads latency. This is your warning — investigate now, before the queue is deep enough to blow the budget."
+        },
+        {
+          "t": "Nothing to act on until latency breaches the SLO",
+          "correct": false,
+          "why": "Waiting for the lagging indicator wastes the one second of advance notice the queue gave you. Alert on depth trending, not only on latency."
+        },
+        {
+          "t": "The publishers are backing up into the engine",
+          "correct": false,
+          "why": "They structurally can't — the engine writes into a ring buffer and never blocks on publishers. That decoupling is deliberate."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "matching",
+      "q": "Asks: 500 at 100.01, 1000 at 100.02, 2000 at 100.03. A buy of 2000 arrives with limit 100.03. What's the result?",
+      "options": [
+        {
+          "t": "Fully filled across three levels; 1500 still resting at 100.03",
+          "correct": true,
+          "why": "It sweeps outward: 500 at 100.01, 1000 at 100.02, then 500 of the 2000 sitting at 100.03. The buyer is done, the best ask stays 100.03 with 1500 left on it, and the cursor has moved two slots."
+        },
+        {
+          "t": "All 2000 fill at 100.03, the limit price",
+          "correct": false,
+          "why": "A limit price is a worst-case bound, not the execution price. The buyer takes the best available levels first and does better than their limit on most of it."
+        },
+        {
+          "t": "All 2000 fill at 100.01, the best price",
+          "correct": false,
+          "why": "Only 500 exist at 100.01. Once a level is exhausted the engine advances to the next one — that's what sweeping means."
+        },
+        {
+          "t": "It's rejected — not enough liquidity at a single price",
+          "correct": false,
+          "why": "Orders routinely fill across several levels. Rejection would only come from a risk check or a price band, not from needing more than one level."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "recovery",
+      "q": "The warm standby holds sequence numbers through 8,214,556 and then sees 8,214,559 arrive. It has just been asked to take over. What does it do?",
+      "options": [
+        {
+          "t": "Promote immediately — two missing messages won't matter",
+          "correct": false,
+          "why": "Those two messages might be a cancel and a large order. Missing them means the standby's book differs from the market's, and it starts printing wrong trades."
+        },
+        {
+          "t": "Fetch the two missing messages, then start matching",
+          "correct": true,
+          "why": "The numbered stream makes the gap detectable and the journal makes it fillable. Draining fully before emitting anything is the non-negotiable step."
+        },
+        {
+          "t": "Ask the old primary for its current book state",
+          "correct": false,
+          "why": "The old primary is presumed dead or untrustworthy — that's why we're failing over. Recovery always comes from the log, never from the suspect node."
+        },
+        {
+          "t": "Rebuild from the last snapshot and skip the missing messages",
+          "correct": false,
+          "why": "A snapshot plus replay is a valid cold-start path, but skipping messages is never valid — every sequenced message must be applied exactly once, in order."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "risk",
+      "q": "Where does spoofing and layering surveillance belong in this architecture?",
+      "options": [
+        {
+          "t": "In the risk gate, before the sequencer",
+          "correct": false,
+          "why": "Detecting spoofing needs pattern analysis across many orders over time — far too slow for an in-path check measured in microseconds."
+        },
+        {
+          "t": "As a consumer of the sequenced stream, minutes behind",
+          "correct": true,
+          "why": "Anything that can be seconds late must be seconds late. It reads the same authoritative stream with zero latency impact on trading."
+        },
+        {
+          "t": "Inside the matching engine, alongside the book",
+          "correct": false,
+          "why": "That's the one thread you protect above all else. Anything that isn't matching gets moved off it."
+        },
+        {
+          "t": "In the feed handlers, as data is published",
+          "correct": false,
+          "why": "Feed handlers only see public output and are latency-sensitive themselves. Surveillance also needs to see rejected and cancelled orders."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q19",
+      "level": 2,
+      "type": "mcq",
+      "tag": "pipeline",
+      "q": "Why do pre-trade risk rejections happen before the sequencer rather than inside the matching engine?",
+      "options": [
+        {
+          "t": "The engine can't produce reject messages",
+          "correct": false,
+          "why": "It could easily. The reason is about what the ordered stream should contain and how fast a reject should come back."
+        },
+        {
+          "t": "A rejected order should never enter the ordered stream",
+          "correct": true,
+          "why": "It never existed as far as the market is concerned, the engine's job stays purely matching, and the reject skips the whole downstream pipeline."
+        },
+        {
+          "t": "Regulators require rejects to happen on the gateway specifically",
+          "correct": false,
+          "why": "The rule requires controls before an order can trade; it doesn't dictate which box. The placement is an engineering choice with good reasons."
+        },
+        {
+          "t": "Risk checks are too slow to run in the engine",
+          "correct": false,
+          "why": "They're a few integer comparisons — speed isn't the barrier. It's about keeping the sequenced stream clean and the engine's job narrow."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Interviewer: 'Why not shard the order book across ten machines so it goes ten times faster?' Which reply reads most senior?",
+      "options": [
+        {
+          "t": "\"Sharding one book means shards must agree on ordering — one round costs a thousand matches. I'd shard by symbol, and give up cross-symbol atomicity.\"",
+          "correct": true,
+          "why": "It prices the objection, commits to the one axis that actually works, and names the cost of that commitment. That's the full senior package."
+        },
+        {
+          "t": "\"Sharding is definitely the way to scale this — I'd partition by price range across the ten machines so each owns a slice of the book and they all match in parallel.\"",
+          "correct": false,
+          "why": "Price-range sharding is the worst version: an aggressive order sweeping levels would cross shard boundaries mid-match, requiring coordination on the hottest possible path."
+        },
+        {
+          "t": "\"We could shard, but it depends on the traffic profile and the consistency requirements.\"",
+          "correct": false,
+          "why": "The numbers already answered this. Hedging when your own estimate has settled the question is the option-listing pattern that caps candidates at mid-level."
+        },
+        {
+          "t": "\"You can't shard an order book, it's inherently sequential.\"",
+          "correct": false,
+          "why": "Half right, stated as dogma. You can shard by symbol — and being unable to say which decomposition works suggests you memorized the rule rather than deriving it."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "crux",
+      "q": "Which statement shows you've found the crux of this problem?",
+      "options": [
+        {
+          "t": "\"The interesting part is the market data fan-out to thousands of subscribers, which is a real bandwidth and delivery problem at this volume.\"",
+          "correct": false,
+          "why": "Real engineering, but it's ordinary horizontal scale — the routine room. It's the part of this system most like everything else you've designed."
+        },
+        {
+          "t": "\"The hard part is choosing between an array and a red-black tree for the book.\"",
+          "correct": false,
+          "why": "A genuine deep-dive detail, and worth discussing — but it's an optimization inside the hard part, not the hard part itself."
+        },
+        {
+          "t": "\"Ordering is the product: one authority decides who was first, and everything else is a deterministic replay of it.\"",
+          "correct": true,
+          "why": "That's the fire. Fairness, recovery, standby, testing and audit all hang off this one property, and the whole architecture is shaped by it."
+        },
+        {
+          "t": "\"The hard part is handling 1 million messages per second.\"",
+          "correct": false,
+          "why": "The estimate showed one core handles that at 20–30% utilization. Treating throughput as the challenge means you missed what the numbers were telling you."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Interviewer: 'You have no fsync in the path. So trades aren't really durable, are they?' Best response:",
+      "options": [
+        {
+          "t": "\"They are — the log is replicated to memory on separate racks before publishing, and end-of-day reconciliation covers the tail.\"",
+          "correct": true,
+          "why": "Names the mechanism, admits the exact exposure, states the backstop, and justifies the side of the trade with a number. Owning a weakness beats denying it."
+        },
+        {
+          "t": "\"Correct, that's a real gap in my design — I'd add an fsync to the journal before acknowledging any order, and accept the latency cost.\"",
+          "correct": false,
+          "why": "Conceding a designed trade-off as a mistake abandons a decision you had good reasons for. Adding fsync would blow the entire latency requirement."
+        },
+        {
+          "t": "\"Durability is the clearing house's responsibility, not the exchange's.\"",
+          "correct": false,
+          "why": "Deflection. Clearing is a reconciliation backstop, not a substitute for the exchange keeping an accurate, replicated record of its own stream."
+        },
+        {
+          "t": "\"Modern NVMe fsync is fast enough that it's not really a concern.\"",
+          "correct": false,
+          "why": "A confident wrong number. Even a fast fsync is hundreds of times the match cost, and interviewers in this space know the figure."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "operations",
+      "q": "How do you safely ship a change to the matching engine, given you can't run two versions side by side?",
+      "options": [
+        {
+          "t": "Canary it to 5% of symbols for a day and compare their trade quality against the rest",
+          "correct": false,
+          "why": "Tempting because it's the reflex from every other system — and it's the closest wrong answer here. It's really a partition, so it works only if those symbols are already on a separate pipeline; it gives you no comparison of old versus new on the same input."
+        },
+        {
+          "t": "Replay yesterday's journal and byte-compare all output, then shadow it on the standby",
+          "correct": true,
+          "why": "Determinism turns testing into a diff. You get a full day of production traffic through the new build with zero blast radius, and any unexpected message difference is a stop-ship."
+        },
+        {
+          "t": "Deploy overnight after a full regression suite, with a documented rollback plan and a war room",
+          "correct": false,
+          "why": "Necessary hygiene, and not sufficient. A synthetic suite can't cover the input distribution a real session produces — and you already have that session recorded."
+        },
+        {
+          "t": "Feature-flag the new matching logic and enable it gradually",
+          "correct": false,
+          "why": "A flag that changes matching behaviour mid-session makes the day's stream non-replayable against either build, which destroys the property recovery and audit depend on."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Product asks for a 'priority lane' that lets institutional clients' orders skip the risk gate to shave 3 µs. How do you respond?",
+      "options": [
+        {
+          "t": "Build it but keep it undocumented so retail clients don't complain",
+          "correct": false,
+          "why": "Undisclosed differential access is the scandal scenario, not the mitigation. Hiding a fairness violation is worse than having one."
+        },
+        {
+          "t": "No — it breaks the fairness guarantee and skips a required control",
+          "correct": true,
+          "why": "Two independent blockers: pre-trade risk is regulatorily required in-path, and any queue-jumping path destroys the promise the venue is built on. Optimize the shared path instead — everyone benefits and the guarantee holds."
+        },
+        {
+          "t": "Offer it as a paid tier, since colocation is already a paid advantage",
+          "correct": false,
+          "why": "Colocation is sold on equal terms with equalized cable lengths inside the facility. Selling a shorter code path through the exchange is a different thing entirely."
+        },
+        {
+          "t": "Build it, but only for clients who pass an enhanced credit review",
+          "correct": false,
+          "why": "Moving the check earlier doesn't make skipping it safe — risk state changes with every fill — and it still leaves one participant on a shorter path than everyone else."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "failure",
+      "q": "A network partition briefly isolates the primary engine. The control group promotes the standby. Thirty milliseconds later the old primary reconnects, still matching. What is the actual danger, and what saves you?",
+      "options": [
+        {
+          "t": "Duplicate trades from both engines; epoch fencing discards the stale one's output",
+          "correct": true,
+          "why": "Two authorities producing different truths for the same shares is a market-integrity event. Fencing is what makes the split brain harmless — the old primary's messages carry a dead epoch and die on arrival."
+        },
+        {
+          "t": "Danger is lost orders during the partition; the journal replays them once the primary is back",
+          "correct": false,
+          "why": "Nothing is lost — the sequencer kept stamping and the journal kept the stream. The danger is duplication, which is the harder and scarier direction."
+        },
+        {
+          "t": "Danger is the standby having stale state; snapshots fix it",
+          "correct": false,
+          "why": "The standby was consuming the same stream throughout and drains any gap before promoting. Its state isn't the risk here."
+        },
+        {
+          "t": "Danger is clock skew between the two engines; PTP resolves it",
+          "correct": false,
+          "why": "Business logic reads no clocks in this design, so skew can't change matching. The conflict is about authority, not time."
+        }
+      ]
+    },
+    {
+      "id": "p3c22-q26",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Ten minutes in, a candidate has drawn gateways, a sequencer, a single-threaded engine and publishers, and says: 'I want to spend most of our remaining time on sequencing and failover, because everything else here is ordinary.' What did they do?",
+      "options": [
+        {
+          "t": "Risked annoying the interviewer by dismissing the rest of the design",
+          "correct": false,
+          "why": "Classifying by difficulty is the job, not a slight — and any interviewer who wants a different area will just say so, at no cost to the candidate."
+        },
+        {
+          "t": "Triaged by difficulty and claimed the agenda for the rest of the round",
+          "correct": true,
+          "why": "They found the crux, said it out loud, and proposed where the remaining time goes instead of waiting to be steered. Ten seconds that multiply the value of the next twenty minutes."
+        },
+        {
+          "t": "Moved too fast — the high-level design deserved more time first",
+          "correct": false,
+          "why": "The loop was already closed end to end. Polishing a complete high-level design past that point trades deep-dive minutes for nothing."
+        },
+        {
+          "t": "Made a lucky guess about what the interviewer wanted",
+          "correct": false,
+          "why": "Not luck — the estimate pointed here. One core absorbed the volume, which means coordination and ordering are the only remaining hard problems."
+        }
+      ]
+    }
+  ]
+}

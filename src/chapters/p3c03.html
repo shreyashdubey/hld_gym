@@ -26,7 +26,7 @@
 
 <p>Now the number that gates the crux decision. Our SMS providers, combined, drain maybe 1,000 messages/sec (SMS throughput is contractual and carrier-limited — you buy it, you don't scale it). If a campaign ever puts 500K SMS in front of an OTP in a shared queue, that OTP waits 500 seconds. The OTP expires at 300. The user retries, adding more load. So: <strong>queue position is latency</strong>, drain rates differ per channel by 100x, and therefore priorities must be separate queues with separate workers — not a priority field sorted inside one queue. The math forces the design; we'll commit properly in the deep dive.</p>
 
-<p>Storage: log every send attempt for tracking — ~500 bytes × 1B/day ≈ 500GB/day, ~45TB at 90-day retention. That's an LSM-style store (Cassandra/Scylla) partitioned by user_id — straight from the sharding chapter. Device tokens: 100M users × ~1.3 devices = 130M rows. Small. Gate state (dedup keys, rate counters): at 100K sends/sec with ~4 lookups each, that's 400K ops/sec against Redis at burst — fine for a modest cluster, but it tells me gates must be O(1) in-memory checks, never SQL queries.</p>
+<p>Storage: log every send attempt for tracking — ~500 bytes × 1B/day ≈ 500GB/day, ~45TB at 90-day retention. That's an LSM-style store — log-structured, built to swallow writes (Cassandra/Scylla) — partitioned by user_id — straight from the sharding chapter. Device tokens: 100M users × ~1.3 devices = 130M rows. Small. Gate state (dedup keys, rate counters): at 100K sends/sec with ~4 lookups each, that's 400K ops/sec against Redis at burst — fine for a modest cluster, but it tells me gates must be O(1) in-memory checks, never SQL queries.</p>
 
 <h2>API and data model — quickly</h2>
 
@@ -45,7 +45,7 @@
   "send_at":   null                        // or a future timestamp
 }</code></pre>
 
-<p>Core tables: <code>preferences</code> (user_id, category, channel opt-ins, quiet-hours window, timezone), <code>device_tokens</code> (user_id, token, platform, last_seen_at), <code>notification_log</code> (event_id, user_id, channel, status, timestamps — the tracking store), plus an in-app <code>inbox</code> table. Dedup keys and rate counters live in Redis with TTLs, not in a database.</p>
+<p>Core tables: <code>preferences</code> (user_id, category, channel opt-ins, quiet-hours window, timezone), <code>device_tokens</code> (user_id, token, platform, last_seen_at), <code>notification_log</code> (event_id, user_id, channel, status, timestamps — the tracking store), plus an in-app <code>inbox</code> table. Dedup keys and rate counters live in Redis with TTLs — a time-to-live, the expiry after which the store deletes the key for you — not in a database.</p>
 
 <h2>High-level design: the complete machine</h2>
 
@@ -57,9 +57,9 @@
   <text class="dg-txt-s" x="20" y="114">Order service</text>
   <rect class="dg-node" x="8" y="150" width="112" height="40" rx="8"/>
   <text class="dg-txt-s" x="20" y="174">Campaigns</text>
-  <rect class="dg-node" x="150" y="85" width="90" height="50" rx="8"/>
-  <text class="dg-txt-s" x="164" y="106">Ingest API</text>
-  <text class="dg-txt-s" x="164" y="121">validate+enqueue</text>
+  <rect class="dg-node" x="150" y="85" width="108" height="50" rx="8"/>
+  <text class="dg-txt-s" x="160" y="106">Ingest API</text>
+  <text class="dg-txt-s" x="160" y="121">validate → 202</text>
   <rect class="dg-node-alt" x="270" y="75" width="130" height="70" rx="8"/>
   <text class="dg-txt-s" x="282" y="98">Fan-out workers</text>
   <text class="dg-txt-s" x="282" y="114">resolve audience,</text>
@@ -81,7 +81,7 @@
   <line class="dg-edge" x1="120" y1="50" x2="150" y2="100" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="120" y1="110" x2="150" y2="110" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="120" y1="170" x2="150" y2="120" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="240" y1="110" x2="270" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="258" y1="110" x2="270" y2="110" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="400" y1="95" x2="430" y2="45" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="400" y1="102" x2="430" y2="77" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="400" y1="112" x2="430" y2="111" marker-end="url(#arrow)"/>
@@ -156,14 +156,14 @@
   <line class="dg-edge" x1="370" y1="87" x2="394" y2="87" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="498" y1="87" x2="522" y2="87" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="626" y1="87" x2="650" y2="87" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="24" y="150">1.00M in</text>
-  <text class="dg-txt-s" x="152" y="150">0.99M</text>
-  <text class="dg-txt-s" x="280" y="150">0.64M</text>
-  <text class="dg-txt-s" x="408" y="150">0.58M (+60K deferred)</text>
+  <text class="dg-txt-s" x="24" y="150">in: 1.00M</text>
+  <text class="dg-txt-s" x="152" y="150">in: 0.99M</text>
+  <text class="dg-txt-s" x="280" y="150">in: 0.64M</text>
+  <text class="dg-txt-s" x="408" y="150">in: 0.58M (60K deferred)</text>
   <text class="dg-txt-s" x="24" y="180">P0 skips gates 3 and 4 — critical messages are never silenced or budgeted.</text>
   <text class="dg-txt-s" x="24" y="205">All gates are O(1) Redis/cache lookups: ~4 ops × 100K/sec = 400K ops/sec at burst.</text>
 </svg>
-<figcaption>The funnel. A third of the blast never becomes a message — which is exactly why gates run before rendering and queueing, not after.</figcaption>
+<figcaption>The funnel — each label is what arrives at that gate. Over 40% of the blast never becomes a message, which is exactly why gates run before rendering and queueing, not after.</figcaption>
 </figure>
 
 <h3>At-least-once, dedup, and the crash window</h3>
@@ -193,7 +193,7 @@
 <li>Deployment isolation too: bulk workers can be preemptible instances that scale to zero at night; critical workers are always-on, multi-AZ, and their configs change rarely and carefully.</li>
 </ul>
 
-<p>The cost, stated plainly: more queues, more worker fleets, more dashboards — roughly 3× the operational surface per channel. Worth it, because the failure it prevents is the worst one this system has: self-inflicted denial of service on login. Head-of-line blocking is a queueing law, not a bug; the only real fix is a second lane.</p>
+<p>The cost, stated plainly: more queues, more worker fleets, more dashboards — roughly 3× the operational surface per channel. Worth it, because the failure it prevents is the worst one this system has: self-inflicted denial of service on login. Head-of-line blocking — one item at the front of a line holding up everything behind it — is a queueing law, not a bug; the only real fix is a second lane.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 240" role="img" aria-label="Two isolated lanes: a shallow critical queue with reserved workers and a deep bulk queue with capped workers">
@@ -224,7 +224,7 @@
   <text class="dg-txt-s" x="342" y="176">capped workers</text>
   <text class="dg-txt-s" x="342" y="192">≤ 800 msg/s</text>
   <rect class="dg-node" x="530" y="158" width="170" height="40" rx="8"/>
-  <text class="dg-txt-s" x="542" y="182">drains over hours — fine</text>
+  <text class="dg-txt-s" x="542" y="182">hours to drain — fine</text>
   <line class="dg-edge" x1="110" y1="178" x2="140" y2="178" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="290" y1="178" x2="330" y2="178" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="480" y1="178" x2="530" y2="178" marker-end="url(#arrow)"/>
@@ -240,7 +240,7 @@
 
 <p>Everything so far assumed the gateway at the end behaves. It doesn't. Three behaviors to design for:</p>
 
-<p><strong>They throttle you.</strong> APNs and FCM are generous but will push back (HTTP 429/503) under bursts; SMS throughput is a hard purchased ceiling; SES enforces sending quotas. Channel workers therefore treat provider capacity as a token bucket and respect backpressure signals — when the provider says slow down, workers slow down and the queue absorbs the difference. That's what the queue is <em>for</em>. Retries use exponential backoff with jitter (Part 2 reflex — a synchronized retry wave after a provider blip is a self-made DDoS). After N failed attempts, the message goes to a dead-letter queue for inspection, not into an infinite retry loop.</p>
+<p><strong>They throttle you.</strong> APNs and FCM are generous but will push back (HTTP 429/503) under bursts; SMS throughput is a hard purchased ceiling; SES enforces sending quotas. Channel workers therefore treat provider capacity as a token bucket — an allowance of sends that refills at a fixed rate — and respect backpressure signals — when the provider says slow down, workers slow down and the queue absorbs the difference. That's what the queue is <em>for</em>. Retries use exponential backoff with jitter (Part 2 reflex — a synchronized retry wave after a provider blip is a self-made DDoS). After N failed attempts, the message goes to a dead-letter queue for inspection, not into an infinite retry loop.</p>
 
 <p><strong>They fail — so expire messages honestly.</strong> Every message carries a TTL matched to its meaning. A marketing push has <code>ttl = 4h</code>; if APNs is down for five hours, those messages should die in the queue, unsent (APNs even supports this natively — the <code>apns-expiration</code> header tells Apple to discard undeliverable pushes after a deadline). And here's the counterintuitive one: <strong>P0 gets the shortest TTL of all</strong> — an OTP older than two minutes must be dropped, because the code has expired, the user has already re-requested, and delivering hour-old login codes in a burst after recovery is confusing at best and an attack surface at worst. Never-lose-a-P0 means "never lose it <em>while it's still meaningful</em>." Retry hard within the window; drop dead-certain at its end.</p>
 
@@ -271,8 +271,8 @@
   <text class="dg-txt-s" x="608" y="120">DLRs</text>
   <path class="dg-edge" fill="none" d="M 420 190 C 300 210, 260 180, 255 146" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="290" y="205">receipts update health scores</text>
-  <text class="dg-txt-s" x="10" y="30">Failover trigger is the DELIVERED rate, not the accept rate —</text>
-  <text class="dg-txt-s" x="10" y="48">a provider returning 200 while carriers drop messages still gets circuit-broken.</text>
+  <text class="dg-txt-s" x="10" y="30">Failover triggers on the DELIVERED rate,</text>
+  <text class="dg-txt-s" x="10" y="48">never on the provider's accept rate.</text>
 </svg>
 <figcaption>Health-scored routing. The provider's own API status is not trusted; the delivery receipts are the vote that counts.</figcaption>
 </figure>
@@ -292,14 +292,14 @@
 <p><strong>The incident pattern to design against</strong> is exactly the cold open — the marketing blast that melts 2FA. It's an entire genre of outage: a bulk producer saturates a shared resource (queue, worker pool, provider quota) and the highest-stakes traffic in the company dies quietly behind it. Priority isolation is the structural fix; the operational fixes on top: campaigns ramp (1% → 10% → 100% with delivery-rate checks between stages), an audience-size threshold above which a send requires a second human approval, and a per-campaign kill switch that stops queued sends — the queue is per-campaign-taggable precisely so a bad blast can be surgically drained.</p>
 
 <div class="box story"><div class="box-tag">War story — Hawaii's false missile alert</div>
-<p>On January 13, 2018, at 8:07am, every phone in Hawaii buzzed with: "BALLISTIC MISSILE THREAT INBOUND TO HAWAII. SEEK IMMEDIATE SHELTER. THIS IS NOT A DRILL." There was no missile. During a shift-change drill at the Hawaii Emergency Management Agency, an operator triggered the <em>live</em> alert instead of the test version — the real send and the drill sat next to each other in the same menu. The FCC's investigation found the deeper failure: it took <strong>38 minutes</strong> to push a correction, because no pre-scripted "false alarm" message existed in the system and officials had to compose and authorize one while the state panicked. The fixes are a notification-platform checklist: two-person confirmation for the highest-stakes sends, test environments that physically cannot reach production audiences, and — the one everyone forgets — a pre-built correction path, because a notification system has no undo. You cannot recall a million buzzes. You can only be fast with the follow-up, and only if you built it before you needed it.</p>
+<p>On January 13, 2018, at 8:07am, phones across Hawaii buzzed with: "BALLISTIC MISSILE THREAT INBOUND TO HAWAII. SEEK IMMEDIATE SHELTER. THIS IS NOT A DRILL." There was no missile. A shift-change drill was running at the Hawaii Emergency Management Agency, and the warning officer on duty missed the "exercise, exercise, exercise" cue on the recorded message, thought the threat was real, and chose the <em>live</em> alert from a drop-down menu where the drill option and the real one sat side by side, separated only by a confirmation click. The FCC's investigation faulted the ambiguous drill and the menu — and found a deeper failure: the correction went out <strong>38 minutes later</strong>, because no pre-scripted "false alarm" message existed in the system and officials had to compose and authorize one while the state panicked. The fixes are a notification-platform checklist: two-person confirmation for the highest-stakes sends, test environments that physically cannot reach production audiences, and — the one everyone forgets — a pre-built correction path, because a notification system has no undo. You cannot recall a million buzzes. You can only be fast with the follow-up, and only if you built it before you needed it.</p>
 </div>
 
 <p><strong>What I'd monitor</strong>, per channel × priority: <em>age of the oldest message</em> in each queue (better than depth — a deep bulk queue is normal, an old critical message is an incident), send rate vs. baseline, gateway error rate by code (429s = throttling, 410s spiking = token-table problem, 5xx = provider incident), delivered rate from receipts, and token-invalidation rate. Plus one end-to-end canary: a synthetic user receives a real push through the full pipeline every minute; the alert fires when the canary goes quiet — this catches whole-pipeline failures that every per-component metric misses. Alert thresholds differ by lane: critical-queue oldest-message age &gt; 30s pages someone at 3am; bulk-queue depth alone never does.</p>
 
 <p><strong>Rollout:</strong> template and routing changes ship behind flags to 1% of traffic first — a malformed payload can crash a mobile app in the field, and you cannot roll back a million delivered pushes. Provider config changes (new SMS route, new APNs cert/key) get canaried against the synthetic user before real traffic. Certificates and provider keys expire; their expiry dates are monitored like disk space.</p>
 
-<p><strong>What breaks at 10x</strong> (1B users, multiple 400M blasts a day): first, audience resolution — "resolve 400M users" must become a precomputed segment file split into thousands of chunks checkpointed by fan-out workers, because any single scanner is hours of work and a single point of restart-from-zero. Second, the gate store — 4M Redis ops/sec needs a properly sharded cluster with per-user hash-tagging so one user's gates stay on one node. Third — and this one has no engineering fix — SMS: provider throughput is bought, not scaled, and at 10x the honest answer is to migrate 2FA off SMS toward TOTP apps and passkeys, and reserve SMS for the long tail. Sometimes the senior answer to "how does this scale?" is "this channel doesn't — here's the product change that sidesteps it."</p>
+<p><strong>What breaks at 10x</strong> (1B users, multiple 400M blasts a day): first, audience resolution — "resolve 400M users" must become a precomputed segment file split into thousands of chunks checkpointed by fan-out workers, because any single scanner is hours of work and a single point of restart-from-zero. Second, the gate store — 4M Redis ops/sec needs a properly sharded cluster with per-user hash-tagging so one user's gates stay on one node. Third — and this one has no engineering fix — SMS: provider throughput is bought, not scaled, and at 10x the honest answer is to migrate 2FA off SMS toward TOTP apps (the six-digit codes an authenticator app generates on the phone itself, no network hop) and passkeys, and reserve SMS for the long tail. Sometimes the senior answer to "how does this scale?" is "this channel doesn't — here's the product change that sidesteps it."</p>
 
 <div class="box lens"><div class="box-tag">At the whiteboard</div>
 <p>Interviewers use this problem to test whether you respect boundaries you don't control, and whether "priority" is a word or an architecture in your answer. Expect these, nearly verbatim:</p>

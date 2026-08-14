@@ -1,0 +1,405 @@
+<p>"Design S3." Two words, and the room goes quiet.</p>
+
+<p>Storing bytes is not hard — a file system stores bytes. What makes this a senior question is the promise printed on the tin: <strong>eleven nines of durability</strong>, 99.999999999% of objects surviving a given year. Amazon's own gloss makes it feel real: store ten million objects and expect to lose one about every ten thousand years. Underneath sit ordinary disks that die at one to two percent a year — which, at the scale we're about to size, means disks dying <em>every single day</em>. You're being asked to build something that never loses a byte, out of parts that fail on a schedule.</p>
+
+<p>And a second system hides inside the first. Every object needs a row somewhere saying "this key, this version, these checksums, these shards, on these machines." That index is a sharded, replicated, strongly-consistent database with a hundred billion rows in it, and it is every bit as hard as the storage. The famous S3 outage was not a disk problem. It was an index problem.</p>
+
+<p>Two planes, one crux. Let's build it.</p>
+
+<h2>Requirements: what I'm promising, in numbers</h2>
+
+<p>Scope out loud first: "I'll build PUT, GET, DELETE and HEAD by key, prefix LIST with pagination, multipart upload, versioning, and light lifecycle rules — tier to cold storage, expire old versions. Out of scope: IAM, cross-region replication, anything query-in-place. Fair?"</p>
+
+<ul>
+<li><strong>Durability: 99.999999999% per object per year.</strong> This one line generates the entire design. Everything else is negotiable; this is the product.</li>
+<li><strong>Availability: 99.99% for GET.</strong> Mind the gap between those two numbers — fifty minutes of downtime a year is survivable, losing one customer's wedding photos is not. Durability outranks availability, and that ordering settles several arguments later.</li>
+<li><strong>Survive losing a whole availability zone</strong> with zero data loss and zero read unavailability. Not "recover from" — <em>survive</em>, serving reads throughout.</li>
+<li><strong>Strong read-after-write.</strong> A successful PUT is immediately visible to any client's next GET, and to LIST. (Real S3 was eventually consistent for overwrites and listings until December 2020; we're building the after version.)</li>
+<li><strong>Scale:</strong> 100 billion objects, 400 PB logical, +30% a year, objects from 1 byte to 5 TB.</li>
+<li><strong>Latency:</strong> p99 time-to-first-byte under 100 ms for small objects. Large objects are throughput-bound and measured differently.</li>
+</ul>
+
+<p>Six lines, and the first one already decides the architecture. To find out what it costs, we have to size the thing — which is where this problem stops behaving like every capacity estimate you have ever done.</p>
+
+<h2>Estimation: two numbers, two different problems</h2>
+
+<p>Here's the move that separates people on this question. Most systems have one scale number. This one has <strong>two, and they move independently</strong>: the number of <em>objects</em> and the number of <em>bytes</em>.</p>
+
+<p><strong>Bytes → drives.</strong> 400 PB logical at the 1.5x redundancy I'll commit to shortly is 600 PB physical; at 20 TB per drive, <strong>30,000 drives</strong>. Sanity-check the failures: at a 1.5% annualized failure rate that's roughly 450 dead drives a year — <em>more than one every day</em>. Grow to 100,000 drives and it's four a day, forever. Circle that: <strong>drive death is not an incident here, it's a heartbeat.</strong> Repair isn't a disaster-recovery feature, it's normal operation.</p>
+
+<p><strong>Objects → metadata rows.</strong> 100 billion objects, each needing a row: bucket, key (up to 1 KB of it), version, size, ETag, timestamps, and a manifest listing every chunk with its checksum and location. Call it 1 KB per row — <strong>100 TB of metadata</strong>, replicated five ways, and not cold archive: a hot index every request touches. That's a large distributed database before we've stored one byte of anyone's photo.</p>
+
+<p>The punchline: if every customer switched from 4 MB videos to 400 KB thumbnails, the bytes stay flat, the drives are bored — and the metadata plane grows ten times and melts. A genomics customer uploading 5 TB files does the reverse. <strong>Two scaling problems, two walls, design against both.</strong></p>
+
+<p>Two more numbers drive decisions. <strong>Request rate:</strong> ~500K/sec fleet-wide, read-heavy at 5:1 — but fleet-wide is the easy part, it's the <em>per-prefix</em> rate that hurts. Real S3 documents roughly 3,500 write and 5,500 read requests per second per partitioned prefix: one hot prefix is a hot partition (chapter 2.6) with a bucket name on it. <strong>Repair bandwidth:</strong> rebuilding a dead 20 TB drive reads several times that much from other drives, so repair traffic is budgeted next to customer traffic. Skip it and your first bad day is a network outage stacked on a hardware outage.</p>
+
+<h2>API and data model: five minutes, then move on</h2>
+
+<ul>
+<li><code>PUT /{bucket}/{key}</code> with body + <code>x-amz-checksum-crc32c</code> → <code>200</code>, an <code>ETag</code>, a version id. <code>GET</code> takes optional <code>?versionId=</code> and <code>Range:</code>.</li>
+<li><code>DELETE /{bucket}/{key}</code> → in a versioned bucket this writes a <em>delete marker</em>; it erases nothing.</li>
+<li><code>GET /{bucket}?prefix=photos/2026/&amp;delimiter=/&amp;max-keys=1000&amp;continuation-token=…</code> → up to 1000 keys plus a token.</li>
+<li>Multipart: <code>POST …?uploads</code> → upload id; <code>PUT …?partNumber=N&amp;uploadId=…</code> per part; <code>POST …?uploadId=…</code> with the part list to finalize.</li>
+</ul>
+
+<p>Two tables in two very different systems. Metadata plane: <code>(bucket, key, version_id) → manifest</code>, holding size, content type, ETag, storage class, and an ordered list of <code>{chunk_id, offset, length, checksum, placement_group}</code>. The primary key is <strong>ordered by key</strong>, not hashed, and that one choice decides how LIST works — defended in deep dive two. Data plane: no rows at all, just immutable chunks plus a per-drive local index.</p>
+
+<p>One rule pays for itself all chapter: <strong>chunks are immutable.</strong> Overwriting a key never rewrites bytes in place; it writes new chunks and commits a new manifest. Immutability makes caching safe, checksums meaningful, repair correct, and versioning nearly free.</p>
+
+<h2>The high-level machine: two planes</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 350" role="img" aria-label="Two-plane object store architecture: metadata plane of sharded Raft groups above, data plane of storage nodes below">
+  <rect class="dg-node" x="8" y="150" width="76" height="50" rx="8"/>
+  <text class="dg-txt" x="22" y="180">Client</text>
+  <rect class="dg-node" x="112" y="150" width="120" height="50" rx="8"/>
+  <text class="dg-txt" x="126" y="172">API fleet</text>
+  <text class="dg-txt-s" x="126" y="190">auth, throttle</text>
+  <rect class="dg-zone" x="270" y="14" width="440" height="118" rx="10" fill="none"/>
+  <text class="dg-txt-s" x="282" y="32">Metadata plane — ordered shards, 5-way Raft, 100 TB</text>
+  <rect class="dg-node-alt" x="288" y="46" width="126" height="66" rx="8"/>
+  <text class="dg-txt-s" x="300" y="70">shard: a… → f…</text>
+  <text class="dg-txt-s" x="300" y="90">key → manifest</text>
+  <rect class="dg-node-alt" x="428" y="46" width="126" height="66" rx="8"/>
+  <text class="dg-txt-s" x="440" y="70">shard: g… → q…</text>
+  <text class="dg-txt-s" x="440" y="90">auto-splits</text>
+  <rect class="dg-node-alt" x="568" y="46" width="126" height="66" rx="8"/>
+  <text class="dg-txt-s" x="580" y="70">shard: r… → z…</text>
+  <text class="dg-txt-s" x="580" y="90">lease reads</text>
+  <rect class="dg-zone" x="270" y="200" width="440" height="136" rx="10" fill="none"/>
+  <text class="dg-txt-s" x="282" y="220">Data plane — immutable chunks on raw drives, 600 PB</text>
+  <rect class="dg-node" x="288" y="232" width="74" height="56" rx="8"/>
+  <text class="dg-txt-s" x="300" y="264">node 1</text>
+  <rect class="dg-node" x="374" y="232" width="74" height="56" rx="8"/>
+  <text class="dg-txt-s" x="386" y="264">node 2</text>
+  <rect class="dg-node" x="460" y="232" width="74" height="56" rx="8"/>
+  <text class="dg-txt-s" x="472" y="264">node 3</text>
+  <rect class="dg-node" x="546" y="232" width="74" height="56" rx="8"/>
+  <text class="dg-txt-s" x="558" y="264">node 4</text>
+  <rect class="dg-node" x="632" y="232" width="62" height="56" rx="8"/>
+  <text class="dg-txt-s" x="644" y="264">…30K</text>
+  <text class="dg-txt-s" x="288" y="310">placement spreads shards across AZs; repair refills the gaps</text>
+  <line class="dg-edge" x1="84" y1="175" x2="112" y2="175" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="232" y1="163" x2="270" y2="90" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="232" y1="188" x2="270" y2="258" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="238" y="120">meta</text>
+  <text class="dg-txt-s" x="236" y="228">bytes</text>
+</svg>
+<figcaption>The spine of the design. Rows scale with object count, bytes scale with data volume, and the two planes fail in completely different ways.</figcaption>
+</figure>
+
+<p><strong>Write path.</strong> The API server authenticates, checks the per-prefix rate limit, and streams the body: cut into chunks, checksum each, erasure-code each chunk into 12 shards, push them in parallel to 12 storage nodes chosen so no more than 4 land in one AZ. Once enough shards are durably on disk, write one row to the metadata shard owning this key — a five-replica <dfn>Raft</dfn> group, meaning a majority of the five must agree before anything counts as written. <strong>That commit is the moment the object exists</strong> — only then does the client see <code>200</code>.</p>
+
+<p><strong>Read path.</strong> GET asks the metadata shard for the manifest — a linearizable read, so it reflects every committed write — then fetches shards in parallel, verifies each checksum, concatenates, streams bytes out. In the common case there is no math at all, for a reason I'll get to. If a shard is missing or slow, pull a parity shard and reconstruct: a <em>degraded read</em>, slower but invisible to the customer.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A library has shelves and a card catalog. The shelves are the data plane: if one collapses you lose a few books. The catalog is the metadata plane: it tells you where every book lives. Burn the catalog and every book is still physically present — and every book is equally lost, because nobody can find anything. That asymmetry is why the planes are separate: shelves need redundancy for the <em>books</em>, the catalog needs redundancy and consistency for the <em>truth</em>. Where the analogy breaks: a real catalog can be rebuilt by walking the shelves. Ours can too, by scanning 30,000 drives, which would take days. Don't rely on it.</p>
+</div>
+
+<h2>Deep dive 1: durability engineering</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Everything else here is assembled from parts you know — a stateless API tier, a sharded database, a queue. The hard part is manufacturing eleven nines out of components that fail daily, at a price a business can pay. Three mechanisms lock together: <strong>erasure coding</strong> (redundancy at 1.5x instead of 3x), <strong>failure-domain-aware placement</strong> (so one power event can't take enough shards to matter), and <strong>fast, risk-ordered repair</strong> (so the vulnerable window is minutes, not days). Miss one and the nines evaporate. The least obvious is the third: <strong>repair speed is a durability input, not an operations detail.</strong> I'll say that twice; that was once.</p>
+</div>
+
+<h3>Erasure coding, taught the friendly way</h3>
+
+<p>The simplest scheme is three copies in three AZs: tolerates two losses, repair is a file copy, reads are trivial — and it costs <strong>3x</strong>, which on 400 PB is 1.2 exabytes of hardware, two-thirds of it duplicates. At small scale that's the right answer and you should say so. At 400 PB the finance conversation ends the design.</p>
+
+<p>The alternative, with no field theory. Take 10 numbers and also write down their sum. Erase any one number and you recover it by subtracting the rest: 11 things stored, 1 loss survived, at 1.1x instead of a copy's 2x.</p>
+
+<p>Reed-Solomon generalizes that. Split a chunk into <strong>k</strong> data shards and compute <strong>m</strong> parity shards, each a <em>different</em> weighted mix of the data. With <code>k=10, m=4</code> you store 14 shards and <strong>any 10 of the 14 reconstruct the original</strong>. Ten unknowns, fourteen equations; pick any ten and solve. Overhead 1.4x, tolerating <em>four</em> losses where 3x replication tolerated two.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Ten friends each memorize one digit of a phone number, and four more each memorize a different arithmetic mix of all ten digits. Any four friends can be unreachable and the remaining ten sit down and solve for the original number, because ten unknowns with ten independent equations has exactly one answer. Where the analogy breaks: real Reed-Solomon works in a finite field, arithmetic that wraps around, so parity stays exactly one byte per byte instead of growing. The intuition — <em>extra equations let you solve for missing unknowns</em> — is exactly right, and it's the sentence to say in an interview.</p>
+</div>
+
+<p>One property makes your read path fast: Reed-Solomon as deployed is <strong>systematic</strong> — the k data shards are the original bytes, just cut up. A healthy read is a concatenation with zero decoding; you pay CPU only when a shard is missing.</p>
+
+<h3>The AZ constraint quietly rewrites your parameters</h3>
+
+<p>Now watch a requirement kill the popular answer. I promised to survive losing a whole AZ, and I have 3 AZs: 14 shards over 3 AZs puts at least <code>ceil(14/3) = 5</code> in one of them. Lose that AZ and 5 shards are gone, but I can only afford 4. <strong>Objects become unreadable.</strong> Not lost — they return when the AZ does — but "unreadable for four hours" fails the availability promise, and the interviewer will find this hole if you don't.</p>
+
+<p>The general rule is worth memorizing: <strong>with A availability zones, at least 1/A of your shards sit in one AZ, so surviving an AZ loss needs parity ≥ n/A, forcing overhead of at least A/(A−1).</strong> Three AZs → a 1.5x floor. Four AZs → 1.33x. No code is clever enough to go below it.</p>
+
+<table>
+<thead><tr><th>Scheme</th><th>Overhead on 400 PB</th><th>Tolerates</th><th>Survives an AZ (3 AZs)?</th><th>Reads to rebuild 1 shard</th></tr></thead>
+<tbody>
+<tr><td>3x replication</td><td>3.0x — 1.2 EB, ~60K drives</td><td>2 losses</td><td>Yes, 1 copy per AZ</td><td>1 (a plain copy)</td></tr>
+<tr><td>RS 10+4</td><td>1.4x — 560 PB, ~28K drives</td><td>4 losses</td><td><strong>No</strong> — 5 shards land in one AZ</td><td>10</td></tr>
+<tr><td>RS 8+4 <em>(committed)</em></td><td>1.5x — 600 PB, ~30K drives</td><td>4 losses</td><td>Yes — exactly 4 per AZ</td><td>8</td></tr>
+<tr><td>RS 16+4</td><td>1.25x — 500 PB, ~25K drives</td><td>4 losses</td><td><strong>No</strong> — 7 shards in one AZ</td><td>16</td></tr>
+</tbody>
+</table>
+
+<p><strong>I commit to Reed-Solomon 8+4 across 3 AZs, 4 shards per AZ.</strong> Half the cost of replication, tolerates any 4 losses, and an AZ outage leaves exactly 8 shards — exactly enough to serve every read uninterrupted. The cost I state out loud: right after an AZ loss there is <em>zero</em> spare redundancy, so repair must reconstruct into the surviving zones immediately while reads run degraded. I'd rather own that than pretend 10+4 was AZ-safe.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Eight data plus four parity shards spread four per availability zone across three zones, with zone B failed">
+  <rect class="dg-zone" x="14" y="30" width="212" height="150" rx="10" fill="none"/>
+  <text class="dg-txt-s" x="26" y="50">AZ-A — 4 shards</text>
+  <rect class="dg-node" x="30" y="62" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="56" y="88">D1</text>
+  <rect class="dg-node" x="126" y="62" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="152" y="88">D2</text>
+  <rect class="dg-node" x="30" y="116" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="56" y="142">D3</text>
+  <rect class="dg-node" x="126" y="116" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="152" y="142">P1</text>
+  <rect class="dg-zone" x="254" y="30" width="212" height="150" rx="10" fill="none"/>
+  <text class="dg-txt-s" x="266" y="50">AZ-B — offline</text>
+  <rect class="dg-bad" x="270" y="62" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="296" y="88">D4</text>
+  <rect class="dg-bad" x="366" y="62" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="392" y="88">D5</text>
+  <rect class="dg-bad" x="270" y="116" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="296" y="142">P2</text>
+  <rect class="dg-bad" x="366" y="116" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="392" y="142">P3</text>
+  <rect class="dg-zone" x="494" y="30" width="212" height="150" rx="10" fill="none"/>
+  <text class="dg-txt-s" x="506" y="50">AZ-C — 4 shards</text>
+  <rect class="dg-node" x="510" y="62" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="536" y="88">D6</text>
+  <rect class="dg-node" x="606" y="62" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="632" y="88">D7</text>
+  <rect class="dg-node" x="510" y="116" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="536" y="142">D8</text>
+  <rect class="dg-node" x="606" y="116" width="86" height="42" rx="6"/>
+  <text class="dg-txt-s" x="632" y="142">P4</text>
+  <text class="dg-txt" x="14" y="216">8 survivors, k = 8: every object still readable, zero decode failures.</text>
+  <text class="dg-txt-s" x="14" y="242">10+4 would have put 5 shards in one AZ — losing it loses 5, and you can only afford 4.</text>
+  <text class="dg-txt-s" x="14" y="264">Inside an AZ the 4 shards also sit on 4 racks: one bad power unit must not cost more than one shard.</text>
+  <text class="dg-txt-s" x="14" y="286">Repair now runs at top priority — the survivors have zero spare redundancy until it finishes.</text>
+</svg>
+<figcaption>Placement is arithmetic, not vibes. Count the shards in your largest failure domain and compare that count to m; if it's bigger, your AZ promise is fiction.</figcaption>
+</figure>
+
+<h3>Small objects break erasure coding, so don't code them alone</h3>
+
+<p>Erasure-coding a 4 KB thumbnail into 12 shards gives twelve 512-byte fragments on twelve machines, each with its own bookkeeping and disk seek — the overhead costs more than the data. Every serious object store fixes this the same way: <strong>pack many small objects into large append-only containers</strong>, a gigabyte each, and erasure-code the <em>container</em>, not the object. The manifest points at <code>(container_id, offset, length)</code>, which is why offsets were in the data model. That gives a two-stage write policy: new writes land as <strong>3 plain replicas</strong> in an open container (no encoding on the latency path), and once sealed a background job codes it and drops the replicas. Hot data gets replication's simplicity, settled data gets coding's economics, nobody waits.</p>
+
+<p>Facebook published exactly this pattern at OSDI 2014. Their photo store Haystack sat at an effective replication factor of <strong>3.6x</strong> — fine when photos were hot and few, ruinous at exabyte scale, since BLOB access falls off a cliff with age. So they built <strong>f4</strong>, a separate warm tier using Reed-Solomon 10+4 for 1.4x local overhead plus a cross-data-center XOR, landing at an effective <strong>2.1x</strong>. <em>Tier by temperature: replicate the hot stuff for simplicity, erasure-code the cold stuff for money.</em></p>
+
+<h3>The durability math, without the math</h3>
+
+<p>You don't derive anything at a whiteboard, but you must show the shape of the argument. For an object to die, <strong>5 of its 12 shards must be permanently gone at once</strong>, because any 8 survivors reconstruct it. The chance a specific drive dies today is about 1.5% ÷ 365 ≈ 1 in 25,000, and the chance four <em>more</em> specific drives die inside the repair window is that tiny number multiplied several times over. Multiply four or five small probabilities and you land near eleven nines. That's the whole argument.</p>
+
+<p>Which exposes the lever: each of those terms scales with the <strong>repair window</strong>, the time between a shard going missing and a fresh one existing. Halve repair time and four terms halve with it, dropping risk by roughly sixteen. <strong>Repair speed is a durability input.</strong> (Second time, as promised.) Slow repair isn't "behind on maintenance," it's durability loss happening now, silently.</p>
+
+<p>How do you make repair fast? <strong>Decluster the placement.</strong> If a drive's shard groups always used the same 11 partner drives, its rebuild is capped by 11 machines' read speed — hours or days. Draw each placement group from a randomized set of thousands of candidates instead, and a dead 20 TB drive's rebuild reads come from thousands of peers at once, finishing in minutes. Same hardware, an order of magnitude better durability, purely from placement.</p>
+
+<p>And the caveat strong candidates volunteer: <strong>that math assumes independent failures, and real failures are correlated.</strong> A shared power unit, a firmware bug in one drive model, a bad manufacturing batch, a botched deploy — these kill many drives together and the multiplication stops applying. Which is why placement is failure-domain-aware rather than merely random, why fleets mix drive models and purchase batches, and why the biggest real-world losses are almost never "too many disks died."</p>
+
+<div class="box story"><div class="box-tag">War story — Backblaze publishes its dead drives</div>
+<p>Backblaze does something almost nobody else does: since 2013 they publish <strong>Drive Stats</strong>, a quarterly report on every drive in their fleet — model, size, days in service, annualized failure rate — with the raw daily data as an open download. It now covers hundreds of thousands of drives and has become the industry's de facto public reference for how drives actually fail, including the finding that failure rates vary enormously <em>between models</em>, not just between vendors. That transparency is the culture point; the architecture point is just as good. Backblaze stores data in <strong>Vaults</strong>, splitting each file into 20 shards — <strong>17 data and 3 parity</strong> — one shard per storage pod across 20 pods, so a file survives three pods failing outright, and they open-sourced their Reed-Solomon implementation in 2015. Two lessons: measure your own fleet's real failure rate instead of trusting a datasheet, and choose failure domains such that the thing that fails together is a thing your code can afford to lose.</p>
+</div>
+
+<h3>End-to-end integrity: bits rot, and silence is the enemy</h3>
+
+<p>A dead drive is the easy failure; it announces itself. The frightening one is a drive that cheerfully returns wrong bytes — bit rot, a firmware bug, a flipped bit in a network card or in RAM. Nothing errors, and the customer finds out months later. So: checksums, created as early as possible and verified everywhere.</p>
+
+<ul>
+<li><strong>At ingest,</strong> the client sends a checksum (real S3 supports CRC32, CRC32C, CRC64NVME, SHA-1 and SHA-256 for exactly this, and since 2025 computes CRC32 by default when you send nothing) and the API server verifies before accepting. A checksum computed by <em>our</em> server only proves the bytes didn't change after they reached us — the checksum must be older than the bug you're trying to catch.</li>
+<li><strong>Per shard,</strong> a checksum lives next to the shard <em>and</em> in the manifest, so a reader verifies independently of the storage node's own opinion.</li>
+<li><strong>On every read,</strong> verify before assembling. A mismatch means: discard that shard, fetch a parity shard, reconstruct, serve correct bytes, file a repair task. The customer never sees the corruption; the fleet does.</li>
+<li><strong>Constantly,</strong> a background scrubber reads and verifies every shard on a rolling schedule — a full pass every 30 days. Rot found by a scrubber costs a repair; rot found by a customer costs an object.</li>
+<li><strong>During repair, verify before you rebuild.</strong> Reconstructing from a corrupted shard produces a confidently wrong result that gets checksummed and stored as truth — the nastiest bug in the class.</li>
+</ul>
+
+<h3>The repair pipeline, and the elegant bit</h3>
+
+<p>Detection has three sources — heartbeats (node gone), the scrubber (silent corruption), and read-time verification failures (a customer stumbled onto it first) — all feeding one queue. Workers always do the same thing: read k healthy shards, verify them, re-derive the missing shard, place it under the failure-domain rules, update the manifest.</p>
+
+<p>Here's the piece that turns an ordinary system into a durable one: <strong>the queue is ordered by risk, not arrival time.</strong> An object missing 3 shards is one failure from unreadable; an object missing 1 has three failures of slack. FIFO makes the desperate object wait behind a million comfortable ones. So the queue has lanes by shards-missing and the critical lane always drains first. During a big correlated failure — when the queue is longest and durability most at risk — that ordering is worth more than extra hardware.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Repair pipeline: three detectors feed a queue ordered by risk into repair workers">
+  <rect class="dg-node" x="10" y="26" width="152" height="44" rx="8"/>
+  <text class="dg-txt-s" x="24" y="46">heartbeat lost</text>
+  <text class="dg-txt-s" x="24" y="62">node or drive dead</text>
+  <rect class="dg-node" x="10" y="90" width="152" height="44" rx="8"/>
+  <text class="dg-txt-s" x="24" y="110">scrubber</text>
+  <text class="dg-txt-s" x="24" y="126">30-day full pass</text>
+  <rect class="dg-node" x="10" y="154" width="152" height="44" rx="8"/>
+  <text class="dg-txt-s" x="24" y="174">read verify failed</text>
+  <text class="dg-txt-s" x="24" y="190">customer hit it</text>
+  <rect class="dg-bad" x="220" y="26" width="216" height="42" rx="8"/>
+  <text class="dg-txt-s" x="234" y="44">lane 1: missing 3 — critical</text>
+  <text class="dg-txt-s" x="234" y="60">one loss from unreadable</text>
+  <rect class="dg-node-alt" x="220" y="82" width="216" height="42" rx="8"/>
+  <text class="dg-txt-s" x="234" y="100">lane 2: missing 2 — urgent</text>
+  <text class="dg-txt-s" x="234" y="116">drains after lane 1</text>
+  <rect class="dg-node" x="220" y="138" width="216" height="42" rx="8"/>
+  <text class="dg-txt-s" x="234" y="156">lane 3: missing 1 — routine</text>
+  <text class="dg-txt-s" x="234" y="172">rate-limited, off-peak</text>
+  <rect class="dg-node" x="490" y="60" width="216" height="112" rx="8"/>
+  <text class="dg-txt" x="504" y="84">Repair workers</text>
+  <text class="dg-txt-s" x="504" y="106">1. read 8 shards, verify</text>
+  <text class="dg-txt-s" x="504" y="124">2. re-derive missing shard</text>
+  <text class="dg-txt-s" x="504" y="142">3. place, honoring AZ rules</text>
+  <text class="dg-txt-s" x="504" y="160">4. update manifest location</text>
+  <line class="dg-edge" x1="162" y1="48" x2="220" y2="48" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="162" y1="112" x2="220" y2="103" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="162" y1="176" x2="220" y2="159" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="436" y1="47" x2="490" y2="90" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="436" y1="103" x2="490" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="436" y1="159" x2="490" y2="136" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="10" y="236">Backlog in lane 1 is the durability alarm — page on it, not on lane 3.</text>
+  <text class="dg-txt-s" x="10" y="262">Repair reads are declustered across thousands of peers: a dead 20 TB drive rebuilds in minutes, not days.</text>
+  <text class="dg-txt-s" x="10" y="288">Repair bandwidth is capped below customer traffic — except lane 1, which is allowed to hurt.</text>
+</svg>
+<figcaption>Risk-ordered repair. The lane structure is a few lines of code and worth more than a second copy of your data.</figcaption>
+</figure>
+
+<h2>Deep dive 2: the metadata plane is its own distributed system</h2>
+
+<p>Time for the honest sentence, which earns points precisely because most candidates skip it: <strong>the metadata plane is a sharded, replicated, strongly-consistent, ordered index with a hundred billion rows in it, and it is at least as hard as the storage problem.</strong> Google learned this in public — the Google File System kept all file metadata in a single master server's memory, which capped how many files a cluster could hold, and its successor Colossus exists largely to distribute that layer.</p>
+
+<p><strong>Sharding: range, not hash — and I'll pay the cost.</strong> Hash-partitioning spreads load perfectly and makes LIST impossible: listing <code>photos/2026/</code> would have to ask every shard. So I range-partition on <code>(bucket, key)</code>, keeping keys sorted, which turns a prefix LIST into a contiguous scan of one or two shards. Each shard is a Raft group of 5 replicas placed 2/2/1 across the AZs, so it survives an AZ loss and still forms a majority, and shards <strong>auto-split</strong> on size or request rate.</p>
+
+<p>The cost is the hot-partition problem from chapter 2.6: customers love keys like <code>logs/2026-08-14T09:12:03Z</code>, and monotonically increasing keys send every write in the world to the last shard. Auto-splitting on request rate is the answer — split the hot range, hand the halves to different machines, repeat. Real S3 lived this publicly: for years the official advice was to randomize your key prefixes, retired in 2018 once S3 began scaling partitions per prefix automatically.</p>
+
+<p><strong>Strong read-after-write, in one paragraph.</strong> The object exists when and only when its metadata row commits — the linearization point, exactly like Dropbox's manifest commit in chapter 3.7. Because the shard is a Raft group, that commit is durable and ordered before the client hears <code>200</code>, and a leader read under a valid lease reflects every commit that finished before it started. Chunks are immutable, so there are no stale bytes to serve by accident; the only mutable fact in the whole system is "which manifest is current for this key," and it lives in exactly one consensus group. When real S3 shipped strong read-after-write in December 2020 — GETs, LISTs and overwrites, no extra cost, no performance penalty — that was a change in the index layer, not the disks.</p>
+
+<p><strong>LIST, honestly.</strong> A paginated ordered scan returning up to 1,000 keys plus a continuation token, costing what the prefix contains rather than what you asked for. Listing a bucket with 10 billion objects is a batch job wearing a request's clothing, and a customer polling LIST in a loop to find new files has built a denial of service against your metadata plane using your own API. Mitigations: throttle LIST harder than GET, support <code>delimiter</code> so scans skip whole "directories," and offer the tools built for the real need — a nightly inventory report delivered as a file (real S3 does this) plus event notifications.</p>
+
+<p><strong>Versioning, deletes and lifecycle</strong> fall out of the ordered index cheaply. Version id is part of the primary key, sorted newest-first, so "current version" is the first row in the range. A DELETE writes a <em>delete marker</em>, a tombstone that makes the key look gone while recoverable data sits underneath. Nothing is erased on the request path; reclamation is a background sweep that frees chunks no live manifest references, after a grace period. <strong>The deletion principle: deleting late costs money, deleting early costs data — every tie breaks toward late.</strong></p>
+
+<div class="box story"><div class="box-tag">War story — the day the index went away, 28 February 2017</div>
+<p>Just after 9:37am Pacific, an authorized S3 engineer in us-east-1 was debugging a billing-system slowdown and ran a playbook command to remove a small number of servers. A typo removed a much larger set — and those servers supported two other S3 subsystems. One was the <strong>index subsystem</strong>, holding metadata and location information for every object in the region, required by every GET, LIST, PUT and DELETE. The other was the <strong>placement subsystem</strong>, which allocates storage for new objects and itself depends on the index. With too much capacity gone, both needed a full restart. Here's the part to tattoo somewhere: S3 had grown enormously since those subsystems were last fully restarted, the restart took far longer than anyone expected, and safety checks validating metadata integrity ran for hours before the index could serve traffic. Most of the internet's "S3 is down" day was really "the index is starting up." Two lessons: the metadata plane is your availability single point of failure even when your data is perfectly safe, and <strong>a recovery path you have never exercised at current scale is not a recovery path, it's a hypothesis.</strong> AWS's follow-up split the index into smaller cells and made restart time a tracked property. Bonus detail with a bitter laugh in it: the AWS status dashboard couldn't be updated during the outage, because it ran on S3.</p>
+</div>
+
+<h2>Deep dive 3: the write path, the ack rule, and multipart</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="PUT flow: chunk, encode into twelve shards, place in parallel, ack at ten durable, then commit metadata last">
+  <rect class="dg-node" x="10" y="112" width="88" height="52" rx="8"/>
+  <text class="dg-txt-s" x="24" y="134">PUT key</text>
+  <text class="dg-txt-s" x="24" y="152">+ checksum</text>
+  <rect class="dg-node" x="126" y="112" width="112" height="52" rx="8"/>
+  <text class="dg-txt-s" x="140" y="134">chunk + verify</text>
+  <text class="dg-txt-s" x="140" y="152">encode 8+4</text>
+  <rect class="dg-node" x="270" y="24" width="150" height="38" rx="6"/>
+  <text class="dg-txt-s" x="284" y="48">4 shards → AZ-A</text>
+  <rect class="dg-node" x="270" y="76" width="150" height="38" rx="6"/>
+  <text class="dg-txt-s" x="284" y="100">4 shards → AZ-B</text>
+  <rect class="dg-node" x="270" y="128" width="150" height="38" rx="6"/>
+  <text class="dg-txt-s" x="284" y="152">4 shards → AZ-C</text>
+  <rect class="dg-good" x="270" y="188" width="150" height="52" rx="8"/>
+  <text class="dg-txt-s" x="284" y="210">10 of 12 fsynced,</text>
+  <text class="dg-txt-s" x="284" y="228">all 3 AZs present</text>
+  <rect class="dg-node-alt" x="454" y="100" width="176" height="76" rx="8"/>
+  <text class="dg-txt" x="468" y="126">commit manifest</text>
+  <text class="dg-txt-s" x="468" y="146">Raft, metadata shard</text>
+  <text class="dg-txt-s" x="468" y="164">the linearization point</text>
+  <rect class="dg-good" x="454" y="204" width="176" height="40" rx="8"/>
+  <text class="dg-txt-s" x="468" y="228">200 OK + ETag</text>
+  <line class="dg-edge" x1="98" y1="138" x2="126" y2="138" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="238" y1="126" x2="270" y2="44" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="238" y1="138" x2="270" y2="96" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="238" y1="150" x2="270" y2="148" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="345" y1="166" x2="345" y2="188" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="212" x2="454" y2="160" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="542" y1="176" x2="542" y2="204" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="10" y="266">Nothing before the commit is visible. Crash earlier and you leave orphan shards, not a broken object.</text>
+  <text class="dg-txt-s" x="10" y="288">The last 2 shards finish asynchronously as a top-priority repair task — never ack at exactly k.</text>
+</svg>
+<figcaption>Metadata commit last. Every step before it is retryable; the commit is the only step the world can observe.</figcaption>
+</figure>
+
+<p>The write path is where you commit to a durability contract, and the contract is one question: <strong>what must be true before we say 200?</strong></p>
+
+<p><strong>My ack rule: 200 only after at least 10 of 12 shards are durable on disk, spanning all three AZs; the last shards finish asynchronously as a top-priority repair task.</strong> Three parts deserve defending. "Durable on disk" means the drive acknowledged, not that bytes sit in the OS page cache — a rack power event must not turn acked writes into lost writes, so nodes use power-loss-protected devices or an explicit flush. "All three AZs" is what makes the ack survive an AZ dying one second later. And 10, not 8: <strong>never acknowledge at exactly k</strong>, because there the object has zero redundancy and one later drive failure destroys data the customer was told was safe. Acking at 10 keeps two shards of slack while dropping the two slowest nodes from the latency path — a few milliseconds of p99 against a window of zero redundancy.</p>
+
+<p><strong>Metadata commit last</strong> is the discipline from Dropbox's manifest commit (chapter 3.7) and the outbox pattern (chapter 2.1). Shards written but never committed are invisible orphans that GC sweeps up; no customer can observe half an object. A retried PUT after a lost response writes new chunks and commits again — last commit wins, S3's documented semantics, and no interleaving produces a Frankenstein object made of two uploads.</p>
+
+<p><strong>Multipart upload</strong> exists because a 5 TB single-stream PUT is a bad bet: one network blip and you restart 5 TB. So: create an upload id, PUT parts in parallel (5 MB minimum each except the last, 5 GB maximum, up to 10,000 parts, with the 5 TB single-object ceiling as its own separate limit on top), each erasure-coded, acked and retryable on its own. Then <code>CompleteMultipartUpload</code> assembles their chunk lists into one manifest and commits it atomically: before that the key doesn't exist, after it the whole object does. The multipart ETag is deliberately not the object's MD5 — it's a hash of the part hashes with a dash and the part count appended, since a real digest would mean re-reading 5 TB. Abandoned uploads get swept by a lifecycle rule, because half-finished parts are invisible bytes customers still pay for.</p>
+
+<p><strong>Two read-path refinements.</strong> Since any 8 of 12 suffice, a reader chasing p99 can issue 10 requests and use the first 8 that return — <em>hedged reads</em>, tail-latency insurance for a little bandwidth. And <code>Range</code> reads map to specific chunks via manifest offsets, so a player seeks into the middle of a 4 GB video without reading the first 4 GB.</p>
+
+<h2>Failure modes and operations</h2>
+
+<ul>
+<li><strong>A drive dies.</strong> Routine — multiple times a day, by design. Heartbeats enqueue its shards, declustered repair pulls from thousands of peers, done in minutes. Zero customer impact, zero pages. If a single drive death <em>can</em> page someone, the system is wrong.</li>
+<li><strong>A node is slow but alive.</strong> Worse than dead, because nothing declares it broken. Gray failure is the classic tail-latency killer: eject on latency percentiles, not just heartbeats, and let hedged reads cover the rest.</li>
+<li><strong>An AZ goes dark.</strong> Every object drops to exactly 8 of 12: all reads succeed, all degraded. New writes can't satisfy the 3-AZ placement rule, so I accept 2-AZ placement with a mandatory re-placement task queued — and say so, rather than silently weakening the contract. The judgment call: <strong>do not immediately re-replicate everything</strong>, because rebuilding a third of the fleet saturates the network the healthy path needs. A grace timer separates <em>transient absence</em> from <em>permanent loss</em> — except the critical lane, which never waits.</li>
+<li><strong>Metadata shard leader dies.</strong> Raft elects a new one in seconds; that key range blinks and nothing is lost. Fencing (chapter 2.3) matters — an old leader waking up must not commit.</li>
+<li><strong>A hot prefix.</strong> One customer's <code>uploads/</code> takes 50K writes/sec: per-prefix token buckets, <code>503 SlowDown</code> with <code>Retry-After</code>, auto-split the range. Throttling delivered as a clear retryable signal is backpressure (chapter 2.7); throttling delivered as timeouts is an outage.</li>
+</ul>
+
+<p><strong>What I monitor</strong>, and note that the top item is not latency:</p>
+
+<ul>
+<li><strong>Repair backlog by risk lane</strong> — the durability alarm. Page if any object sits at 9-of-12 for more than a few minutes, and page if arrival rate exceeds drain rate for a sustained window: that trend extrapolated is data loss with a date on it.</li>
+<li><strong>Scrub coverage:</strong> percent of bytes verified in the last 30 days, and cycle-time drift. A scrubber falling behind means undetected rot accumulating.</li>
+<li><strong>Durability events:</strong> any object that ever reaches zero recoverable shards is a company-level incident. The count should be zero; if it isn't, the number is the postmortem.</li>
+<li>Then the ordinary tier: p99 TTFB, degraded-read rate (a leading indicator of fleet health), per-prefix throttle rate, leader elections, capacity runway in months.</li>
+</ul>
+
+<p><strong>Rollout.</strong> Storage node software rolls one failure domain at a time, never two AZs at once — a bad binary deployed everywhere at once is exactly the correlated failure erasure coding can't save you from. Encoding formats are <strong>read-compatible forever</strong>: the manifest carries a format version and new code must read every version ever written, because objects written in 2026 will be read in 2046. And borrow the 2017 lesson — rehearse the metadata restart at current scale, on a schedule.</p>
+
+<p><strong>At 10x.</strong> Bytes go to 4 exabytes and drives to 300,000: more of the same, plus a bigger repair-bandwidth budget. The first real wall is the metadata plane at a <em>trillion</em> rows — more Raft groups, more split churn, and a placement service whose own state stops fitting anywhere comfortable. The second is LIST, whose cost grows with objects under a prefix. The third is repair bandwidth, which grows with fleet size while the network doesn't automatically follow. Notice what isn't on that list: the erasure code. Coding parameters scale for free; coordination doesn't.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>What the interviewer probes next, roughly in this order:</p>
+<ul>
+<li>"You said 11 nines. Show me where that number comes from." — The shape of the argument (5 of 12 must die inside the repair window), not a formula. Then volunteer the weakness: correlated failure breaks the independence assumption.</li>
+<li>"Why erasure coding instead of three copies, and what does it cost you?" — 1.5x versus 3x, then the costs: rebuilding one shard reads eight, degraded reads burn CPU and cross-AZ bandwidth, small objects must be packed first.</li>
+<li>"An entire AZ just went offline. Walk me through the next ten minutes." — Count shards, refuse the fleet-wide rebuild, separate transient absence from permanent loss.</li>
+<li>"When exactly do you return 200?" — If the answer doesn't include how many shards, in how many AZs, and whether bytes reached the platter, you haven't answered.</li>
+<li>"How do you get strong read-after-write?" — Metadata commit is the linearization point; chunks are immutable; the only mutable fact lives in one consensus group.</li>
+<li>"What's the one metric you'd page on at 3am?" — Repair backlog in the critical lane. Anything else is watching symptoms.</li>
+</ul>
+</div>
+
+<h2>The trade-offs I committed to</h2>
+
+<table>
+<thead><tr><th>Choice</th><th>Why</th><th>What it costs me</th></tr></thead>
+<tbody>
+<tr><td>Reed-Solomon 8+4, 4 shards per AZ</td><td>1.5x instead of 3x; survives any 4 losses and a full AZ</td><td>Rebuilding 1 shard reads 8; degraded reads cost CPU and cross-AZ bandwidth; 10+4's cheaper 1.4x is off the table because 3 AZs force a 1.5x floor</td></tr>
+<tr><td>3 replicas first, code on seal</td><td>No encoding on the write latency path; small objects packed before coding</td><td>A background transcode pipeline to operate; recent data is briefly more expensive</td></tr>
+<tr><td>Range-partitioned metadata</td><td>Prefix LIST becomes a contiguous scan of one or two shards</td><td>Sequential keys create hot shards; survives only with auto-split on request rate (chapter 2.6)</td></tr>
+<tr><td>Metadata commit as linearization point</td><td>Strong read-after-write falls out; no partially visible objects; earlier steps retryable</td><td>The metadata plane becomes the availability single point of failure — see February 2017</td></tr>
+<tr><td>Ack at 10 of 12 shards, all 3 AZs</td><td>Never acknowledge at zero redundancy; drops the two slowest nodes from the latency path</td><td>A brief reduced-redundancy window per write, covered by a top-priority repair task</td></tr>
+<tr><td>Risk-ordered repair queue</td><td>Objects closest to death rebuild first, which is where durability comes from</td><td>Starves the routine lane during big events; needs its own backlog alarm</td></tr>
+<tr><td>Delete = tombstone + async reclaim</td><td>Recoverable deletes; no erase work on the request path</td><td>Customers pay for bytes after "deleting" them; GC must be fenced against in-flight writes</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c20-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, how erasure coding gives better durability than three copies while using half the storage — and why repair speed matters as much as the code you picked.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Take a chunk of data, cut it into 8 equal pieces, and compute 4 extra "parity" pieces, each a different mathematical mix of all 8. Store those 12 pieces on 12 different machines. Any 8 of the 12 rebuild the original — 8 unknowns, and any 8 independent equations solve for them — so losing any 4 costs you nothing. That's 1.5x the storage tolerating 4 failures, where three full copies cost 3x and tolerate only 2. But an object only dies if 5 pieces vanish <em>at the same time</em>, so what really protects you is how fast a missing piece gets replaced: if repair takes ten minutes instead of ten hours, the window for those other failures to pile up is sixty times smaller. That's why storage teams treat repair queue backlog, not disk failure rate, as the number that predicts data loss.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Your company opens a fourth availability zone in the region. Recompute the cheapest erasure code that still survives a full AZ loss, and say whether you'd actually migrate.</p></div>
+<details><summary>Answer</summary><p>With A zones, one zone holds at least n/A shards, so surviving a zone loss needs m ≥ n/A and overhead n/k ≥ A/(A−1). Four zones lowers the floor from 1.5x to 1.33x — say 9+3 (3 per zone; lose one and exactly 9 survive) or 12+4. On 400 PB that's about 67 PB saved, roughly 3,400 drives. Migrate? Not by rewriting existing data: re-encoding an exabyte costs months of repair-class bandwidth, and every byte re-read is a byte that can be corrupted. Switch <em>new</em> containers to the new code, let the manifest's format version handle the mix, and let lifecycle transitions re-encode old data lazily. The senior move is noticing that the migration cost, not the code, is the decision.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>10x this: 100 billion objects becomes a trillion. Which plane breaks first, what's the symptom, and what do you do?</p></div>
+<details><summary>Answer</summary><p>The metadata plane, well before the disks. A trillion rows at ~1 KB is a petabyte of hot index across tens of thousands of Raft groups. Symptoms in order: shard-split churn as ranges outgrow their targets; the shard-map service becoming a bottleneck because its own state no longer fits on one machine; leader-election storms during deploys; LIST latency degrading as prefixes span more shards. Fixes: make the shard map hierarchical and cached at the API tier; split cold metadata (old versions, delete markers) away from the hot current-version index; cellularize per bucket (chapter 2.5) so one noisy tenant can't churn a shared shard. Note what didn't break: the erasure code and the storage nodes. Coordination fails to scale; arithmetic doesn't.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: the durability target drops to 99.99% per year — this is a scratch tier for machine-learning intermediates that can be regenerated — but cost per TB must be as low as possible and write throughput must double. What changes?</p></div>
+<details><summary>Answer</summary><p>Almost everything relaxes, and saying so confidently is the point — over-engineering a scratch tier is a real failure mode. Move to a wider, cheaper code (16+2, ~1.13x) or single-AZ placement; dropping AZ survival removes the 1.5x floor entirely. Ack earlier, since a lost object costs a recomputation, not a customer. Scrub quarterly instead of monthly, run repair off-peak, page nobody. Keep two things unchanged: end-to-end checksums, because silently corrupted training data poisons results invisibly, and metadata consistency, because a scratch tier that loses track of what it has is unusable at any price.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>An object store has two scaling problems that move independently: bytes drive drive count, object count drives metadata rows, each with its own wall.</li>
+<li>Erasure coding buys better failure tolerance than replication at half the cost, because any k of n shards reconstruct the original — but small objects must be packed into large containers before coding.</li>
+<li>Availability-zone tolerance sets a hard floor on overhead: with A zones you need at least 1/A parity, so three zones can never go below 1.5x.</li>
+<li>Repair speed is a durability input — halving the repair window shrinks risk by roughly the power of your parity count, which is why declustered placement and a risk-ordered queue beat buying extra copies.</li>
+<li>Checksums must be created by the client and verified on read, during repair, and by a background scrubber, because silent corruption never pages anyone.</li>
+<li>The metadata plane is a sharded, strongly-consistent index at least as hard as the storage — S3's worst outage was an index restart, not a disk problem.</li>
+<li>The metadata commit is the linearization point: it delivers strong read-after-write, keeps every earlier step retryable, and makes partially visible objects impossible.</li>
+<li>Never acknowledge a write at exactly k shards, and page on repair backlog rather than on individual drive deaths — at fleet scale, dead drives are the heartbeat, not the emergency.</li>
+</ul>
+</div>

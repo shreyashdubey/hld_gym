@@ -73,7 +73,7 @@
   <rect class="dg-node-alt" x="495" y="12" width="215" height="62" rx="8"/>
   <text class="dg-txt" x="510" y="36">Geo index (memory)</text>
   <text class="dg-txt-s" x="510" y="53">cell → driver set, sharded</text>
-  <text class="dg-txt-s" x="510" y="67">+ driver → state, CAS here</text>
+  <text class="dg-txt-s" x="510" y="67">+ driver → state, reserve</text>
   <line class="dg-edge" x1="115" y1="43" x2="160" y2="43" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="280" y1="43" x2="325" y2="43" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="445" y1="43" x2="495" y2="43" marker-end="url(#arrow)"/>
@@ -90,7 +90,7 @@
   <text class="dg-txt-s" x="22" y="251">POST /rides</text>
   <rect class="dg-node" x="160" y="215" width="120" height="46" rx="8"/>
   <text class="dg-txt" x="172" y="235">Trip service</text>
-  <text class="dg-txt-s" x="172" y="251">Postgres, durable</text>
+  <text class="dg-txt-s" x="172" y="251">durable rows</text>
   <rect class="dg-node-alt" x="325" y="215" width="120" height="46" rx="8"/>
   <text class="dg-txt" x="337" y="235">Matching svc</text>
   <text class="dg-txt-s" x="337" y="251">rank + reserve</text>
@@ -101,8 +101,8 @@
   <line class="dg-edge" x1="280" y1="238" x2="325" y2="238" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="445" y1="238" x2="495" y2="238" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="400" y1="215" x2="560" y2="74" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="480" y="165">k-ring query + CAS reserve</text>
-  <line class="dg-edge" x1="360" y1="261" x2="70" y2="300"/>
+  <text class="dg-txt-s" x="480" y="165">nearby query + reserve</text>
+  <line class="dg-edge" x1="360" y1="261" x2="80" y2="299" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="80" y="310">offer push to driver app (15s window)</text>
 </svg>
 <figcaption>Top: the location firehose stays in memory, with history tee'd to Kafka. Bottom: the rare, precious ride request goes through durable trip state, then matching queries and reserves in the geo index.</figcaption>
@@ -157,8 +157,8 @@
   <text class="dg-txt-s" x="440" y="100">driver A — nearest,</text>
   <text class="dg-txt-s" x="440" y="114">next cell over</text>
   <circle class="dg-node" cx="325" cy="172" r="7"/>
-  <text class="dg-txt-s" x="252" y="176">driver B — same</text>
-  <text class="dg-txt-s" x="252" y="190">cell, farther</text>
+  <text class="dg-txt-s" x="252" y="204">driver B — same</text>
+  <text class="dg-txt-s" x="252" y="218">cell, farther</text>
   <text class="dg-txt" x="20" y="40">query = rider's cell</text>
   <text class="dg-txt" x="20" y="60">+ k-ring(1) = 7 cells</text>
   <text class="dg-txt-s" x="20" y="82">skip the ring and you</text>
@@ -207,7 +207,7 @@
   <text class="dg-txt-s dg-bad" x="392" y="130">→ Ben: FAIL, already reserved</text>
   <line class="dg-edge" x1="605" y1="155" x2="680" y2="155" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="510" y="147">try candidate #2</text>
-  <line class="dg-edge" x1="115" y1="195" x2="60" y2="195"/>
+  <line class="dg-edge" x1="115" y1="195" x2="55" y2="195" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="130" y="188">offer (token m1) → Dev's phone, 15s window</text>
   <line class="dg-edge" x1="115" y1="255" x2="360" y2="255" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="130" y="247">accept(m1): token matches → trip ACCEPTED (durable)</text>

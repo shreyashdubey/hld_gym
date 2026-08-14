@@ -1,0 +1,457 @@
+<p>A user types "explain quantum tunnelling like I'm twelve" and hits enter. Somewhere in a datacenter, eight GPUs that cost more than a house spend twenty seconds producing four hundred words — and they are doing the same thing for a hundred and seventy other people at once. Give this user more of the machine and everyone else gets less. There is no cache to hide behind, no CDN edge, no read replica. Every token is computed fresh, on hardware you rent by the second.</p>
+
+<p>Now the interview version: <em>"Design the serving infrastructure for a large language model."</em> Most candidates reach for shapes they know — load balancer, autoscaling group, Redis, a queue — and build something that would be fine for a REST API and is quietly nonsense here. They autoscale on CPU. They put a response cache in front of "the model." They quote a p99 for an answer that arrives one word at a time over thirty seconds.</p>
+
+<p>The interviewer wants one thing: do you understand that a GPU serving an LLM is <strong>a memory allocator with a scheduler bolted on</strong>, and that how many users you serve, how fast their words appear, and what your monthly bill is all fall out of one resource you cannot buy your way around. Let's find it fast.</p>
+
+<h2>Requirements: what we promise, in numbers</h2>
+
+<p>Functional, committed in two minutes:</p>
+
+<ul>
+<li><strong>Chat completions</strong> against one large model (70B-class), <strong>streamed token by token</strong>.</li>
+<li><strong>Multi-turn conversations</strong> — each request carries history, so prompts grow across a session.</li>
+<li><strong>Multi-tenant</strong>: many API customers plus our own chat app on one fleet.</li>
+<li><strong>Safety classifiers in the path</strong>: prompt checked before generation, output checked as it streams. A requirement, not a nice-to-have.</li>
+<li><strong>Two service classes</strong>: interactive (a human is waiting) and batch (a script is waiting; hours are fine).</li>
+</ul>
+
+<p>Out of scope, said out loud: training, fine-tuning, model quality, agents, billing invoices.</p>
+
+<p>Non-functional, with numbers I'll defend all chapter:</p>
+
+<ul>
+<li><strong>TTFT p95 under 500 ms</strong> for interactive requests with prompts under 4K tokens.</li>
+<li><strong>Inter-token latency p95 under 50 ms</strong> — 20 tokens/second, comfortably faster than anyone reads.</li>
+<li><strong>Cost efficiency is a first-class requirement.</strong> Output tokens per second per GPU is what the business pays for. Quiet part out loud: this design is 60% an economics problem.</li>
+<li><strong>Fairness</strong>: no tenant starves another, and one 200K-token prompt must not wreck everyone else's latency.</li>
+<li><strong>99.9% availability</strong>, with a defined answer for a node dying mid-sentence.</li>
+</ul>
+
+<h2>The vocabulary first — this is the grading language</h2>
+
+<p>Four terms. Use them precisely and the interviewer relaxes; say "latency" unqualified and they stop trusting the rest.</p>
+
+<ul>
+<li><strong>TTFT — time to first token.</strong> Enter to first word. The "is it broken?" window. Under 300 ms feels instant; past two seconds people re-click.</li>
+<li><strong>ITL — inter-token latency</strong> (also TPOT, time per output token). The gap between tokens. People read about 6–7 tokens/second, so 50 ms per token outruns the eye. Below 10 tokens/second it feels like the model is struggling.</li>
+<li><strong>Throughput</strong> — output tokens/second, and more usefully <strong>tokens/second per GPU</strong>. Nothing else converts to dollars this directly.</li>
+<li><strong>Goodput</strong> — requests/second served <em>within SLO</em>. This one separates seniors. You can always raise throughput by cramming more users into a batch; past a point every one of them gets 200 ms per token, and your interactive goodput is zero. A saturated server with terrible ITL looks great on a throughput dashboard and is, in product terms, down.</li>
+</ul>
+
+<p>Hold two facts together: <strong>throughput and per-user latency are in direct tension, and the dial between them is batch size.</strong> That tension is the chapter.</p>
+
+<h2>The two-phase insight — learn this before any architecture</h2>
+
+<p>A request is not one workload. It is two, back to back, with opposite bottlenecks. I'd draw this before drawing a single box.</p>
+
+<p><strong>Prefill.</strong> The model reads your whole prompt in <em>one</em> forward pass — all 1,500 tokens together, as big matrix multiplications. GPUs love this: dense math, arithmetic units saturated. Prefill is <strong>compute-bound</strong>. Its output is the first token plus the <dfn>KV cache</dfn>: saved attention state for every prompt token, kept so later tokens don't re-read the prompt from scratch.</p>
+
+<p><strong>Decode.</strong> Now it generates, one token at a time, strictly sequential — token 12 needs token 11 as input. Each step does tiny arithmetic, but to do it the GPU must read <em>all the weights</em> out of memory. For a 70B model at 16-bit that's 140 GB of memory traffic per word fragment. Decode is <strong>memory-bandwidth-bound</strong>.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="A request splits into a parallel compute-bound prefill pass and a sequential memory-bound decode loop">
+  <text class="dg-txt-s" x="10" y="22">One request, two workloads with opposite bottlenecks</text>
+  <rect class="dg-node" x="10" y="70" width="96" height="56" rx="8"/>
+  <text class="dg-txt" x="24" y="94">Prompt</text>
+  <text class="dg-txt-s" x="24" y="112">1,500 tok</text>
+  <line class="dg-edge" x1="106" y1="98" x2="134" y2="98" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="136" y="56" width="180" height="84" rx="8"/>
+  <text class="dg-txt" x="150" y="80">PREFILL</text>
+  <text class="dg-txt-s" x="150" y="99">all 1,500 at once</text>
+  <text class="dg-txt-s" x="150" y="115">compute-bound</text>
+  <text class="dg-txt-s" x="150" y="131">~60 ms, one pass</text>
+  <line class="dg-edge" x1="316" y1="98" x2="344" y2="98" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="336" y="56" width="330" height="84" rx="8"/>
+  <text class="dg-txt-s" x="346" y="48">DECODE — sequential</text>
+  <rect class="dg-node" x="348" y="74" width="70" height="48" rx="6"/>
+  <text class="dg-txt" x="368" y="103">tok 1</text>
+  <line class="dg-edge" x1="418" y1="98" x2="436" y2="98" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="438" y="74" width="70" height="48" rx="6"/>
+  <text class="dg-txt" x="458" y="103">tok 2</text>
+  <line class="dg-edge" x1="508" y1="98" x2="526" y2="98" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="528" y="74" width="70" height="48" rx="6"/>
+  <text class="dg-txt" x="548" y="103">tok 3</text>
+  <text class="dg-txt" x="616" y="103">…</text>
+  <line class="dg-edge" x1="14" y1="176" x2="382" y2="176"/>
+  <text class="dg-txt-s" x="90" y="196">TTFT — enter to first token</text>
+  <line class="dg-edge" x1="418" y1="176" x2="508" y2="176"/>
+  <text class="dg-txt-s" x="400" y="196">one ITL gap</text>
+  <text class="dg-txt-s" x="10" y="234">Prefill: 2 × params × tokens of arithmetic — the math units are the wall.</text>
+  <text class="dg-txt-s" x="10" y="256">Decode: re-read all 140 GB of weights to emit ONE token — bandwidth is the wall.</text>
+  <text class="dg-txt-s" x="10" y="278">So batching barely helps prefill, and completely transforms decode.</text>
+</svg>
+<figcaption>The split that generates every later decision: two phases, two bottlenecks, two batching behaviours.</figcaption>
+</figure>
+
+<p>One number makes decode's problem vivid. Count <dfn>arithmetic intensity</dfn> — how much math you do per byte you drag out of memory. At batch size 1, decode does two operations per parameter and reads two bytes per parameter, so about <strong>1 FLOP per byte</strong>. A modern datacenter GPU can do roughly 300 FLOPs in the time it reads one byte. So a single-user decode step uses well under 1% of the chip's arithmetic — a Formula 1 engine idling in traffic.</p>
+
+<p>The fix writes itself: <strong>read the weights once, use them for many users at the same time.</strong> Batch 64 requests and that same 140 GB read produces 64 tokens instead of 1 — and intensity rises to roughly 1 FLOP per byte <em>per sequence</em>. Throughput grows almost linearly with batch size until that intensity catches up with the hardware's 300, somewhere around batch 200–300 here. Batching isn't an optimisation. It <em>is</em> the business model.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Prefill is a chef reading the whole order ticket for a table of eight in one glance. Decode is the chef walking to the walk-in freezer, opening it, and coming back with <em>one</em> pea. Then walking back for the next pea. The walk is memory bandwidth; the pea is the token. This kitchen only makes money if the chef carries peas for twenty tables per trip — that's batching. Where the analogy breaks: our chef must decide the whole trip's cargo before starting, and the freezer has a hard limit on how much can be carried at once, which is exactly the constraint we're about to meet.</p>
+</div>
+
+<h2>Estimation: the KV ledger decides everything</h2>
+
+<p>Two calculations. One sizes the fleet; the other changes the architecture, so I do it first and out loud.</p>
+
+<h3>The memory ledger for one node</h3>
+
+<p>A node of 8 GPUs at 80 GB each: <strong>640 GB</strong>. Where does it go?</p>
+
+<ul>
+<li><strong>Weights, fixed:</strong> 70 billion parameters × 2 bytes = <strong>140 GB</strong>, charged before you serve a single user.</li>
+<li><strong>Activations and workspace:</strong> call it 60 GB with headroom for the largest prefill chunk.</li>
+<li><strong>KV cache: everything left, ~440 GB.</strong> The only elastic resource on the node — and what you're actually selling.</li>
+</ul>
+
+<p>How much KV does one conversation eat? Memorise the formula; interviewers ask you to derive it.</p>
+
+<pre><code>KV bytes/token = 2 (K and V) × layers × kv_heads × head_dim × bytes_per_value
+
+70B-class model with grouped-query attention:
+  = 2 × 80 layers × 8 kv_heads × 128 head_dim × 2 bytes
+  = 327,680 bytes  ≈  320 KB per token</code></pre>
+
+<p>320 kilobytes. <em>Per token.</em> So an 8K-token conversation holds <strong>2.6 GB</strong> of KV — about <strong>170 concurrent chats</strong> on our 440 GB budget. A 32K chat holds 10 GB → 42 concurrent. A 100K chat holds <strong>32 GB</strong> → 13 concurrent, one user's cache now approaching a quarter of the model's weights.</p>
+
+<p>Say that at the whiteboard and watch the interviewer sit up. <strong>Context length is a concurrency multiplier in reverse.</strong> Ten times the context is roughly a tenth of the users on the same hardware, and no clever code changes that arithmetic. (<dfn>Grouped-query attention</dfn> is the trick that keeps that number survivable: instead of every attention head storing its own K and V, groups of query heads share one set. With plain multi-head attention — 64 KV heads, not 8 — KV per token would be 2.5 MB, capping the node near 20 users. GQA is an 8× concurrency win, which is why every serious serving model uses it.)</p>
+
+<h3>The fleet, and the bill</h3>
+
+<p>Committed assumptions: 2M daily users × 6 messages = 12M requests/day ≈ 140 rps average, <strong>peak 3× = 420 rps</strong>, averaging <strong>1,500 input / 400 output tokens</strong>.</p>
+
+<ul>
+<li><strong>Decode:</strong> 420 × 400 = <strong>168,000 output tokens/second</strong>. A node at batch ~170 with a 25 ms step yields ~6,800 tok/s; call it 6,000 once prefill shares the GPU. <strong>~28 nodes.</strong></li>
+<li><strong>Prefill:</strong> 420 × 1,500 = <strong>630,000 prompt tokens/second</strong>, and a node prefills roughly 25,000 tok/s. <strong>~25 nodes.</strong></li>
+<li><strong>Total ≈ 53 nodes ≈ 420 GPUs</strong>, call it <strong>500</strong> with failover. At a couple of dollars per GPU-hour: roughly <strong>$25K/day, $9M/year</strong> — and the price is the assumption most worth checking.</li>
+</ul>
+
+<p>Three decisions those numbers just made, which is the only reason to have done them:</p>
+
+<ol>
+<li><strong>Prefill is nearly half the bill</strong> — shocking until you remember multi-turn chat resends the whole history every turn. Reusing prompt work across turns (prefix caching) is the biggest cost lever in the system, bigger than any kernel tweak. Deep dive 2.</li>
+<li><strong>Memory, not compute, caps the batch.</strong> The hardware wants 250; the KV ledger allows 170 at 8K and 13 at 100K. So the scheduler must be a memory allocator, and admission must be gated on KV budget. Deep dive 1.</li>
+<li><strong>At half a million dollars a month, precision is a product decision.</strong> Quantization moves the weight number and the KV number at once.</li>
+</ol>
+
+<h2>API and data model: quick, then move</h2>
+
+<pre><code>POST /v1/chat/completions   {model, messages[], max_tokens, stream:true}
+     headers: Idempotency-Key: &lt;request_id&gt;, Authorization: &lt;tenant key&gt;
+     → 200 text/event-stream
+       data: {"delta":"Quantum"}
+       data: {"delta":" tunnelling"}
+       data: {"finish_reason":"stop","usage":{...}}
+
+GET  /v1/requests/{request_id}   → status + text so far (reconnect / resume)
+POST /v1/batch  {requests[]} → job_id            (the cheap tier)</code></pre>
+
+<p>There's almost no persistent data model, which is itself the senior observation: <strong>this system is nearly stateless across requests and enormously stateful <em>within</em> one.</strong> We store a request record (id, tenant, token counts, status, partial output — for resume and billing) and per-tenant quota counters; everything else lives in GPU and host memory as KV blocks and prefix cache, and conversation history belongs to the client. That's deliberate: any replica can serve any request, which makes routing a free choice instead of a constraint.</p>
+
+<h2>High-level design: the complete machine</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 340" role="img" aria-label="Serving topology: gateway with quotas, prompt filter, priority queues, prefix-aware router, GPU replica pool, output streamed through a classifier">
+  <rect class="dg-node" x="10" y="140" width="92" height="56" rx="8"/>
+  <text class="dg-txt" x="26" y="164">Clients</text>
+  <text class="dg-txt-s" x="20" y="182">SSE stream</text>
+  <line class="dg-edge" x1="102" y1="160" x2="128" y2="160" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="130" y="140" width="122" height="56" rx="8"/>
+  <text class="dg-txt" x="144" y="164">Gateway</text>
+  <text class="dg-txt-s" x="144" y="182">auth, token quota</text>
+  <line class="dg-edge" x1="191" y1="196" x2="191" y2="228" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="130" y="230" width="122" height="46" rx="8"/>
+  <text class="dg-txt" x="144" y="258">Prompt filter</text>
+  <line class="dg-edge" x1="252" y1="160" x2="278" y2="160" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="280" y="140" width="132" height="56" rx="8"/>
+  <text class="dg-txt" x="294" y="164">Prefix router</text>
+  <text class="dg-txt-s" x="294" y="182">prefix hash → node</text>
+  <line class="dg-edge" x1="346" y1="140" x2="346" y2="104" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="280" y="46" width="132" height="56" rx="8"/>
+  <text class="dg-txt" x="294" y="70">Queues</text>
+  <text class="dg-txt-s" x="294" y="88">interactive/batch</text>
+  <rect class="dg-zone" x="438" y="20" width="272" height="252" rx="8"/>
+  <text class="dg-txt-s" x="450" y="40">GPU nodes — 8 GPUs, tensor-parallel</text>
+  <rect class="dg-node-alt" x="458" y="52" width="234" height="70" rx="8"/>
+  <text class="dg-txt" x="472" y="76">Node A</text>
+  <text class="dg-txt-s" x="472" y="94">weights 140 GB fixed</text>
+  <text class="dg-txt-s" x="472" y="112">paged KV + prefix cache</text>
+  <rect class="dg-node" x="458" y="134" width="234" height="54" rx="8"/>
+  <text class="dg-txt" x="472" y="158">Node B</text>
+  <text class="dg-txt-s" x="472" y="176">KV 88% full — shedding</text>
+  <rect class="dg-node" x="458" y="200" width="234" height="54" rx="8"/>
+  <text class="dg-txt" x="472" y="224">Node C</text>
+  <text class="dg-txt-s" x="472" y="242">KV 41% full</text>
+  <line class="dg-edge" x1="412" y1="160" x2="456" y2="90" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="412" y1="168" x2="456" y2="224" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="280" y="230" width="132" height="46" rx="8"/>
+  <text class="dg-txt" x="294" y="258">Output filter</text>
+  <line class="dg-edge" x1="690" y1="272" x2="690" y2="302"/>
+  <line class="dg-edge" x1="690" y1="302" x2="60" y2="302" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="56" y1="302" x2="56" y2="198" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="250" y="294">tokens stream back, checked as they go</text>
+</svg>
+<figcaption>The machine. Note what's missing: no response cache in front of the model, no CPU-based autoscaler. Both would be lies at this layer.</figcaption>
+</figure>
+
+<p><strong>Request in:</strong> the gateway authenticates, counts prompt tokens, checks the tenant's tokens-per-minute budget and concurrency cap. The prompt classifier runs (small model, tens of milliseconds, charged to TTFT). The request enters a priority queue by class. The router hashes the prompt prefix, finds the node already holding that conversation's KV blocks, and checks its KV headroom. The node's scheduler admits only if it can reserve blocks for prompt plus expected output. Prefill runs; the first token emerges.</p>
+
+<p><strong>Tokens out:</strong> every decode step, the node produces one token for each of ~170 in-flight sequences at once. Tokens land in a small per-request buffer; the streaming layer drains buffers into server-sent events (SSE — one long-lived HTTP response the server keeps writing into); the output classifier inspects text as it flows. Finished sequences release their KV blocks <em>immediately</em>, which is what lets a queued request start on the very next step. Thumb to token to screen, loop closed.</p>
+
+<h2>Deep dive 1: the KV budget is the scheduler</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Every extra request you admit buys throughput and costs KV memory — and KV memory is finite, unswappable, and grows every decode step for every user. That makes this a live allocation problem with no good failure mode: too small a batch and you burn money reading weights for nobody; too big and either ITL blows past SLO (throughput up, goodput zero) or you run out of KV mid-generation and the process dies, taking 170 strangers' conversations with it. Worse, TTFT and tokens/sec pull opposite ways — what improves one degrades the other. Everything else in this chapter is a technique for surviving that single trade. Name it out loud and spend your time here.</p>
+</div>
+
+<h3>Why the obvious batching is a disaster</h3>
+
+<p><strong>Static batching</strong> is what you write first: collect 32 requests, run them together, return 32 responses, repeat. It has a fatal shape here. Generations differ wildly in length — one user wants yes/no, another wants an essay — and the batch can't return <em>anything</em> until the longest finishes. A 20-token answer sits completed but unreturned while a 2,000-token answer grinds on and its neighbours' slots compute padding. That's the convoy problem, and at realistic length distributions it wastes most of your fleet.</p>
+
+<p><strong>Continuous batching</strong> (in-flight batching; introduced as iteration-level scheduling in the Orca paper, OSDI 2022) fixes it with one idea: <em>the scheduling unit is one decode step, not one request.</em> Between every step the scheduler runs — finished sequences leave and free their KV, waiting requests join. The batch becomes a rolling membership instead of a cohort.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Timeline comparison: static batching leaves slots idle until the longest request finishes, continuous batching refills slots immediately">
+  <text class="dg-txt-s" x="10" y="26">Static batching — the convoy</text>
+  <text class="dg-txt-s" x="10" y="62">R1</text>
+  <rect class="dg-node" x="70" y="48" width="120" height="18" rx="4"/>
+  <rect class="dg-bad" x="190" y="48" width="350" height="18" rx="4" fill="none"/>
+  <text class="dg-txt-s" x="10" y="88">R2</text>
+  <rect class="dg-node" x="70" y="74" width="220" height="18" rx="4"/>
+  <rect class="dg-bad" x="290" y="74" width="250" height="18" rx="4" fill="none"/>
+  <text class="dg-txt-s" x="10" y="114">R3</text>
+  <rect class="dg-node" x="70" y="100" width="300" height="18" rx="4"/>
+  <rect class="dg-bad" x="370" y="100" width="170" height="18" rx="4" fill="none"/>
+  <text class="dg-txt-s" x="10" y="140">R4</text>
+  <rect class="dg-node" x="70" y="126" width="470" height="18" rx="4"/>
+  <line class="dg-edge" x1="540" y1="42" x2="540" y2="150"/>
+  <text class="dg-txt-s" x="548" y="100">next batch</text>
+  <text class="dg-txt-s" x="70" y="170">Red = a paid GPU slot computing padding.</text>
+  <text class="dg-txt-s" x="10" y="204">Continuous batching — slots refill every step</text>
+  <text class="dg-txt-s" x="10" y="240">slot 1</text>
+  <rect class="dg-node" x="70" y="226" width="120" height="18" rx="4"/>
+  <rect class="dg-node-alt" x="192" y="226" width="200" height="18" rx="4"/>
+  <rect class="dg-node" x="394" y="226" width="266" height="18" rx="4"/>
+  <text class="dg-txt-s" x="10" y="266">slot 2</text>
+  <rect class="dg-node" x="70" y="252" width="220" height="18" rx="4"/>
+  <rect class="dg-node-alt" x="292" y="252" width="180" height="18" rx="4"/>
+  <rect class="dg-node" x="474" y="252" width="186" height="18" rx="4"/>
+  <text class="dg-txt-s" x="10" y="292">slot 3</text>
+  <rect class="dg-node" x="70" y="278" width="300" height="18" rx="4"/>
+  <rect class="dg-node-alt" x="372" y="278" width="288" height="18" rx="4"/>
+  <text class="dg-txt-s" x="10" y="318">slot 4</text>
+  <rect class="dg-node" x="70" y="304" width="470" height="18" rx="4"/>
+  <rect class="dg-node-alt" x="542" y="304" width="118" height="18" rx="4"/>
+</svg>
+<figcaption>Same requests, same hardware. The only change: scheduling happens between decode steps instead of between batches.</figcaption>
+</figure>
+
+<h3>The memory problem that creates</h3>
+
+<p>Rolling membership needs rolling memory. The old approach reserved, per sequence, one contiguous chunk sized to its <em>maximum</em> possible length. Ask for <code>max_tokens=4096</code> and generate 200? You reserved 1.3 GB and used 65 MB — times every request — and the gaps left behind are the wrong sizes for new arrivals. Classic external fragmentation.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Operating systems solved this in the 1960s. A program doesn't get one contiguous slab of RAM sized to its worst case; it gets fixed-size <strong>pages</strong> scattered anywhere in physical memory, tied together by a <strong>page table</strong> mapping "the program's page 7" to "physical frame 913". Nothing is contiguous, nothing is reserved in advance, and two programs can share a page by pointing at the same frame. <strong>PagedAttention</strong> is exactly this for KV cache: fixed-size blocks (say 16 tokens), a per-sequence block table, blocks allocated one at a time as tokens appear. Waste is bounded by one partly-filled block per sequence.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Paged KV cache: logical blocks per sequence mapped through a block table to scattered physical blocks, with a shared prefix">
+  <text class="dg-txt-s" x="20" y="28">Fixed-size KV blocks (16 tokens each)</text>
+  <text class="dg-txt-s" x="20" y="62">Seq A</text>
+  <rect class="dg-good" x="70" y="48" width="46" height="30" rx="4" fill="none"/>
+  <text class="dg-txt-s" x="84" y="68">b0</text>
+  <rect class="dg-good" x="122" y="48" width="46" height="30" rx="4" fill="none"/>
+  <text class="dg-txt-s" x="136" y="68">b1</text>
+  <rect class="dg-node" x="174" y="48" width="46" height="30" rx="4"/>
+  <text class="dg-txt-s" x="188" y="68">b2</text>
+  <rect class="dg-node" x="226" y="48" width="46" height="30" rx="4"/>
+  <text class="dg-txt-s" x="240" y="68">b3</text>
+  <text class="dg-txt-s" x="20" y="122">Seq B</text>
+  <rect class="dg-good" x="70" y="108" width="46" height="30" rx="4" fill="none"/>
+  <text class="dg-txt-s" x="84" y="128">b0</text>
+  <rect class="dg-good" x="122" y="108" width="46" height="30" rx="4" fill="none"/>
+  <text class="dg-txt-s" x="136" y="128">b1</text>
+  <rect class="dg-node" x="174" y="108" width="46" height="30" rx="4"/>
+  <text class="dg-txt-s" x="188" y="128">b2</text>
+  <line class="dg-edge" x1="276" y1="63" x2="308" y2="80" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="226" y1="123" x2="308" y2="110" marker-end="url(#arrow)"/>
+  <rect class="dg-node-alt" x="310" y="60" width="120" height="80" rx="8"/>
+  <text class="dg-txt" x="322" y="88">Block table</text>
+  <text class="dg-txt-s" x="322" y="108">logical block</text>
+  <text class="dg-txt-s" x="322" y="126">→ physical block</text>
+  <line class="dg-edge" x1="430" y1="100" x2="470" y2="100" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="474" y="34" width="230" height="146" rx="8"/>
+  <text class="dg-txt-s" x="486" y="52">GPU memory — any order</text>
+  <rect class="dg-node" x="490" y="62" width="46" height="30" rx="4"/>
+  <rect class="dg-good" x="546" y="62" width="46" height="30" rx="4" fill="none"/>
+  <rect class="dg-node" x="602" y="62" width="46" height="30" rx="4"/>
+  <rect class="dg-node" x="490" y="100" width="46" height="30" rx="4"/>
+  <rect class="dg-node" x="546" y="100" width="46" height="30" rx="4"/>
+  <rect class="dg-good" x="602" y="100" width="46" height="30" rx="4" fill="none"/>
+  <rect class="dg-node" x="490" y="138" width="46" height="30" rx="4"/>
+  <rect class="dg-node" x="546" y="138" width="46" height="30" rx="4"/>
+  <rect class="dg-node" x="602" y="138" width="46" height="30" rx="4"/>
+  <text class="dg-txt-s" x="20" y="212">Green blocks are a shared prefix — the same system prompt in both chats, stored once.</text>
+  <text class="dg-txt-s" x="20" y="238">No contiguous reservation, no worst-case sizing: waste is one partial block per sequence.</text>
+  <text class="dg-txt-s" x="20" y="264">Same machinery as OS virtual memory — pages, a page table, sharing by reference count.</text>
+</svg>
+<figcaption>Virtual memory, rebuilt for attention. Sharing falls out for free: identical prefixes point at the same physical blocks.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — vLLM and PagedAttention, 2023</div>
+<p>In 2023 a Berkeley group (Kwon et al.) measured what was actually happening to GPU memory in production LLM servers and found something embarrassing: existing systems were <strong>wasting 60–80% of KV cache memory</strong> to fragmentation and over-reservation. Not on the model, not on compute — on empty space held "just in case" a sequence ran to its maximum length. They built vLLM around PagedAttention, and their SOSP 2023 paper reports memory waste falling to <strong>under 4%</strong> and throughput improving <strong>2–4× at the same latency</strong> versus the then state-of-the-art FasterTransformer and Orca. The launch benchmarks were louder still: <strong>14–24× the throughput of stock HuggingFace Transformers</strong>, and up to 3.5× HuggingFace's Text Generation Inference. The lesson is a systems lesson, not an ML one — the bottleneck was never the math, it was an allocator making a bad assumption. And once blocks are shared by reference count, sequences with an identical prefix share physical memory for free, which is the feature deep dive 2 is built on.</p>
+</div>
+
+<h3>Admission control: the OOM you must make impossible</h3>
+
+<p>The scheduler's contract in one sentence: <strong>never begin a generation whose memory you cannot finish.</strong> Before admitting, reserve KV blocks for the prompt plus a forecast of the output. No budget, no admission — the request waits with an honest queue position, or gets a 429 with <code>Retry-After</code>. Never an accepted request that dies at token 300.</p>
+
+<p>Why so hard-line? GPU out-of-memory is not a per-request failure. The allocation fails inside the model process, and that process is serving the whole batch — one bad admission kills 170 live conversations. Same stance as p3c14: decide the failure direction before 3am. Reject cleanly at the door rather than fail mid-answer.</p>
+
+<p>But pure reservation is too conservative, since <code>max_tokens</code> is an upper bound most requests never approach. So I <strong>overcommit deliberately</strong>: admit on a forecast (a running percentile of real output lengths, not the declared max), hold a reserve pool, and accept that the bet occasionally loses. When it does, <strong>preempt</strong> — and how is a real decision:</p>
+
+<ul>
+<li><strong>Swap out:</strong> copy the victim's KV to host RAM over PCIe, restore later. A 2.6 GB sequence is on the order of 100 ms each way and competes for the bus. Wins for long sequences, where re-prefilling costs more.</li>
+<li><strong>Evict and recompute:</strong> throw the KV away, re-run prefill on resume. At the 25,000 prompt-tokens/second a node prefills, re-running a 1,500-token prompt is ~60 ms of compute and no PCIe traffic at all.</li>
+</ul>
+
+<p><strong>Commitment:</strong> recompute below ~16K tokens (the overwhelming majority), swap above it. Victim: the most recently admitted, lowest-priority request — least sunk cost — with a cap on preemptions per request so nothing starves. This is partly what the batch tier is <em>for</em>: batch-class requests are freely preemptible, which lets me hold headroom for interactive traffic without paying for idle GPUs. <strong>The cheap tier is how you afford the fast tier's latency budget.</strong></p>
+
+<h2>Deep dive 2: prefill and decode fighting over one GPU</h2>
+
+<p>Here's the most confusing page in this system. Throughput is flat and healthy. ITL p99 has doubled. Nothing deployed. What happened?</p>
+
+<p>Someone sent a 100K-token prompt. Prefilling it takes seconds of solid compute, and during those seconds no decode steps run — so all 170 people mid-sentence stall. One request, a hundred and seventy victims. It's p2c06's hot partition in new clothes: one unit of work costing 100× the median, landing on shared capacity.</p>
+
+<ul>
+<li><strong>Chunked prefill</strong> (committing). Split that prompt into 2K-token chunks and interleave them with decode steps. The worst stall anyone feels is one chunk — tens of milliseconds. Cost: chunked prefill is slightly less efficient, and the long request's own TTFT gets worse. Right direction: one user waits longer so 170 don't stutter.</li>
+<li><strong>Separate the classes</strong> (committing). Long-prompt and batch traffic get their own node pool with their own SLOs. Mixed workloads on shared nodes are how you get latency you can't explain.</li>
+<li><strong>Prefill/decode disaggregation</strong> (named, deferred). At larger scale, prefill runs on one pool and decode on another, shipping KV between them. Genuinely the right endgame — each pool sized, batched and hardware-matched independently — but it means moving gigabytes of KV per request across the network. I'd call it the next architectural step, not day one.</li>
+</ul>
+
+<h3>Prefix-cache-aware routing — the cost lever hiding in the router</h3>
+
+<p>Back to the estimate: prefill is half the bill, and multi-turn chat resends the whole conversation every turn. Turn 6 re-prefills turns 1–5 that we computed ten seconds ago. With paged KV those blocks may still be resident, and blocks holding identical tokens are byte-identical — so reuse them. Hash the prompt block by block, keep a prefix cache from block hash to physical block, and on a hit skip prefill for the matched prefix entirely. A sixth-turn message sharing 80% of its prompt costs 20% of the prefill: the difference between a 900 ms TTFT and a 200 ms one, and roughly a third off the fleet.</p>
+
+<p>The catch is routing. That cache lives in <em>one node's</em> memory, and least-loaded routing sends turn 6 to whichever node is quietest, throwing the cache away. So the router must be <strong>prefix-aware</strong>: hash the conversation prefix, route consistently to the node holding it. This is p1c05's sticky-routing trade-off inverted — there stickiness was a liability that ruined even load distribution; here it's the point, and even distribution is what we give up. Temper it with a <strong>load-aware override</strong>: if the target node's KV occupancy is above ~85% or its queue is long, route elsewhere and eat the prefill. Affinity is a preference, never an obligation.</p>
+
+<p>One rule that is not optional: <strong>key the prefix cache by tenant.</strong> Cross-tenant block sharing leaks — a suspiciously fast TTFT tells you someone else recently sent that exact prefix, which is a real side channel for anything sensitive in a system prompt.</p>
+
+<h3>Three more levers, briefly and honestly</h3>
+
+<p><strong>Speculative decoding.</strong> A small draft model guesses the next 4–5 tokens; the big model verifies all of them in a <em>single</em> forward pass, because verification is parallel like prefill. Every guess it agrees with is free, the first disagreement discards the rest, and done properly the output distribution is identical to the big model's. Pure latency win — at low batch. At high batch the math units are already busy, so speculation spends compute you were using productively and can <em>reduce</em> throughput. Commitment: on for the low-latency tier and off-peak troughs, off above a batch-size threshold. A dial, not a setting.</p>
+
+<p><strong>Quantization.</strong> Eight-bit weights halve both the memory they occupy (140 GB → 70 GB, freeing 70 GB for KV) and the bandwidth decode must read, so decode roughly doubles in speed; four-bit doubles that again at a bigger quality cost. The underrated one: <strong>quantize the KV cache itself</strong> — 8-bit KV halves 320 KB/token and doubles concurrency outright. Stance per tier: 8-bit weights and 8-bit KV by default, full 16-bit for a "high-fidelity" tier customers opt into, 4-bit only for draft models. Every precision change ships behind an eval gate, never on vibes — this is the one knob that degrades the product invisibly.</p>
+
+<p><strong>When the model doesn't fit one GPU.</strong> <em>Tensor parallelism</em> splits every layer's matrices across GPUs so they work on each token together, but at every layer all eight GPUs must stop and sum their partial results together (an <dfn>all-reduce</dfn>) before anyone can continue — so it only makes sense over a fast intra-node link like NVLink. It keeps single-request latency low: TP=8 within a node. <em>Pipeline parallelism</em> splits by layers across machines (box 1 runs layers 1–40, box 2 runs 41–80). Communication is just boundary activations, so ordinary networking survives it, but it creates <strong>bubbles</strong>: stage 1 idles while stage 2 works, unless many micro-batches are in flight. Better throughput, worse latency. Commitment: tensor-parallel inside a node, replicate whole nodes, reach for pipeline parallel only if the model stops fitting in one node.</p>
+
+<h2>Deep dive 3: streaming, safety, and fairness on the way out</h2>
+
+<p><strong>Streaming.</strong> Server-sent events over one long-lived HTTP response — simple, one-directional, proxy-friendly, reconnects natively; WebSockets buy bidirectionality we don't need. The interesting failure is a <em>slow client</em>: someone on a train whose socket drains at a trickle. If the GPU slot waits on that socket, one bad connection holds 2.6 GB of KV hostage. So decouple — the model writes into a small bounded per-request buffer and the HTTP layer drains it independently, so generation runs to completion at full speed regardless. If the buffer fills we stop <em>sending</em>, not generating: finish, persist, let the client resume by request id. That's p2c07's backpressure at the right layer — never let the expensive stage block on the cheap one.</p>
+
+<p><strong>Retries, honestly.</strong> If a node dies at token 200, that KV is gone and there is no resume — the state was ephemeral by construction. Idempotency here means <em>re-running produces one answer and one bill</em>, not that we continue mid-sentence. Every request carries a request id, the gateway dedups on it, and a retry either attaches to the in-flight generation, replays a persisted completed stream, or restarts a dead one — usage written once, keyed by that id (p2c02, same double-charge discipline as p3c14). Restarting is non-deterministic at nonzero temperature, so surface it as a regeneration rather than pretending nothing happened.</p>
+
+<p><strong>Safety in the path.</strong> Two checkpoints with latency budgets. The prompt classifier runs before prefill — small model, tens of milliseconds, charged straight to TTFT. Output moderation is harder because output arrives progressively: checking only at the end defeats streaming, checking every token is too expensive. So check in windows, every ~50 tokens or at sentence boundaries, over the accumulated text.</p>
+
+<p>That leaves a genuine product choice, and I'd commit rather than hedge. Either <strong>hold back</strong> (emit only text that already passed a check, adding delay to the visible stream) or <strong>emit then revoke</strong> (send an explicit event telling the client to remove what it displayed). Holding back costs perceived speed; revoking means a user occasionally watches text vanish, which feels worse — worse still if they screenshotted it. Commitment: hold back a small window for the highest-risk categories, revoke-and-explain for the rest, with a first-class <code>revoked</code> event designed in from day one, because retrofitting that into a client is miserable. Two things people forget: the classifiers are <em>models too</em>, with their own GPUs and capacity plan, and the fail-open/fail-closed rule must be pre-decided — closed for the highest-risk categories, open with loud logging for the rest, because globally fail-closed turns a classifier hiccup into a total outage.</p>
+
+<p><strong>Fairness and rate limits.</strong> Requests-per-minute is the wrong unit when one request can be 50 tokens or 200,000. Limit on <strong>tokens per minute</strong>, counting output several times heavier than input because decode is the scarce resource; charge the estimate at admission, reconcile on completion. Add a <strong>per-tenant concurrency cap</strong>, because concurrency is what consumes KV — a tenant with a modest token budget opening 500 simultaneous streams still eats the node. Enforcement is p3c10's machinery: local token buckets per gateway with async reconciliation, accepting small overshoot rather than a Redis round-trip in front of every request.</p>
+
+<p><strong>Semantic caching, and why I mostly don't.</strong> An exact-match cache keyed on a hash of (model, prompt, sampling params) is trivial and safe, and in chat it almost never hits — real conversations are unique. It earns its keep for programmatic traffic: classification calls, fixed product prompts, temperature-zero requests. Fuzzy semantic caching — embed the prompt, serve a near neighbour's answer — I decline for the general product, with the reason on record: two prompts can be 0.98 cosine-similar and need opposite answers ("is X safe for a child" versus "is X safe for a child with a nut allergy"). A wrong fuzzy hit is a silent correctness bug with no error to alert on, and the prefix cache is where the real reuse lives anyway.</p>
+
+<h2>Failure modes and operations</h2>
+
+<p>What goes on the wall, unprompted:</p>
+
+<ul>
+<li><strong>TTFT p95/p99 split by class <em>and by prompt-length bucket</em></strong> — aggregate TTFT is meaningless when prompt lengths span 100×, and a shift in traffic mix looks identical to a regression.</li>
+<li><strong>ITL p99</strong> — the interference detector. A doubling with flat throughput means a long prefill is landing un-chunked, or the batch grew past what the SLO tolerates.</li>
+<li><strong>Output tokens/second per GPU</strong> — the dollar metric. And a warning: <em>do not use GPU utilization percent.</em> During memory-bound decode it reads near 100% while actual arithmetic utilization is a few percent; it reports "a kernel was running," not "useful work happened."</li>
+<li><strong>KV cache occupancy</strong> — the honest "how full is this node" number. Route away above ~85%.</li>
+<li><strong>Queue wait, admission rejections, preemption rate</strong> per class and tenant — the fairness audit. Preemptions should be low and <em>non-zero</em>; exactly zero means you're too conservative and leaving memory unsold.</li>
+<li><strong>Prefix cache hit rate</strong> — a silent drop after a routing change is a silent 30% cost increase.</li>
+<li><strong>Classifier latency and trip rate</strong>, with an error budget per class (p2c08).</li>
+</ul>
+
+<p><strong>Node death mid-stream</strong> is frequent at 500 GPUs, and one dead GPU takes its whole tensor-parallel group with it. The answer isn't prevention, it's a clean client contract: request ids, persisted partial output, reconnect to resume or regenerate, billed once. Blast radius is the batch on that node — another argument for batching at the SLO-optimal point rather than the maximum.</p>
+
+<p><strong>Autoscaling, honestly.</strong> A new node must pull a container, fetch 140 GB of weights, load them into GPU memory and warm up kernels — <strong>minutes</strong>. Reactive autoscaling on latency is useless: the node arrives after the spike ends. So: predictive scaling on the daily curve (chat traffic rises and falls with waking hours in each region, which makes it unusually easy to forecast), a <strong>warm pool</strong> of pre-loaded idle nodes as insurance (5% of a $9M fleet is cheap next to a capacity incident), node-local NVMe weight caching so restarts don't re-download, and for unforecast spikes <strong>degrade rather than scale</strong>: pause the batch tier, tighten default <code>max_tokens</code>, lengthen the queue, shed with honest 429s.</p>
+
+<p><strong>At 10x?</strong> Prefill compute breaks first, because long-context usage grows faster than user count — prompts lengthen as people trust the product. KV memory second, as those longer contexts collapse per-node concurrency. Decode bandwidth last. So: prefix caching harder, 8-bit KV, split prefill and decode into separate pools, and the biggest lever of all — <strong>route by difficulty</strong>, sending the easy 60–70% to a much smaller model and reserving the 70B for what needs it. That last one is a product decision as much as an infrastructure one, and saying so is part of the answer.</p>
+
+<div class="box story"><div class="box-tag">War story — Anthropic's three overlapping bugs, August–September 2025</div>
+<p>Anthropic published an unusually detailed postmortem on three bugs that degraded Claude's output quality in late 2025 — and every one was a serving-infrastructure bug, not a model bug. The first matters most here: a <strong>context-window routing error</strong> sent short-context requests to servers configured for the 1M-token context window. Because routing was <strong>sticky</strong>, a request that landed on the wrong server tended to keep landing there — follow-up turns in the same conversation were likely served by the same incorrect server. It began at 0.8% of Sonnet 4 requests and grew: at the worst hour on August 31, <strong>16% of Sonnet 4 requests</strong> were affected, and roughly <strong>30% of Claude Code users</strong> who made a request in that window had at least one message land on the wrong server type. The second was a TPU misconfiguration where a runtime performance optimization assigned high probability to tokens that should never have been chosen — English prompts answered with Thai or Chinese characters, or code with obvious syntax errors. The third was a latent <strong>XLA:TPU compiler miscompilation</strong> of the approximate top-k operation used to pick high-probability tokens, triggered by an unrelated deployment. Three lessons for your design. A heterogeneous fleet — nodes configured for different context sizes — is a routing <em>correctness</em> problem, not just a capacity problem, and the sticky routing you added for prefix-cache hits will faithfully pin users to a broken node. Optimizations in the sampling path can change outputs, so they need output-quality monitoring, not just latency monitoring. And "the answers feel worse" is invisible to every dashboard in the list above unless you deliberately build quality telemetry beside the latency telemetry.</p>
+</div>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>They'll let you draw boxes for five minutes, then aim everything at memory and scheduling. Expect close to these words:</p>
+<ul>
+<li>"Walk me through the memory on one node. Where does all 640 GB go?" — they want weights, KV and activations with arithmetic, plus the sentence "KV is the only elastic part."</li>
+<li>"Why not just increase the batch size until the GPU is saturated?" — testing throughput versus goodput, and whether you reach for the KV ceiling and the ITL SLO as the two limits.</li>
+<li>"A user sends a 200K-token prompt. What happens to everyone else on that node?" — the interference question: chunked prefill, class separation, and the honest admission that this is a hot-partition problem.</li>
+<li>"You're out of KV memory and a high-priority request arrives. What do you do?" — swap versus recompute, which victim, what the user sees. Committing to a rule <em>is</em> the answer.</li>
+<li>"How do you rate limit this — requests per minute?" — the wrong unit, offered deliberately. Tokens per minute plus a concurrency cap.</li>
+<li>"ITL p99 doubled overnight, throughput unchanged, nothing shipped. Debug it." — traffic mix, un-chunked long prefills, a prefix-cache hit-rate drop after a routing change.</li>
+<li>"The safety classifier fleet is down. Do you keep serving?" — a pre-decided rule with categories, not an improvised ethics discussion.</li>
+</ul>
+</div>
+
+<h2>The trade-offs I committed to</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Chosen over</th><th>What it costs me</th></tr></thead>
+<tbody>
+<tr><td>Continuous batching with paged KV blocks</td><td>Static batching, contiguous reserved KV</td><td>A far more complex scheduler and allocator, per-step scheduling overhead, block tables to keep correct under preemption</td></tr>
+<tr><td>Admission control on a KV budget, with deliberate overcommit</td><td>Accept everything and hope</td><td>Visible queueing and 429s at peak instead of silent degradation; forecast errors force preemptions</td></tr>
+<tr><td>Recompute on preempt below 16K, swap above</td><td>Never preempt; or always swap</td><td>Preempted users feel a hiccup, and recompute burns that request's prefill twice</td></tr>
+<tr><td>Chunked prefill</td><td>Prefill-to-completion, first come first served</td><td>Long prompts get worse TTFT and prefill runs slightly less efficiently — paid so 170 streams don't stall</td></tr>
+<tr><td>Prefix-aware sticky routing, tenant-scoped</td><td>Pure least-loaded routing</td><td>Uneven node load, hot replicas, and a correctness hazard: a bad node stays bad for the users pinned to it</td></tr>
+<tr><td>8-bit weights and 8-bit KV as the default tier</td><td>16-bit everywhere</td><td>A small, real quality cost only an eval suite can see — the one knob that degrades the product invisibly</td></tr>
+<tr><td>Tensor parallel in-node, replicate nodes</td><td>Pipeline parallel across nodes</td><td>The model must fit one node, and capacity grows in 8-GPU units</td></tr>
+<tr><td>Predictive scaling plus a warm pool</td><td>Reactive autoscaling on latency</td><td>Paying for idle GPUs, and unforecast spikes handled by shedding rather than growing</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c23-f1">
+<p class="fey-prompt">A junior asks: "It's just a model behind an API — why can't we scale it like our normal web service?" Explain in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A normal web request is stateless and takes milliseconds; an LLM request holds a growing chunk of GPU memory for twenty seconds while it writes one token at a time. That memory is the KV cache — the model's saved attention state — and it grows with every token, so a long conversation holds gigabytes and one node only fits a couple of hundred conversations. Generating a single token means reading the entire model's weights out of GPU memory, which is so wasteful for one user that the only economical approach is serving many users in the same batch, sharing that one read. So "load balancer plus autoscaler" doesn't fit: between every token step, a scheduler has to decide who is in the batch and whether there is enough memory to let anyone new in. And you can't scale out of a spike, because starting a node means loading 140 GB of weights, which takes minutes — so you forecast, keep warm spares, and degrade gracefully instead.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Now add a 1M-token context tier — customers want to paste whole codebases. Redo the arithmetic and say what actually has to change.</p></div>
+<details><summary>Answer</summary><p>KV for one 1M-token request at 320 KB/token is <strong>320 GB</strong> — more than double the model's weights, half a node, for one user; shared-node concurrency goes to roughly one. Prefill is worse: 2 × 70e9 × 1e6 ≈ 1.4 × 10^17 FLOPs, tens of seconds of node compute, so TTFT is measured in tens of seconds and the product must show progress or go async. Changes: a <strong>dedicated node pool</strong> with its own SLOs and pricing (never mix these with interactive chat), 8-bit or 4-bit KV to cut that 320 GB, offloading cold blocks to host memory or NVMe with prefetch, and aggressive prefix caching because these users resend the same codebase every turn. And note the operational hazard from the Anthropic postmortem: once the fleet is heterogeneous by context size, misrouting between pools becomes a <em>correctness</em> bug — route on declared context class and alarm on mismatches.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>10x the traffic: 4,200 requests/second at peak. Name what breaks first, in order, and what you do about each.</p></div>
+<details><summary>Answer</summary><p>(1) <strong>Prefill compute</strong> — 6.3M prompt tokens/second needs ~250 nodes for prefill alone, and it's the half of the bill you can attack without buying hardware: raise prefix-cache hit rate, add cross-node prefix lookup, and split prefill and decode into separately-sized pools so you stop over-provisioning decode memory to buy prefill FLOPs. (2) <strong>KV memory</strong> — quantize KV to 8-bit for an instant 2× concurrency, tighten default <code>max_tokens</code> so forecasts reserve less, grow the preemptible batch tier. (3) <strong>The router</strong> becomes its own scale problem: prefix-hash tables plus per-node occupancy at 4,200 rps want a sharded, gossip-updated view rather than one central scheduler. (4) The honest answer underneath: at 10× the real move is <strong>model tiering</strong> — route the easy majority to a small model, keep the 70B for what needs it. Bigger than any scheduling change, and I'd say so before being asked.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flips: a regulated enterprise customer demands their requests never share a batch with anyone else's. Quantify the cost and propose something you'd actually ship.</p></div>
+<details><summary>Answer</summary><p>Quantify first: batching is where the economics live, so a batch of one runs at roughly 1/170th the token throughput of a shared node — two orders of magnitude more per token. Then get precise about what they actually fear. Sequences in a shared batch don't leak into each other; attention is computed per sequence, and batching is a matrix-shape optimisation, not shared state. The genuine cross-tenant surface is the <strong>prefix cache</strong>, where shared blocks and TTFT timing can reveal that someone else sent the same prefix — which is why ours is keyed by tenant. So the shippable middle: dedicated <em>nodes</em> (not dedicated batches) on a minimum-commitment contract, so their own traffic batches together and they keep ~90% of the efficiency; tenant-scoped prefix cache and per-tenant KV accounting; a documented isolation model. Committing to the mechanism beats agreeing to the demand.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>"Cut serving cost 40%. You may not change the model or degrade the interactive SLO." Where do you go?</p></div>
+<details><summary>Answer</summary><p>Ranked by win per unit of risk. (1) <strong>Prefix caching plus prefix-aware routing</strong> — prefill is half the compute and chat resends most of its prompt, so a good hit rate takes a large bite with zero quality change. (2) <strong>8-bit KV cache</strong> — doubles concurrency per node, attacking the binding constraint, with far less quality impact than weight quantization. (3) <strong>Push async traffic into the batch tier</strong>, on preemptible capacity, since it is preemptible by design already. (4) <strong>Right-size defaults</strong>: <code>max_tokens</code> of 4,096 when the p95 answer is 400 tokens makes every admission reserve ten times what it needs. (5) <strong>Speculative decoding off-peak</strong>, when batches are small and the FLOPs really are free. What I would <em>not</em> do is raise batch size past the ITL SLO — that trades goodput for a throughput number while looking good on a dashboard.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>An LLM request is two workloads: prefill is a parallel, compute-bound pass over the whole prompt; decode is a sequential, memory-bandwidth-bound loop that re-reads every weight to emit one token — which is why batching is the business model, amortising that one enormous read across many users at once.</li>
+<li>KV cache is the scarce resource at roughly 320 KB per token for a 70B-class model with grouped-query attention, so an 8K chat costs 2.6 GB and a 100K chat costs 32 GB — context length is a concurrency multiplier in reverse.</li>
+<li>Static batching convoys behind its longest generation; continuous batching schedules between decode steps, and PagedAttention manages KV like OS virtual memory — fixed blocks, a block table, prefix sharing for free.</li>
+<li>Admission control on a KV budget makes mid-generation OOM structurally impossible; overcommit deliberately, then preempt by recomputing short sequences and swapping long ones, with the batch tier as your preemptible shock absorber.</li>
+<li>TTFT and tokens/sec pull against each other, so chunked prefill, class separation, and prefix-aware sticky routing are how you buy latency for the many at a named cost to the few.</li>
+<li>Rate limit in tokens per minute plus a concurrency cap, never requests per minute, because one request can be a thousand times bigger than its neighbour.</li>
+<li>Monitor TTFT bucketed by prompt length, ITL p99, tokens/sec per GPU and KV occupancy — never GPU utilization percent, which reads near 100% during memory-bound decode while the chip does almost no arithmetic.</li>
+<li>You cannot autoscale out of a spike when a cold node takes minutes to load 140 GB of weights, so forecast the daily curve, keep a warm pool, and degrade the cheap tier first.</li>
+</ul>
+</div>

@@ -2,7 +2,7 @@
 
 <p>Now the interview version. The interviewer says: <em>"Design Ticketmaster."</em> Most candidates hear "huge traffic" and reach for the scaling toolbox — autoscaling groups, sharding, CDNs. Twenty minutes later they've built a system that can serve the seat map to a hundred million people and still sells seat 14B twice. The interviewer was never worried about traffic. Traffic is the decoy.</p>
 
-<p>Selling one seat twice isn't a latency blip. It's two humans at a stadium gate holding tickets for the same chair — refunds, press coverage, and in one real case we'll get to, a government agency calling your architecture "a very elegant way to oversell." This walkthrough is built around the deep dive that decides your level: letting thousands race for the same database row and guaranteeing exactly one winner.</p>
+<p>Selling one seat twice isn't a latency blip. It's two humans at a stadium gate holding tickets for the same chair — refunds, press coverage, and in one real case we'll get to, a national consumer-protection agency ruling that your system oversold a stadium. This walkthrough is built around the deep dive that decides your level: letting thousands race for the same database row and guaranteeing exactly one winner.</p>
 
 <h2>Requirements: pin the invariant first</h2>
 
@@ -55,7 +55,7 @@ DELETE /holds/{hold_id}            (user changed their mind)</code></pre>
       hold_expires_at,
       order_id)</code></pre>
 
-<p>Every hard problem in this chapter is a fight over who gets to flip <code>status</code> on one of these rows. The hold endpoint returns an explicit <code>expires_at</code> so the client can show a countdown — honest UX comes free when the data model is honest.</p>
+<p>Every hard problem ahead is a fight over who gets to flip <code>status</code> on one of these rows. The hold endpoint returns an explicit <code>expires_at</code> so the client can show a countdown — honest UX comes free when the data model is honest.</p>
 
 <h2>High-level design: the complete machine</h2>
 
@@ -89,7 +89,7 @@ DELETE /holds/{hold_id}            (user changed their mind)</code></pre>
   <line class="dg-edge" x1="440" y1="160" x2="500" y2="212" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="385" y1="172" x2="385" y2="250" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="330" y1="272" x2="270" y2="272" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="292" y="196">saga</text>
+  <text class="dg-txt-s" x="392" y="216">saga</text>
   <text class="dg-txt-s" x="452" y="120">reads</text>
   <text class="dg-txt-s" x="448" y="188">writes</text>
 </svg>
@@ -126,9 +126,9 @@ if row.status == 'free':
 
 <figure class="diagram">
 <svg viewBox="0 0 720 290" role="img" aria-label="Two requests both read seat as free, then both write sold, producing a double sell">
-  <line class="dg-edge" x1="140" y1="50" x2="140" y2="240"/>
-  <line class="dg-edge" x1="360" y1="50" x2="360" y2="240"/>
-  <line class="dg-edge" x1="580" y1="50" x2="580" y2="240"/>
+  <line class="dg-edge" x1="140" y1="50" x2="140" y2="222"/>
+  <line class="dg-edge" x1="360" y1="50" x2="360" y2="222"/>
+  <line class="dg-edge" x1="580" y1="50" x2="580" y2="222"/>
   <rect class="dg-node" x="90" y="14" width="100" height="30" rx="6"/>
   <text class="dg-txt" x="103" y="34">Request A</text>
   <rect class="dg-node" x="310" y="14" width="100" height="30" rx="6"/>
@@ -211,7 +211,7 @@ WHERE event_id=:e AND seat_id='14B'
 </figure>
 
 <div class="box story"><div class="box-tag">War story — Bad Bunny at Estadio Azteca, December 2022</div>
-<p>On December 9, 2022, Bad Bunny played the 87,000-capacity Estadio Azteca in Mexico City — and hundreds of fans with tickets bought through Ticketmaster Mexico were turned away at the gates, their tickets scanned as invalid or duplicates. Ticketmaster's first explanation: counterfeits. Mexico's consumer-protection agency Profeco investigated and concluded otherwise — the tickets were legitimate and the system had effectively oversold; the agency's chief memorably called it "a very elegant way to oversell." Profeco threatened fines of up to 10% of annual sales; Ticketmaster ended up refunding 2,155 affected customers 100% of the ticket price <em>plus 20% compensation</em> — nearly 18.2 million pesos, about a million US dollars. Notice the shape of the failure: not a crashed website, but duplicate valid-looking tickets for the same physical seats — the invariant this whole chapter defends. And the resolution matched our reconciliation rule: once overselling reaches humans, all you can do is refund with interest and eat the reputational bill. The database guard is cheaper.</p>
+<p>On December 9, 2022, Bad Bunny played the 87,000-capacity Estadio Azteca in Mexico City — and thousands of fans holding tickets bought through Ticketmaster Mexico were turned away at the gates, their tickets scanned as invalid or duplicates. Ticketmaster's first explanation was counterfeits. Mexico's consumer-protection agency Profeco investigated and concluded otherwise: the tickets were genuine, and the system had oversold the venue. Profeco said it could fine Ticketmaster up to 10% of its annual sales in Mexico; Ticketmaster ended up refunding 2,155 affected customers 100% of the ticket price <em>plus 20% compensation</em> — about 18.2 million pesos, roughly a million US dollars. Notice the shape of the failure: not a crashed website, but duplicate valid-looking tickets for the same physical seats — the invariant this whole chapter defends. And the resolution matched our reconciliation rule: once overselling reaches humans, all you can do is refund with interest and eat the reputational bill. The database guard is cheaper.</p>
 </div>
 
 <h2>Deep dive 2: the waiting room — admission control as architecture</h2>
@@ -247,7 +247,7 @@ WHERE event_id=:e AND seat_id='14B'
   <text class="dg-txt" x="220" y="216">Bots out</text>
   <line class="dg-bad" x1="255" y1="142" x2="255" y2="190" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="264" y="172">rate limits + fingerprint</text>
-  <text class="dg-txt-s" x="390" y="60">admission rate is a live dial, tied to store health</text>
+  <text class="dg-txt-s" x="344" y="60">admission rate is a live dial, tied to store health</text>
   <line class="dg-edge" x1="470" y1="66" x2="460" y2="88" marker-end="url(#arrow)"/>
 </svg>
 <figcaption>Admission control. Demand and capacity are decoupled: the store never sees more shoppers than the token bucket releases, no matter how many millions arrive.</figcaption>

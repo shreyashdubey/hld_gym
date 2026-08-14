@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c20",
+  "items": [
+    {
+      "id": "p3c20-q01", "level": 1, "type": "mcq", "tag": "erasure-coding",
+      "q": "In a Reed-Solomon 8+4 scheme, how many of the 12 shards do you need to reconstruct the original data?",
+      "options": [
+        {"t": "Any 8", "correct": true,
+         "why": "Right, and the word 'any' is the magic. Eight unknowns plus any eight independent equations has exactly one solution, so it doesn't matter which four shards you lost."},
+        {"t": "The 8 data shards specifically, since parity can't stand in for them", "correct": false,
+         "why": "That's the common misreading. Data shards are convenient — a read using all 8 needs no decoding — but parity shards substitute for missing data shards freely."},
+        {"t": "All 12, otherwise the decode fails", "correct": false,
+         "why": "If you needed all 12, the parity would buy you nothing. The whole point is surviving the loss of up to m=4 shards."},
+        {"t": "Any 4", "correct": false,
+         "why": "Four is what you can afford to lose, not what you need. You can't reconstruct 8 shards' worth of information from 4 shards' worth of bytes."}
+      ]
+    },
+    {
+      "id": "p3c20-q02", "level": 1, "type": "mcq", "tag": "durability",
+      "q": "'Eleven nines of durability' means:",
+      "options": [
+        {"t": "~99.999999999% of stored objects survive a year", "correct": true,
+         "why": "Yes — AWS's own gloss makes it concrete: store 10 million objects and you'd expect to lose one about every 10,000 years. It's a durability figure, not an uptime figure."},
+        {"t": "The service responds successfully 99.999999999% of the times it is called", "correct": false,
+         "why": "That's a success-rate SLO. A failed request is retryable; a lost object is forever, which is why durability is the higher bar."},
+        {"t": "The service is up 99.999999999% of the time", "correct": false,
+         "why": "That's availability, a completely different (and much lower) number — typically four nines. The two get traded against each other constantly, so never conflate them."},
+        {"t": "Every object is stored with at least 11 copies", "correct": false,
+         "why": "No relation. With 8+4 erasure coding there are 12 shards and only 1.5x total storage — nines come from math and repair speed, not a copy count."}
+      ]
+    },
+    {
+      "id": "p3c20-q03", "level": 1, "type": "mcq", "tag": "two-planes",
+      "q": "What does the metadata plane store that the data plane does not?",
+      "options": [
+        {"t": "Key → manifest: checksums, versions, and where each shard lives", "correct": true,
+         "why": "Exactly. The data plane holds anonymous immutable chunks; the metadata plane holds the only statement of what those chunks mean and which object is current."},
+        {"t": "Nothing much — both planes hold the same data, just indexed differently", "correct": false,
+         "why": "They're deliberately different systems: rows scale with object count, bytes scale with data volume, and they fail in totally different ways."},
+        {"t": "A cached copy of hot object bytes for fast reads", "correct": false,
+         "why": "Caching bytes is a separate concern. Mixing bytes into the index would blow up the one component that must stay small and fast."},
+        {"t": "The erasure-coded parity shards", "correct": false,
+         "why": "Parity shards are just more bytes and live on storage nodes with everything else. The metadata only records where they are."}
+      ]
+    },
+    {
+      "id": "p3c20-q04", "level": 1, "type": "mcq", "tag": "estimation",
+      "q": "Why does an object store have two independent scaling problems rather than one?",
+      "options": [
+        {"t": "Object count drives metadata rows; bytes drive drive count", "correct": true,
+         "why": "The key estimation insight. Swap 4 MB videos for 400 KB thumbnails and bytes stay flat while metadata grows 10x, melting a plane the capacity plan said was fine."},
+        {"t": "Reads and writes scale separately, so each path needs its own capacity plan", "correct": false,
+         "why": "True of most systems and not the special thing here. The read/write split doesn't explain why the index can break while the disks sit idle."},
+        {"t": "Hot and cold data must be counted separately", "correct": false,
+         "why": "Temperature drives tiering and cost, but hot and cold data both consume rows and bytes. Different axis."},
+        {"t": "Because durability and availability have different targets", "correct": false,
+         "why": "A requirements distinction, not a capacity one. It doesn't tell you how many drives or index rows to plan for."}
+      ]
+    },
+    {
+      "id": "p3c20-q05", "level": 1, "type": "mcq", "tag": "write-path",
+      "q": "At what moment does a newly PUT object become visible to other clients?",
+      "options": [
+        {"t": "When its manifest is committed in the metadata plane", "correct": true,
+         "why": "That commit is the linearization point — same discipline as Dropbox's manifest commit. Everything before it is retryable, and nothing before it is observable."},
+        {"t": "As soon as the first shard is written to a storage node", "correct": false,
+         "why": "Shards without a committed manifest are invisible orphans waiting for garbage collection. No index row, no object."},
+        {"t": "When the API server finishes encoding the shards in memory", "correct": false,
+         "why": "Encoding happens on one server. Nothing about it has been recorded anywhere another client could read."},
+        {"t": "After the background scrubber verifies it", "correct": false,
+         "why": "Scrubbing runs on a 30-day cycle. If visibility waited on it, read-after-write would take a month."}
+      ]
+    },
+    {
+      "id": "p3c20-q06", "level": 1, "type": "mcq", "tag": "integrity",
+      "q": "What is background scrubbing for?",
+      "options": [
+        {"t": "Finding silent corruption before a customer's read does", "correct": true,
+         "why": "Right. Bit rot and firmware bugs return wrong bytes without any error. Reading and verifying every shard on a rolling schedule turns invisible rot into an ordinary repair task."},
+        {"t": "Reclaiming space from deleted objects once their manifests are gone", "correct": false,
+         "why": "That's garbage collection, a separate sweep driven by manifest references and a grace period. Scrubbing verifies bytes; GC frees them."},
+        {"t": "Rebalancing shards onto newer drives", "correct": false,
+         "why": "Rebalancing is a placement job. A scrubber only reads and checks — it doesn't move data unless it finds something wrong."},
+        {"t": "Warming caches so reads are faster", "correct": false,
+         "why": "Scrubbing touches everything equally, the opposite of what a cache wants. Its output is a verdict, not a cache entry."}
+      ]
+    },
+    {
+      "id": "p3c20-q07", "level": 1, "type": "mcq", "tag": "list",
+      "q": "Why is LIST expensive in this design?",
+      "options": [
+        {"t": "It's an ordered scan costing what the prefix holds", "correct": true,
+         "why": "Exactly why it's paginated with continuation tokens and throttled harder than GET. Listing a billion-key bucket is a batch job wearing a request's clothing."},
+        {"t": "It needs a distributed transaction so the listing is a consistent snapshot", "correct": false,
+         "why": "No transaction is involved; results are a paginated walk. Range partitioning usually keeps a prefix on one or two shards anyway."},
+        {"t": "It must read object bytes to build the listing", "correct": false,
+         "why": "LIST never touches the data plane — it's pure metadata. That's precisely why the index is stored key-ordered."},
+        {"t": "It has to decode parity shards", "correct": false,
+         "why": "Decoding only happens on degraded reads of object data. Listings never enter the erasure-coding path."}
+      ]
+    },
+    {
+      "id": "p3c20-q08", "level": 1, "type": "mcq", "tag": "repair",
+      "q": "The repair queue is ordered by risk rather than arrival time. What does that mean in practice?",
+      "options": [
+        {"t": "Objects missing 3 shards rebuild before objects missing 1", "correct": true,
+         "why": "The elegant bit. An object one failure from unreadable must never queue behind a million comfortable ones — and that ordering matters most exactly when the queue is longest."},
+        {"t": "Objects belonging to paying customers are rebuilt ahead of free-tier data", "correct": false,
+         "why": "A billing policy, not a durability one. The queue's job is to minimize the chance that anything becomes unrecoverable."},
+        {"t": "Larger objects are repaired before smaller ones", "correct": false,
+         "why": "Size doesn't measure danger. A tiny object missing 3 shards is far closer to death than a huge one missing 1."},
+        {"t": "The oldest damaged objects go first", "correct": false,
+         "why": "That's FIFO with extra steps. Age tells you nothing about how many more failures an object can absorb."}
+      ]
+    },
+    {
+      "id": "p3c20-q09", "level": 1, "type": "mcq", "tag": "deletes",
+      "q": "In a versioned bucket, what does DELETE actually do?",
+      "options": [
+        {"t": "Writes a delete marker; data stays until lifecycle reclaims it", "correct": true,
+         "why": "Correct. Deleting is a metadata write, reclamation is a background sweep, and the tie always breaks toward deleting late — late costs money, early costs data."},
+        {"t": "Marks the object's shards as free for the next PUT to overwrite in place", "correct": false,
+         "why": "Chunks are immutable and never rewritten in place. New writes get new chunks; that immutability is what makes checksums and repair sound."},
+        {"t": "Erases the shards from every storage node immediately", "correct": false,
+         "why": "Synchronous erasure puts expensive, unrecoverable work on the request path. One bad client loop then becomes permanent data loss."},
+        {"t": "Removes the row after all shards confirm deletion", "correct": false,
+         "why": "That inverts the order and couples a fast metadata write to a slow fleet-wide operation. The tombstone lands first; reclamation follows."}
+      ]
+    },
+    {
+      "id": "p3c20-q10", "level": 2, "type": "mcq", "tag": "placement",
+      "q": "You have 3 AZs and propose Reed-Solomon 10+4 (1.4x overhead, tolerates 4 losses). Your requirement says survive a full AZ loss with no read unavailability. What's wrong?",
+      "options": [
+        {"t": "14 shards over 3 AZs puts 5 in one AZ — one more than you tolerate", "correct": true,
+         "why": "Count the shards in your largest failure domain and compare to m. Five exceeds four, so the AZ promise is fiction. This arithmetic quietly rewrites your code parameters."},
+        {"t": "Nothing is wrong — 4 parity shards means any 4 failures are survivable, and an AZ outage is just 4 more failures", "correct": false,
+         "why": "The code tolerates 4 shard losses, but an AZ loss doesn't take a shard — it takes a third of them. Failure domains, not failure counts, decide."},
+        {"t": "10+4 is too slow to decode at AZ scale", "correct": false,
+         "why": "Decode cost rises during degraded reads, but that's capacity, not correctness. Here the objects are genuinely unreadable, not merely slower."},
+        {"t": "10+4 uses more storage than 8+4", "correct": false,
+         "why": "Backwards — 1.4x is cheaper than 1.5x. That's exactly why it's tempting, and exactly why you run the AZ arithmetic before committing."}
+      ]
+    },
+    {
+      "id": "p3c20-q11", "level": 2, "type": "mcq", "tag": "ack-rule",
+      "q": "Your PUT path encodes into 12 shards. A teammate proposes acking the client as soon as 8 shards are durable, to cut tail latency. Your response?",
+      "options": [
+        {"t": "Reject it — at exactly k there is zero redundancy", "correct": true,
+         "why": "The rule to commit to: never ack at exactly k, because one more drive failure then destroys data the customer was told was safe. Acking at 10 keeps two shards of slack while still dropping the two slowest nodes."},
+        {"t": "Accept it — the repair queue will restore the missing shards within minutes anyway", "correct": false,
+         "why": "Minutes of zero redundancy, on every write, at hundreds of thousands of writes per second. Multiply that exposure by your write rate before agreeing."},
+        {"t": "Accept it, but only for objects under 1 MB", "correct": false,
+         "why": "Size doesn't change the physics. A small object at zero redundancy is just as dead when the wrong drive fails."},
+        {"t": "Reject it — you must always wait for all 12 shards", "correct": false,
+         "why": "Right instinct, overshot. Waiting for all 12 makes every write pay the slowest node's tail latency for redundancy you can rebuild asynchronously."}
+      ]
+    },
+    {
+      "id": "p3c20-q12", "level": 2, "type": "mcq", "tag": "small-objects",
+      "q": "A customer stores 5 billion 4 KB thumbnails. Erasure-coding each one into 12 shards behaves badly. Why, and what do you do?",
+      "options": [
+        {"t": "Pack them into GB containers and code the container, not the object", "correct": true,
+         "why": "Correct, and it's what every production store does — twelve 512-byte fragments each need their own bookkeeping and seek. The manifest then points at (container, offset, length)."},
+        {"t": "Nothing is wrong: the coding math is size-independent, so 4 KB works like 4 GB", "correct": false,
+         "why": "Mathematically true; operationally the per-shard bookkeeping and disk seeks dwarf a 512-byte fragment. Overhead is measured in the whole system, not in the equation."},
+        {"t": "Leave them on 3x replication permanently and accept the bill", "correct": false,
+         "why": "Half a good instinct — replication is right for hot new small writes — but leaving 5 billion thumbnails at 3x forever is the cost you were trying to avoid."},
+        {"t": "Increase k so the shards are bigger", "correct": false,
+         "why": "Raising k splits the same 4 KB into more, smaller pieces — the opposite of the fix. The object has to get bigger, not the divisor."}
+      ]
+    },
+    {
+      "id": "p3c20-q13", "level": 2, "type": "mcq", "tag": "consistency",
+      "q": "How does this design deliver strong read-after-write without slowing everything down?",
+      "options": [
+        {"t": "One consensus group owns the only mutable fact, and chunks are immutable", "correct": true,
+         "why": "Exactly the one-paragraph answer: 'which manifest is current' is the sole mutable state, and there are no stale bytes to serve. S3 shipped this in December 2020 as an index-layer change, not a disk change."},
+        {"t": "Writes are synchronously replicated to every AZ before the client is acknowledged", "correct": false,
+         "why": "Placement across AZs buys durability, not consistency. Two clients could still disagree about which version is current without a single ordering point."},
+        {"t": "Every read is served by a quorum of storage nodes", "correct": false,
+         "why": "Storage-node quorums put consensus on the byte path, the expensive place. The data plane holds immutable chunks and needs no agreement at all."},
+        {"t": "Clients poll until their write appears", "correct": false,
+         "why": "That's a workaround for eventual consistency — the thing we promised to eliminate. Read-after-write means the next GET already sees it."}
+      ]
+    },
+    {
+      "id": "p3c20-q14", "level": 2, "type": "mcq", "tag": "hot-prefix",
+      "q": "One customer's logging pipeline writes keys like logs/2026-08-14T09:12:03Z at 50K writes/sec, and one metadata shard is melting. Best response?",
+      "options": [
+        {"t": "Auto-split the hot range on request rate, throttling with 503 SlowDown meanwhile", "correct": true,
+         "why": "Split the range, hand the halves to different machines, repeat — and make the throttle an explicit retryable signal rather than a timeout. S3 retired its 'randomize your prefixes' advice in 2018 for exactly this reason."},
+        {"t": "Switch the metadata plane to hash partitioning so writes spread evenly across all shards", "correct": false,
+         "why": "It would spread the load and destroy LIST: a prefix scan would have to ask every shard. You'd fix one customer's writes by breaking everyone's listings."},
+        {"t": "Tell the customer to add a random prefix to their keys", "correct": false,
+         "why": "This was the official advice years ago; it pushes your scaling problem onto customers and wrecks their ability to list by time. The platform should absorb it."},
+        {"t": "Add a write-through cache in front of the shard", "correct": false,
+         "why": "Caching doesn't help writes — they still must be committed and ordered. You've added a component without moving the bottleneck."}
+      ]
+    },
+    {
+      "id": "p3c20-q15", "level": 2, "type": "mcq", "tag": "integrity",
+      "q": "A read returns a shard whose stored checksum doesn't match its bytes. What should happen?",
+      "options": [
+        {"t": "Discard it, reconstruct from parity, serve correct bytes, file a repair", "correct": true,
+         "why": "The customer never sees the corruption; the fleet does. Serving correct bytes and recording the damage are two separate obligations and you owe both."},
+        {"t": "Rebuild the shard immediately from the other shards, without verifying those first", "correct": false,
+         "why": "Half right — rebuild, yes, but verify the inputs. Reconstructing from a corrupted source produces a confidently wrong shard that gets checksummed and stored as truth."},
+        {"t": "Return a 500 so the client retries", "correct": false,
+         "why": "You have 11 other shards and need only 8 — failing the request throws away redundancy you paid for, and a retry likely hits the same rotten shard."},
+        {"t": "Serve the bytes and log a warning", "correct": false,
+         "why": "The nightmare outcome: silently corrupted data delivered as truth. Everything in the integrity section exists to prevent this line of code."}
+      ]
+    },
+    {
+      "id": "p3c20-q16", "level": 2, "type": "mcq", "tag": "repair",
+      "q": "Why does declustered placement (each object's 12 shards drawn from a large random pool) improve durability compared with fixed groups of 12 partner drives?",
+      "options": [
+        {"t": "Rebuild reads come from thousands of peers, not 11", "correct": true,
+         "why": "So the repair window shrinks from days to minutes — and repair speed is a durability input. Same hardware, an order of magnitude better durability, purely from placement."},
+        {"t": "It reduces the total number of shards stored, so there's less data to rebuild", "correct": false,
+         "why": "Shard count is set by k and m, not by placement. Declustering changes who holds the shards, never how many exist."},
+        {"t": "Fewer drives fail per year", "correct": false,
+         "why": "Placement has no effect on hardware failure rates. It changes how fast you respond to a failure that was going to happen anyway."},
+        {"t": "It lets you reduce the parity count m", "correct": false,
+         "why": "Tempting but backwards — faster repair buys margin, yet m decides how many simultaneous losses you survive at all. Don't spend parity on an optimization."}
+      ]
+    },
+    {
+      "id": "p3c20-q17", "level": 2, "type": "mcq", "tag": "multipart",
+      "q": "Why does CompleteMultipartUpload assemble the manifest in a single metadata transaction rather than committing each part as it lands?",
+      "options": [
+        {"t": "So the key is either absent or the whole object, never half", "correct": true,
+         "why": "One commit, one visible transition. Parts uploaded and never completed are orphan chunks the lifecycle sweeper reclaims — an accounting problem, not a correctness one."},
+        {"t": "So the service can compute the object's true MD5 digest across all the parts", "correct": false,
+         "why": "It deliberately doesn't. A multipart ETag is a hash of the part hashes with a dash and the part count — a real digest would mean re-reading terabytes."},
+        {"t": "Because parts must be uploaded strictly in order", "correct": false,
+         "why": "The opposite: parts upload in parallel and out of order, retrying independently, which is the whole reason multipart exists for a 5 TB object."},
+        {"t": "To let storage nodes free their temporary buffers", "correct": false,
+         "why": "Each part is already fully durable and erasure-coded on its own. Finalize is a metadata concern, not a storage-node one."}
+      ]
+    },
+    {
+      "id": "p3c20-q18", "level": 2, "type": "mcq", "tag": "ops",
+      "q": "Which alarm most directly predicts future data loss?",
+      "options": [
+        {"t": "Critical-lane repair backlog and its drain rate", "correct": true,
+         "why": "Objects sitting at 9 of 12, with arrivals outpacing drains, is data loss with a date on it. Drive deaths are the heartbeat; a repair pipeline falling behind is the emergency."},
+        {"t": "Remaining free capacity across the storage fleet", "correct": false,
+         "why": "Running out of space stops writes, which is bad and visible, but doesn't destroy stored data — though it will eventually starve repair, which is the connection to watch."},
+        {"t": "Daily count of failed drives", "correct": false,
+         "why": "At 30,000 drives you expect more than one a day forever — a constant, not a signal. What matters is whether repair keeps pace."},
+        {"t": "p99 GET latency on the customer read path", "correct": false,
+         "why": "Worth alarming on for the availability SLO, but slow reads and lost bytes are different problems. Latency can look perfect while durability quietly erodes."}
+      ]
+    },
+    {
+      "id": "p3c20-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'An entire AZ just went dark. Walk me through the next ten minutes.' Strongest answer?",
+      "options": [
+        {"t": "\"Every object drops to 8 of 12 — all reads still succeed, degraded. No fleet-wide rebuild; it saturates the network the healthy path needs. A grace timer separates transient absence from permanent loss, except the critical lane. New writes go to 2 AZs, re-placement queued, and I say so out loud.\"", "correct": true,
+         "why": "Counts shards, refuses the panic rebuild, keeps the risk lane exempt from the grace timer, and is explicit about the temporarily weakened write placement. An operator's answer, not a diagram's."},
+        {"t": "\"I immediately re-replicate every affected object into the two surviving zones so we're back at full redundancy as fast as possible, add temporary capacity to absorb the rebuild traffic, and throttle customer writes for the duration so the repair fleet gets all the bandwidth it needs to finish before the zone returns.\"", "correct": false,
+         "why": "The instinct is right and the execution is a self-inflicted outage: rebuilding a third of an exabyte at once saturates exactly the network your surviving reads need. Triage by risk instead."},
+        {"t": "\"Reads fail over to our second region while we wait for the AZ to return, we re-sync the primary once it comes back, and customers see no interruption at all — that is what cross-region replication is there for.\"", "correct": false,
+         "why": "Cross-region replication is asynchronous and out of scope — and unnecessary, since 8 surviving shards serve every read. Reaching for a bigger hammer suggests you didn't count the shards."},
+        {"t": "\"Nothing changes operationally — the erasure code is designed to tolerate four losses, one AZ is well inside that budget, so I'd let the system ride it out and revisit if the zone stays dark past a day.\"", "correct": false,
+         "why": "The objects are readable, and stopping there misses everything: zero spare redundancy, degraded-read CPU and cross-AZ bandwidth, and a write path that can no longer satisfy its own placement rule."}
+      ]
+    },
+    {
+      "id": "p3c20-q20", "level": 3, "type": "mcq", "tag": "crux",
+      "q": "You get 20 minutes of deep-dive time on this problem. Which agenda reads most senior?",
+      "options": [
+        {"t": "\"Durability engineering first — coding, placement and repair as one interlocking thing — then the metadata plane.\"", "correct": true,
+         "why": "The crux is manufacturing eleven nines from daily-failing parts, and the second-hardest thing is the index. Naming both and sequencing them is exactly the triage being graded."},
+        {"t": "\"The API surface and the authorization model, since getting the external contract right shapes every downstream decision we make.\"", "correct": false,
+         "why": "Real work, routine here. This problem's API section should take five minutes; spending deep-dive time on it means the burning room never got visited."},
+        {"t": "\"Edge caching and CDN integration, since the workload is read-dominated and that's where user-visible latency actually comes from.\"", "correct": false,
+         "why": "A sensible product layer bolted on top, and an evasion. Nothing about caching touches how bytes survive 30,000 drives."},
+        {"t": "\"The erasure-coding math — I'd derive the durability probability properly so the eleven-nines claim is defensible end to end.\"", "correct": false,
+         "why": "Half the crux, taken too literally. The formula deserves two minutes of intuition; the engineering that makes it true — placement domains and repair speed — deserves the other eighteen."}
+      ]
+    },
+    {
+      "id": "p3c20-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your 11-nines math assumes independent drive failures. Is that assumption safe?' Best response:",
+      "options": [
+        {"t": "\"No — shared power, a firmware bug in one model, a bad batch or a bad deploy kill drives together and the multiplication stops. So placement is failure-domain-aware, we mix drive models, and software rolls one domain at a time.\"", "correct": true,
+         "why": "Volunteering the weakness in your own math, then showing the mitigations are already in the design, is the senior package. The biggest real-world loss events are almost never independent disk failures."},
+        {"t": "\"It's safe enough in practice — with 30,000 drives the law of large numbers smooths out the correlation, our observed failure rate has tracked the model closely for years, and the parity gives us room for the occasional bad week, so I wouldn't redesign around it.\"", "correct": false,
+         "why": "Large numbers smooth variance in independent events; correlation is precisely what they don't fix. One firmware bug can hit every drive of a model at once."},
+        {"t": "\"We compensate by adding a fifth parity shard, which gives enough margin to absorb whatever correlation exists in the fleet without changing how we place anything.\"", "correct": false,
+         "why": "Buying margin with hardware instead of addressing the mechanism. A correlated event that takes an AZ's worth of drives eats your fifth shard as easily as your fourth."},
+        {"t": "\"We'd catch correlated failures quickly through fleet-wide monitoring and respond long before they threaten durability.\"", "correct": false,
+         "why": "Detection is necessary and insufficient — by the time you see the event, the shards are gone. Placement decides whether the event could hurt at all."}
+      ]
+    },
+    {
+      "id": "p3c20-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Finance asks you to cut storage cost. A staff engineer proposes moving from 8+4 (1.5x) to 16+4 (1.25x) across the same 3 AZs. What do you say?",
+      "options": [
+        {"t": "\"No. 20 shards over 3 AZs puts 7 in one zone and we tolerate 4, so it silently breaks the AZ promise — and rebuilding one shard would read 16 instead of 8. If we want 1.33x, the answer is a fourth AZ.\"", "correct": true,
+         "why": "Two independent objections — placement arithmetic and repair amplification — plus the real path to the savings. Refusing a cost cut is only credible when you bring the alternative."},
+        {"t": "\"Yes — more data shards per stripe is strictly more efficient, we still tolerate any 4 losses exactly as before, the code width is a config change rather than new engineering, and the savings on 400 PB are far too large to leave on the table.\"", "correct": false,
+         "why": "The tolerance number is unchanged; the failure domains aren't. Seven shards in one AZ means a zone outage makes objects unreadable, which was a hard requirement."},
+        {"t": "\"Yes, but scope it to cold data only, where slower repair and much lower access rates make the extra risk acceptable for the savings.\"", "correct": false,
+         "why": "Half a good instinct — tiering by temperature is real — but repair speed protects cold data exactly as much as hot. Cold means rarely read, not less valuable."},
+        {"t": "\"No — cost isn't really an engineering concern, and I'd push it back to finance rather than touch the durability design.\"", "correct": false,
+         "why": "At 400 PB, cost is *the* engineering concern — it's why erasure coding exists here at all. Dismissing the ask loses the room and the argument."}
+      ]
+    },
+    {
+      "id": "p3c20-q23", "level": 3, "type": "mcq", "tag": "failure",
+      "q": "Which lesson from the February 2017 S3 us-east-1 outage most changes how you'd design this system?",
+      "options": [
+        {"t": "The index subsystem needed a full restart nobody had exercised at current scale, so recovery took hours", "correct": true,
+         "why": "The transferable lesson: rehearse metadata restart on a schedule and cell-split the index so restarts are bounded. Data was never at risk; the catalog was."},
+        {"t": "Operators shouldn't hold production access to capacity-removal playbooks at all, and destructive commands should need a second approver", "correct": false,
+         "why": "A typo triggered it, but the design lesson isn't 'remove humans' — it's blast-radius control and rehearsed recovery. Systems that only work when nobody errs don't work."},
+        {"t": "Durability schemes like erasure coding should be replaced with plain replication", "correct": false,
+         "why": "No bytes were lost and no coding scheme was involved. Reading it as a durability incident misses that the metadata plane is your availability single point of failure."},
+        {"t": "A status dashboard should never depend on the service it reports on", "correct": false,
+         "why": "True, memorable, and the smallest lesson in the postmortem — a dependency-hygiene footnote next to 'we couldn't restart our own index.'"}
+      ]
+    },
+    {
+      "id": "p3c20-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A customer complains that LIST on their 2-billion-object bucket times out, and asks you to 'make LIST faster.' Senior response?",
+      "options": [
+        {"t": "\"LIST is an ordered scan and its cost tracks the keys under the prefix — I can't make that O(1). Use delimiters, take the daily inventory report for full enumeration, and subscribe to events instead of polling.\"", "correct": true,
+         "why": "Honest about the mechanism, then redirects to the tools built for the real need. A customer polling LIST in a loop has built a denial of service against your metadata plane with your own API."},
+        {"t": "\"I'll build a secondary index that precomputes listings per prefix so the scan cost is paid by a background job instead of at request time, and keep it updated from the object-created event stream so every bucket's listings stay fresh.\"", "correct": false,
+         "why": "A precomputed index over billions of keys is another copy of the metadata plane, with its own consistency problem, serving a query that shouldn't be on the request path at all."},
+        {"t": "\"Raise their LIST rate limit and add metadata replicas behind that key range so the scan has more capacity to work with.\"", "correct": false,
+         "why": "Feeding the pattern. More capacity for an unbounded scan just moves the timeout and puts a shared plane at risk for one tenant's loop."},
+        {"t": "\"Recommend they split their data across many more buckets so each individual listing covers a much smaller number of keys.\"", "correct": false,
+         "why": "It shrinks each scan and pushes your architecture's limits into the customer's data model. Fine as advice, weak as an answer when purpose-built tools exist."}
+      ]
+    },
+    {
+      "id": "p3c20-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You're asked to name the weakest point of your own design. Which answer reads most senior?",
+      "options": [
+        {"t": "\"The metadata plane: it's the availability single point of failure, range partitioning makes sequential keys hot, and its recovery time grows quietly with scale.\"", "correct": true,
+         "why": "Picks the genuinely riskiest component and names three concrete failure shapes — then attach mitigations (cell-split, alarm on split churn, rehearse restarts). Specific self-critique is explicitly rewarded."},
+        {"t": "\"The erasure code — if there's a subtle bug in our Reed-Solomon implementation we could lose everything at once and not discover it until a degraded read fails months later, long after the bad shards were written.\"", "correct": false,
+         "why": "A well-tested, decades-old algorithm with open implementations is the least likely thing to fail here. Naming an implausible weakness reads as not knowing where the real risk lives."},
+        {"t": "\"We should have designed for four availability zones from the start, since that would have cut overhead from 1.5x to 1.33x.\"", "correct": false,
+         "why": "A cost regret, not a weakness — the design chose 1.5x knowingly. Real self-critique names something that could hurt customers."},
+        {"t": "\"Nothing major — the design handles every failure mode we discussed today, so I'd rather spend the time on extensions.\"", "correct": false,
+         "why": "Every system has a soft spot, and claiming otherwise ends the most valuable conversation in the round. Interviewers read this as inexperience or evasion."}
+      ]
+    }
+  ]
+}

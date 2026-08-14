@@ -5,9 +5,9 @@
       "id": "p3c05-q01", "level": 1, "type": "mcq", "tag": "fanout",
       "q": "In a news feed, what does 'fanout-on-write' mean?",
       "options": [
-        {"t": "When a user posts, the system pushes that post into each follower's precomputed feed", "correct": true,
+        {"t": "The post is pushed into each follower's precomputed feed at post time", "correct": true,
          "why": "Right. The work happens once, at write time, so every follower's feed read becomes a single cheap cache lookup instead of a merge across hundreds of accounts."},
-        {"t": "Building a user's feed from scratch each time they open the app", "correct": false,
+        {"t": "Building a user's feed from scratch, at read time, every time they open the app", "correct": false,
          "why": "That's fanout-on-read, also called pull. The 'write' in the name tells you when the work happens — at post time, not at read time."},
         {"t": "Replicating each post to multiple database nodes", "correct": false,
          "why": "That's replication for durability (Chapter 1.8). Fanout is about distributing a post into follower feeds, not about copies for safety."},
@@ -21,7 +21,7 @@
       "options": [
         {"t": "Do extra work at write time so reads become cheap cache hits", "correct": true,
          "why": "Yes — a ~50:1 read/write ratio is the whole argument for precomputing feeds. You gladly amplify the rare operation (writes) to make the common one (reads) a single lookup."},
-        {"t": "Shard the database by post ID", "correct": false,
+        {"t": "Shard the posts database by post ID so writes spread evenly across nodes", "correct": false,
          "why": "Sharding choices come from data size and access patterns, not directly from this ratio. The ratio's job is deciding where the compute happens: write time vs read time."},
         {"t": "Use a stronger consistency model for reads", "correct": false,
          "why": "Backwards — heavy read traffic pushes you toward relaxing consistency (cached, slightly stale feeds), not tightening it."},
@@ -37,7 +37,7 @@
          "why": "Correct. Push is fine for the average account (~200 followers). It's the tail — accounts with tens or hundreds of millions of followers — that turns one tap into minutes of total fleet capacity."},
         {"t": "Redis cannot store that many lists", "correct": false,
          "why": "It can — the chapter sizes the whole feed cache at ~2.4 TB across ~40 shards. Storage isn't the blocker; write amplification per celebrity post is."},
-        {"t": "Users follow too many accounts on average", "correct": false,
+        {"t": "Users follow too many accounts on average, which makes every read-time merge expensive", "correct": false,
          "why": "That's a pull-side cost (more outboxes to merge at read). The hybrid is forced by the write side: a few authors with enormous follower counts."},
         {"t": "Posts contain media that is too large to copy", "correct": false,
          "why": "Media never enters fanout at all — only post IDs are pushed, and media lives on the CDN. The problem is the number of writes, not their size."}
@@ -47,11 +47,11 @@
       "id": "p3c05-q04", "level": 1, "type": "mcq", "tag": "read-path",
       "q": "Why does the feed cache store post IDs rather than full post bodies?",
       "options": [
-        {"t": "IDs keep the cache ~2.4 TB instead of hundreds of TB, and bodies get cached once in a shared post cache", "correct": true,
+        {"t": "IDs keep the cache at ~2.4 TB instead of hundreds, and bodies are cached once and shared", "correct": true,
          "why": "Right. A post pushed to 200 followers as a body would be stored 200 times; as an ID it's 16 bytes per follower plus one shared cached body. The cost is a hydration step at read, which the post cache makes cheap."},
         {"t": "Redis cannot store objects larger than 1 KB", "correct": false,
          "why": "Redis handles values up to hundreds of MB. The reason is economics and duplication, not a technical limit."},
-        {"t": "Post bodies change too frequently to cache", "correct": false,
+        {"t": "Post bodies change too frequently to cache safely, so only stable identifiers can be stored", "correct": false,
          "why": "Nearly the opposite — post bodies are essentially immutable, which makes them ideal cache material. That's exactly why one shared post cache works so well."},
         {"t": "IDs are needed for the ranking model to work", "correct": false,
          "why": "The ranker works on candidates either way; it fetches its own features. The ID-only choice is about RAM and write amplification."}
@@ -77,7 +77,7 @@
       "options": [
         {"t": "Approximate now, exact eventually — increments aggregate asynchronously and reconcile later", "correct": true,
          "why": "Right. A billion likes a day can't be synchronous updates on hot post rows. Sharded counters absorb the storm, cached reads lag by seconds, and a reconciliation job repairs drift from the durable event log."},
-        {"t": "Strongly consistent — counts must always be exact", "correct": false,
+        {"t": "Strongly consistent — every like blocks until the counter is updated, so counts are always exact", "correct": false,
          "why": "Exact real-time counts on a viral post would mean millions of serialized writes on one row. Nobody can fact-check '1.2M likes' anyway — the display rounding hides more than the lag does."},
         {"t": "Counts are computed fresh from the likes table on every read", "correct": false,
          "why": "A COUNT(*) per post per feed read at 200K reads/sec is astronomically expensive. Counts are precomputed and cached, like the feed itself."},
@@ -89,13 +89,13 @@
       "id": "p3c05-q07", "level": 1, "type": "mcq", "tag": "pagination",
       "q": "Why does offset pagination ('give me items 26–50') break for a ranked feed?",
       "options": [
-        {"t": "The ranked order shifts between requests, so pages computed at different times overlap or skip items", "correct": true,
+        {"t": "The ranked order shifts between requests, so fixed offsets overlap or skip items", "correct": true,
          "why": "Exactly. New posts arrive and scores change between page one and page two. The fix is a session snapshot: freeze the ranked ID list once, then page through the frozen copy by cursor."},
         {"t": "Offsets are too slow for Redis lists", "correct": false,
          "why": "Redis list index reads are fast. The problem is correctness — a moving ranking under fixed offsets — not performance."},
         {"t": "The feed has too many items to number", "correct": false,
          "why": "A feed page numbers a few hundred candidates at most. Scale isn't the issue; the reshuffling between requests is."},
-        {"t": "Clients cannot store an offset between requests", "correct": false,
+        {"t": "Clients cannot store an offset between requests, so the server would have to track it for them", "correct": false,
          "why": "Clients store cursors fine — that's the mechanism. The issue is what the offset points into when the underlying order won't hold still."}
       ]
     },
@@ -103,9 +103,9 @@
       "id": "p3c05-q08", "level": 1, "type": "mcq", "tag": "ops",
       "q": "The fanout queue develops a 30-minute backlog. What happens to the posts inside it?",
       "options": [
-        {"t": "They arrive in followers' feeds late — nothing is lost, because posts were durably stored before the 201", "correct": true,
+        {"t": "They arrive in followers' feeds late — nothing is lost, the post was durable before the 201", "correct": true,
          "why": "Right. Durability was settled at write time in the posts DB; the queue is durable too. Fanout lag delays delivery, never destroys it — 'delayed, not lost' is the exact phrase to say in the interview."},
-        {"t": "Posts older than the queue retention are dropped", "correct": false,
+        {"t": "Posts older than the queue's retention window are silently dropped once the backlog grows past it", "correct": false,
          "why": "Even if a queue aged out events, the posts themselves live in the posts DB and reach readers via the pull path. The design has no point where an accepted post can vanish."},
         {"t": "Users must repost anything that didn't fan out", "correct": false,
          "why": "Never — the 201 was a promise. Asking users to redo accepted writes means the system broke its durability contract."},
@@ -137,7 +137,7 @@
          "why": "Priority tiers still spend 3M writes per post. The hybrid's point is that above the threshold you spend zero fanout writes, because read-time merging is cheaper."},
         {"t": "The post is pushed only to the most active 1M followers", "correct": false,
          "why": "Partial fanout gives you both code paths' costs on the same post and still needs the merge for everyone else. The clean split — push or pull per author — is simpler and sufficient."},
-        {"t": "The post goes to a special celebrity queue that fans out overnight", "correct": false,
+        {"t": "The post goes into a lower-priority celebrity queue that fans out to all 3M followers overnight, when spare write capacity is free", "correct": false,
          "why": "Overnight delivery breaks the freshness requirement badly for exactly the posts most people are waiting to see. Read-time merge delivers them within seconds with no fanout at all."}
       ]
     },
@@ -165,7 +165,7 @@
          "why": "Fanout only covers the future; an empty feed for a returning user would look like a broken app. The posts DB has everything needed to rebuild the past on demand."},
         {"t": "A batch job pre-rebuilds all inactive users' feeds nightly", "correct": false,
          "why": "That re-creates the exact waste the dormant-skip optimization removed — building feeds for people who may never return. Rebuild lazily, on the read that proves they're back."},
-        {"t": "The app shows trending content until their graph is re-fanned-out", "correct": false,
+        {"t": "The app shows generic trending content until a background job re-fans-out their followees' recent posts into a fresh list", "correct": false,
          "why": "Trending fallback is for users who follow nobody. This user has a follow graph; the pull path serves their real feed on the very first request."}
       ]
     },
@@ -173,9 +173,9 @@
       "id": "p3c05-q13", "level": 2, "type": "mcq", "tag": "fanout",
       "q": "Why does the fanout worker skip followers who haven't opened the app in 30 days?",
       "options": [
-        {"t": "A large share of fanout writes would land in lists nobody reads; those users rebuild by pull if they return", "correct": true,
+        {"t": "Those writes land in lists nobody reads, and dormant users rebuild by pull if they return", "correct": true,
          "why": "Right — it can cut fanout cost dramatically, and the pull path guarantees correctness for anyone who comes back. Classic trade: cheaper steady-state writes for one slower page on return."},
-        {"t": "Inactive users' Redis lists have been deleted, so writes would fail", "correct": false,
+        {"t": "Inactive users' Redis lists have already been evicted, so the fanout write would fail with an error", "correct": false,
          "why": "Writes to a fresh key would simply recreate the list — Redis doesn't error. The point is that the write is wasted, not that it fails."},
         {"t": "It protects those users' privacy", "correct": false,
          "why": "Privacy isn't involved — the post is public to followers either way. This is purely a cost optimization on write amplification."},
@@ -189,7 +189,7 @@
       "options": [
         {"t": "The feature pipeline is lagging — the scorer is ranking confidently on stale features", "correct": true,
          "why": "This is the silent failure the chapter flags: stale affinity data doesn't error, it just ranks worse. It's why feature age gets monitored with the same seriousness as latency."},
-        {"t": "The scorer service is down", "correct": false,
+        {"t": "The scorer service is down, so the feed has silently fallen back to chronological order", "correct": false,
          "why": "A dead scorer is loud — chrono_served_rate pins to 1.0 and its own error metrics fire. The scenario says everything is green, which points at a failure no standard dashboard catches."},
         {"t": "The fanout queue has a backlog", "correct": false,
          "why": "Backlog shows up immediately in the fanout-lag metric and in 'my followers see my posts late' complaints — loud in a different way, and it doesn't smell like a slow week-long quality drift."},
@@ -207,7 +207,7 @@
          "why": "The snapshot only guards one session's pages against each other. These sightings are in different sessions — outside the snapshot's jurisdiction entirely."},
         {"t": "The ranking model re-scored the post highly", "correct": false,
          "why": "The scorer may indeed love the post both days — that's allowed. The seen filter exists to overrule it for content the user already saw; scoring it isn't the bug, serving it is."},
-        {"t": "Fanout delivered the post twice", "correct": false,
+        {"t": "Fanout delivered the post twice — the same post ID was written into this user's feed list on two different days", "correct": false,
          "why": "Duplicate IDs in a feed list are expected under at-least-once delivery — and are exactly what read-time dedup and the seen filter are there to absorb. The read-side filter failing is the story."}
       ]
     },
@@ -259,7 +259,7 @@
       "options": [
         {"t": "\"Hybrid, and the follower distribution decides the split: push under ~1M followers because fanout finishes in seconds, pull above it because one celebrity post is 100M writes — and users follow few enough celebrities that the read merge stays cheap.\"", "correct": true,
          "why": "A commitment, driven by the distribution, with both cost curves named and a bounded read-side cost. This is the crux answered as an owner, in three sentences."},
-        {"t": "\"Push has fast reads but expensive writes; pull has cheap writes but slow reads. Both are used in industry, so it depends on the workload.\"", "correct": false,
+        {"t": "\"Push has fast reads but expensive writes; pull has cheap writes but slow reads. Twitter, Instagram and Facebook have each used both at different points, so it really depends on the workload and what the team wants to operate — I could sketch either one.\"", "correct": false,
          "why": "True, balanced, and uncommitted — the option-listing pattern. The workload was given to you; 'it depends' after the numbers exist reads as declining to decide."},
         {"t": "\"Push, because reads dominate 50:1 and precomputation makes them O(1).\"", "correct": false,
          "why": "Committed and correctly reasoned — for the average case. It walks straight into the celebrity trap the question was built around, which the interviewer will spring one sentence later. Half the distribution isn't the distribution."},
@@ -327,11 +327,11 @@
       "id": "p3c05-q24", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Interviewer: 'Your 1M threshold — why not 100K, or 10M?' What is this question actually grading?",
       "options": [
-        {"t": "Whether the number connects to mechanisms: fanout time per post, how many accounts are exempted, and the read-merge cost per user — any value whose curves you can defend passes", "correct": true,
+        {"t": "Whether the number connects to fanout time, exempted-account population, and read-merge cost — any value whose curves you can defend passes", "correct": true,
          "why": "Threshold questions are never about the constant; they're calibration probes. Knowing that 100K trades more merging for less write amplification — and what data would move you — is the passing answer at any specific number."},
         {"t": "Whether you know the industry-standard threshold", "correct": false,
          "why": "There isn't one — real systems tune it continuously against their own distributions. Citing a 'standard' signals memorization where judgment was requested."},
-        {"t": "Whether you'll defend your first answer under pressure", "correct": false,
+        {"t": "Whether you'll defend your first answer under pressure instead of caving the moment the interviewer pushes back on the number you picked", "correct": false,
          "why": "Stubbornness isn't conviction. Updating the threshold when the interviewer supplies new constraints is fine — what's graded is whether the reasoning machinery exists, not whether the number survives."},
         {"t": "Whether you can compute 1M × 20 bytes quickly", "correct": false,
          "why": "Arithmetic is assumed. The probe is about the three cost curves crossing, not the multiplication — a fast wrong-framework answer scores below a slow right-framework one."}

@@ -1,6 +1,6 @@
 <p>"Design the Facebook news feed." At Meta, this is the house specialty. There's a real chance your interviewer spent years working on the actual feed, which means two things: they will not be impressed by buzzwords, and they know exactly which room is on fire. One more thing before the clock starts — Meta runs this question in two flavors (Chapter 0.2). In the <strong>System Design</strong> round, the backend machine is the star. In the <strong>Product Architecture</strong> round — the flavor most product engineers get — your API contract and client behavior are graded too: what's in the payload, what the cursor promises, what the app does while a request is in flight. This walkthrough plays it as a Product Architecture candidate performing at E5, because that's the harder grading.</p>
 
-<p>Here's the trap hiding inside the question. You can design a feed that works beautifully for 499 million of your 500 million daily users — and it will melt for the last few thousand. Those few thousand are the celebrities, and one of them has more than 600 million followers. A single tap of Cristiano Ronaldo's thumb generates more write traffic than the rest of the platform combined for the next several minutes.</p>
+<p>Here's the trap hiding inside the question. You can design a feed that works beautifully for 499 million of your 500 million daily users — and it will melt for the last few thousand. Those few thousand are the celebrities, and the biggest of them — Cristiano Ronaldo, on Meta's other feed, Instagram — has over 600 million followers. A single tap of his thumb generates more write traffic than the rest of the platform combined for the next several minutes.</p>
 
 <p>The whole interview is secretly about that one moment. Everything else — caching, ranking, counters — is important supporting cast. Let's run the 45 minutes.</p>
 
@@ -11,8 +11,8 @@
 <p><strong>Non-functional, with numbers I'm committing to:</strong></p>
 
 <ul>
-<li><strong>Scale:</strong> 2 billion accounts, 500 million daily actives. Feed is the front door of the entire product.</li>
-<li><strong>Feed latency:</strong> under 200 ms at p99 for a page of feed. This is the number users feel with their thumb.</li>
+<li><strong>Scale:</strong> 2 billion accounts, 500 million daily actives. Real Meta is bigger — Family daily active people passed 3 billion in 2024 — and I say so out loud before rounding down. Every number below scales linearly, and whiteboard arithmetic I can't fumble is worth more than precision nobody grades. Feed is the front door of the entire product.</li>
+<li><strong>Feed latency:</strong> under 200 ms at p99 — p99 meaning the slowest 1 in 100 requests, because averages hide the users who are actually suffering. This is the number people feel with their thumb.</li>
 <li><strong>Post visibility:</strong> a new post should reach followers' feeds within seconds — I'll commit to "usually under 10 seconds." Crucially, this is allowed to slip to minutes during an incident. Feed freshness is soft; feed <em>availability</em> is not.</li>
 <li><strong>Durability:</strong> once we return 201 for a post, it is never lost. Delayed is survivable; vanished is not.</li>
 <li><strong>No duplicates:</strong> refreshing or paging should not show the same post twice — surprisingly hard with a ranked feed, and I flag it unprompted.</li>
@@ -24,9 +24,9 @@
 
 <p>I do only the math that changes decisions (Chapter 1.4). First number: <strong>the read/write ratio.</strong> 500M daily users open the app a few times a day and scroll a few pages each time — call it 10 feed-page fetches per user per day. That's 5 billion fetches a day, about 60K per second average, so I plan for <strong>200K reads/sec at peak</strong>. Writes: maybe one in five daily users posts, so 100M posts a day — about 1.2K/sec, call it 5K/sec at peak. That's roughly <strong>50 reads for every write</strong>. Conclusion, said out loud: I will happily do extra work at write time to make reads a cheap cache hit. That is the argument for precomputing feeds — pushing each new post into followers' feeds when it's created, so a feed read is just "get my list."</p>
 
-<p>Second number: <strong>the fanout multiplication.</strong> Pushing a post means one write per follower. An average account has ~200 followers, so 1.2K posts/sec becomes ~240K tiny cache writes/sec, maybe a million at peak. A sharded Redis fleet shrugs at that; each write is a few microseconds of list-push. So far, push looks great.</p>
+<p>Second number: <strong>the fanout multiplication.</strong> Fanout is the copying step — one post fanning out into many follower feeds — so pushing a post means one write per follower. An average account has ~200 followers, so 1.2K posts/sec becomes ~240K tiny cache writes/sec, maybe a million at peak. A sharded Redis fleet shrugs at that; each write is a few microseconds of list-push. So far, push looks great.</p>
 
-<p>Then I do the celebrity row of the table, because follower counts are a power law (Chapter 2.6): a 100M-follower account posts once, and that's <strong>100 million writes for one tap</strong>. At a generous 1M writes/sec of fanout capacity, one post occupies the entire fleet for 100 seconds. Ronaldo's 600M followers: ten minutes of everything we own, and every ordinary user's post queued behind it. Also: 100M copies of a post ID at ~20 bytes each is 2 GB of RAM duplicated per celebrity post — most of it for followers who won't even open the app today. <strong>This is the number that forces a hybrid design</strong>, and I say so now: "push for normal accounts, pull for celebrities — I'll deep-dive the threshold later."</p>
+<p>Then I do the celebrity row of the table, because follower counts are a power law (Chapter 2.6) — almost everyone has a few hundred followers, a handful of accounts have tens of millions, and the average is a lie told by the tail: a 100M-follower account posts once, and that's <strong>100 million writes for one tap</strong>. At a generous 1M writes/sec of fanout capacity, one post occupies the entire fleet for 100 seconds. Ronaldo's 600M followers: ten minutes of everything we own, and every ordinary user's post queued behind it. Also: 100M copies of a post ID at ~20 bytes each is 2 GB of RAM duplicated per celebrity post — most of it for followers who won't even open the app today. <strong>This is the number that forces a hybrid design</strong>, and I say so now: "push for normal accounts, pull for celebrities — I'll deep-dive the threshold later."</p>
 
 <p>One more sizing check, because it decides what the feed cache stores: 500M active users × 300 feed entries × 16 bytes per entry (post ID plus a timestamp) ≈ <strong>2.4 TB of RAM</strong> — about 40 Redis shards. Perfectly buildable, but only because I'm storing post <em>IDs</em>, not post bodies, and only for <em>active</em> users. Store full posts and it's hundreds of terabytes. The estimate just made two design decisions for me.</p>
 
@@ -55,11 +55,11 @@
   <rect class="dg-node" x="8" y="118" width="76" height="44" rx="8"/>
   <text class="dg-txt" x="22" y="144">Client</text>
   <rect class="dg-node" x="116" y="118" width="104" height="44" rx="8"/>
-  <text class="dg-txt" x="126" y="136">Post service</text>
-  <text class="dg-txt-s" x="126" y="152">validate, persist</text>
+  <text class="dg-txt" x="122" y="136">Post service</text>
+  <text class="dg-txt-s" x="124" y="152">durable write</text>
   <rect class="dg-node" x="116" y="24" width="104" height="44" rx="8"/>
   <text class="dg-txt" x="130" y="42">Posts DB</text>
-  <text class="dg-txt-s" x="124" y="58">by author = outbox</text>
+  <text class="dg-txt-s" x="124" y="58">author outbox</text>
   <rect class="dg-node" x="252" y="118" width="96" height="44" rx="8"/>
   <text class="dg-txt" x="270" y="136">Queue</text>
   <text class="dg-txt-s" x="262" y="152">post events</text>
@@ -70,11 +70,11 @@
   <text class="dg-txt" x="390" y="42">Social graph</text>
   <text class="dg-txt-s" x="390" y="58">who follows A?</text>
   <rect class="dg-node" x="556" y="64" width="156" height="52" rx="8"/>
-  <text class="dg-txt" x="566" y="84">Follower feed lists</text>
+  <text class="dg-txt" x="566" y="84">Follower feeds</text>
   <text class="dg-txt-s" x="566" y="102">Redis, post IDs only</text>
   <rect class="dg-node-alt" x="556" y="196" width="156" height="52" rx="8"/>
   <text class="dg-txt" x="566" y="216">Celebrity path</text>
-  <text class="dg-txt-s" x="566" y="234">no push, pulled at read</text>
+  <text class="dg-txt-s" x="566" y="234">pulled at read time</text>
   <line class="dg-edge" x1="84" y1="140" x2="116" y2="140" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="168" y1="118" x2="168" y2="68" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="176" y="98">1. store</text>
@@ -100,7 +100,7 @@
   <rect class="dg-node" x="8" y="140" width="72" height="44" rx="8"/>
   <text class="dg-txt" x="20" y="166">Client</text>
   <rect class="dg-node" x="108" y="140" width="104" height="48" rx="8"/>
-  <text class="dg-txt" x="118" y="160">Feed service</text>
+  <text class="dg-txt" x="114" y="160">Feed service</text>
   <text class="dg-txt-s" x="118" y="176">orchestrates</text>
   <rect class="dg-node" x="248" y="20" width="140" height="48" rx="8"/>
   <text class="dg-txt" x="258" y="40">Feed cache list</text>
@@ -136,7 +136,8 @@
   <line class="dg-edge" x1="540" y1="178" x2="576" y2="196" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="108" y1="176" x2="80" y2="176" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="86" y="196">5</text>
-  <text class="dg-txt-s" x="8" y="310">1 get pushed IDs  ·  2 merge celebrities + own posts  ·  3 score ~500 candidates  ·  4 hydrate top 25 in parallel  ·  5 return page + cursor</text>
+  <text class="dg-txt-s" x="8" y="300">1 get pushed IDs · 2 merge celeb outboxes + own posts · 3 score ~500</text>
+  <text class="dg-txt-s" x="8" y="314">4 hydrate top 25 in parallel · 5 return page + cursor</text>
 </svg>
 <figcaption>A feed read. Steps 1–2 gather candidate IDs, step 3 ranks them, step 4 turns 25 winners into renderable posts with parallel fetches.</figcaption>
 </figure>
@@ -182,7 +183,8 @@
   <line class="dg-edge" x1="216" y1="110" x2="300" y2="110" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="216" y1="170" x2="300" y2="122" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="440" y1="110" x2="500" y2="110" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="16" y="216">A typical user follows fewer than ~20 accounts over 1M — the merge stays small, and those outboxes are the hottest, best-cached keys in the system.</text>
+  <text class="dg-txt-s" x="16" y="206">A typical user follows fewer than ~20 accounts over 1M, so the merge</text>
+  <text class="dg-txt-s" x="16" y="220">stays small — and those outboxes are the hottest keys we cache.</text>
 </svg>
 <figcaption>Celebrity posts never enter the fanout at all. They're stitched in at read time, where the cost is a few cached reads instead of 100 million writes.</figcaption>
 </figure>
@@ -204,7 +206,7 @@
   <text class="dg-txt-s" x="20" y="78">~800 post IDs</text>
   <rect class="dg-node" x="168" y="40" width="140" height="52" rx="8"/>
   <text class="dg-txt" x="180" y="60">Filters</text>
-  <text class="dg-txt-s" x="180" y="78">seen, muted, blocked</text>
+  <text class="dg-txt-s" x="172" y="78">seen, muted, blocked</text>
   <rect class="dg-node-alt" x="348" y="40" width="140" height="52" rx="8"/>
   <text class="dg-txt" x="360" y="60">Scorer</text>
   <text class="dg-txt-s" x="360" y="78">p(like), p(comment)</text>
@@ -233,7 +235,7 @@
 <p><strong>The fallback:</strong> if the scorer misses its deadline or its error rate spikes, the feed service sorts candidates by time and ships that (the degradation menu from Chapter 2.7). Users get a slightly dumber feed, not a spinner. I track <code>chrono_served_rate</code> as a first-class metric: near zero normally, and its climb is my early warning — often before the scorer team's own alerts fire. After scoring, <strong>diversity rules</strong> re-rank: no five-in-a-row from one author, mix media types, and a freshness floor so the model's love of proven old bangers never fully buries today's posts.</p>
 
 <div class="box story"><div class="box-tag">War story — Instagram</div>
-<p>Ranking a feed is as much a product rollout problem as a systems one, and Instagram's 2016 switch is the documented proof. Until then the feed was strictly reverse-chronological. In March 2016 Instagram announced it would reorder by relevance, publishing the motivating number: people were missing, on average, 70 percent of the posts in their feed — including about half the posts from their closest connections. The backlash was immediate and loud: users organized around keeping the chronological feed, and celebrities and businesses panic-posted "turn on notifications for our account" for weeks, afraid the algorithm would bury them. Instagram rolled it out anyway — gradually, cohort by cohort, through 2016, measuring as it went. Two years later it reported that ranked feeds had users seeing 90 percent of posts from friends, up from around 50. And in 2022, after years of user and even regulatory pressure, Instagram added chronological options back ("Following" and "Favorites") alongside the ranked default. Every beat of that story maps to a system decision: gradual rollout behind cohorts, guardrail metrics, and keeping the chronological path alive — which happens to be exactly the fallback path your scorer outage needs anyway.</p>
+<p>Ranking a feed is as much a product rollout problem as a systems one, and Instagram's 2016 switch is the documented proof. Until then the feed was strictly reverse-chronological. In March 2016 Instagram announced it would reorder by relevance, publishing the motivating number: people were missing, on average, 70 percent of the posts in their feed. The backlash was immediate and loud: users organized around keeping the chronological feed, and celebrities and businesses panic-posted "turn on notifications for our account" for weeks, afraid the algorithm would bury them. Instagram rolled it out anyway — gradually, cohort by cohort, through 2016, measuring as it went. Two years later it reported that ranked feeds had users seeing 90 percent of posts from friends, up from around 50. And in 2022, after years of user and even regulatory pressure, Instagram added chronological options back ("Following" and "Favorites") alongside the ranked default. Every beat of that story maps to a system decision: gradual rollout behind cohorts, guardrail metrics, and keeping the chronological path alive — which happens to be exactly the fallback path your scorer outage needs anyway.</p>
 </div>
 
 <h2>Deep dive 3: counts, cursors, and cold starts</h2>
@@ -250,7 +252,7 @@
 
 <ul>
 <li><strong>Fanout queue backlog.</strong> A worker bug or a Redis shard brownout and the queue is 30 minutes deep. Because the queue is durable and the post was persisted before the 201, posts are <strong>delayed, never lost</strong> — the user-visible symptom is your followers seeing your post late, and creators noticing "reach" dip. What the author never sees is their own post missing, because the read path injects your own outbox — read-your-writes, guaranteed by construction, no matter how sick fanout is. The metric is <strong>fanout lag</strong>: now minus the event's creation time, measured at dequeue. Alert in minutes; under backpressure, shed dormant-follower pushes first — they were optional anyway.</li>
-<li><strong>Scorer down.</strong> 100% chronological feeds. Product quality dips, availability doesn't. <code>chrono_served_rate</code> pins to 1.0, engagement guardrails sag, and model rollback is a config flag — because every model change ships behind a flag to 1% first, shadow-scored before it ever ranks a real feed.</li>
+<li><strong>Scorer down.</strong> 100% chronological feeds. Product quality dips, availability doesn't. <code>chrono_served_rate</code> pins to 1.0, engagement guardrails sag, and model rollback is a config flag — because every model change ships behind a flag to 1% of users first. Before even that, it runs in shadow mode: it scores real traffic and its output is thrown away, so you learn its latency and its ranking without a single user seeing it.</li>
 <li><strong>Feed cache shard dies.</strong> A slice of users falls to the pull path: their next read is slow-ish, the rebuilt list is written back, done. No data lost — the cache was always a copy. I'd run Redis with a replica per shard anyway, to make this a blip instead of a regional p99 story.</li>
 <li><strong>Counter drift.</strong> Aggregation bugs accumulate silently, so a periodic reconciliation job recomputes counters from the durable like-event log and fixes drift. Approximate now, exact eventually — the "eventually" needs a mechanism, not a hope.</li>
 <li><strong>The viral post.</strong> One post read by 100M people in an hour: the post cache and CDN absorb it (immutable bodies cache perfectly), and the counter service's sharded increments absorb the like storm. The feed system itself barely notices — which is the design working.</li>
@@ -316,7 +318,7 @@
 
 <div class="exercise">
 <div class="ex-q"><p>Add "delete post." The post may already sit in up to 100M feed caches, session snapshots, and client caches. Design deletion, and say what you explicitly won't do.</p></div>
-<details><summary>Answer</summary><p>What I won't do: chase the copies. Fanning out a delete to 100M lists has the exact celebrity-write problem we built the hybrid to avoid, and it still can't reach client caches. Instead: tombstone the post in the posts DB (the single source of truth), purge the post cache entry, and let <em>hydration</em> enforce it — every read path already turns IDs into bodies through the post store, so a tombstoned ID hydrates to nothing and is silently dropped from the page. Stale IDs then age out of feed lists via trim and TTL on their own. Client caches get the same treatment on next refresh; a truly urgent takedown can also purge CDN media. The principle worth saying out loud: with many cheap copies of a reference, enforce deletion at the one choke point every read passes through, not at every copy.</p></details>
+<details><summary>Answer</summary><p>What I won't do: chase the copies. Fanning out a delete to 100M lists has the exact celebrity-write problem we built the hybrid to avoid, and it still can't reach client caches. Instead: tombstone the post in the posts DB (the single source of truth) — a tombstone is just a marker row saying "this ID is dead," kept because an absent row and a deleted row must look different to every reader — purge the post cache entry, and let <em>hydration</em> enforce it — every read path already turns IDs into bodies through the post store, so a tombstoned ID hydrates to nothing and is silently dropped from the page. Stale IDs then age out of feed lists via trim and TTL on their own. Client caches get the same treatment on next refresh; a truly urgent takedown can also purge CDN media. The principle worth saying out loud: with many cheap copies of a reference, enforce deletion at the one choke point every read passes through, not at every copy.</p></details>
 </div>
 
 <div class="takeaways"><div class="box-tag">Takeaways</div>

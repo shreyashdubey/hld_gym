@@ -261,7 +261,7 @@
          "why": "That's the fire this question was invented to probe. Guaranteed ordered delivery over flaky mobile links is the hard part; ticks-as-protocol is where senior candidates separate. Announcing it and steering there is the strongest move available."},
         {"t": "\"Let me detail the media pipeline — image thumbnailing and video transcoding at scale.\"", "correct": false,
          "why": "Media is big but boring: blob storage + CDN, solved in Chapter 1.7, and deliberately dismissed in minute one. Deep-diving it means spending your scoring window in a room that isn't burning."},
-        {"t": "\"I'll walk through the microservice decomposition — auth service, user service, message service, media service — and how they communicate.\"", "correct": false,
+        {"t": "\"I'll walk through the microservice decomposition — auth service, user service, message service, media service, presence service — how they communicate over gRPC, and where I'd draw each service boundary.\"", "correct": false,
          "why": "Service boundaries are organizational bookkeeping, not the hard problem — no delivery guarantee gets easier by drawing more boxes. This reads as process knowledge substituting for judgment."},
         {"t": "\"Let's design the group admin features — roles, invites, and moderation.\"", "correct": false,
          "why": "Product-feature CRUD with no distributed-systems teeth. The interviewer will politely redirect you, and the redirect costs you the driving-the-room points."}
@@ -271,7 +271,7 @@
       "id": "p3c04-q20", "level": 3, "type": "mcq", "tag": "commit-justify",
       "q": "The interviewer asks: 'Cross-region replication for messages — synchronous or asynchronous? Commit.' The senior answer is:",
       "options": [
-        {"t": "\"Synchronous — this product promises to never lose an accepted message, so we can never accept even a few seconds of replication lag putting acked messages at risk.\"", "correct": false,
+        {"t": "\"Synchronous — this product promises never to lose an accepted message, so I won't accept even a few seconds of replication lag putting acked messages at risk; the second region has to have the write before the sender sees a tick.\"", "correct": false,
          "why": "Principled-sounding, but it silently spends ~100ms per send, every send, forever, to defend against a once-a-decade event — and never weighs that trade. Absolutes without costs attached read as rule-following, not judgment."},
         {"t": "\"Both — synchronous for important messages, async for the rest.\"", "correct": false,
          "why": "There's no signal for 'important' (E2E hides content!), so this invents an unimplementable classifier to dodge the commit. Hedges dressed as hybrids are still hedges."},
@@ -301,7 +301,7 @@
       "options": [
         {"t": "\"Yes, deliberately — it's bounded by how fast humans in one chat can type, and the 1,024-member cap keeps it bounded. It genuinely breaks for million-subscriber channels, where I'd flip to a pull model.\"", "correct": true,
          "why": "Owning the hot spot as a conscious choice, quantifying why it's safe (human typing speed × capped membership), and naming the exact boundary where it fails plus the redesign beyond it. A bottleneck you chose, bounded, and fenced is a design decision, not a flaw."},
-        {"t": "\"Good catch — I'd shard each conversation's messages across multiple parallel sequencers so no single instance ever becomes a serialization point.\"", "correct": false,
+        {"t": "\"Good catch — I'd shard each conversation's messages across several parallel sequencers, each handing out numbers from its own range, so no single instance is ever a serialization point and the tier scales out with traffic.\"", "correct": false,
          "why": "Multiple sequencers per conversation means no single order authority — the exact property the sequencer exists to provide. Folding to a probe by breaking your own invariant is worse than defending it; the probe was testing whether you knew why you built it."},
         {"t": "\"Bottlenecks are unacceptable — I'd switch to client timestamps with conflict resolution.\"", "correct": false,
          "why": "Retreating to the approach the design explicitly rejected (clocks lie) to avoid a bottleneck that was never real. Not every serialization point is a problem; per-chat message rate is tiny by definition."},
@@ -319,7 +319,7 @@
          "why": "The seductive optimization that breaks the invariant. 'Both online' doesn't mean 'delivery will succeed' — the recipient's socket can die in the microseconds after the ack. Once the ✓ can lie in any code path, the product's core promise is gone. Senior judgment is recognizing which invariants are priceless."},
         {"t": "Accept it, but have the recipient's ack trigger the persist", "correct": false,
          "why": "Then what does the sender's ✓ mean before the recipient acks? Either you delay the sender's ack until delivery (making 'sent' hostage to the recipient's radio) or you ack undurable messages. The patch just moves the hole."},
-        {"t": "Run it as an A/B experiment and compare message-loss metrics between the two variants before deciding", "correct": false,
+        {"t": "Run it as an A/B experiment on a small traffic slice, compare measured message-loss rates between the two variants for a month, and let the data decide", "correct": false,
          "why": "You don't A/B test an invariant — the experiment's failure mode is real users' messages silently vanishing, and 'acceptable loss rate' isn't a threshold this product has. Some properties are decided by reasoning, not measured by experiment."}
       ]
     },
@@ -329,7 +329,7 @@
       "options": [
         {"t": "\"Nothing breaks — every tier in this design is horizontally scalable, so 10x is just a provisioning exercise.\"", "correct": false,
          "why": "The buzzword shield. 'Horizontally scalable' is a property of tiers, not of systems — amplification effects (fan-out, reconnect storms, hot groups) grow faster than linearly, and claiming immunity invites the interviewer to push until something visibly breaks."},
-        {"t": "\"The database — at 10x we'd need to migrate to a bigger storage technology.\"", "correct": false,
+        {"t": "\"The database — 500B messages a day is 100 TB a day, past what a Cassandra-class store handles, so we'd have to migrate the message tier onto a bigger storage technology.\"", "correct": false,
          "why": "Backwards: bounded-partition Cassandra is the tier that 10xes most gracefully — Discord ran trillions of messages on this exact model. Naming the strongest tier as the weakest suggests the design's scaling properties weren't actually traced."},
         {"t": "\"Gateways and Cassandra scale by adding boxes — the real pain is amplification: group fan-out multiplying inbox writes, and reconnect herds hammering the registry at 10x size. I'd invest there first.\"", "correct": true,
          "why": "The senior move is distinguishing tiers that scale linearly (buy boxes) from multiplicative effects that don't (fan-out, storms). Naming where the amplification lives shows you actually traced the load through the system rather than gestured at 'horizontal scaling.'"},

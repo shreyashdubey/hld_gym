@@ -4,8 +4,8 @@
 
 <p>This problem is a favorite at Meta and Google because it looks cute and is secretly brutal. It has a clean crux, it punishes "just use a database," and it rewards letting numbers make the decisions. Let's play it at the senior bar: commit, justify, find the fire early.</p>
 
-<div class="box story"><div class="box-tag">War story — Google Suggest, born on a shuttle bus</div>
-<p>Autocomplete at Google wasn't a grand roadmap item. In 2004, Kevin Gibbs — a recent Stanford grad who'd joined months before the IPO — used his rides on the new San Francisco–Mountain View employee shuttle as 20% time. His first prototype predicted URLs as you typed, by mining Google's crawl of the web; that morphed into predicting <em>search queries</em> from query logs. Google Suggest launched on Google Labs in December 2004 — one engineer, a lunch-table idea, a few months of shuttle rides. Then it took nearly four more years of hardening before graduating to the google.com homepage in 2008, because a Labs demo and a system eating ten times google.com's query traffic at lower latency are very different machines. The feature is trivial; the scale is the product. That gap is exactly what this interview question measures.</p>
+<div class="box story"><div class="box-tag">War story — Google Suggest: four years from demo to homepage</div>
+<p>Autocomplete at Google didn't arrive as a roadmap item. In 2004 a Google engineer, Kevin Gibbs, built it in 20% time — the one-day-a-week personal-project budget Google handed engineers — and it shipped that year as an experiment on Google Labs, the company's public sandbox for half-finished ideas. Anyone could try it. And then it sat there. It took until 2008 for suggestions to become standard under the search box on google.com. Four years, for a feature you could demo in an afternoon. The delay wasn't product indecision: a Labs toy serving curious visitors and a system eating roughly ten times google.com's query traffic at <em>lower</em> latency than search itself are not the same machine. The idea was cheap; making it survive the scale was the entire job. That gap — trivial feature, brutal scale — is exactly what this interview question measures.</p>
 </div>
 
 <h2>Requirements: scope it before it scopes you</h2>
@@ -23,9 +23,9 @@
 
 <p><strong>Non-functional, with numbers I'm committing to:</strong></p>
 <ul>
-<li><strong>p99 latency under 100 ms</strong>, keystroke to rendered suggestion. Below ~100 ms feels instant; above it, the dropdown visibly lags the fingers and users stop trusting it.</li>
-<li><strong>Scale:</strong> 5 billion searches/day on the parent search product.</li>
-<li><strong>Availability over freshness:</strong> suggestions may be minutes or hours stale, but the box should essentially never be empty or slow. Stale is mildly imperfect; laggy feels broken.</li>
+<li><strong>p99 latency under 100 ms</strong>, keystroke to rendered suggestion. (p99 = the slowest 1 request in 100 — the tail users actually notice.) Below ~100 ms feels instant; above it, the dropdown visibly lags the fingers and users stop trusting it.</li>
+<li><strong>Scale:</strong> assume 5 billion searches/day on the parent search product — a round number, said out loud, agreed with the interviewer, and used for every calculation after.</li>
+<li><strong>Availability over freshness:</strong> suggestions may be minutes or hours stale, but the box should almost never be empty and never be slow. Stale is mildly imperfect; laggy feels broken.</li>
 </ul>
 
 <p>That last line is a CAP-flavored commitment (Part 1) made in product terms, and it decides several designs below.</p>
@@ -38,7 +38,7 @@
 
 <p>10 × 60K = <strong>600,000 requests/sec average. Past a million at peak.</strong></p>
 
-<p>Sit with that. Autocomplete serves <em>an order of magnitude more traffic than the search engine it decorates</em>, with a <em>tighter</em> latency budget — and the budget is mostly pre-spent: on mobile, the round trip alone eats 30–60 ms of our 100. The server gets maybe 10–20 ms, a million times per second.</p>
+<p>Sit with that. Autocomplete serves <em>an order of magnitude more traffic than the search engine it decorates</em>, with a <em>tighter</em> latency budget — and the budget is mostly pre-spent: on a mobile network the round trip alone can eat 50–80 ms of our 100, before the browser has drawn a pixel. What's left for the server is maybe 10–20 ms, a million times per second.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="One search for pizza generates five suggestion requests, one per keystroke">
@@ -55,7 +55,7 @@
   <line class="dg-edge" x1="140" y1="135" x2="540" y2="134" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="140" y1="145" x2="540" y2="147" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="250" y="80">"p"  "pi"  "piz"  "pizz"  "pizza"</text>
-  <text class="dg-txt-s" x="250" y="190">5 requests for 1 search — then only 1 request ever reaches the search engine</text>
+  <text class="dg-txt-s" x="250" y="190">5 suggest requests typed — only 1 reaches the search engine</text>
   <text class="dg-txt-s" x="250" y="212">60K searches/sec  →  ~600K suggest requests/sec</text>
 </svg>
 <figcaption>The keystroke fan. Every search is amplified into many suggestion queries. Autocomplete out-scales the search engine it serves.</figcaption>
@@ -118,7 +118,7 @@ ORDER BY freq DESC LIMIT 10;</code></pre>
   <rect class="dg-node" x="530" y="166" width="160" height="40" rx="8"/>
   <text class="dg-txt" x="546" y="191">shard 3</text>
   <rect class="dg-node" x="530" y="220" width="160" height="40" rx="8"/>
-  <text class="dg-txt" x="546" y="245">shard N  ×3 replicas</text>
+  <text class="dg-txt" x="546" y="245">shard N  ×3 each</text>
   <line class="dg-edge" x1="450" y1="140" x2="530" y2="80" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="450" y1="148" x2="530" y2="132" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="450" y1="156" x2="530" y2="186" marker-end="url(#arrow)"/>
@@ -195,7 +195,7 @@ ORDER BY freq DESC LIMIT 10;</code></pre>
 
 <p><strong>Oven 1 — the batch layer.</strong> Search logs flow into Kafka; a daily MapReduce-style job aggregates weeks of history: count query frequencies with <strong>exponential recency decay</strong> (halve a query's weight every ~week, so dead memes sink without needing deletion), apply <strong>quality filters</strong> (drop queries below a minimum count — killing both junk and privacy-sensitive rare strings — plus misspellings, safe-search hits, and blocklist matches), then emit each prefix's top 10 by score, packed into immutable snapshot files per shard. Filtering at build time is deliberate: a blocklist applied once per build costs nothing; the same check per request would run a million times a second on identical data. Never do per-request what you can do per-build.</p>
 
-<p><strong>Oven 2 — the streaming layer.</strong> A daily build means breaking news wouldn't appear until tomorrow — failing the trending requirement. So a stream job (Part 2) consumes the same Kafka topic, counting queries in ~5-minute windows — sketch-based counting (count-min) is fine, approximate is acceptable. Queries whose current rate massively exceeds their historical rate get promoted into a small <strong>trending overlay</strong>: a few thousand hot queries and their prefixes. It's tiny, so we don't shard it — we push the whole overlay to <em>every</em> serving node every few minutes. At read time a node merges: <code>score = batch_score + boost × trending_count</code>, re-sorts ten-ish items, returns. Nanoseconds of work.</p>
+<p><strong>Oven 2 — the streaming layer.</strong> A daily build means breaking news wouldn't appear until tomorrow — failing the trending requirement. So a stream job (Part 2) consumes the same Kafka topic, counting queries in ~5-minute windows — sketch-based counting is fine here (a count-min sketch is a fixed-size table of counters that trades exact counts for tiny memory), because trending only needs "this is exploding," not an audited number. Queries whose current rate massively exceeds their historical rate get promoted into a small <strong>trending overlay</strong>: a few thousand hot queries and their prefixes. It's tiny, so we don't shard it — we push the whole overlay to <em>every</em> serving node every few minutes. At read time a node merges: <code>score = batch_score + boost × trending_count</code>, re-sorts ten-ish items, returns. Nanoseconds of work.</p>
 
 <p>If you did Part 2's pipelines chapter, you've spotted the shape: a textbook <strong>lambda architecture</strong> — batch layer plus speed layer, merged at read. We argued there that kappa (one streaming path, replay to recompute) is usually the cleaner default. Why lambda here? Because the two layers genuinely compute different things: ranking wants <em>weeks</em> of decayed, heavily filtered history — natural as a batch job — while trending wants a five-minute window. When the speed layer fits in a pocket, lambda's usual sin — two full codebases that must agree — mostly disappears. Committed, with the reason attached.</p>
 
@@ -314,7 +314,7 @@ ORDER BY freq DESC LIMIT 10;</code></pre>
 
 <div class="exercise">
 <div class="ex-q"><p>Global suggest p99 jumped from 80 ms to 240 ms in an hour. Server-side latency is flat at 4 ms. Your first three checks, in order, with reasoning.</p></div>
-<details><summary>Answer</summary><p>Server-flat-but-user-slow means the regression lives between user and origin. (1) CDN hit rate, per region: the classic cause is an edge cache going cold — a config push changed the cache key (a new query param will do it), a TTL got zeroed, or a POP outage rerouted users to distant edges. A regional hit-rate cliff matching the p99 timeline closes the case. (2) A client release ramping that hour: broken debounce (flooding), broken response-cancellation, or a bundle regression shows up exactly as client-measured latency with innocent servers. (3) Response size: new fields or disabled compression spilling into extra round trips moves p99 by exactly this magnitude on mobile RTTs. Meta-lesson: instrument from the client, or you'll page the only team whose component is healthy.</p></details>
+<details><summary>Answer</summary><p>Server-flat-but-user-slow means the regression lives between user and origin. (1) CDN hit rate, per region: the classic cause is an edge cache going cold — a config push changed the cache key (a new query param will do it), a TTL got zeroed, or a POP (point of presence — one physical edge location) went down and rerouted users to distant edges. A regional hit-rate cliff matching the p99 timeline closes the case. (2) A client release ramping that hour: broken debounce (flooding), broken response-cancellation, or a bundle regression shows up exactly as client-measured latency with innocent servers. (3) Response size: new fields or disabled compression spilling into extra round trips moves p99 by exactly this magnitude on mobile RTTs. Meta-lesson: instrument from the client, or you'll page the only team whose component is healthy.</p></details>
 </div>
 
 <div class="exercise">

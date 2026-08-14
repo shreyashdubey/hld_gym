@@ -2,353 +2,728 @@
   "chapter": "p3c18",
   "items": [
     {
-      "id": "p3c18-q01", "level": 1, "type": "mcq", "tag": "series",
+      "id": "p3c18-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "series",
       "q": "In a metrics platform, http_request_ms{service=\"checkout\", status=\"500\"} and http_request_ms{service=\"checkout\", status=\"200\"} are:",
       "options": [
-        {"t": "Two points in the same time series", "correct": false,
-         "why": "Points are individual (timestamp, value) samples. These two things differ in a label value, which makes them separate streams of points, not two samples in one stream."},
-        {"t": "Two different time series", "correct": true,
-         "why": "Right. A series is one metric name plus one exact combination of label values. Change any label value and you've minted a new series with its own stream of points — the definition that makes cardinality the crux of this design."},
-        {"t": "One metric, so one series — labels are just query filters", "correct": false,
-         "why": "Labels aren't post-hoc filters; they're part of the series identity. That's exactly why an unbounded label multiplies storage instead of just adding a searchable field."},
-        {"t": "Two metrics", "correct": false,
-         "why": "The metric name (http_request_ms) is the same. Metric name × label combination = series; here the name is shared and the label set differs, so: one metric, two series."}
+        {
+          "t": "Two points in the same time series",
+          "correct": false,
+          "why": "Points are individual (timestamp, value) samples. These two things differ in a label value, which makes them separate streams of points, not two samples in one stream."
+        },
+        {
+          "t": "Two different time series",
+          "correct": true,
+          "why": "Right. A series is one metric name plus one exact combination of label values. Change any label value and you've minted a new series with its own stream of points — the definition that makes cardinality the crux of this design."
+        },
+        {
+          "t": "One metric, so one series — labels are just query filters",
+          "correct": false,
+          "why": "Labels aren't post-hoc filters; they're part of the series identity. That's exactly why an unbounded label multiplies storage instead of just adding a searchable field."
+        },
+        {
+          "t": "Two metrics",
+          "correct": false,
+          "why": "The metric name (http_request_ms) is the same. Metric name × label combination = series; here the name is shared and the label set differs, so: one metric, two series."
+        }
       ]
     },
     {
-      "id": "p3c18-q02", "level": 1, "type": "mcq", "tag": "estimation",
+      "id": "p3c18-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "estimation",
       "q": "100K hosts, each emitting 500 series, one point per series every 10 seconds. What's the ingest rate?",
       "options": [
-        {"t": "500K points/sec", "correct": false,
-         "why": "That's 100K × 500 ÷ 100. The interval is 10 seconds, not 100: 50M points per 10s window is 5M per second."},
-        {"t": "5M points/sec", "correct": true,
-         "why": "100K × 500 = 50M active series; each reports every 10s, so 50M ÷ 10 = 5M points/sec — around the clock, as a baseline, not a peak. This one multiplication shapes the whole design."},
-        {"t": "50M points/sec", "correct": false,
-         "why": "50M is the number of active series — how many streams exist. Each stream only produces a point every 10 seconds, so divide by the interval to get the write rate."},
-        {"t": "About 300M points/minute is unanswerable without knowing peak traffic", "correct": false,
-         "why": "The math is fully determined: 5M/sec = 300M/minute, so the number is right but the hedge is wrong. And note this workload barely has a 'peak' — agents emit on a metronome whether or not anyone is looking."}
+        {
+          "t": "500K points/sec",
+          "correct": false,
+          "why": "That's 100K × 500 ÷ 100. The interval is 10 seconds, not 100: 50M points per 10s window is 5M per second."
+        },
+        {
+          "t": "5M points/sec",
+          "correct": true,
+          "why": "100K × 500 = 50M active series; each reports every 10s, so 50M ÷ 10 = 5M points/sec — around the clock, as a baseline, not a peak. This one multiplication shapes the whole design."
+        },
+        {
+          "t": "50M points/sec",
+          "correct": false,
+          "why": "50M is the number of active series — how many streams exist. Each stream only produces a point every 10 seconds, so divide by the interval to get the write rate."
+        },
+        {
+          "t": "About 300M points/minute is unanswerable without knowing peak traffic",
+          "correct": false,
+          "why": "The math is fully determined: 5M/sec = 300M/minute, so the number is right but the hedge is wrong. And note this workload barely has a 'peak' — agents emit on a metronome whether or not anyone is looking."
+        }
       ]
     },
     {
-      "id": "p3c18-q03", "level": 1, "type": "mcq", "tag": "buffer",
+      "id": "p3c18-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "buffer",
       "q": "Why does the design put Kafka between the stateless intake fleet and the TSDB shards?",
       "options": [
-        {"t": "It makes individual writes faster", "correct": false,
-         "why": "It adds a hop and ~seconds of latency, actually. The win isn't speed — it's that the producer's health stops depending on the consumer's."},
-        {"t": "So a storage-layer problem costs delay instead of data, and spikes get absorbed instead of hitting the shards", "correct": true,
-         "why": "Right — chapter 1.11's rule. Write volume spikes exactly when storage is struggling (incidents, deploys). An hour of buffered stream means a TSDB incident is a freshness problem, not a data-loss problem — and the buffer doubles as the shard rebuild log."},
-        {"t": "Kafka provides exactly-once delivery, which metrics require", "correct": false,
-         "why": "Metrics tolerate duplicates fine (idempotent windowing rebuilds the same aggregates), and Kafka alone doesn't grant exactly-once end to end. The buffer is there for decoupling, not delivery semantics."},
-        {"t": "To store the metrics long-term more cheaply than a database", "correct": false,
-         "why": "Kafka holds about an hour here, as a shock absorber and replay log. Long-term storage is the TSDB's job, with compression and downsampling doing the economics."}
+        {
+          "t": "It makes individual writes faster",
+          "correct": false,
+          "why": "It adds a hop and ~seconds of latency, actually. The win isn't speed — it's that the producer's health stops depending on the consumer's."
+        },
+        {
+          "t": "So storage trouble costs delay instead of data, and spikes get absorbed",
+          "correct": true,
+          "why": "Right — chapter 1.11's rule. Write volume spikes exactly when storage is struggling (incidents, deploys). An hour of buffered stream means a TSDB incident is a freshness problem, not a data-loss problem — and the buffer doubles as the shard rebuild log."
+        },
+        {
+          "t": "Kafka provides exactly-once delivery, which metrics require",
+          "correct": false,
+          "why": "Metrics tolerate duplicates fine (idempotent windowing rebuilds the same aggregates), and Kafka alone doesn't grant exactly-once end to end. The buffer is there for decoupling, not delivery semantics."
+        },
+        {
+          "t": "To store the metrics long-term more cheaply than a database",
+          "correct": false,
+          "why": "Kafka holds about an hour here, as a shock absorber and replay log. Long-term storage is the TSDB's job, with compression and downsampling doing the economics."
+        }
       ]
     },
     {
-      "id": "p3c18-q04", "level": 1, "type": "mcq", "tag": "aggregation",
+      "id": "p3c18-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "aggregation",
       "q": "The aggregators store 10-second windows of min, max, sum, and count — but not the average. Why?",
       "options": [
-        {"t": "Averages are misleading, so the platform refuses to compute them", "correct": false,
-         "why": "Averages hide tails, true — but the platform serves them constantly. It just derives them: sum ÷ count, exact at every zoom level."},
-        {"t": "Storing four numbers is cheaper than storing one average", "correct": false,
-         "why": "Four numbers cost more than one, not less. The extra storage buys something an average can't provide — the ability to merge windows correctly."},
-        {"t": "Stored averages can't be merged; sum and count can, and average = sum ÷ count at any zoom level", "correct": true,
-         "why": "Exactly. An average of averages is wrong whenever the windows have different counts. Sum of sums and count of counts are always right, so 1-minute and 1-hour rollups, fleet views, and shard fan-out all fall out of the same merge — and the average is recoverable exactly, anywhere."},
-        {"t": "Averages require floating point, which compresses poorly", "correct": false,
-         "why": "Sums are floats too, and Gorilla-style XOR compression handles floats well. Compression isn't the issue — mergeability is."}
+        {
+          "t": "Averages are misleading, so the platform refuses to compute them",
+          "correct": false,
+          "why": "Averages hide tails, true — but the platform serves them constantly. It just derives them: sum ÷ count, exact at every zoom level."
+        },
+        {
+          "t": "Storing four numbers is cheaper than storing one average",
+          "correct": false,
+          "why": "Four numbers cost more than one, not less. The extra storage buys something an average can't provide — the ability to merge windows correctly."
+        },
+        {
+          "t": "Averages don't merge; sum and count do",
+          "correct": true,
+          "why": "Exactly. An average of averages is wrong whenever the windows have different counts. Sum of sums and count of counts are always right, so 1-minute and 1-hour rollups, fleet views, and shard fan-out all fall out of the same merge — and the average is recoverable exactly, anywhere."
+        },
+        {
+          "t": "Averages require floating point, which compresses poorly",
+          "correct": false,
+          "why": "Sums are floats too, and Gorilla-style XOR compression handles floats well. Compression isn't the issue — mergeability is."
+        }
       ]
     },
     {
-      "id": "p3c18-q05", "level": 1, "type": "mcq", "tag": "sketches",
+      "id": "p3c18-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "sketches",
       "q": "Why do percentiles need a sketch (t-digest / DDSketch) instead of just being computed and stored per host?",
       "options": [
-        {"t": "Sketches give exact percentiles; stored percentiles are approximations", "correct": false,
-         "why": "Backwards — a per-host percentile is exact for that host, and sketches are the approximate ones (within ~1% relative error). The problem with stored percentiles isn't precision; it's that they can't be combined at all."},
-        {"t": "Sketches merge: combining two hosts' sketches yields the true sketch of the combined traffic, which stored percentiles can never do", "correct": true,
-         "why": "That's the whole reason the industry settled on them (chapter 2.10's trade: bounded error for tiny memory). Merge across hosts for the fleet view, across windows for rollups, across shards at query time — one property powers all three."},
-        {"t": "Sketches are smaller than a single stored number", "correct": false,
-         "why": "A sketch is a few KB; a stored p99 is 8 bytes. Sketches are bigger — you pay that size precisely to keep the distribution's shape mergeable."},
-        {"t": "Percentile computation is too slow to do per host", "correct": false,
-         "why": "Per-host percentile math over 10 seconds of samples is trivial. Speed was never the obstacle; the mathematics of combining percentiles is."}
+        {
+          "t": "Sketches give exact percentiles; stored percentiles are approximations",
+          "correct": false,
+          "why": "Backwards — a per-host percentile is exact for that host, and sketches are the approximate ones (within ~1% relative error). The problem with stored percentiles isn't precision; it's that they can't be combined at all."
+        },
+        {
+          "t": "Sketches merge; stored percentiles don't",
+          "correct": true,
+          "why": "That's the whole reason the industry settled on them (chapter 2.10's trade: bounded error for tiny memory). Merge across hosts for the fleet view, across windows for rollups, across shards at query time — one property powers all three."
+        },
+        {
+          "t": "Sketches are smaller than a single stored number",
+          "correct": false,
+          "why": "A sketch is a few KB; a stored p99 is 8 bytes. Sketches are bigger — you pay that size precisely to keep the distribution's shape mergeable."
+        },
+        {
+          "t": "Percentile computation is too slow to do per host",
+          "correct": false,
+          "why": "Per-host percentile math over 10 seconds of samples is trivial. Speed was never the obstacle; the mathematics of combining percentiles is."
+        }
       ]
     },
     {
-      "id": "p3c18-q06", "level": 1, "type": "mcq", "tag": "compression",
+      "id": "p3c18-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "compression",
       "q": "Gorilla-style compression turns a 16-byte point into ~1.4 bytes. What property of metrics data does it exploit?",
       "options": [
-        {"t": "Timestamps arrive on a near-regular interval and values barely change between neighbors", "correct": true,
-         "why": "Yes. Delta-of-delta stores the change of the timestamp change — almost always zero on a 10s metronome, so one bit. XOR stores only the bits by which a value differs from its predecessor — for an unchanged gauge, again one bit. In Facebook's paper, 96% of timestamps compressed to a single bit."},
-        {"t": "Most metric values are zero", "correct": false,
-         "why": "Plenty of metrics never touch zero (temperatures, latencies, memory). The exploited fact is that consecutive values are similar, not that they're zero."},
-        {"t": "Floats can be safely rounded to two decimal places", "correct": false,
-         "why": "Gorilla compression is lossless — XOR encoding reproduces the exact bits. Lossy rounding is a different (and riskier) trade nobody needed here."},
-        {"t": "Series names repeat, so they're stored once per block", "correct": false,
-         "why": "Dictionary-encoding names is real and useful, but it's not the Gorilla trick and it isn't where the 12x on points comes from — that's timestamps and values."}
+        {
+          "t": "Consecutive timestamps and values barely change",
+          "correct": true,
+          "why": "Yes. Delta-of-delta stores the change of the timestamp change — almost always zero on a 10s metronome, so one bit. XOR stores only the bits by which a value differs from its predecessor — for an unchanged gauge, again one bit. In Facebook's paper, 96% of timestamps compressed to a single bit."
+        },
+        {
+          "t": "Most metric values are zero",
+          "correct": false,
+          "why": "Plenty of metrics never touch zero (temperatures, latencies, memory). The exploited fact is that consecutive values are similar, not that they're zero."
+        },
+        {
+          "t": "Floats can be safely rounded to two decimal places",
+          "correct": false,
+          "why": "Gorilla compression is lossless — XOR encoding reproduces the exact bits. Lossy rounding is a different (and riskier) trade nobody needed here."
+        },
+        {
+          "t": "Series names repeat, so they're stored once per block",
+          "correct": false,
+          "why": "Dictionary-encoding names is real and useful, but it's not the Gorilla trick and it isn't where the 12x on points comes from — that's timestamps and values."
+        }
       ]
     },
     {
-      "id": "p3c18-q07", "level": 1, "type": "mcq", "tag": "retention",
+      "id": "p3c18-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "retention",
       "q": "Why does the platform downsample to 1-minute and 1-hour tiers instead of keeping raw 10-second data for all 13 months?",
       "options": [
-        {"t": "Raw data older than a month is legally risky to retain", "correct": false,
-         "why": "There's no such rule for operational metrics. Retention here is an economics-and-query-shape decision, not a compliance one."},
-        {"t": "Compression stops working on old data", "correct": false,
-         "why": "Compression works identically on any age of data. The problem is how many points a long-range query must read, not how well they compress at rest."},
-        {"t": "Long-range queries would read hundreds of times more points than they need, and old data only ever answers coarse questions", "correct": true,
-         "why": "Right. 'Last quarter' at 10s resolution is ~800K points per series; at 1-hour rollups it's ~2K — a 400x difference on exactly the wide queries impatient humans run. Nobody needs 10-second resolution from last November, so the resolution is traded away deliberately."},
-        {"t": "The TSDB can't store more than 30 days per shard", "correct": false,
-         "why": "Shards could store more; blocks are just files. The tiering is a choice the design makes for query cost and storage economics, not a hard engine limit."}
+        {
+          "t": "Raw data older than a month is legally risky to retain",
+          "correct": false,
+          "why": "There's no such rule for operational metrics. Retention here is an economics-and-query-shape decision, not a compliance one."
+        },
+        {
+          "t": "Compression stops working on old data",
+          "correct": false,
+          "why": "Compression works identically on any age of data. The problem is how many points a long-range query must read, not how well they compress at rest."
+        },
+        {
+          "t": "Long queries would read 100x the points they need",
+          "correct": true,
+          "why": "Right. 'Last quarter' at 10s resolution is ~800K points per series; at 1-hour rollups it's ~2K — a 400x difference on exactly the wide queries impatient humans run. Nobody needs 10-second resolution from last November, so the resolution is traded away deliberately."
+        },
+        {
+          "t": "The TSDB can't store more than 30 days per shard",
+          "correct": false,
+          "why": "Shards could store more; blocks are just files. The tiering is a choice the design makes for query cost and storage economics, not a hard engine limit."
+        }
       ]
     },
     {
-      "id": "p3c18-q08", "level": 1, "type": "mcq", "tag": "cardinality",
+      "id": "p3c18-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "cardinality",
       "q": "An engineer adds a user_id label to a popular metric. The service has 5 million active users. What happens in the platform?",
       "options": [
-        {"t": "Every unique user_id combination becomes a brand-new series — potentially tens of millions of them, each demanding index space and shard RAM", "correct": true,
-         "why": "That's the explosion. Series = metric × label combination, so an unbounded label multiplies series count by its number of values. One line of code can double a platform's total series in an afternoon — which is why this is the chapter's crux."},
-        {"t": "Each existing point grows by the size of one extra field", "correct": false,
-         "why": "This would be the harmless outcome, and it's the intuition that makes the mistake so easy. Labels aren't fields on points — they're part of series identity, so new values mint new series."},
-        {"t": "Nothing, until someone queries by user_id", "correct": false,
-         "why": "The cost lands at write time, not query time: every new series allocates head memory and index entries the moment its first point arrives. Shards feel it whether or not anyone ever queries."},
-        {"t": "The metric's points get spread more evenly across shards", "correct": false,
-         "why": "Distribution stays hash-based either way. The damage isn't imbalance — it's the sheer number of new series each shard must now hold and index."}
+        {
+          "t": "Every new user_id value mints a new series — tens of millions of them",
+          "correct": true,
+          "why": "That's the explosion. Series = metric × label combination, so an unbounded label multiplies series count by its number of values. One line of code can double a platform's total series in an afternoon — which is why this is the chapter's crux. Each new series also demands its own index entry and head-chunk RAM on a shard."
+        },
+        {
+          "t": "Each existing point just grows by one extra field, so storage rises a little",
+          "correct": false,
+          "why": "This would be the harmless outcome, and it's the intuition that makes the mistake so easy. Labels aren't fields on points — they're part of series identity, so new values mint new series."
+        },
+        {
+          "t": "Nothing, until someone queries by user_id",
+          "correct": false,
+          "why": "The cost lands at write time, not query time: every new series allocates head memory and index entries the moment its first point arrives. Shards feel it whether or not anyone ever queries."
+        },
+        {
+          "t": "The metric's points get spread more evenly across shards",
+          "correct": false,
+          "why": "Distribution stays hash-based either way. The damage isn't imbalance — it's the sheer number of new series each shard must now hold and index."
+        }
       ]
     },
     {
-      "id": "p3c18-q09", "level": 1, "type": "mcq", "tag": "self-dep",
+      "id": "p3c18-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "self-dep",
       "q": "The 'self-dependency rule' for a monitoring platform says:",
       "options": [
-        {"t": "The platform must not monitor itself, to avoid circular alerts", "correct": false,
-         "why": "Backwards — the platform absolutely monitors itself (ingest lag, dropped points, cardinality growth). The rule is about what it depends on, not what it watches."},
-        {"t": "The platform must not depend on the infrastructure it monitors, so it keeps working during the outages it exists to announce", "correct": true,
-         "why": "Right. A monitoring system that shares fate with what it watches is a smoke detector wired to the house mains. Separate failure domain, a pager path that depends on almost nothing, agents that buffer locally — all consequences of this one rule."},
-        {"t": "Each component may only depend on components below it in the stack", "correct": false,
-         "why": "That's a layering principle, and a decent one, but not this rule. The self-dependency rule is specifically about the monitoring platform's blast-radius separation from the monitored world."},
-        {"t": "Alerts must be defined in the platform's own query language", "correct": false,
-         "why": "A product detail with no bearing on failure domains. The rule is about surviving your customers' worst day, which is also your most important day."}
+        {
+          "t": "The platform must not monitor itself, to avoid circular alerts",
+          "correct": false,
+          "why": "Backwards — the platform absolutely monitors itself (ingest lag, dropped points, cardinality growth). The rule is about what it depends on, not what it watches."
+        },
+        {
+          "t": "The platform must not depend on the infrastructure it monitors, so it survives them",
+          "correct": true,
+          "why": "Right. A monitoring system that shares fate with what it watches is a smoke detector wired to the house mains. Separate failure domain, a pager path that depends on almost nothing, agents that buffer locally — all consequences of this one rule."
+        },
+        {
+          "t": "Each component may only depend on components below it in the stack",
+          "correct": false,
+          "why": "That's a layering principle, and a decent one, but not this rule. The self-dependency rule is specifically about the monitoring platform's blast-radius separation from the monitored world."
+        },
+        {
+          "t": "Alerts must be defined in the platform's own query language",
+          "correct": false,
+          "why": "A product detail with no bearing on failure domains. The rule is about surviving your customers' worst day, which is also your most important day."
+        }
       ]
     },
     {
-      "id": "p3c18-q10", "level": 2, "type": "mcq", "tag": "percentiles",
+      "id": "p3c18-q10",
+      "level": 2,
+      "type": "mcq",
+      "tag": "percentiles",
       "q": "Host A serves 9,900 requests, all ~50ms (p99 = 50ms). Host B is sick: 200 requests at ~2,000ms each (p99 = 2,000ms). What is the true fleet p99?",
       "options": [
-        {"t": "About 1,025ms", "correct": false,
-         "why": "That's the average of the two p99s — and it's pure fiction. No request in the entire fleet took anywhere near 1,025ms. Averaged percentiles don't approximate the truth; they carry no information."},
-        {"t": "About 2,000ms", "correct": true,
-         "why": "10,100 total requests; the slowest 1% is the slowest ~101 requests, and there are 200 requests at 2,000ms — so the 99th percentile sits among them. This two-host example is worth performing on the whiteboard: it's the proof that percentiles must be rebuilt from merged data, not combined from stored answers."},
-        {"t": "About 50ms, since most requests were fast", "correct": false,
-         "why": "The 2,000ms requests are ~2% of traffic — more than the top 1% — so they capture the p99. Shrink host B to 50 slow requests and this answer becomes right, which is exactly why no formula over the two p99s can work: same inputs, opposite truths."},
-        {"t": "Cannot be determined from percentiles alone", "correct": false,
-         "why": "Half-credit thinking: in general, stored percentiles are indeed uncombinable. But here you were given the full distributions (counts and values), which is precisely the extra information a sketch preserves — and it pins the answer at 2,000ms."}
+        {
+          "t": "About 1,025ms",
+          "correct": false,
+          "why": "That's the average of the two p99s — and it's pure fiction. No request in the entire fleet took anywhere near 1,025ms. Averaged percentiles don't approximate the truth; they carry no information."
+        },
+        {
+          "t": "About 2,000ms",
+          "correct": true,
+          "why": "10,100 total requests; the slowest 1% is the slowest ~101 requests, and there are 200 requests at 2,000ms — so the 99th percentile sits among them. This two-host example is worth performing on the whiteboard: it's the proof that percentiles must be rebuilt from merged data, not combined from stored answers."
+        },
+        {
+          "t": "About 50ms, since most requests were fast",
+          "correct": false,
+          "why": "The 2,000ms requests are ~2% of traffic — more than the top 1% — so they capture the p99. Shrink host B to 50 slow requests and this answer becomes right, which is exactly why no formula over the two p99s can work: same inputs, opposite truths."
+        },
+        {
+          "t": "Cannot be determined from percentiles alone",
+          "correct": false,
+          "why": "Half-credit thinking: in general, stored percentiles are indeed uncombinable. But here you were given the full distributions (counts and values), which is precisely the extra information a sketch preserves — and it pins the answer at 2,000ms."
+        }
       ]
     },
     {
-      "id": "p3c18-q11", "level": 2, "type": "mcq", "tag": "cardinality",
+      "id": "p3c18-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "cardinality",
       "q": "At 2 p.m. a tenant deploys code that adds a user_id label. By 2:10 their series count is climbing vertically. Where does a well-designed platform stop this?",
       "options": [
-        {"t": "At intake: a per-(tenant, metric) series budget rejects or relabels new series before any shard allocates a byte", "correct": true,
-         "why": "Defense at the door. Intake tracks approximate distinct-series counts (HyperLogLog — a KB-scale counter is all you can afford at 5M points/sec) and contains the explosion where it's cheapest: before storage. Existing series keep flowing; the tenant sees a loud 'over budget' counter."},
-        {"t": "At the shards: evict the oldest series to make room for new ones", "correct": false,
-         "why": "This is cleanup after the damage — the shards have already paid RAM and index cost for millions of junk series, and you're now evicting the legitimate data to keep the accident. Containment must happen before allocation."},
-        {"t": "Autoscale the shard fleet to absorb the new series", "correct": false,
-         "why": "Feeding the explosion. You'd be provisioning ~100GB of RAM in real time to store data that should never have been metrics — and tomorrow's session labels will demand it again. Scaling is for legitimate growth, not accidents."},
-        {"t": "Suspend the tenant's ingest entirely until they roll back", "correct": false,
-         "why": "Too blunt: it takes the tenant's whole monitoring dark — including their alerting — to punish one bad metric. Budgets are per-metric precisely so the blast radius of enforcement matches the blast radius of the mistake."}
+        {
+          "t": "At intake: a per-metric series budget rejects or relabels new series",
+          "correct": true,
+          "why": "Defense at the door. Intake tracks approximate distinct-series counts (HyperLogLog — a KB-scale counter is all you can afford at 5M points/sec) and contains the explosion where it's cheapest: before storage. Existing series keep flowing; the tenant sees a loud 'over budget' counter."
+        },
+        {
+          "t": "At the shards: evict the oldest series to make room for new ones",
+          "correct": false,
+          "why": "This is cleanup after the damage — the shards have already paid RAM and index cost for millions of junk series, and you're now evicting the legitimate data to keep the accident. Containment must happen before allocation."
+        },
+        {
+          "t": "Autoscale the shard fleet to absorb the new series",
+          "correct": false,
+          "why": "Feeding the explosion. You'd be provisioning ~100GB of RAM in real time to store data that should never have been metrics — and tomorrow's session labels will demand it again. Scaling is for legitimate growth, not accidents."
+        },
+        {
+          "t": "Suspend the tenant's ingest entirely until they roll back",
+          "correct": false,
+          "why": "Too blunt: it takes the tenant's whole monitoring dark — including their alerting — to punish one bad metric. Budgets are per-metric precisely so the blast radius of enforcement matches the blast radius of the mistake."
+        }
       ]
     },
     {
-      "id": "p3c18-q12", "level": 2, "type": "mcq", "tag": "agents",
+      "id": "p3c18-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "agents",
       "q": "The intake fleet is completely down for 20 minutes. What did customers actually lose, in a well-designed system?",
       "options": [
-        {"t": "A permanent 20-minute gap in every chart", "correct": false,
-         "why": "Only if agents are fire-and-forget. With a local disk buffer (~30 minutes), the data measured during the outage survives on the customer's own machines and backfills on reconnect."},
-        {"t": "Nothing at all — the system is redundant", "correct": false,
-         "why": "Too rosy. Alert evaluation ran late for 20 minutes because fresh data wasn't arriving — that's a real degradation, and an honest design admits it rather than claiming zero impact."},
-        {"t": "No measured data — agents buffered to disk — but alerting was late; on reconnect, agents send freshest points first and trickle the backlog, rate-limited", "correct": true,
-         "why": "The complete honest answer. Freshest-first matters because alerting needs now, not twenty minutes ago; rate-limiting the backlog matters because 100K agents flushing at once would be the retry stampede (chapter 2.7) that kills the intake that just recovered."},
-        {"t": "Duplicated points, since agents retry blindly", "correct": false,
-         "why": "Retries do produce duplicates, but idempotent windowing makes reprocessing rebuild identical aggregates — duplicates are a solved non-event here, not the loss."}
+        {
+          "t": "A permanent 20-minute hole in every chart, since nothing was collecting",
+          "correct": false,
+          "why": "Only if agents are fire-and-forget. With a local disk buffer (~30 minutes), the data measured during the outage survives on the customer's own machines and backfills on reconnect."
+        },
+        {
+          "t": "Nothing at all — the system is redundant",
+          "correct": false,
+          "why": "Too rosy. Alert evaluation ran late for 20 minutes because fresh data wasn't arriving — that's a real degradation, and an honest design admits it rather than claiming zero impact."
+        },
+        {
+          "t": "No measured data — agents buffered to disk — but alerting ran late",
+          "correct": true,
+          "why": "The complete honest answer. Freshest-first matters because alerting needs now, not twenty minutes ago; rate-limiting the backlog matters because 100K agents flushing at once would be the retry stampede (chapter 2.7) that kills the intake that just recovered."
+        },
+        {
+          "t": "Duplicated points, since agents retry blindly",
+          "correct": false,
+          "why": "Retries do produce duplicates, but idempotent windowing makes reprocessing rebuild identical aggregates — duplicates are a solved non-event here, not the loss."
+        }
       ]
     },
     {
-      "id": "p3c18-q13", "level": 2, "type": "mcq", "tag": "alerting",
+      "id": "p3c18-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "alerting",
       "q": "You have 100K alert rules, each needing evaluation every ~30 seconds. Why does the design evaluate them on the stream instead of polling the TSDB?",
       "options": [
-        {"t": "Polling can't detect conditions that last less than 30 seconds", "correct": false,
-         "why": "True but not the driver — streaming windows are also 10s-grained, and 'for 5 minutes' durations deliberately ignore blips. The killer argument is load, not resolution."},
-        {"t": "Polling would be 3,300 heavyweight queries/sec of permanent background load, competing with humans mid-incident; streaming filters data you already produce, for free", "correct": true,
-         "why": "The estimate is the answer: 100K ÷ 30s ≈ 3,300 QPS, most of it re-reading data written seconds ago, stealing capacity from the engineers staring at dashboards during an outage. Evaluators hold small per-rule state and update it as windows flow past — alert latency equals ingest freshness. The honest footnote: gnarly rules still fall back to scheduled queries."},
-        {"t": "Streaming evaluation guarantees no false positives", "correct": false,
-         "why": "No architecture grants that — false positives come from thresholds and flapping metrics, which is why for-durations and hysteresis exist regardless of where evaluation runs."},
-        {"t": "The TSDB has no API suitable for automated queries", "correct": false,
-         "why": "It has exactly that API — dashboards use it, and the complex-rule fallback path uses it too. The TSDB can serve the queries; it just shouldn't have to serve 3,300 of them per second forever."}
+        {
+          "t": "Polling can't detect conditions that last less than 30 seconds",
+          "correct": false,
+          "why": "True but not the driver — streaming windows are also 10s-grained, and 'for 5 minutes' durations deliberately ignore blips. The killer argument is load, not resolution."
+        },
+        {
+          "t": "3,300 background queries/sec forever, competing with humans mid-incident",
+          "correct": true,
+          "why": "The estimate is the answer: 100K ÷ 30s ≈ 3,300 QPS, most of it re-reading data written seconds ago, stealing capacity from the engineers staring at dashboards during an outage. Evaluators hold small per-rule state and update it as windows flow past — alert latency equals ingest freshness. The honest footnote: gnarly rules still fall back to scheduled queries."
+        },
+        {
+          "t": "Streaming evaluation guarantees no false positives, because it sees every point",
+          "correct": false,
+          "why": "No architecture grants that — false positives come from thresholds and flapping metrics, which is why for-durations and hysteresis exist regardless of where evaluation runs."
+        },
+        {
+          "t": "The TSDB has no API suitable for automated queries",
+          "correct": false,
+          "why": "It has exactly that API — dashboards use it, and the complex-rule fallback path uses it too. The TSDB can serve the queries; it just shouldn't have to serve 3,300 of them per second forever."
+        }
       ]
     },
     {
-      "id": "p3c18-q14", "level": 2, "type": "mcq", "tag": "gaps",
+      "id": "p3c18-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "gaps",
       "q": "A TSDB shard lost two hours of one series and no replica has it. What must the query API do with that range?",
       "options": [
-        {"t": "Return zeros so charts stay continuous", "correct": false,
-         "why": "The worst option in the list. A zero-filled gap reads as 'the metric dropped to zero' — paging someone for a ghost — and, worse, convinces absence-based alerts ('page me if this stops reporting') that everything is fine. A dead host would look alive at value zero."},
-        {"t": "Interpolate between the edges of the gap", "correct": false,
-         "why": "A smoother lie is still a lie. Interpolation invents plausible-looking data across exactly the window someone may be investigating — in monitoring, fabricated continuity is worse than visible absence."},
-        {"t": "Fail the whole query so nobody sees wrong data", "correct": false,
-         "why": "Over-correction: two missing hours of one series shouldn't take down a dashboard of fifty series. Partial truth, clearly labeled, beats total refusal."},
-        {"t": "Return what exists, flag the response as partial, render the gap as a gap", "correct": true,
-         "why": "Honest gaps beat smooth lies. The human sees exactly what's known and what isn't; absence alerts can treat 'no data' as its own state rather than as zero. In monitoring, a wrong chart is worse than no chart."}
+        {
+          "t": "Return zeros so charts stay continuous",
+          "correct": false,
+          "why": "The worst option in the list. A zero-filled gap reads as 'the metric dropped to zero' — paging someone for a ghost — and, worse, convinces absence-based alerts ('page me if this stops reporting') that everything is fine. A dead host would look alive at value zero."
+        },
+        {
+          "t": "Interpolate between the edges of the gap",
+          "correct": false,
+          "why": "A smoother lie is still a lie. Interpolation invents plausible-looking data across exactly the window someone may be investigating — in monitoring, fabricated continuity is worse than visible absence."
+        },
+        {
+          "t": "Fail the whole query so that nobody can possibly see wrong data",
+          "correct": false,
+          "why": "Over-correction: two missing hours of one series shouldn't take down a dashboard of fifty series. Partial truth, clearly labeled, beats total refusal."
+        },
+        {
+          "t": "Return what exists, flag it partial, draw the gap",
+          "correct": true,
+          "why": "Honest gaps beat smooth lies. The human sees exactly what's known and what isn't; absence alerts can treat 'no data' as its own state rather than as zero. In monitoring, a wrong chart is worse than no chart."
+        }
       ]
     },
     {
-      "id": "p3c18-q15", "level": 2, "type": "mcq", "tag": "tiers",
+      "id": "p3c18-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "tiers",
       "q": "A user loads a dashboard panel: 'checkout latency by region, last 90 days.' Which storage does this read?",
       "options": [
-        {"t": "The cold tier's 1-hour rollups — the query planner picks the tier by time range, invisibly to the user", "correct": true,
-         "why": "Right. Ninety days at 1-hour resolution is ~2,160 points per series — instant. The same panel at raw 10s resolution would read ~800K points per series. The planner chooses; users never ask. Long ranges get coarse data because coarse questions are all long ranges ever ask."},
-        {"t": "The hot tier, because dashboards always need full resolution", "correct": false,
-         "why": "The hot tier only holds 7 days — and a 90-day panel physically can't render 800K points per series anyway; your screen has ~2K pixels of width. Full resolution on long ranges is cost with no benefit."},
-        {"t": "All three tiers merged, to maximize accuracy", "correct": false,
-         "why": "Stitching happens only at tier boundaries of a range that spans them. Reading all tiers for every query would triple the work for zero visible difference on a 90-day zoom level."},
-        {"t": "Whichever tier is least loaded right now", "correct": false,
-         "why": "Tiers aren't replicas — they hold different resolutions of different time windows. The 90-day range dictates the tier; load balancing happens within a tier, across shard replicas."}
+        {
+          "t": "The cold tier's 1-hour rollups — the planner picks the tier by range",
+          "correct": true,
+          "why": "Right. Ninety days at 1-hour resolution is ~2,160 points per series — instant. The same panel at raw 10s resolution would read ~800K points per series. The planner chooses; users never ask. Long ranges get coarse data because coarse questions are all long ranges ever ask."
+        },
+        {
+          "t": "The hot tier, because dashboards always need full resolution",
+          "correct": false,
+          "why": "The hot tier only holds 7 days — and a 90-day panel physically can't render 800K points per series anyway; your screen has ~2K pixels of width. Full resolution on long ranges is cost with no benefit."
+        },
+        {
+          "t": "All three tiers merged, to maximize accuracy",
+          "correct": false,
+          "why": "Stitching happens only at tier boundaries of a range that spans them. Reading all tiers for every query would triple the work for zero visible difference on a 90-day zoom level."
+        },
+        {
+          "t": "Whichever tier is least loaded right now",
+          "correct": false,
+          "why": "Tiers aren't replicas — they hold different resolutions of different time windows. The 90-day range dictates the tier; load balancing happens within a tier, across shard replicas."
+        }
       ]
     },
     {
-      "id": "p3c18-q16", "level": 2, "type": "mcq", "tag": "replay",
+      "id": "p3c18-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "replay",
       "q": "A stream aggregator node crashes with 10-second windows half-built in memory. What happens to that data?",
       "options": [
-        {"t": "It's gone — in-memory state doesn't survive crashes", "correct": false,
-         "why": "The windows are gone; the data isn't. The source points still sit in Kafka, which is the entire reason the buffer sits upstream of the stateful stage."},
-        {"t": "The replacement node replays the partition from the last committed offset and rebuilds identical windows; the failure costs freshness, never correctness", "correct": true,
-         "why": "Kafka's retention plus idempotent windowing (rerunning a window produces byte-identical output) turns a crash into a rewind. Consumers commit offsets only after windows are durably written, so nothing is skipped and duplicates rebuild harmlessly."},
-        {"t": "Agents detect the crash and resend the affected points", "correct": false,
-         "why": "Agents can't see aggregator internals and shouldn't have to — they're on customer machines. Recovery is the platform's job, and the replay log it needs is already there."},
-        {"t": "The TSDB fills the gap by interpolating neighboring windows", "correct": false,
-         "why": "Interpolation invents data — banned in this design even for display, let alone storage. And it's unnecessary: the real points are replayable from the buffer."}
+        {
+          "t": "It's gone — in-memory state doesn't survive crashes",
+          "correct": false,
+          "why": "The windows are gone; the data isn't. The source points still sit in Kafka, which is the entire reason the buffer sits upstream of the stateful stage."
+        },
+        {
+          "t": "The replacement replays Kafka and rebuilds identical windows",
+          "correct": true,
+          "why": "Kafka's retention plus idempotent windowing (rerunning a window produces byte-identical output) turns a crash into a rewind. Consumers commit offsets only after windows are durably written, so nothing is skipped and duplicates rebuild harmlessly. The failure costs freshness, never correctness."
+        },
+        {
+          "t": "Agents detect the crash and resend the affected points",
+          "correct": false,
+          "why": "Agents can't see aggregator internals and shouldn't have to — they're on customer machines. Recovery is the platform's job, and the replay log it needs is already there."
+        },
+        {
+          "t": "The TSDB fills the gap by interpolating neighboring windows",
+          "correct": false,
+          "why": "Interpolation invents data — banned in this design even for display, let alone storage. And it's unnecessary: the real points are replayable from the buffer."
+        }
       ]
     },
     {
-      "id": "p3c18-q17", "level": 2, "type": "mcq", "tag": "routing",
+      "id": "p3c18-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "routing",
       "q": "Product insists: 'customers must see latency charts per individual user.' The senior way to deliver this:",
       "options": [
-        {"t": "Add the user_id label but raise that metric's series budget to 10 million", "correct": false,
-         "why": "A budget raised to 'all our users' isn't a budget — you've paid the full explosion (shard RAM, index bloat, fan-out) and called it a feature. Budgets exist to prevent exactly this, not to be waived around it."},
-        {"t": "Hash user IDs into 1,000 buckets to keep cardinality bounded", "correct": false,
-         "why": "Clever, and it does bound cardinality — but a bucket mixes thousands of users, so 'show me user 48210' is unanswerable. Bounding the label destroyed the feature it was meant to deliver."},
-        {"t": "Ship the data as structured events into logs/traces, where user_id is an event attribute and cost scales with event volume, not distinct users", "correct": true,
-         "why": "The routing rule as product design: unbounded identities are event attributes, not metric dimensions. Per-user questions are event queries. If per-user aggregates are needed, run a dedicated stream job into its own provisioned store — a deliberate high-cardinality system, not a label smuggled into the shared TSDB."},
-        {"t": "Only track the top 1,000 users by traffic as labels", "correct": false,
-         "why": "The feature said 'per user,' and support tickets come disproportionately from users who aren't in your top 1,000. Sampling identity breaks the promise while still normalizing the bad pattern."}
+        {
+          "t": "Add the user_id label but raise that metric's series budget to 10 million",
+          "correct": false,
+          "why": "A budget raised to 'all our users' isn't a budget — you've paid the full explosion (shard RAM, index bloat, fan-out) and called it a feature. Budgets exist to prevent exactly this, not to be waived around it."
+        },
+        {
+          "t": "Hash user IDs into 1,000 buckets to keep cardinality bounded",
+          "correct": false,
+          "why": "Clever, and it does bound cardinality — but a bucket mixes thousands of users, so 'show me user 48210' is unanswerable. Bounding the label destroyed the feature it was meant to deliver."
+        },
+        {
+          "t": "Ship it as structured events into logs/traces, where user_id is an attribute",
+          "correct": true,
+          "why": "The routing rule as product design: unbounded identities are event attributes, not metric dimensions. Per-user questions are event queries. If per-user aggregates are needed, run a dedicated stream job into its own provisioned store — a deliberate high-cardinality system, not a label smuggled into the shared TSDB."
+        },
+        {
+          "t": "Only track the top 1,000 users by traffic as labels",
+          "correct": false,
+          "why": "The feature said 'per user,' and support tickets come disproportionately from users who aren't in your top 1,000. Sampling identity breaks the promise while still normalizing the bad pattern."
+        }
       ]
     },
     {
-      "id": "p3c18-q18", "level": 2, "type": "mcq", "tag": "partitioning",
+      "id": "p3c18-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "partitioning",
       "q": "Why are Kafka partitions keyed by hash(series_id) rather than round-robin?",
       "options": [
-        {"t": "Round-robin would overload some partitions", "correct": false,
-         "why": "Backwards — round-robin gives the most even spread possible. Evenness is what you'd sacrifice nothing for; ordering and locality are what you'd lose."},
-        {"t": "So every point of a given series flows through one partition, in order, to one owning shard — no cross-shard writes, ever", "correct": true,
-         "why": "Locality is the point. The aggregator building a series' 10-second windows needs that series' points arriving in one place, in order; the TSDB shard that owns the series gets everything it needs from one partition. Round-robin would scatter one series across all consumers and force a shuffle."},
-        {"t": "Hashing compresses the series IDs", "correct": false,
-         "why": "Hashing here routes; it doesn't compress. The ID travels with the point either way."},
-        {"t": "Kafka requires a key for durability guarantees", "correct": false,
-         "why": "Kafka is durable with or without keys. Keys control placement and per-key ordering — which is exactly the property this pipeline is buying."}
+        {
+          "t": "Round-robin would overload some partitions and starve others",
+          "correct": false,
+          "why": "Backwards — round-robin gives the most even spread possible. Evenness is what you'd sacrifice nothing for; ordering and locality are what you'd lose."
+        },
+        {
+          "t": "So each series' points stay in one partition, in order",
+          "correct": true,
+          "why": "Locality is the point. The aggregator building a series' 10-second windows needs that series' points arriving in one place, in order; the TSDB shard that owns the series gets everything it needs from one partition. Round-robin would scatter one series across all consumers and force a shuffle."
+        },
+        {
+          "t": "Hashing compresses the series IDs",
+          "correct": false,
+          "why": "Hashing here routes; it doesn't compress. The ID travels with the point either way."
+        },
+        {
+          "t": "Kafka requires a key for durability guarantees",
+          "correct": false,
+          "why": "Kafka is durable with or without keys. Keys control placement and per-key ordering — which is exactly the property this pipeline is buying."
+        }
       ]
     },
     {
-      "id": "p3c18-q19", "level": 3, "type": "mcq", "tag": "crux",
+      "id": "p3c18-q19",
+      "level": 3,
+      "type": "mcq",
+      "tag": "crux",
       "q": "Interviewer: 'What's the genuinely hard part of this problem?' The senior answer:",
       "options": [
-        {"t": "\"Ingesting 5M points/sec — that write volume is the core challenge.\"", "correct": false,
-         "why": "It's the impressive number, but it's the predictable one: stateless intake + partitioned Kafka + sharded storage scale it linearly. A firehose you can provision for is an engineering chore, not a crux."},
-        {"t": "\"Series cardinality. It's the one axis set by user label choices, multiplicatively, that can double overnight — everything expensive scales with series count, so I'd spend my depth on intake-side defenses.\"", "correct": true,
-         "why": "Crux found and justified: points are cheap, series are expensive, and series count is the variable the platform doesn't control. Naming the defense location (intake, before shards allocate) and steering your time there is exactly the E5 move this problem exists to elicit."},
-        {"t": "\"Designing a query language expressive enough for all dashboards.\"", "correct": false,
-         "why": "Real work, but bounded and well-trodden — label matchers plus aggregation covers the product. No interviewer lit this room on fire."},
-        {"t": "\"Storing 13 months of data affordably.\"", "correct": false,
-         "why": "Solved by two known techniques the moment you name them: Gorilla-style compression and retention tiers. A hard part that dissolves in two sentences wasn't the crux."}
+        {
+          "t": "\"Ingesting 5M points a second — that raw write volume is the core challenge here.\"",
+          "correct": false,
+          "why": "It's the impressive number, but it's the predictable one: stateless intake + partitioned Kafka + sharded storage scale it linearly. A firehose you can provision for is an engineering chore, not a crux."
+        },
+        {
+          "t": "\"Cardinality — series count is the axis users set, and it can double overnight.\"",
+          "correct": true,
+          "why": "Crux found and justified: points are cheap, series are expensive, and series count is the variable the platform doesn't control. Naming the defense location (intake, before shards allocate) and steering your time there is exactly the E5 move this problem exists to elicit."
+        },
+        {
+          "t": "\"Designing a query language expressive enough for all dashboards.\"",
+          "correct": false,
+          "why": "Real work, but bounded and well-trodden — label matchers plus aggregation covers the product. No interviewer lit this room on fire."
+        },
+        {
+          "t": "\"Storing 13 months of data affordably.\"",
+          "correct": false,
+          "why": "Solved by two known techniques the moment you name them: Gorilla-style compression and retention tiers. A hard part that dissolves in two sentences wasn't the crux."
+        }
       ]
     },
     {
-      "id": "p3c18-q20", "level": 3, "type": "mcq", "tag": "shedding",
+      "id": "p3c18-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "shedding",
       "q": "Intake hits capacity during a major customer incident (their metrics tripled). Commit to a shedding policy.",
       "options": [
-        {"t": "Drop points uniformly at random across all tenants — it's the fairest", "correct": false,
-         "why": "Fair by bytes, catastrophic by value: a random drop degrades alert-feeding series and junk custom metrics equally. During an incident the pager is the product; fairness that dulls it is the wrong fairness."},
-        {"t": "Backpressure the agents: tell them to slow collection until intake recovers", "correct": false,
-         "why": "Agents must never be told to stop measuring — the data collected during the outage is exactly what the incident review needs. Backpressure belongs between intake and storage (that's the Kafka buffer), not between reality and the agent."},
-        {"t": "Shed unreferenced custom metrics first, per-tenant; protect platform-health series and anything an alert rule references; count every drop where the tenant can see it", "correct": true,
-         "why": "Priority shedding, chapter 2.7 style: degrade the nice-to-haves, defend the pager. The visible drop counter matters as much as the policy — a silent shed is a lie in the data, and 'why is my graph thinner' becomes a support mystery instead of a labeled event."},
-        {"t": "Accept everything and let Kafka absorb the overload", "correct": false,
-         "why": "The buffer absorbs storage-side trouble; this is intake-side saturation — the fleet can't authenticate and validate fast enough, so the queue never receives the excess. Buffers move pain downstream in time; they don't create CPU upstream."}
+        {
+          "t": "Drop points uniformly at random across all tenants — it's the fairest",
+          "correct": false,
+          "why": "Fair by bytes, catastrophic by value: a random drop degrades alert-feeding series and junk custom metrics equally. During an incident the pager is the product; fairness that dulls it is the wrong fairness."
+        },
+        {
+          "t": "Backpressure the agents: tell them to slow collection until intake recovers",
+          "correct": false,
+          "why": "Agents must never be told to stop measuring — the data collected during the outage is exactly what the incident review needs. Backpressure belongs between intake and storage (that's the Kafka buffer), not between reality and the agent."
+        },
+        {
+          "t": "Shed unreferenced custom metrics first; protect alert-referenced series",
+          "correct": true,
+          "why": "Priority shedding, chapter 2.7 style: degrade the nice-to-haves, defend the pager. The visible drop counter matters as much as the policy — a silent shed is a lie in the data, and 'why is my graph thinner' becomes a support mystery instead of a labeled event."
+        },
+        {
+          "t": "Accept everything and let Kafka absorb the overload",
+          "correct": false,
+          "why": "The buffer absorbs storage-side trouble; this is intake-side saturation — the fleet can't authenticate and validate fast enough, so the queue never receives the excess. Buffers move pain downstream in time; they don't create CPU upstream."
+        }
       ]
     },
     {
-      "id": "p3c18-q21", "level": 3, "type": "mcq", "tag": "10x",
+      "id": "p3c18-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "10x",
       "q": "The interviewer 10x's you: one million hosts, 50M points/sec, 500M series. What breaks first?",
       "options": [
-        {"t": "Kafka — it can't move 50M points/sec", "correct": false,
-         "why": "Batched and compressed, this is a few GB/s across many partitions — well within a boring Kafka deployment's range. Partitioned logs are the part that scales by addition."},
-        {"t": "Series-shaped things: shard head/index memory (500M × ~2KB ≈ a terabyte of RAM to distribute) and query fan-out, where the root's merge becomes the bottleneck", "correct": true,
-         "why": "As the crux predicted, the scaling axis is series, not points. First moves: split shards along the consistent-hash ring, add an intermediate merge layer so the query tree is two levels deep, and put giant tenants in their own cells so their accidents stay theirs. If you said 'add more Kafka,' you scaled the part that was already fine."},
-        {"t": "The intake fleet's CPU", "correct": false,
-         "why": "Stateless fleets are the easiest thing in the design to grow — 10x the load is 10x the nodes behind the load balancer. Linear problems don't 'break first'; they just cost more."},
-        {"t": "Disk space for the cold tier", "correct": false,
-         "why": "The cold tier is 1-hour rollups in object storage — the cheapest bytes in the whole system, and 10x of cheap is still cheap. Cost grows; nothing breaks."}
+        {
+          "t": "Kafka — no cluster can move 50M points a second reliably",
+          "correct": false,
+          "why": "Batched and compressed, this is a few GB/s across many partitions — well within a boring Kafka deployment's range. Partitioned logs are the part that scales by addition."
+        },
+        {
+          "t": "Series-shaped things: shard index memory and query fan-out width",
+          "correct": true,
+          "why": "As the crux predicted, the scaling axis is series, not points. First moves: split shards along the consistent-hash ring, add an intermediate merge layer so the query tree is two levels deep, and put giant tenants in their own cells so their accidents stay theirs. If you said 'add more Kafka,' you scaled the part that was already fine."
+        },
+        {
+          "t": "CPU headroom on the stateless intake fleet",
+          "correct": false,
+          "why": "Stateless fleets are the easiest thing in the design to grow — 10x the load is 10x the nodes behind the load balancer. Linear problems don't 'break first'; they just cost more."
+        },
+        {
+          "t": "Cold-tier disk capacity in object storage",
+          "correct": false,
+          "why": "The cold tier is 1-hour rollups in object storage — the cheapest bytes in the whole system, and 10x of cheap is still cheap. Cost grows; nothing breaks."
+        }
       ]
     },
     {
-      "id": "p3c18-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "id": "p3c18-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
       "q": "A teammate argues: 'Storage is cheap now. Kill the downsampling jobs and keep raw 10-second data for 13 months — a simpler system.' The strongest senior response:",
       "options": [
-        {"t": "Agree — fewer moving parts always wins", "correct": false,
-         "why": "Simplicity is a value, not a trump card. This 'simpler' system quietly moves the aggregation work into every long-range query, repeatedly, at the worst time — complexity relocated, not removed."},
-        {"t": "Disagree: 2.5PB/year of raw data is unaffordable to store", "correct": false,
-         "why": "Weak ground — Gorilla-style compression brings it to ~200TB, which object storage sells cheaply. Argue storage price and the teammate wins the argument you chose; the real bill was never storage."},
-        {"t": "Concede storage is affordable, then show the query math: 'last quarter' reads ~800K raw points per series versus ~2K hourly rollups — a 400x penalty on the wide queries humans run while impatient", "correct": true,
-         "why": "Steelman, then kill with the right number. You'd end up caching coarse aggregates computed at query time, repeatedly — which is downsampling with worse economics. And the honest coda: if the product were a rarely-queried forensic archive, the teammate would be right. The design follows the query pattern, not the storage price."},
-        {"t": "Disagree — deleting data is always safer than keeping it", "correct": false,
-         "why": "Downsampling isn't about deletion being safe; old rollups are kept for 13 months. This argument fights a position nobody took."}
+        {
+          "t": "Agree — fewer moving parts always wins",
+          "correct": false,
+          "why": "Simplicity is a value, not a trump card. This 'simpler' system quietly moves the aggregation work into every long-range query, repeatedly, at the worst time — complexity relocated, not removed."
+        },
+        {
+          "t": "Disagree: 2.5PB a year of raw data is simply unaffordable to store anywhere",
+          "correct": false,
+          "why": "Weak ground — Gorilla-style compression brings it to ~200TB, which object storage sells cheaply. Argue storage price and the teammate wins the argument you chose; the real bill was never storage."
+        },
+        {
+          "t": "Concede the storage point, then show the 400x query-read penalty",
+          "correct": true,
+          "why": "Steelman, then kill with the right number. You'd end up caching coarse aggregates computed at query time, repeatedly — which is downsampling with worse economics. And the honest coda: if the product were a rarely-queried forensic archive, the teammate would be right. The design follows the query pattern, not the storage price."
+        },
+        {
+          "t": "Disagree — deleting data is always safer than keeping it",
+          "correct": false,
+          "why": "Downsampling isn't about deletion being safe; old rollups are kept for 13 months. This argument fights a position nobody took."
+        }
       ]
     },
     {
-      "id": "p3c18-q23", "level": 3, "type": "mcq", "tag": "war-story",
-      "q": "Datadog's March 2023 outage began when an automatic systemd security update rolled out across tens of thousands of VMs — spanning multiple regions and multiple cloud providers — nearly simultaneously. The most transferable design lesson:",
+      "id": "p3c18-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "war-story",
+      "q": "Datadog's March 2023 outage began when an automatic systemd security update rolled out across tens of thousands of VMs — five regions, three different cloud providers — inside one hour. The most transferable design lesson:",
       "options": [
-        {"t": "Run on a single cloud provider to reduce complexity", "correct": false,
-         "why": "The outage crossed clouds precisely because the cause wasn't a cloud — it was a uniform change. One provider or three, an auto-update channel touching every host at once has the same blast radius."},
-        {"t": "A change applied everywhere at once is a correlated failure domain that tunnels under region and cloud 'independence' — every change, even a base-OS update, must roll out gradually like a deploy", "correct": true,
-         "why": "Geographic redundancy defends against geographic failures; it's helpless against a simultaneous self-inflicted change. Datadog's own fixes included disabling the legacy auto-update channel and staging OS changes. Canary one node, one shard, one evaluator — the platform deploys like the serious systems it monitors."},
-        {"t": "Never apply security updates to production hosts", "correct": false,
-         "why": "Unpatched fleets trade one outage class for a worse one. The lesson is about the delivery mechanism — unstaged and simultaneous — not about patching itself."},
-        {"t": "systemd is too risky for large fleets", "correct": false,
-         "why": "Blaming the component misses the class of failure. Any uniform automatic change — package, config, certificate — could have written the same postmortem; the fix is staging, not a different init system."}
+        {
+          "t": "Run on a single cloud provider, since multi-cloud complexity caused this",
+          "correct": false,
+          "why": "The outage crossed clouds precisely because the cause wasn't a cloud — it was a uniform change. One provider or three, an auto-update channel touching every host at once has the same blast radius."
+        },
+        {
+          "t": "A simultaneous change is its own failure domain; stage everything",
+          "correct": true,
+          "why": "Geographic redundancy defends against geographic failures; it's helpless against a simultaneous self-inflicted change. Datadog's own fixes included disabling the legacy auto-update channel and staging OS changes. Canary one node, one shard, one evaluator — the platform deploys like the serious systems it monitors."
+        },
+        {
+          "t": "Never apply security updates to production hosts",
+          "correct": false,
+          "why": "Unpatched fleets trade one outage class for a worse one. The lesson is about the delivery mechanism — unstaged and simultaneous — not about patching itself."
+        },
+        {
+          "t": "systemd is too risky for large fleets",
+          "correct": false,
+          "why": "Blaming the component misses the class of failure. Any uniform automatic change — package, config, certificate — could have written the same postmortem; the fix is staging, not a different init system."
+        }
       ]
     },
     {
-      "id": "p3c18-q24", "level": 3, "type": "mcq", "tag": "self-dep",
+      "id": "p3c18-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "self-dep",
       "q": "Design review for the alerting path. Which statement shows the self-dependency rule applied all the way down?",
       "options": [
-        {"t": "\"Alert evaluation reads from TSDB replicas, so a primary failure doesn't stop paging\"", "correct": false,
-         "why": "Better than reading a single primary, but the pager still dies with the TSDB cluster — replication protects against node loss, not against the storage layer itself being the incident."},
-        {"t": "\"Evaluators consume the aggregate stream directly and hold rule state in memory; the final notification hop rides an independent third-party path — pages go out even if every TSDB shard is dead\"", "correct": true,
-         "why": "That's the razor applied one level down: the component that delivers pages depends on almost nothing. 'Evaluate stream, send page' survives storage death, and the external notification path answers the last question — who pages you when your own notifier is what broke?"},
-        {"t": "\"The platform monitors its own components, so failures are detected quickly\"", "correct": false,
-         "why": "Self-observation is necessary and present, but detection isn't delivery. A platform that knows it's dying and can't tell anyone has failed at its one irreducible job."},
-        {"t": "\"Alerting runs in the same cells as ingestion for data locality\"", "correct": false,
-         "why": "Locality optimizes the common case by coupling the pager's fate to the ingest cell's — the precise coupling the rule exists to forbid. Milliseconds saved daily, blindness purchased for the one day it matters."}
+        {
+          "t": "\"Alert evaluation reads from TSDB replicas, so a primary failure doesn't stop paging\"",
+          "correct": false,
+          "why": "Better than reading a single primary, but the pager still dies with the TSDB cluster — replication protects against node loss, not against the storage layer itself being the incident."
+        },
+        {
+          "t": "\"Evaluators read the aggregate stream and page over an independent path\"",
+          "correct": true,
+          "why": "That's the razor applied one level down: the component that delivers pages depends on almost nothing. 'Evaluate stream, send page' survives storage death, and the external notification path answers the last question — who pages you when your own notifier is what broke? Rule state lives in the evaluator's memory, so nothing in the paging path touches storage."
+        },
+        {
+          "t": "\"The platform monitors its own components, so failures are detected quickly\"",
+          "correct": false,
+          "why": "Self-observation is necessary and present, but detection isn't delivery. A platform that knows it's dying and can't tell anyone has failed at its one irreducible job."
+        },
+        {
+          "t": "\"Alerting runs in the same cells as ingestion for data locality\"",
+          "correct": false,
+          "why": "Locality optimizes the common case by coupling the pager's fate to the ingest cell's — the precise coupling the rule exists to forbid. Milliseconds saved daily, blindness purchased for the one day it matters."
+        }
       ]
     },
     {
-      "id": "p3c18-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "id": "p3c18-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
       "q": "A candidate proposes: 'For percentiles I'll compute p99 per host every 10 seconds, store that, and average at query time — simple and cheap.' What does the interviewer conclude?",
       "options": [
-        {"t": "Reasonable approximation — dashboards don't need exact percentiles", "correct": false,
-         "why": "The averaged number isn't inexact; it's unrelated to the truth. In the two-host example it reads 1,025ms whether the real fleet p99 is 2,000ms or 50ms. An error that doesn't shrink with more data isn't an approximation."},
-        {"t": "Acceptable if the dashboard labels it 'avg of host p99s'", "correct": false,
-         "why": "Honest labeling of a meaningless statistic still ships a meaningless statistic — and it will sit next to an SLO threshold where someone will read it as the fleet p99. Disclosure doesn't rescue math."},
-        {"t": "The mistake is disqualifying on its own — percentile mergeability is core knowledge at a senior bar", "correct": false,
-         "why": "Interviewers distinguish a gap from a defended error. This concept is teachable in one probe question, and plenty of strong engineers first meet it in exactly this way; what's graded is what happens after the counterexample lands."},
-        {"t": "A knowledge gap, recoverable if the candidate reasons through a counterexample when probed — and fatal if they defend the average after seeing it", "correct": true,
-         "why": "Interviewers probe exactly this ('host A fast, host B sick — what does your average show?'). Working the counterexample and self-correcting to mergeable summaries reads as first-principles strength; insisting the average is 'close enough' after the demonstration is the real failure, because it shows numbers don't gate this candidate's decisions."}
+        {
+          "t": "Reasonable approximation — dashboards don't need exact percentiles",
+          "correct": false,
+          "why": "The averaged number isn't inexact; it's unrelated to the truth. In the two-host example it reads 1,025ms whether the real fleet p99 is 2,000ms or 50ms. An error that doesn't shrink with more data isn't an approximation."
+        },
+        {
+          "t": "Acceptable if the dashboard labels it 'avg of host p99s'",
+          "correct": false,
+          "why": "Honest labeling of a meaningless statistic still ships a meaningless statistic — and it will sit next to an SLO threshold where someone will read it as the fleet p99. Disclosure doesn't rescue math."
+        },
+        {
+          "t": "The mistake is disqualifying on its own — percentile mergeability is core knowledge at a senior bar",
+          "correct": false,
+          "why": "Interviewers distinguish a gap from a defended error. This concept is teachable in one probe question, and plenty of strong engineers first meet it in exactly this way; what's graded is what happens after the counterexample lands."
+        },
+        {
+          "t": "A recoverable gap — unless they defend the average after the counterexample",
+          "correct": true,
+          "why": "Interviewers probe exactly this ('host A fast, host B sick — what does your average show?'). Working the counterexample and self-correcting to mergeable summaries reads as first-principles strength; insisting the average is 'close enough' after the demonstration is the real failure, because it shows numbers don't gate this candidate's decisions."
+        }
       ]
     }
   ]

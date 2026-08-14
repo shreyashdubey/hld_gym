@@ -2,353 +2,757 @@
   "chapter": "p3c19",
   "items": [
     {
-      "id": "p3c19-q01", "level": 1, "type": "mcq", "tag": "inverted-index",
+      "id": "p3c19-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "posting-list",
       "q": "What does an inverted index actually store?",
       "options": [
-        {"t": "For each document, the list of terms it contains", "correct": false,
-         "why": "That's the forward direction — what the raw document already is. The 'inverted' part is flipping it, so a query term leads straight to its documents."},
-        {"t": "For each term, a sorted list of the documents containing it, with frequencies and positions", "correct": true,
-         "why": "Right. Term → posting list (doc IDs, sorted, plus per-doc frequency for ranking and word positions for phrases). One lookup per query term instead of scanning every document."},
-        {"t": "A B-tree over the concatenated text of all documents", "correct": false,
-         "why": "B-trees are sorted by value from the first character, so they answer prefix questions only — that's exactly why LIKE '%term%' scans everything and why search needs a different structure."},
-        {"t": "A hash of each document's full text for deduplication", "correct": false,
-         "why": "Content hashing helps dedupe (GitHub used it to shrink 115TB of code), but it can't answer 'which docs contain this word' — that's the posting list's job."}
+        {
+          "t": "Term → sorted list of the docs containing it",
+          "correct": true,
+          "why": "That's the whole idea: term to posting list. Instead of document to words, you store word to documents, so search becomes fetching a couple of short lists instead of reading everything."
+        },
+        {
+          "t": "For each document, the list of terms it contains",
+          "correct": false,
+          "why": "That's the forward index, which is what you already have — and it forces you to scan every document to answer a query. Inverting it is the entire point."
+        },
+        {
+          "t": "A B-tree over the text column",
+          "correct": false,
+          "why": "A B-tree answers 'starts with' but never 'contains', which is exactly why LIKE '%x%' degrades to a full scan on 500M rows."
+        },
+        {
+          "t": "A compressed copy of every document, sorted by relevance",
+          "correct": false,
+          "why": "Relevance depends on the query, so nothing can be pre-sorted by it. The index stores term-to-document mappings; ranking happens at query time."
+        }
       ]
     },
     {
-      "id": "p3c19-q02", "level": 1, "type": "mcq", "tag": "postings",
-      "q": "Posting lists are kept sorted by doc ID. What does that buy?",
+      "id": "p3c19-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "sorted-postings",
+      "q": "Why are doc IDs in a posting list kept in ascending order?",
       "options": [
-        {"t": "Results come back sorted by relevance automatically", "correct": false,
-         "why": "Doc ID order has nothing to do with relevance — scoring happens separately. Sorting is for the matching step, not the ranking step."},
-        {"t": "Newer documents appear first in results", "correct": false,
-         "why": "Doc IDs aren't a freshness ranking. Recency, if wanted, is a scoring feature in the rerank phase — not a property of posting order."},
-        {"t": "AND queries become cheap: two sorted lists intersect in one linear pass, and skip pointers let you leap blocks", "correct": true,
-         "why": "Yes. Intersection of sorted lists is a two-finger merge, and skip data lets the rare term drive while whole compressed blocks of the common term's list are jumped over unread."},
-        {"t": "It makes the index smaller", "correct": false,
-         "why": "Close to a real point — sorted IDs delta-encode well, which does compress — but the load-bearing reason is fast intersection. An unsorted list could be compressed too; it couldn't be intersected cheaply."}
+        {
+          "t": "So results come back in the right ranking order",
+          "correct": false,
+          "why": "Doc ID order has nothing to do with relevance order. Ranking is computed by the scorer after matching."
+        },
+        {
+          "t": "Intersection becomes a one-pass merge, and gaps compress",
+          "correct": true,
+          "why": "Two wins from one property. Sorted lists intersect in a single pass, and storing the gaps (12, 7, 8, ...) gives you small numbers that pack into a byte or two — which is how 50 billion postings fit in 250 GB and stay in cache."
+        },
+        {
+          "t": "Because Lucene requires documents to be inserted in ID order",
+          "correct": false,
+          "why": "Documents arrive in any order; the engine assigns and orders internal IDs itself. The sortedness is a design choice for speed and compression."
+        },
+        {
+          "t": "It keeps deletes cheap",
+          "correct": false,
+          "why": "Deletes are cheap because of tombstone bitmaps, not ordering. Ordering buys intersection speed and compression."
+        }
       ]
     },
     {
-      "id": "p3c19-q03", "level": 1, "type": "mcq", "tag": "analysis",
-      "q": "Why must a query pass through the same analyzer as the indexed documents?",
+      "id": "p3c19-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "skip-pointers",
+      "q": "What is a skip pointer in a posting list?",
       "options": [
-        {"t": "The index stores analyzed terms — documents indexed 'flight' won't match a query for 'flights' unless the query stems the same way", "correct": true,
-         "why": "Right. The analyzer is a contract between write and read. Mismatched analysis is the classic silent bug: zero errors, zero results."},
-        {"t": "For security, to sanitize user input", "correct": false,
-         "why": "Sanitization is real but separate. The analyzer's job is linguistic normalization so query terms and index terms land in the same vocabulary."},
-        {"t": "To make queries case-sensitive", "correct": false,
-         "why": "Backwards — analyzers usually lowercase both sides, making search case-insensitive. The point is doing the same thing on both sides, whatever that thing is."},
-        {"t": "It's an optimization; skipping it just makes queries slower", "correct": false,
-         "why": "It's correctness, not speed. An unanalyzed query for 'Flights' against an index of stemmed lowercase terms doesn't run slowly — it finds nothing."}
+        {
+          "t": "A checkpoint every N entries, with a byte offset",
+          "correct": true,
+          "why": "Right — the express-train stops. When you ask 'is doc 4,410 in this list', you hop across checkpoints until you overshoot, then scan one small block, instead of walking millions of entries."
+        },
+        {
+          "t": "A pointer to the next segment holding the same term",
+          "correct": false,
+          "why": "Segments are separate indexes consulted independently. Skip pointers work inside one posting list."
+        },
+        {
+          "t": "A cached result for a previously seen query",
+          "correct": false,
+          "why": "That's a query cache, a different layer entirely. Skips are structural data inside the posting list itself."
+        },
+        {
+          "t": "A bloom filter that says whether a term exists",
+          "correct": false,
+          "why": "Bloom filters answer membership approximately; skip pointers accelerate exact seeks within a list you already found."
+        }
       ]
     },
     {
-      "id": "p3c19-q04", "level": 1, "type": "mcq", "tag": "stopwords",
-      "q": "The textbook says drop stopwords ('the', 'to', 'a'). Why do modern engines keep them?",
+      "id": "p3c19-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "bm25",
+      "q": "Compared with raw term counts, what do BM25's two main adjustments do?",
       "options": [
-        {"t": "Disk got cheap, so why not", "correct": false,
-         "why": "Cheap storage makes keeping them affordable, but that's the enabler, not the reason. There's a query class that breaks without them."},
-        {"t": "Phrase queries need them — 'the who' or 'to be or not to be' can't be matched from an index that threw those words away", "correct": true,
-         "why": "Right. Phrases are verified from stored positions, and a phrase made of stopwords has nothing to verify against if they were dropped. Compression makes the cost bearable, and BM25's IDF already makes near-universal terms weigh almost nothing."},
-        {"t": "Stopwords carry the most relevance signal", "correct": false,
-         "why": "The opposite — a term in every document discriminates nothing, which is exactly why dropping them was the old advice. They're kept for matching (phrases), not for scoring."},
-        {"t": "Removing them is too CPU-expensive at index time", "correct": false,
-         "why": "Filtering a token stream against a small word list is nearly free. Cost was never the argument on either side."}
+        {
+          "t": "Saturate repeats and normalize for length",
+          "correct": true,
+          "why": "Exactly. The 60th mention of 'waterproof' adds almost nothing, and a 4,000-word page shouldn't beat a tight 30-word listing just by being long. Those two fixes are the whole argument for BM25."
+        },
+        {
+          "t": "Boost newer documents and penalize old ones",
+          "correct": false,
+          "why": "Freshness is a ranking feature you may add yourself, but it isn't part of BM25 — BM25 only looks at term statistics and lengths."
+        },
+        {
+          "t": "Remove stopwords and apply stemming",
+          "correct": false,
+          "why": "Those are analyzer steps that run before scoring. BM25 operates on whatever terms the analyzer produced."
+        },
+        {
+          "t": "Weight documents by click-through rate",
+          "correct": false,
+          "why": "Behavioral signals belong to the phase-2 reranker. BM25 knows nothing about users."
+        }
       ]
     },
     {
-      "id": "p3c19-q05", "level": 1, "type": "mcq", "tag": "bm25",
-      "q": "BM25 improves on raw TF-IDF with two fixes. Which pair?",
+      "id": "p3c19-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "idf",
+      "q": "In the query 'gore-tex boots', which term contributes more to the score, and why?",
       "options": [
-        {"t": "Synonym expansion and typo tolerance", "correct": false,
-         "why": "Both real features, both living elsewhere — synonyms in query rewriting, typos in fuzzy matching. BM25 is purely a scoring formula over frequencies and lengths."},
-        {"t": "Term-frequency saturation and document-length normalization", "correct": true,
-         "why": "Yes. The 50th occurrence of a term adds ~nothing (stuffing stops paying), and matches in a short doc outweigh the same matches buried in a long one. That's the whole trick, and it's been Lucene's default since 2016."},
-        {"t": "Click-through weighting and personalization", "correct": false,
-         "why": "Behavioral signals belong to the rerank phase — BM25 can't see users at all. It's computed entirely from what's already in the posting lists."},
-        {"t": "Caching of scores and precomputed rankings", "correct": false,
-         "why": "Those are systems optimizations, not scoring improvements. BM25 changed what the score IS, not how it's cached."}
+        {
+          "t": "'boots', because it appears in more documents",
+          "correct": false,
+          "why": "Backwards. Appearing everywhere makes a term uninformative — it barely narrows anything down."
+        },
+        {
+          "t": "They contribute equally; BM25 treats query terms symmetrically",
+          "correct": false,
+          "why": "BM25 weights every term by its IDF, so rare and common terms are treated very differently."
+        },
+        {
+          "t": "'gore-tex', because it is rare across the corpus",
+          "correct": true,
+          "why": "Inverse document frequency: a term in 5,000 listings discriminates far better than one in 8 million. That's also why you drive the intersection from the rare term — cheap and correct agree."
+        },
+        {
+          "t": "Whichever appears first in the query",
+          "correct": false,
+          "why": "Position in the query text has no effect on bag-of-words scoring. Only phrase matching cares about order."
+        }
       ]
     },
     {
-      "id": "p3c19-q06", "level": 1, "type": "mcq", "tag": "segments",
-      "q": "In Lucene's design, what is a segment?",
+      "id": "p3c19-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "segments",
+      "q": "What is a segment in a Lucene-based search engine?",
       "options": [
-        {"t": "A shard's replica on another machine", "correct": false,
-         "why": "Replicas are whole-shard copies for availability. Segments live inside a single shard — they're how it organizes its own files."},
-        {"t": "A complete, immutable mini-index written once when the RAM buffer is refreshed, and never modified after", "correct": true,
-         "why": "Right — term dictionary, postings, doc values, frozen at refresh time. Immutability is what allows aggressive compression, fearless caching, file-copy replication, and lock-free search."},
-        {"t": "The in-memory buffer where incoming documents wait", "correct": false,
-         "why": "The buffer is the segment's larva — unsearchable RAM state. It becomes a segment at refresh, and that moment is when documents become findable."},
-        {"t": "A range of doc IDs assigned to one shard", "correct": false,
-         "why": "That describes shard routing (and ours is by hash, not range). Segments are a storage-layer concept below sharding entirely."}
+        {
+          "t": "A small immutable index file made at each refresh",
+          "correct": true,
+          "why": "Yes. The in-memory buffer is frozen into a brand-new mini-index once per refresh interval, never edited afterwards, and a shard is just a stack of these consulted together."
+        },
+        {
+          "t": "A shard replica living on another node",
+          "correct": false,
+          "why": "Replicas are copies of a whole shard across machines. Segments live inside a single shard."
+        },
+        {
+          "t": "The portion of a posting list that fits in one disk block",
+          "correct": false,
+          "why": "Posting lists are stored in blocks, but a segment is a whole self-contained index — term dictionary, postings, doc values and all."
+        },
+        {
+          "t": "A cached query result set",
+          "correct": false,
+          "why": "Segments are on-disk index structures, not caches of answers."
+        }
       ]
     },
     {
-      "id": "p3c19-q07", "level": 1, "type": "mcq", "tag": "deletes",
-      "q": "Segments are immutable. So what happens when a document is deleted?",
+      "id": "p3c19-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "deletes",
+      "q": "What happens when you delete a document from a search index?",
       "options": [
-        {"t": "Its entries are removed from every posting list it appears in", "correct": false,
-         "why": "That's the in-place update this whole design exists to avoid — hundreds of random writes into compressed sorted lists. Immutable means immutable."},
-        {"t": "The segment containing it is rewritten immediately without it", "correct": false,
-         "why": "Rewriting a multi-gigabyte segment per delete would melt the disks. Rewriting does eventually remove it — but as a byproduct of a scheduled merge, not per delete."},
-        {"t": "It's marked dead in a per-segment tombstone bitmap; queries skip it, and a later merge physically drops it", "correct": true,
-         "why": "Right. Deletes hide documents instantly and cheaply; reclaiming the bytes is deferred to background compaction. An update is this plus reindexing the new version into the buffer."},
-        {"t": "Deletes aren't supported; documents expire via TTL", "correct": false,
-         "why": "Search indexes handle deletes constantly — every edited listing is a delete plus an insert. TTLs exist in some systems but aren't the mechanism."}
+        {
+          "t": "Its entries are removed from every posting list immediately",
+          "correct": false,
+          "why": "That would mean rewriting roughly a hundred compressed, sorted lists per delete — the exact cost immutability exists to avoid."
+        },
+        {
+          "t": "The segment containing it is deleted",
+          "correct": false,
+          "why": "That would drop thousands of unrelated live documents. Only the merge process rewrites segments, and it copies the survivors."
+        },
+        {
+          "t": "A bit flips in a tombstone bitmap until the next merge",
+          "correct": true,
+          "why": "Right. The document is marked not-alive and filtered at query time, still occupying disk until a merge rewrites the segment without it. An update is a delete plus an insert."
+        },
+        {
+          "t": "It is moved to a tombstone segment",
+          "correct": false,
+          "why": "No data is moved. The deletion is recorded as a bit in a per-segment liveness mask."
+        }
       ]
     },
     {
-      "id": "p3c19-q08", "level": 1, "type": "mcq", "tag": "nrt",
-      "q": "'Near-real-time search' means a new document becomes searchable…",
+      "id": "p3c19-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "nrt",
+      "q": "Why is search described as 'near-real-time' rather than real-time?",
       "options": [
-        {"t": "At the next refresh, when the RAM buffer freezes into a segment — seconds after arrival, not instantly", "correct": true,
-         "why": "Right. Visibility is per-refresh, not per-document. Add CDC pipeline lag upstream and the honest promise is 'searchable within a few seconds' — say it before the interviewer asks."},
-        {"t": "The moment the indexer acknowledges it", "correct": false,
-         "why": "Acknowledged means buffered (and durable upstream in Kafka), not searchable. The buffer is invisible to queries until refresh freezes it."},
-        {"t": "After the next background merge completes", "correct": false,
-         "why": "Merges compact already-searchable segments — they affect efficiency, not visibility. Waiting for merges would mean minutes-to-hours of delay."},
-        {"t": "Within milliseconds, like a database read-after-write", "correct": false,
-         "why": "That's the promise this architecture deliberately doesn't make. Per-document visibility would mean per-document segments — the design trades instant visibility for sequential-write indexing."}
+        {
+          "t": "Because network latency between shards adds delay",
+          "correct": false,
+          "why": "Fan-out costs milliseconds, not seconds. The freshness delay comes from indexing, not query networking."
+        },
+        {
+          "t": "Because new documents only become visible at the next refresh",
+          "correct": true,
+          "why": "Documents sit in an in-memory buffer until the refresh interval (a second by default) freezes them into a segment. Freshness is quantized by design — that's the 'near'."
+        },
+        {
+          "t": "Because replicas are eventually consistent with the primary shard",
+          "correct": false,
+          "why": "Replica lag exists, but even the primary shard cannot show a document before the refresh that makes it searchable."
+        },
+        {
+          "t": "Because merges must complete before documents are visible",
+          "correct": false,
+          "why": "Merges are background housekeeping; a document is searchable as soon as its segment exists, long before any merge touches it."
+        }
       ]
     },
     {
-      "id": "p3c19-q09", "level": 1, "type": "mcq", "tag": "cdc",
-      "q": "How do documents get into the search index in this design?",
+      "id": "p3c19-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "doc-values",
+      "q": "Why do engines keep a column-oriented 'doc values' structure alongside the inverted index?",
       "options": [
-        {"t": "The application writes to the database and the index in the same request", "correct": false,
-         "why": "Dual-write — no transaction spans both systems, so a crash between the writes leaves them silently disagreeing forever. Chapter 1.14 buried this pattern."},
-        {"t": "CDC tails the database's replication log, publishes changes to Kafka, and indexers consume them", "correct": true,
-         "why": "Right. The DB's own commit log feeds the index, so nothing committed is missed, indexers can replay after crashes, bursts are absorbed by the queue, and consumer lag is your freshness metric for free."},
-        {"t": "A nightly batch job re-indexes changed rows", "correct": false,
-         "why": "That's how it worked when 'searchable tomorrow' was acceptable. Our requirement is seconds, which needs a continuous stream, not a cron."},
-        {"t": "Sellers' clients POST documents directly to the search API", "correct": false,
-         "why": "The index would become a second source of truth drifting from the catalog DB. There is deliberately no write API — search is derived data."}
+        {
+          "t": "To store the original document text shown in results",
+          "correct": false,
+          "why": "That's stored fields, a separate thing fetched only for the handful of winners. Doc values are for computing over many documents."
+        },
+        {
+          "t": "To speed up term lookups",
+          "correct": false,
+          "why": "Term lookups already go through the term dictionary and postings. Doc values answer the opposite question."
+        },
+        {
+          "t": "Sorting and faceting need per-document field values",
+          "correct": true,
+          "why": "The inverted index says which docs contain X; it can't cheaply say what category each of 40,000 matching docs has. A packed per-field column makes 'walk the matches, tally the ordinals' fast."
+        },
+        {
+          "t": "To store the tombstone bitmaps",
+          "correct": false,
+          "why": "Liveness bitmaps are their own small per-segment structure and are unrelated to columnar field storage."
+        }
       ]
     },
     {
-      "id": "p3c19-q10", "level": 2, "type": "mcq", "tag": "sharding",
-      "q": "A teammate proposes sharding the index by term: machine 1 holds terms A–C, machine 2 holds D–F… 'Single-term queries touch one machine!' What kills it?",
+      "id": "p3c19-q10",
+      "level": 2,
+      "type": "mcq",
+      "tag": "estimation",
+      "q": "You estimate a 250 GB index, 12 shards, and 10,000 queries/sec. Your first design does 12 ms of CPU work per shard-query. What does that number tell you?",
       "options": [
-        {"t": "Multi-term queries: the posting lists for 'cheap' and 'goa' live on different machines, so intersecting them means shipping millions of doc IDs across the network per query — plus the machine holding 'iphone' becomes a hot partition", "correct": true,
-         "why": "Both barrels. The expensive operation (intersection) becomes a network operation, and Zipf-skewed term popularity bakes in a celebrity problem. Doc sharding keeps every intersection local; only tiny top-K lists travel."},
-        {"t": "The alphabet doesn't split evenly across machines", "correct": false,
-         "why": "Uneven letter distribution is trivially fixable by hashing terms. The real killers are cross-shard intersection and hot terms — problems no rebalancing fixes."},
-        {"t": "It can't support ranking", "correct": false,
-         "why": "Scoring could be bolted on (painfully). The design dies earlier — at the matching step, where posting lists must cross the network to be intersected."},
-        {"t": "Terms change too often to assign stably", "correct": false,
-         "why": "The vocabulary is actually fairly stable, and hashing handles new terms fine. Assignment isn't the issue; what queries make the shards DO to each other is."}
+        {
+          "t": "Nothing much — 12 ms sits comfortably inside a 200 ms p99 budget",
+          "correct": false,
+          "why": "The latency fits, but the cost doesn't. Fan-out multiplies work: latency budget and CPU budget are different constraints and this one blows the second."
+        },
+        {
+          "t": "You should add more replicas",
+          "correct": false,
+          "why": "Replicas do add read throughput, but you'd be buying hardware to serve work that shouldn't exist. Cut the per-query cost first, then size the fleet."
+        },
+        {
+          "t": "You should reduce the shard count to 4 to cut fan-out",
+          "correct": false,
+          "why": "Fewer shards means bigger shards doing more work each, so total CPU barely moves while merges and recovery get worse. The per-shard cost is the real lever."
+        },
+        {
+          "t": "~1,400 cores of query CPU — per-shard work is the lever",
+          "correct": true,
+          "why": "10,000 QPS times 12 shards is 120,000 shard-queries/sec; at 12 ms each that's ~1,440 CPU-seconds per second. At this fan-out every extra millisecond costs about 120 cores, which is why skip pointers and a cheap first-pass scorer are architecture, not trivia."
+        }
       ]
     },
     {
-      "id": "p3c19-q11", "level": 2, "type": "mcq", "tag": "freshness",
-      "q": "A seller edits a listing title, searches 3 seconds later, and sees the old title. Support files a bug. Your diagnosis?",
+      "id": "p3c19-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "synonyms",
+      "q": "Merchandising wants to edit the synonym list weekly based on search logs. A full reindex of your 500M documents takes about 3 hours. Where do you apply synonyms?",
       "options": [
-        {"t": "The CDC pipeline has crashed — page the on-call", "correct": false,
-         "why": "Check indexing lag before paging anyone — 3 seconds is within the normal budget (CDC hop plus refresh interval). Lag alarms exist so you know the difference between 'working as designed' and 'broken'."},
-        {"t": "Working as designed: commit → CDC → Kafka → indexer → next refresh adds up to a few seconds, inside the stated freshness SLO — though the seller's own view could be fixed with read-your-writes from the source DB", "correct": true,
-         "why": "Right. Walk the pipeline calmly with numbers, then note the product refinement: the author seeing their own edit is a read-your-own-writes problem, servable by ID from the database without touching search freshness at all."},
-        {"t": "The refresh interval is misconfigured and must be lowered to 100ms", "correct": false,
-         "why": "That 'fix' births twenty tiny segments a second and collapses query latency. The pipeline is behaving; the requirement needs interrogating, not the knob cranking."},
-        {"t": "A real bug: the delete-and-reinsert must have resurrected the old version", "correct": false,
-         "why": "Version-conflict resurrection is a real failure mode (which document versioning prevents), but it produces a stale doc that persists — not one that's simply 3 seconds behind. Occam says pipeline latency."}
+        {
+          "t": "At query time, expanding the incoming query",
+          "correct": true,
+          "why": "The list becomes a config change that takes effect in seconds. You pay a slightly wider query at runtime, and multi-word synonyms need care — a fair price for decoupling a weekly decision from a 3-hour job."
+        },
+        {
+          "t": "At index time, so queries stay fast",
+          "correct": false,
+          "why": "It is faster at query time, but every weekly edit now costs a 3-hour rebuild and skews term statistics. You've tied a routine business change to a heavyweight operation."
+        },
+        {
+          "t": "Both, for maximum recall",
+          "correct": false,
+          "why": "Doubling up multiplies the index bloat and the query width while making relevance harder to reason about — you can no longer tell where a match came from."
+        },
+        {
+          "t": "Neither; train the ranking model to learn synonyms instead",
+          "correct": false,
+          "why": "A reranker can only reorder what retrieval found. If 'sneakers' never matches a listing saying 'trainers', no model downstream can rescue it."
+        }
       ]
     },
     {
-      "id": "p3c19-q12", "level": 2, "type": "mcq", "tag": "merges",
-      "q": "Query p50 is flat, but p99 spikes for a minute or two every ten-ish minutes on one shard. First suspect?",
+      "id": "p3c19-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "phrase-queries",
+      "q": "Your index stores doc IDs and term frequencies. Product now wants quoted phrase search. What must change?",
       "options": [
-        {"t": "A slow network switch", "correct": false,
-         "why": "Possible, but network trouble rarely arrives on a tidy periodic schedule confined to one shard. The rhythm is the clue — something scheduled is running."},
-        {"t": "Hot celebrity documents", "correct": false,
-         "why": "A hot doc would push p50 too, and wouldn't oscillate on a timer. Skewed traffic looks sustained, not periodic."},
-        {"t": "A background segment merge saturating disk I/O and evicting the page cache queries depend on", "correct": true,
-         "why": "The classic signature: merges are periodic, heavy, and local to a shard — they steal disk bandwidth and flush the cache, so the tail suffers while the median (served from remaining cache) holds. Check merge activity against the latency timeline before blaming anything else."},
-        {"t": "Garbage collection pauses", "correct": false,
-         "why": "A reasonable second suspect — GC also causes periodic tail pain. But in a search node the first look goes to merge I/O, because this system's defining tension is indexing I/O versus query cache, and merge schedules match the period."}
+        {
+          "t": "Nothing — just AND the terms and check the order in the results",
+          "correct": false,
+          "why": "You can't check order without knowing where each term appeared. Postings as described don't record positions at all."
+        },
+        {
+          "t": "Store term positions, then verify adjacency",
+          "correct": true,
+          "why": "Postings gain the offsets where each term occurs; you intersect as usual, then walk position lists to keep only docs where the words are adjacent in order. Cost: positions roughly double or triple index size, and it's why you can't strip stopwords if phrases matter."
+        },
+        {
+          "t": "Switch from BM25 to a phrase-aware scoring function",
+          "correct": false,
+          "why": "Scoring is downstream of matching. No scorer can find phrases if the index doesn't record where terms sit."
+        },
+        {
+          "t": "Index every two-word pair as its own term",
+          "correct": false,
+          "why": "Indexing word pairs as terms (shingles) does exist and can help specific phrases, but as a general solution the vocabulary explodes and arbitrary-length phrases still don't work. Positions are the standard answer."
+        }
       ]
     },
     {
-      "id": "p3c19-q13", "level": 2, "type": "mcq", "tag": "synonyms",
-      "q": "The merchandising team updates the synonym list ('sofa'='couch'='settee') most weeks. Index-time or query-time expansion?",
+      "id": "p3c19-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "hot-fields",
+      "q": "A pricing engine will rewrite the price on every listing every 10 minutes. Where should price live?",
       "options": [
-        {"t": "Query time: rewrite queries to (sofa OR couch OR settee) — list changes take effect instantly, at a small per-query cost", "correct": true,
-         "why": "Right. Index-time expansion bakes the list into every posting — each weekly edit would demand a full reindex of 200M docs. Paying a slightly fatter query beats paying a reindex per synonym tweak."},
-        {"t": "Index time: queries stay fast, and reindexing weekly is fine", "correct": false,
-         "why": "A defensible trade in principle, but run the numbers: a full 200M-doc reindex every week as routine overhead, forever, to save an OR-clause per query. The cost-benefit points firmly the other way for a volatile list."},
-        {"t": "Both, for safety", "correct": false,
-         "why": "Doing it twice double-expands queries into mush and still inherits index-time's reindex-on-change problem. Pick the one that matches how often the list changes."},
-        {"t": "Neither — synonyms belong in the ML rerank phase", "correct": false,
-         "why": "The reranker only sees the top-1000 retrieved. If 'couch' docs were never retrieved for a 'sofa' query, no reranker can rescue them — synonym expansion must happen at retrieval."}
+        {
+          "t": "In the indexed document, so filters and sorts are fast",
+          "correct": false,
+          "why": "Each rewrite is a delete plus an insert, so the index fills with tombstoned documents and merges must continuously rewrite the whole thing. This is how a cluster enters a merge death spiral."
+        },
+        {
+          "t": "In the index, but with the refresh interval raised to 5 minutes",
+          "correct": false,
+          "why": "A longer refresh reduces segment churn slightly but does nothing about 500M deletes-plus-inserts per cycle, which is the actual problem."
+        },
+        {
+          "t": "In the index, with nightly full reindexing",
+          "correct": false,
+          "why": "Then prices are up to a day stale, which defeats the point of a pricing engine, and you still pay a 3-hour rebuild every night."
+        },
+        {
+          "t": "Outside the index, applied at rerank time",
+          "correct": true,
+          "why": "Churn rate decides membership in a read-optimized structure. Index the stable fields, keep the volatile number outside, and if you must filter during retrieval index a rarely-changing bucket like 'under 5k' instead."
+        }
       ]
     },
     {
-      "id": "p3c19-q14", "level": 2, "type": "mcq", "tag": "idf",
-      "q": "BM25 uses shard-local IDF in your design. When would that visibly mis-rank results?",
+      "id": "p3c19-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "monitoring",
+      "q": "Segment count per shard has been climbing steadily for six hours. Query latency looks normal so far. What is happening?",
       "options": [
-        {"t": "Always — global and local statistics never agree", "correct": false,
-         "why": "They agree to within noise when each shard is a big random sample. The senior skill here is knowing when an approximation is safe, not rejecting all approximations."},
-        {"t": "When shards are small or non-randomly filled — say, per-tenant or per-category shards — so 'how rare is this term' differs by shard and scores stop being comparable at merge time", "correct": true,
-         "why": "Right. With 20M randomly-routed docs per shard, local frequencies mirror global ones and the drift is invisible. Break the random-sample property and cross-shard score comparison wobbles — the fix is periodic global-stats sync or a two-pass query."},
-        {"t": "During bulk imports", "correct": false,
-         "why": "Imports strain freshness and merge I/O, not IDF math — document frequencies shift slowly even during heavy writes. Wrong failure mode for this knob."},
-        {"t": "Whenever two shards return the same document", "correct": false,
-         "why": "They can't — each doc is hashed to exactly one shard. Duplicate results would be a routing bug, unrelated to scoring statistics."}
+        {
+          "t": "Merges are losing to indexing; queries degrade next",
+          "correct": true,
+          "why": "Every query consults every segment, so a rising count is borrowed time. This is the best early-warning signal in a search cluster: it moves hours before latency alerts fire."
+        },
+        {
+          "t": "The refresh interval is too long for this write volume",
+          "correct": false,
+          "why": "A longer refresh creates fewer, larger segments. Rising counts point the other way — segments arriving faster than merges retire them."
+        },
+        {
+          "t": "Replicas are out of sync with the primary",
+          "correct": false,
+          "why": "Replica divergence shows up as inconsistent results or recovery traffic, not as a steady one-way climb in segment count."
+        },
+        {
+          "t": "Nothing to act on until p99 moves",
+          "correct": false,
+          "why": "Waiting for the symptom is exactly the on-call mistake this metric exists to prevent. By the time p99 moves, the merge backlog is hours deep."
+        }
       ]
     },
     {
-      "id": "p3c19-q15", "level": 2, "type": "mcq", "tag": "facets",
-      "q": "The results page shows 'Brand: Sony (812), Bose (340)…' computed over all matching docs. Which structure serves this?",
+      "id": "p3c19-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "deep-paging",
+      "q": "A partner integration pages through results with from=100000, size=10. Why does this hurt?",
       "options": [
-        {"t": "The inverted index, walked in reverse", "correct": false,
-         "why": "The inverted index answers term → docs. Facets need the opposite — doc → field value, for thousands of matched docs — and walking postings backwards to get it would be absurdly slow."},
-        {"t": "A separate Redis counter per brand", "correct": false,
-         "why": "Pre-counted totals can't answer facet counts, because the counts are per-query — Sony's count within THIS search's matches. It has to be computed over the match set at query time."},
-        {"t": "Doc values: a columnar doc-ID → field-value array kept alongside the index, scanned for the matching docs at query time", "correct": true,
-         "why": "Right — a column store bolted onto the text index. Filters, facet counting, sort-by-price, and rerank feature lookups all read this structure; it's built at the same segment-write time as everything else."},
-        {"t": "The source database, queried per search", "correct": false,
-         "why": "Re-checking 400K matches against Postgres per search recreates the load the index exists to absorb. The index carries its own columnar sidecar precisely so it never has to phone home per query."}
+        {
+          "t": "The posting lists have to be re-read from disk each page",
+          "correct": false,
+          "why": "Posting lists are cached and re-scanned cheaply. The cost is in the merge, not the disk reads."
+        },
+        {
+          "t": "BM25 scores drift for low-ranked documents",
+          "correct": false,
+          "why": "Scores are computed identically regardless of rank position. The problem is the volume of candidates the merge must handle."
+        },
+        {
+          "t": "Deep pages miss recently indexed documents",
+          "correct": false,
+          "why": "Freshness is governed by the refresh interval and applies to every page equally."
+        },
+        {
+          "t": "Every shard must return its own top 100,010",
+          "correct": true,
+          "why": "No shard knows whether it holds global result #100,004, so all twelve ship their top 100,010 and the coordinator merges 1.2 million entries for ten results. Cap the page depth and give partners a cursor API instead."
+        }
       ]
     },
     {
-      "id": "p3c19-q16", "level": 2, "type": "mcq", "tag": "rerank",
-      "q": "Where do click-through rate, seller reputation, and (later) an ML relevance model plug into this architecture?",
+      "id": "p3c19-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "cdc",
+      "q": "How should changes get from Postgres into the search index?",
       "options": [
-        {"t": "Into BM25's formula as extra weights", "correct": false,
-         "why": "BM25 runs over every matching doc — millions — so it must stay cheap, computable straight from postings. Stuffing expensive features into phase one prices you out of your latency budget."},
-        {"t": "Phase two: rerank the ~1000 BM25-retrieved candidates with the expensive signals", "correct": true,
-         "why": "Right — retrieve-then-rerank. Cheap scorer earns a small candidate set; expensive scorer spends its budget only there. This is the socket ML (and vector similarity, chapter 3.24) plugs into without touching the index below."},
-        {"t": "At index time, baked into each document's stored score", "correct": false,
-         "why": "Precomputed static quality scores exist, but click-through and personalization change per user and per hour — baking them into immutable segments means a reindex per update. Dynamic signals belong at query time."},
-        {"t": "In the client, re-sorting the returned page", "correct": false,
-         "why": "The client only sees 20 results — reordering them can't surface a great doc ranked 500th by BM25. Reranking must happen where the top-1000 still exists: the coordinator."}
+        {
+          "t": "CDC tails the replication log into a queue",
+          "correct": true,
+          "why": "The database's own commit log is the event source, so nothing committed is missed, the queue absorbs bursts, and a dead indexer resumes where it stopped. It also makes replay the standard recovery move."
+        },
+        {
+          "t": "The app writes to Postgres and then writes to the search cluster",
+          "correct": false,
+          "why": "Dual writes have no shared transaction: a crash or a timeout between them leaves the copies disagreeing silently and permanently, with no record of the drift."
+        },
+        {
+          "t": "A cron job reindexes rows changed in the last hour",
+          "correct": false,
+          "why": "Polling by timestamp misses clock-skew edge cases and deletes entirely, and an hour of lag fails the five-second freshness requirement."
+        },
+        {
+          "t": "Write to search first, then asynchronously to Postgres",
+          "correct": false,
+          "why": "That makes the derived index the front door for durability — the one job a search engine is not built for."
+        }
       ]
     },
     {
-      "id": "p3c19-q17", "level": 2, "type": "mcq", "tag": "ops",
-      "q": "Dashboard: segment count per shard has climbed steadily for six hours. Query latency is still normal. What is this telling you?",
+      "id": "p3c19-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "stopwords",
+      "q": "A teammate proposes stripping stopwords ('the', 'a', 'of') to shrink the index. Your response?",
       "options": [
-        {"t": "Nothing — segment count naturally grows forever", "correct": false,
-         "why": "It naturally oscillates: refreshes add segments, merges remove them. Sustained growth means the equilibrium is broken — one side of that loop is losing."},
-        {"t": "Merges are falling behind indexing; every query pays per-segment overhead, so latency will follow within hours — investigate merge throughput now, while it's cheap", "correct": true,
-         "why": "Right — this is a leading indicator, the kind worth alarming on. Cause could be an import burst, throttled merge I/O, or a sick disk. Waiting for the p99 alarm means fixing it during the fire instead of before it."},
-        {"t": "Disk is filling up; add storage", "correct": false,
-         "why": "More segments isn't meaningfully more bytes — the same docs are just spread across more files. The cost is per-query work and a growing compaction debt, not capacity."},
-        {"t": "The refresh interval is too long", "correct": false,
-         "why": "Backwards — a LONGER refresh would mean fewer, larger segments. If anything, stretching refresh during heavy indexing is a mitigation, not the cause."}
+        {
+          "t": "Agree — it cuts index size meaningfully",
+          "correct": false,
+          "why": "It does shrink things, but storage is not the binding constraint here, and you'd be trading a real feature for a small saving."
+        },
+        {
+          "t": "Strip them at index time but keep them at query time",
+          "correct": false,
+          "why": "Query and index analysis must match. Terms removed at index time simply cannot be matched later, whatever the query does."
+        },
+        {
+          "t": "Keep them, because removing them would break BM25's math",
+          "correct": false,
+          "why": "BM25 works fine on any vocabulary. The real reasons are phrase matching and the fact that IDF handles the weighting for free."
+        },
+        {
+          "t": "Keep them; phrase queries need them",
+          "correct": true,
+          "why": "'The Who' and 'to be or not to be' break without stopwords and their positions, and BM25 gives near-zero weight to terms that appear everywhere. Deleting them hand-optimizes something the scorer already handles."
+        }
       ]
     },
     {
-      "id": "p3c19-q18", "level": 2, "type": "mcq", "tag": "partial-results",
-      "q": "All copies of shard 4 are down. Marketplace search queries arrive. Your committed behavior?",
+      "id": "p3c19-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "two-phase",
+      "q": "Your reranking model costs 300 microseconds per document. Where does it belong?",
       "options": [
-        {"t": "Serve results from the nine healthy shards, mark the response partial, log and alarm on the partial-result rate", "correct": true,
-         "why": "Right for THIS product: 90% of the catalog beats an error page in a purchase funnel. The flag matters — silent degradation is how you lose a week to 'search seems worse lately'. And the commit flips for compliance search, where incomplete-but-confident answers are the worst outcome."},
-        {"t": "Fail all queries until shard 4 recovers", "correct": false,
-         "why": "This turns a 10% recall loss into a 100% outage of a revenue-critical page. Fail-closed is the right commit for legal discovery — for commerce it's self-harm."},
-        {"t": "Retry the query until shard 4 comes back", "correct": false,
-         "why": "Retrying against a dead shard adds latency and load and returns nothing — with every copy down there's nowhere for the retry to land. Answer with what you have, flagged."},
-        {"t": "Serve the nine shards' results without telling anyone — users won't notice", "correct": false,
-         "why": "Users mostly won't; your relevance metrics and support queue will, mysteriously. Degrade openly: flag the response, count it, alarm on it. The difference between graceful degradation and silent data loss is the flag."}
+        {
+          "t": "In retrieval, replacing BM25 as the scoring function",
+          "correct": false,
+          "why": "At 300 microseconds it would take minutes to score millions of matching documents. Retrieval must stay a few arithmetic operations per candidate."
+        },
+        {
+          "t": "On the final 10 results before display",
+          "correct": false,
+          "why": "Reranking only 10 documents can reorder them but cannot pull a better result up from position 200, which is where most of the gain lives."
+        },
+        {
+          "t": "In a nightly batch that precomputes scores per document",
+          "correct": false,
+          "why": "Relevance depends on the query, so a per-document precomputed score cannot capture it. Query-independent signals can be precomputed as features, but the model still runs at query time."
+        },
+        {
+          "t": "On the top ~1,000 candidates BM25 returns",
+          "correct": true,
+          "why": "That's the two-phase shape: cheap scoring over millions, expensive scoring over a thousand — a few milliseconds total. It's the slot every ranking model plugs into without touching retrieval."
+        }
       ]
     },
     {
-      "id": "p3c19-q19", "level": 3, "type": "mcq", "tag": "crux-spotting",
-      "q": "Thirty seconds into 'design search', you name where you'll spend your depth. The strongest crux call?",
+      "id": "p3c19-q19",
+      "level": 3,
+      "type": "mcq",
+      "tag": "sharding-commit",
+      "q": "The interviewer says: 'The index is keyed by term, so why not shard by term?' Which answer reads senior?",
       "options": [
-        {"t": "\"The hard part is keeping the index fresh: an inverted index is a frozen structure — sorted, compressed posting lists — and I have to absorb thousands of updates a second into it while serving queries. That's segments, refreshes, and merges, and I'll spend my main dive there.\"", "correct": true,
-         "why": "That's the fire. The reconciliation of 'immutable by design' with 'seconds-fresh by requirement' is what this question uniquely probes — matching, ranking, and fan-out are important but far more routine. Naming the tension in one sentence is the senior open."},
-        {"t": "\"The hard part is scale — 200M documents is a lot of data.\"", "correct": false,
-         "why": "Run the numbers: ~300GB of index. Small data. Calling volume the crux signals the estimation didn't drive the thinking — the interesting pressures are QPS fan-out and update absorption, not bytes."},
-        {"t": "\"The hard part is choosing between Elasticsearch and OpenSearch.\"", "correct": false,
-         "why": "A procurement decision, not an engineering one — they're forks of the same design. The interviewer wants what's inside the box, not which sticker is on it."},
-        {"t": "\"The hard part is the ranking ML model.\"", "correct": false,
-         "why": "Ranking ML matters in real products, but in this interview it slots neatly into the rerank phase — an extension point, not a tension. The structural difficulty lives in the index-update machinery."}
+        {
+          "t": "'Both work; term-sharding is better for single-word queries, doc-sharding for multi-word ones. It depends on the workload.'",
+          "correct": false,
+          "why": "Option-listing under a direct challenge reads as no judgment. There is a decisive quantitative argument here and the interviewer is waiting for it."
+        },
+        {
+          "t": "'I shard by document — term-sharding ships 8-million-entry lists across the network per query.'",
+          "correct": true,
+          "why": "Committed, with the number that kills the alternative and the failure-mode contrast. Doc-sharded queries stay local and degrade gracefully; term-sharded ones need terabits of internal bandwidth and break specific words entirely."
+        },
+        {
+          "t": "'Term-sharding causes hot shards, so I'd add consistent hashing to spread the terms.'",
+          "correct": false,
+          "why": "It spots one real problem and then patches it while missing the fatal one: no hashing scheme avoids moving whole posting lists between machines to intersect them."
+        },
+        {
+          "t": "'Elasticsearch shards by document, so I'd follow that.'",
+          "correct": false,
+          "why": "Appealing to what a tool does, without the reason, is exactly the answer the probe was designed to expose."
+        }
       ]
     },
     {
-      "id": "p3c19-q20", "level": 3, "type": "mcq", "tag": "judgment",
-      "q": "PM demands: 'When a seller hits save, search must reflect it in under 100ms.' The senior response?",
+      "id": "p3c19-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "crux",
+      "q": "You have ten minutes of deep-dive time. Which topic is the crux of this problem?",
       "options": [
-        {"t": "Set the refresh interval to 50ms and ship it", "correct": false,
-         "why": "Twenty micro-segments per second per shard: segment counts explode, per-query overhead multiplies, merges drown. This 'fix' trades a freshness complaint for a site-wide latency incident."},
-        {"t": "Interrogate the requirement first: 'visible to whom?' The seller seeing their own edit is read-your-own-writes — serve it by ID from the source DB instantly — while everyone else keeps seconds-level refresh; commit to that split and say what true 100ms-for-all would cost", "correct": false,
-         "why": "Wait — this IS the senior answer. If you picked it, re-read the option marked correct; they should match."},
-        {"t": "Interrogate the requirement: the seller seeing their own edit is read-your-own-writes, servable by ID from the source database with no search-index change; global 100ms visibility is a different, far more expensive ask — quote its cost separately and commit to the split", "correct": true,
-         "why": "Right. Most 'instant search' demands dissolve into read-your-writes for the author plus normal refresh for the world. Splitting the requirement, serving the real need cheaply, and pricing the expensive interpretation honestly — that's the E5 pattern."},
-        {"t": "Explain that search engines can't do this and the requirement must be dropped", "correct": false,
-         "why": "Half-true and unhelpful — engines do offer real-time-get by ID, and the underlying user need is usually fully servable. 'No' without decomposing the ask reads as inflexibility, not judgment."}
+        {
+          "t": "Choosing between BM25 and classic TF-IDF scoring",
+          "correct": false,
+          "why": "Worth thirty seconds and a committed choice, but it's a well-understood default with no architectural tension behind it."
+        },
+        {
+          "t": "The API contract and pagination parameters",
+          "correct": false,
+          "why": "Necessary plumbing, and it should be quick. Spending deep-dive time here reads as avoiding the hard part."
+        },
+        {
+          "t": "Keeping an immutable index fresh in real time",
+          "correct": true,
+          "why": "That's the fire. Posting lists are fast because they're sorted, compressed and contiguous, which makes in-place updates impossible at 5,000 docs/sec — and segments, refresh intervals, merges and tombstones are all consequences of resolving it."
+        },
+        {
+          "t": "Which cloud provider hosts the cluster",
+          "correct": false,
+          "why": "An operational detail with no bearing on the design's hard problem."
+        }
       ]
     },
     {
-      "id": "p3c19-q21", "level": 3, "type": "mcq", "tag": "10x",
-      "q": "The interviewer 10x's the corpus: 2 billion docs, same 2K QPS. What actually degrades first, and why?",
+      "id": "p3c19-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "distributed-idf",
+      "q": "You route documents by hash(seller_id) so each seller's catalog lives on one shard. What is the subtle danger?",
       "options": [
-        {"t": "Storage costs — 10x the disk", "correct": false,
-         "why": "Disk is the cheapest thing in the room; ~3TB of index across a fleet is a rounding error. If your first concern at 10x is bytes, the estimation isn't driving the answer."},
-        {"t": "Nothing, if you add replicas", "correct": false,
-         "why": "Replicas multiply read capacity for the SAME data. This axis grows the data: replicas of 10 overloaded shards don't help — you need ~100 shards, and that's where the pain starts."},
-        {"t": "Tail latency: ~100 shards means every query's p99 is the max over 100 machines, so it worsens by pure statistics even with all shards healthy — plus 10x merge I/O grinding against query cache on every node", "correct": true,
-         "why": "Right. Fan-out width is the hidden cost of doc sharding, and max-over-N is brutal arithmetic: more shards, worse tails, no one at fault. Counters: hedged requests, partitioning so queries touch fewer shards, and splitting the indexing tier with segment-file replication."},
-        {"t": "BM25 stops working at that document count", "correct": false,
-         "why": "BM25 is per-shard local math over posting statistics — it's indifferent to global corpus size. If anything, bigger random shards make its IDF approximation better."}
+        {
+          "t": "Queries filtered to a single seller get slower",
+          "correct": false,
+          "why": "Those get faster — a single-seller query now hits one shard instead of twelve. The damage is elsewhere."
+        },
+        {
+          "t": "Per-shard term statistics diverge",
+          "correct": true,
+          "why": "Each shard computes IDF from its own documents, which only works when routing is random. An electronics shard thinks 'battery' is common while a shoe shard thinks it's rare, so the coordinator merges scores that aren't comparable — wrong rankings, with no error anywhere."
+        },
+        {
+          "t": "Deletes stop working correctly",
+          "correct": false,
+          "why": "Deletes are per-segment tombstones and are unaffected by which shard a document lives on."
+        },
+        {
+          "t": "Phrase queries break across shard boundaries",
+          "correct": false,
+          "why": "Each shard holds complete documents, so phrase matching is always local. Documents are never split across shards."
+        }
       ]
     },
     {
-      "id": "p3c19-q22", "level": 3, "type": "mcq", "tag": "judgment",
-      "q": "Candidate A: 'I'd use Elasticsearch — it handles sharding and replication for us.' Candidate B says the same, then walks through segments and refresh honesty, CDC feeding a derived index, doc-sharded fan-out, and where merges will hurt. Both 'used Elasticsearch.' Why does only B pass at senior?",
+      "id": "p3c19-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "degradation",
+      "q": "One shard of twelve has no live replica during a query. What do you return, and how do you justify it?",
       "options": [
-        {"t": "B memorized more Elasticsearch trivia", "correct": false,
-         "why": "Nothing B said is trivia — segments, fan-out, and derived-store discipline are the design itself. Trivia would be flag names and version numbers; B showed mechanisms and their failure modes."},
-        {"t": "The tool's name is not a design: B demonstrated ownership of what's inside — the freshness promise, the update machinery, the failure modes they'd be paged for — which is what the question was probing through the tool", "correct": true,
-         "why": "Right. 'Use X' outsources the thinking to a box the candidate can't open; every senior probe ('why is the edit not searchable?', 'why did p99 spike?') lands inside that box. B can answer them; A's design ends where the questions begin."},
-        {"t": "A should have built search from scratch instead of using a product", "correct": false,
-         "why": "Using Lucene-based infrastructure is the correct engineering call — nobody wants you writing a posting-list codec in an interview. The bar isn't avoiding the tool; it's being able to open its lid."},
-        {"t": "B took longer, and interviews reward thoroughness", "correct": false,
-         "why": "Time spent isn't the metric — plenty of candidates fill 45 minutes without depth. B's minutes carried mechanism, commitment, and failure-awareness; that content, not the duration, is the difference."}
+        {
+          "t": "Fail the query with a 503 in every case — partial results are lies",
+          "correct": false,
+          "why": "Honest, but applied blindly it destroys a marketplace's revenue for a fault the user could not perceive. The point is that this is a per-product decision, not a universal rule."
+        },
+        {
+          "t": "Return partial results silently; users won't notice 8% missing",
+          "correct": false,
+          "why": "The commitment isn't wrong for this product, but hiding it is. Unflagged degradation means nobody pages, nobody investigates, and the outage becomes permanent."
+        },
+        {
+          "t": "Commit per product: flagged partials here, fail loudly elsewhere",
+          "correct": true,
+          "why": "Same mechanism, two justified answers. An empty page loses a sale and search is already approximate; but for e-discovery, 'no results' and 'we skipped 8% of the corpus' are different answers and only one is honest. The flag, log and alert are mandatory either way."
+        },
+        {
+          "t": "Retry the query until the shard recovers",
+          "correct": false,
+          "why": "Retrying against a shard with no live copy just burns the latency budget and adds load during an incident."
+        }
       ]
     },
     {
-      "id": "p3c19-q23", "level": 3, "type": "mcq", "tag": "reindex",
-      "q": "Relevance is suffering because the stemmer is too aggressive; you need a different analyzer. The index holds 200M live documents. Your move?",
+      "id": "p3c19-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "migration",
+      "q": "You need to change the tokenizer on a live 500M-document index. What's the plan?",
       "options": [
-        {"t": "Change the analyzer config and restart the cluster", "correct": false,
-         "why": "The old analysis is physically baked into every posting of every segment — a config flip makes new writes and all queries disagree with 200M already-indexed docs. Relevance wouldn't degrade; it would shatter."},
-        {"t": "Write a script that re-analyzes documents in place, segment by segment", "correct": false,
-         "why": "Segments are immutable — 'in place' isn't an operation this storage layer has. Any rewrite path ends up building new segments anyway, which is just a reindex without the safety rails."},
-        {"t": "Build a new index version with the new analyzer, bulk-load from a DB snapshot, let CDC catch it up, compare result quality side by side, then flip the alias — old index kept warm for rollback", "correct": true,
-         "why": "Right — reindex-from-source, the expand-and-contract migration of chapter 2.11 in search costume. It exists precisely because the index is derived data; teams that run it routinely treat analyzer changes as a Tuesday, not an incident."},
-        {"t": "Only apply the new analyzer to documents indexed from now on", "correct": false,
-         "why": "Now the corpus is split-brained: the same query stems one way against new docs and another against old ones, and which results you get depends on indexing date. A quiet, permanent relevance bug — worse than the stemmer you started with."}
+        {
+          "t": "Update the mapping and let new documents use the new analyzer",
+          "correct": false,
+          "why": "Now old segments hold terms produced by the old analyzer and new ones don't. Queries match inconsistently, nothing errors, and relevance rots silently — the worst failure mode in search."
+        },
+        {
+          "t": "Reindex in place, document by document, over a few days",
+          "correct": false,
+          "why": "You get the same mixed-analyzer index for days, plus 500M deletes-and-inserts churning merges on the live serving cluster."
+        },
+        {
+          "t": "New index, dual-feed, shadow-compare, flip the alias",
+          "correct": true,
+          "why": "The derived-store payoff and Part 2.11 verbatim. Truth is in Postgres, so a 3-hour rebuild is always available; the alias flip makes the cutover atomic and the old index makes the rollback instant."
+        },
+        {
+          "t": "Restore from last night's snapshot with the new mapping applied",
+          "correct": false,
+          "why": "Snapshots carry the segments as they were, terms and all. Changing tokenization requires re-analyzing the source text, which only a reindex does."
+        }
       ]
     },
     {
-      "id": "p3c19-q24", "level": 3, "type": "mcq", "tag": "ops-judgment",
-      "q": "Every big catalog import tanks query p99 for the duration. The business needs both imports and fast search. Your committed plan, short-term to long-term?",
+      "id": "p3c19-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "scale-10x",
+      "q": "Corpus grows 10x to 5 billion documents and traffic to 100K QPS. What breaks first?",
       "options": [
-        {"t": "Now: throttle merge I/O, stretch the refresh interval during imports, schedule bulk loads off-peak, and let replicas favor queries. At the next order of magnitude: split indexing onto its own tier and replicate by copying finished segment files to searchers", "correct": true,
-         "why": "Right — this is the 'two workloads fight' tension managed at increasing cost. The knobs buy time cheaply; the tier split (the design Amazon's Lucene-based product search uses) removes the fight structurally, because immutable segments make replication a file copy."},
-        {"t": "Add more CPU to the index nodes", "correct": false,
-         "why": "The contention is disk I/O and page cache, not cycles — merges evict the cache queries live on. Bigger boxes dilute the pain without addressing the mechanism, and the next import proves it."},
-        {"t": "Pause all indexing during business hours", "correct": false,
-         "why": "This sacrifices the freshness SLO on the altar of latency — sellers' edits invisible all day. A commitment that deletes a requirement isn't a trade-off, it's a surrender."},
-        {"t": "Route queries to the replica with the least indexing load, and call it done", "correct": false,
-         "why": "A real knob (and part of the right answer) presented as the whole answer. Replicas doing their own indexing still merge and still evict cache — without throttling and eventually a tier split, the fight follows you to every copy."}
+        {
+          "t": "The inverted index structure itself stops scaling",
+          "correct": false,
+          "why": "It doesn't — postings compress and skip just as well at 5B documents. Blaming the data structure misses where the real pressure lands."
+        },
+        {
+          "t": "BM25 becomes too slow to compute",
+          "correct": false,
+          "why": "Per-candidate scoring cost is unchanged by corpus size; you touch more postings, but the scorer is the same handful of operations."
+        },
+        {
+          "t": "Fan-out: p99 becomes the worst of ~120 shards",
+          "correct": true,
+          "why": "Tail latency compounds with fan-out, so p99 becomes roughly the shards' p99.9 and one merging node hurts every query. The fixes are routing (locale or category in the shard key so a query touches a subset) and hedged requests."
+        },
+        {
+          "t": "The CDC pipeline runs out of ordering guarantees",
+          "correct": false,
+          "why": "Per-key ordering from the log survives scaling fine and is a throughput problem at worst — not the first thing that bends."
+        }
       ]
     },
     {
-      "id": "p3c19-q25", "level": 3, "type": "mcq", "tag": "judgment",
-      "q": "Same architecture, new customer: a legal e-discovery product where lawyers must certify that a search returned ALL responsive documents. Which single committed behavior must flip from the marketplace design?",
+      "id": "p3c19-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "recall-ceiling",
+      "q": "Relevance ships a strong new reranker but offline metrics barely move on tail queries. What do you suspect first?",
       "options": [
-        {"t": "Shard-loss handling: partial results must become a loud failure — an incomplete answer presented as complete is the worst possible outcome for this product, so fail closed and say why", "correct": true,
-         "why": "Right. For commerce, 90% recall flagged is graceful degradation; for a court-certified search it's a professional catastrophe wearing a success status code. Same machine, opposite commit — knowing that the product dictates the failure semantics IS the senior signal this question hunts."},
-        {"t": "Switch ranking from BM25 to exact boolean matching", "correct": false,
-         "why": "E-discovery does lean on boolean queries, but ranking choice isn't the life-or-death flip — you can rank however you like as long as the MATCH SET is complete and honest. Completeness semantics outrank scoring choices here."},
-        {"t": "Drop the refresh interval to zero for instant indexing", "correct": false,
-         "why": "Discovery corpora are mostly static once ingested — freshness pressure goes DOWN in this product, not up. The knob that must move is what happens when part of the index can't answer."},
-        {"t": "Move the index into the source-of-truth database so nothing is derived", "correct": false,
-         "why": "The derived-index architecture is fine — desirable, even, since reindex-from-source gives you a provable rebuild story. What changes is the promise made when a shard is missing, not where the index lives."}
+        {
+          "t": "The model is undertrained on tail queries",
+          "correct": false,
+          "why": "Possible, and easy to test — but it assumes the candidates were there to reorder, which is the assumption worth checking first."
+        },
+        {
+          "t": "Phase 1 never retrieved those documents",
+          "correct": true,
+          "why": "The recall ceiling. If BM25 misses the listing because the user typed 'sneakers' and the listing says 'trainers', no reranker can save it. Measure phase-1 recall at 1,000 before blaming the model — and this is exactly where a semantic retriever earns its place alongside the lexical one."
+        },
+        {
+          "t": "BM25 parameters need tuning",
+          "correct": false,
+          "why": "Tuning changes the order of retrieved candidates more than the set, so it rarely fixes documents that were never retrieved at all."
+        },
+        {
+          "t": "The index is stale on tail documents",
+          "correct": false,
+          "why": "Freshness applies uniformly by refresh interval; it doesn't selectively affect the tail of the query distribution."
+        }
+      ]
+    },
+    {
+      "id": "p3c19-q26",
+      "level": 3,
+      "type": "mcq",
+      "tag": "durability",
+      "q": "You propose relaxing the search cluster's write-ahead-log fsync from per-request to per-batch. Is that defensible?",
+      "options": [
+        {
+          "t": "No — losing acknowledged writes is never acceptable",
+          "correct": false,
+          "why": "True for a system of record. This index isn't one, and applying primary-store rules to a derived store means paying for durability you already bought elsewhere."
+        },
+        {
+          "t": "Yes, because modern SSDs make fsync effectively free",
+          "correct": false,
+          "why": "The right conclusion from the wrong reasoning. If fsync were free there'd be nothing to gain; the argument has to be about where the truth lives."
+        },
+        {
+          "t": "Only if you also disable replicas to save the network round trip",
+          "correct": false,
+          "why": "Replicas provide availability and read throughput, not durability of last resort here. Dropping them trades away uptime for a saving you didn't need."
+        },
+        {
+          "t": "Yes — the index is derived; truth is in Postgres",
+          "correct": true,
+          "why": "This is the payoff of committing early that search is never authoritative. A crash costs a replay, not data — so you can buy real throughput with a trade that would be reckless in the primary store."
+        }
       ]
     }
   ]

@@ -38,7 +38,7 @@
 
 <p>There's barely a public API — the "users" are internal systems. <code>POST /seeds</code> to inject starting URLs with a priority, and downstream consumers tail a "page fetched" stream (Part 2 streams pattern: the crawler produces, the indexer consumes, neither knows the other's pace).</p>
 
-<p>Two data shapes matter. The <strong>URL record</strong>, keyed by a hash of the normalized URL: the URL, host, priority score, depth from seed, last-fetch time, ETag/Last-Modified, estimated change frequency, failure count. The <strong>page store</strong>: content in a blob store keyed by <em>content hash</em> (identical bodies stored once), plus a metadata record mapping URL → content hash, fetch time, HTTP status, outlinks. Common Crawl — the nonprofit publishing an open crawl of ~2–3 billion pages per cycle — stores exactly this shape as append-only WARC archives: raw response plus capture metadata. Append-only is right for us too: a crawl is a log of observations, not a table you update in place.</p>
+<p>Two data shapes matter. The <strong>URL record</strong>, keyed by a hash of the normalized URL: the URL, host, priority score, depth from seed, last-fetch time, ETag/Last-Modified, estimated change frequency, failure count. The <strong>page store</strong>: content in a blob store keyed by <em>content hash</em> (identical bodies stored once), plus a metadata record mapping URL → content hash, fetch time, HTTP status, outlinks. Common Crawl — the nonprofit publishing an open crawl of roughly 2 billion pages every month — stores exactly this shape as append-only WARC archives: the raw HTTP response plus capture metadata, concatenated into big files. Append-only is right for us too: a crawl is a log of observations, not a table you update in place.</p>
 
 <h2>High-level design: the loop</h2>
 
@@ -49,7 +49,7 @@
   <rect class="dg-node-alt" x="140" y="40" width="110" height="44" rx="8"/>
   <text class="dg-txt" x="160" y="66">Frontier</text>
   <rect class="dg-node" x="290" y="40" width="110" height="44" rx="8"/>
-  <text class="dg-txt" x="298" y="66">Fetcher fleet</text>
+  <text class="dg-txt" x="312" y="66">Fetchers</text>
   <rect class="dg-node" x="440" y="40" width="110" height="44" rx="8"/>
   <text class="dg-txt" x="448" y="66">Content-seen</text>
   <rect class="dg-node" x="590" y="40" width="120" height="44" rx="8"/>
@@ -93,7 +93,7 @@
 <p>The frontier must satisfy two masters that want opposite things. <strong>Priority</strong> says: fetch important, fresh-changing pages first — a new BBC article beats page 94,000 of a forum archive. <strong>Politeness</strong> says: however important a host's pages are, never hit it more than once per delay window. A naive priority queue fails politeness catastrophically: the top thousand entries usually belong to the same few important hosts, so fetchers drain the queue straight into one server's face. Naive round-robin over hosts fails priority: junk fetched at the same rate as gold. The interview IS the reconciliation of these two, at a scale — billions of queued URLs — where the structure must live on disk. Nail this section and the rest is a formality.</p>
 </div>
 
-<p>The classic answer — it comes from the Mercator crawler and still underlies serious designs — is a <strong>two-level queue</strong>.</p>
+<p>The classic answer — it comes from Mercator, a research crawler from Compaq's labs whose war story is coming up, and it still underlies serious designs — is a <strong>two-level queue</strong>.</p>
 
 <p><strong>Front queues: priority.</strong> A few dozen FIFO queues, one per priority band. The prioritizer scores each incoming URL — site importance (PageRank-ish, or simpler: how many distinct domains link in), expected change frequency, depth from seed — and drops it into the matching band. A selector pulls with <em>biased randomness</em>: high bands far more often, low bands never fully starved.</p>
 
@@ -154,13 +154,13 @@
   <rect class="dg-node" x="430" y="60" width="130" height="44" rx="8"/>
   <text class="dg-txt" x="452" y="86">worker</text>
   <line class="dg-edge" x1="300" y1="77" x2="430" y2="77" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="318" y="66">pop root when ready</text>
+  <text class="dg-txt-s" x="330" y="68">pop when ready</text>
   <line class="dg-edge" x1="560" y1="82" x2="640" y2="82" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="580" y="70">fetch 1 URL</text>
   <path class="dg-edge" fill="none" d="M 495 104 L 495 200 L 310 200"/>
   <path class="dg-edge-fill" d="M 304 200 L 314 195 L 314 205 Z"/>
   <text class="dg-txt-s" x="330" y="192">re-insert: now + delay</text>
-  <text class="dg-txt-s" x="330" y="232">delay = max(robots crawl-delay, base delay, adaptive backoff)</text>
+  <text class="dg-txt-s" x="20" y="234">delay = max(robots crawl-delay, base delay, adaptive backoff)</text>
 </svg>
 <figcaption>The politeness clock. The heap's root is always the next host allowed to be contacted anywhere in the system.</figcaption>
 </figure>
@@ -202,15 +202,15 @@
   <text class="dg-txt-s" x="176" y="68">normalize</text>
   <rect class="dg-node-alt" x="310" y="44" width="130" height="40" rx="8"/>
   <text class="dg-txt-s" x="322" y="62">Bloom (RAM)</text>
-  <text class="dg-txt-s" x="322" y="78">+ exact set (disk)</text>
+  <text class="dg-txt-s" x="316" y="78">+ exact set (disk)</text>
   <line class="dg-edge" x1="120" y1="64" x2="160" y2="64" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="270" y1="64" x2="310" y2="64" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="440" y1="56" x2="530" y2="46" marker-end="url(#arrow)"/>
-  <rect class="dg-good" x="530" y="30" width="170" height="34" rx="8"/>
-  <text class="dg-txt-s" x="542" y="51">new → prioritize → frontier</text>
-  <line class="dg-edge" x1="440" y1="76" x2="530" y2="92" marker-end="url(#arrow)"/>
-  <rect class="dg-bad" x="530" y="78" width="170" height="34" rx="8"/>
-  <text class="dg-txt-s" x="542" y="99">"seen" → drop (FP ≈ 1%)</text>
+  <line class="dg-edge" x1="440" y1="56" x2="500" y2="46" marker-end="url(#arrow)"/>
+  <rect class="dg-good" x="505" y="30" width="205" height="34" rx="8"/>
+  <text class="dg-txt-s" x="515" y="51">new → prioritize → frontier</text>
+  <line class="dg-edge" x1="440" y1="76" x2="500" y2="92" marker-end="url(#arrow)"/>
+  <rect class="dg-bad" x="505" y="78" width="205" height="34" rx="8"/>
+  <text class="dg-txt-s" x="530" y="99">"seen" → drop (FP ≈ 1%)</text>
   <text class="dg-txt-s" x="20" y="170">Content-seen (after fetch)</text>
   <rect class="dg-node" x="20" y="184" width="110" height="40" rx="8"/>
   <text class="dg-txt-s" x="34" y="208">fetched page</text>
@@ -242,7 +242,7 @@
 </div>
 
 <div class="box story"><div class="box-tag">War story — IRLbot</div>
-<p>In 2007, researchers at Texas A&amp;M ran IRLbot — a crawler on a <em>single server</em> — for 41 days straight: 6.3 billion pages fetched, averaging ~1,789 pages/second, published at WWW 2008. Two findings shaped how everyone builds crawlers now. First, what broke crawlers at scale wasn't bandwidth but the URL-seen check: billions of membership tests overwhelmed RAM and naive disk lookups alike. Their fix, DRUM, batched URL checks into large sequential disk merges instead of random reads — the ancestor of the batch-merge exact store behind our Bloom filter. Second, naive breadth-first crawling gets <em>captured by spam</em>: auto-generated link farms with massive branching factors flooded the frontier until real sites starved. Their answer — crawl budgets allocated by domain reputation, measured by how many other domains link in — is the direct ancestor of the budget defense above. One machine, 6.3 billion pages, and both of this chapter's hard problems documented in one paper.</p>
+<p>In 2007, researchers at Texas A&amp;M ran IRLbot — a crawler on a <em>single server</em> — for 41 days straight: 6.3 billion pages fetched, averaging ~1,789 pages/second, published at WWW 2008. Two findings shaped how everyone builds crawlers now. First, what broke crawlers at scale wasn't bandwidth but the URL-seen check: billions of membership tests overwhelmed RAM and naive disk lookups alike. Their fix — DRUM, for Disk Repository with Update Management — batched URL checks into large sequential disk merges instead of random reads — the ancestor of the batch-merge exact store behind our Bloom filter. Second, naive breadth-first crawling gets <em>captured by spam</em>: auto-generated link farms with massive branching factors flooded the frontier until real sites starved. Their answer — crawl budgets allocated by domain reputation, measured by how many other domains link in — is the direct ancestor of the budget defense above. One machine, 6.3 billion pages, and both of this chapter's hard problems documented in one paper.</p>
 </div>
 
 <h2>DNS: the bottleneck nobody sees coming</h2>
@@ -250,7 +250,7 @@
 <p>Every fetch starts with resolving a hostname. At 11,500 fetches/second, forwarding every lookup upstream melts your resolver — and each remote resolution costs 20–200ms. The fix is boring and mandatory: a <strong>local caching resolver on every fetcher node</strong>, async lookups so slow resolutions never block the event loop, and pre-resolution while a host waits in the timer heap. Host-hash sharding helps here too — a host's lookups always hit the same node's cache, so hit rates are excellent.</p>
 
 <div class="box story"><div class="box-tag">War story — Mercator</div>
-<p>Mercator was the research crawler built at Compaq's Systems Research Center by Allan Heydon and Marc Najork in the late 1990s — the paper that gave us the two-level frontier. Their most quoted finding wasn't about queues at all: profiling showed <strong>DNS resolution consuming 87% of each thread's elapsed time</strong>. The culprit was a synchronized resolver interface — one lookup at a time per process — so their fully parallel crawler was quietly single-file through DNS. They wrote their own multi-threaded resolver firing parallel requests at a local nameserver, and DNS dropped from 87% to 25% of elapsed time. The lesson generalizes: your architecture is only as parallel as its most serialized dependency, and that dependency is usually something so mundane you never drew it on the whiteboard.</p>
+<p>Mercator was the research crawler built at Compaq's Systems Research Center by Allan Heydon and Marc Najork. Their 1999 paper's most quoted finding wasn't about queues at all: profiling showed <strong>DNS resolution consuming 87% of each thread's elapsed time</strong>. The culprit was a synchronized resolver interface — Java's, and <code>gethostbyname</code> underneath it, allowed one uncached lookup outstanding at a time — so their fully parallel crawler was quietly single-file through DNS. They wrote their own multi-threaded resolver firing parallel requests at a local nameserver, and DNS dropped from 87% to 25% of elapsed time. Their 2001 follow-up report is where the two-level frontier this chapter draws comes from, timer heap and all — right down to running about three times as many back queues as crawler threads, the same rule of thumb we used above. The DNS lesson generalizes: your architecture is only as parallel as its most serialized dependency, and that dependency is usually something so mundane you never drew it on the whiteboard.</p>
 </div>
 
 <h2>Freshness: crawling is a subscription, not a download</h2>
@@ -272,7 +272,7 @@
 
 <p><strong>Rollouts:</strong> new prioritizer or politeness logic canaries on a low-stakes shard, with the 429 rate as automatic rollback trigger. The kill switch is the frontier pausing dispensing: fetchers drain in-flight work and idle, the stream goes quiet, nothing breaks. Backpressure-friendly by construction.</p>
 
-<p><strong>What breaks at 10x?</strong> 10B pages/day = 115K fetches/sec and ~1PB/day of ingress. Fetchers and frontier shards scale linearly — the reward for zero cross-shard coordination. Three things don't. Bandwidth: 100Gbit/s sustained means multi-region fetch clusters, each owning a host-hash range (ownership stays exclusive — the invariant survives geography). The URL-seen store: 10x churn on the batch-merge pipeline needs re-tiering before it needs disks. And the subtle one: the politeness math now demands ~10x more <em>distinct ready hosts</em> at every instant — but host importance is zipfian (Part 2's hot-partition lesson in a trench coat), so past a point the constraint isn't your fleet, it's the web: the pages you most want sit on hosts whose fetch rate politeness caps. At 10x, the frontier's job shifts from "keep up" to "choose well."</p>
+<p><strong>What breaks at 10x?</strong> 10B pages/day = 115K fetches/sec and ~1PB/day of ingress. Fetchers and frontier shards scale linearly — the reward for zero cross-shard coordination. Three things don't. Bandwidth: 100Gbit/s sustained means multi-region fetch clusters, each owning a host-hash range (ownership stays exclusive — the invariant survives geography). The URL-seen store: 10x churn on the batch-merge pipeline needs re-tiering before it needs disks. And the subtle one: the politeness math now demands ~10x more <em>distinct ready hosts</em> at every instant — but host importance is zipfian — a few thousand hosts hold most of the pages anyone wants, and the tail falls off a cliff (Part 2's hot-partition lesson in a trench coat) — so past a point the constraint isn't your fleet, it's the web: the pages you most want sit on hosts whose fetch rate politeness caps. At 10x, the frontier's job shifts from "keep up" to "choose well."</p>
 
 <div class="box lens"><div class="box-tag">At the whiteboard</div>
 <p>Interviewers use the crawler to test whether you can serve two masters in one data structure, and whether you think about systems that touch strangers' machines. Expect these, nearly verbatim:</p>
@@ -315,7 +315,7 @@
 
 <div class="exercise">
 <div class="ex-q"><p>Now add JavaScript rendering: half the modern web builds its content client-side, and your indexer wants what users actually see. What changes in your design?</p></div>
-<details><summary>Answer</summary><p>Rendering means a headless browser per page — roughly 100x the CPU and memory of a plain fetch, and each render fires dozens of sub-requests (JS, CSS, APIs) that must obey politeness for <em>their</em> hosts too. Unaffordable for a billion pages a day, so: plain fetch first, a cheap classifier flags JS-dependent pages (near-empty body, framework markers), and only those enter a render queue with its own budget — rendering is a privilege important pages earn, not a default. The frontier is unchanged; you've added a more expensive fetcher class behind the same politeness machinery. This mirrors Googlebot: crawling and rendering are separate phases, rendering later, from a queue, at lower volume.</p></details>
+<details><summary>Answer</summary><p>Rendering means a headless browser per page — roughly 100x the CPU and memory of a plain fetch, and each render fires dozens of sub-requests (JS, CSS, APIs) that must obey politeness for <em>their</em> hosts too. Unaffordable for a billion pages a day, so: plain fetch first, a cheap classifier flags JS-dependent pages (near-empty body, framework markers), and only those enter a render queue with its own budget — rendering is a privilege important pages earn, not a default. The frontier is unchanged; you've added a more expensive fetcher class behind the same politeness machinery. This mirrors Googlebot: crawling and rendering are separate phases, with rendering fed by its own queue at its own pace — sometimes seconds behind the fetch, sometimes much longer, but never the same budget.</p></details>
 </div>
 
 <div class="exercise">
@@ -325,7 +325,7 @@
 
 <div class="exercise">
 <div class="ex-q"><p>Requirement flip: instead of a discovery crawler for search, you now need to re-check 100K known product pages every 10 minutes for price changes. Which parts of your design survive, and which collapse?</p></div>
-<details><summary>Answer</summary><p>Almost everything shrinks except politeness. 100K pages / 600s ≈ 170 fetches/sec — a couple of machines. No discovery means no link-extraction loop, no URL-seen problem, no Bloom filter, no traps or budgets: the frontier degenerates into a recurring schedule, essentially a cron wheel. What survives untouched: the per-host timer heap and delays (100K product pages span a few thousand retailer hosts, and commercial sites block scrapers fastest of all), robots.txt handling, conditional GETs, and content hashing (only act on changes). Say the lesson out loud: politeness machinery is the invariant core of every crawler; the frontier's <em>priority</em> half is what morphs with the use case.</p></details>
+<details><summary>Answer</summary><p>Almost everything shrinks except politeness. 100K pages / 600s ≈ 170 fetches/sec — a couple of machines. No discovery means no link-extraction loop, no URL-seen problem, no Bloom filter, no traps or budgets: the frontier degenerates into a recurring schedule — a cron wheel. What survives untouched: the per-host timer heap and delays (100K product pages span a few thousand retailer hosts, and commercial sites block scrapers fastest of all), robots.txt handling, conditional GETs, and content hashing (only act on changes). Say the lesson out loud: politeness machinery is the invariant core of every crawler; the frontier's <em>priority</em> half is what morphs with the use case.</p></details>
 </div>
 
 <div class="takeaways"><div class="box-tag">Takeaways</div>

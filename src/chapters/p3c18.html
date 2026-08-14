@@ -58,7 +58,7 @@
   <text class="dg-txt-s" x="20" y="204">disk buffer</text>
   <rect class="dg-node" x="140" y="150" width="112" height="60" rx="8"/>
   <text class="dg-txt" x="154" y="174">Intake</text>
-  <text class="dg-txt-s" x="154" y="191">auth · validate</text>
+  <text class="dg-txt-s" x="154" y="191">auth, validate</text>
   <text class="dg-txt-s" x="154" y="204">series budgets</text>
   <rect class="dg-node" x="288" y="150" width="96" height="60" rx="8"/>
   <text class="dg-txt" x="304" y="174">Kafka</text>
@@ -126,13 +126,13 @@
 
 <figure class="diagram">
 <svg viewBox="0 0 720 280" role="img" aria-label="Per-host sketches merge into one window sketch that answers any percentile; averaging p99s gives fiction">
-  <rect class="dg-node" x="8" y="24" width="140" height="56" rx="8"/>
+  <rect class="dg-node" x="8" y="24" width="168" height="56" rx="8"/>
   <text class="dg-txt-s" x="22" y="46">Host A sketch</text>
   <text class="dg-txt-s" x="22" y="63">9,900 req · p99 50ms</text>
-  <rect class="dg-node" x="8" y="104" width="140" height="56" rx="8"/>
+  <rect class="dg-node" x="8" y="104" width="168" height="56" rx="8"/>
   <text class="dg-txt-s" x="22" y="126">Host B sketch</text>
   <text class="dg-txt-s" x="22" y="143">200 req · p99 2,000ms</text>
-  <rect class="dg-node" x="8" y="184" width="140" height="40" rx="8"/>
+  <rect class="dg-node" x="8" y="184" width="168" height="40" rx="8"/>
   <text class="dg-txt-s" x="22" y="208">… 998 more hosts</text>
   <rect class="dg-node-alt" x="280" y="94" width="160" height="70" rx="8"/>
   <text class="dg-txt" x="296" y="122">Merged sketch</text>
@@ -140,9 +140,9 @@
   <rect class="dg-node" x="552" y="94" width="160" height="70" rx="8"/>
   <text class="dg-txt" x="568" y="120">Any percentile</text>
   <text class="dg-txt-s" x="568" y="139">p50 / p99 / p99.9</text>
-  <line class="dg-edge" x1="148" y1="52" x2="280" y2="112" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="148" y1="132" x2="280" y2="132" marker-end="url(#arrow)"/>
-  <line class="dg-edge" x1="148" y1="200" x2="280" y2="150" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="176" y1="52" x2="280" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="176" y1="132" x2="280" y2="132" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="176" y1="200" x2="280" y2="150" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="440" y1="129" x2="552" y2="129" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="290" y="200">merge = union of the data, lossless in shape</text>
   <text class="dg-bad" x="290" y="240">avg(p99s) = 1,025 ms — pure fiction</text>
@@ -205,14 +205,14 @@
 <li><strong>Monitor the monitoring.</strong> A standing per-tenant report of top cardinality offenders — which metrics, which labels, growth rate — plus an alert on cardinality growth itself. The platform metric I'd watch most nervously is "new series per minute per tenant." A cardinality bomb announces itself minutes before it detonates; this report is the fuse you can see burning.</li>
 </ul>
 
-<h2>Deep dive 3: the TSDB — compression and retention tiers (minutes 35–40)</h2>
+<h2>Deep dive 3: the TSDB — compression and retention tiers (minutes 35–38)</h2>
 
 <p>Inside a shard, storage is LSM-flavored, tuned for time. Incoming points append to a write-ahead log (crash recovery) and an in-memory <strong>head block</strong> holding each series' most recent chunk — recent data is both the hottest to query and the cheapest to serve from RAM. Every two hours the head is sealed into an immutable, time-partitioned block on disk with its own inverted index; background compaction merges small blocks into bigger ones. Deleting expired data is dropping whole blocks — no tombstones, no surgery. Append, seal, compact: the LSM idea from chapter 1.13, with time as the natural partition key.</p>
 
 <p>Compression is where this design's economics live, and the intuition takes two sentences. Timestamps arrive on a metronome — every 10 seconds — so store the <em>change of the change</em> (delta-of-delta), which is almost always exactly zero: one bit per timestamp. Values barely move between neighbors — a temperature gauge reads 42.1 then 42.1 — so XOR each value's bits against the previous value's and store only the handful of bits that differ, which for an unchanged value is again a single bit.</p>
 
 <div class="box story"><div class="box-tag">War story — Facebook's Gorilla</div>
-<p>Both tricks come from one paper. Around 2013, Facebook's monitoring store (ODS, built on HBase) had become too slow to be useful during incidents — engineers debugging an outage would issue queries and wait seconds for graphs, at exactly the moment seconds mattered. The team's observation: virtually all debugging queries touched the last day or so of data. So they built Gorilla, an in-memory time-series database holding the most recent 26 hours, and published it at VLDB 2015. The compression results made the paper famous: with delta-of-delta timestamps, 96% of timestamps compressed to a single bit; with XOR value encoding, about half of values did too; a 16-byte point shrank to 1.37 bytes on average — a 12x win that made "26 hours of everything, in RAM" affordable at an ingest rate of about 700 million points per minute. Queries went from seconds to milliseconds — around 70x faster — which changed engineer behavior: people built tools that speculatively ran queries they'd never have dared before. The paper's encodings became the industry default; Prometheus's own storage engine credits Gorilla-style XOR compression directly. When you write "delta-of-delta + XOR" on the whiteboard, you're citing one of the most-adopted systems papers of its decade.</p>
+<p>Both tricks come from one paper. By 2013 Facebook's monitoring store — ODS, backed by HBase — had become too slow to be useful during incidents: a query over a few thousand series took <em>tens of seconds</em>, at exactly the moment seconds mattered. The team's observation was that virtually all debugging queries touch only recent data. So they built Gorilla, an in-memory database holding the most recent 26 hours as a write-through cache in front of HBase, and published it at VLDB 2015. The compression results made the paper famous: with delta-of-delta timestamps, 96% of timestamps compressed to a single bit; with XOR value encoding, about 51% of values did too; a 16-byte point shrank to 1.37 bytes on average — a 12x win that made "26 hours of everything, in RAM" affordable at an ingest rate of 700 million points per minute. Query latency dropped over 70x, to a 90th percentile of 10 milliseconds — and the behavior change is the part worth remembering. ODS was serving 450 queries per second when Gorilla launched; Gorilla soon handled over 5,000 steady-state, peaking near 40,000, because engineers built analysis tools nobody would attempt against a database that answered in tens of seconds. Make reads cheap and people ask more questions. The paper's encodings became the industry default; Prometheus's storage engine uses Gorilla-style XOR compression directly. When you write "delta-of-delta + XOR" on the whiteboard, you're citing one of the most-adopted systems papers of its decade.</p>
 </div>
 
 <p>Compression makes raw retention affordable for days; <strong>downsampling</strong> makes 13 months affordable. Three tiers, each an honest statement about what questions old data answers:</p>
@@ -238,8 +238,8 @@
   <text class="dg-txt-s" x="518" y="98">13 months · object store</text>
   <line class="dg-edge" x1="188" y1="88" x2="256" y2="88" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="436" y1="88" x2="504" y2="88" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="192" y="76">downsample</text>
-  <text class="dg-txt-s" x="440" y="76">downsample</text>
+  <text class="dg-txt-s" x="189" y="76">downsample</text>
+  <text class="dg-txt-s" x="437" y="76">downsample</text>
   <text class="dg-txt-s" x="8" y="160">Query planner picks the tier by range:</text>
   <text class="dg-txt-s" x="8" y="182">"last 3h" → hot · "last 30d" → warm · "last year" → cold</text>
   <text class="dg-txt-s" x="8" y="204">Rollups merge min/max/sum/count + sketch — the mergeability trick, again</text>
@@ -247,7 +247,7 @@
 <figcaption>Retention tiers trade resolution for years. The mergeable window record is what makes downsampling a cheap merge instead of a recomputation.</figcaption>
 </figure>
 
-<h2>Alerting: evaluate the stream, not the database</h2>
+<h2>Alerting: evaluate the stream, not the database (minutes 38–40)</h2>
 
 <p>The obvious alerting design is a poller: every 30 seconds, run each rule's query against the TSDB. The estimate already killed it — 100K rules is 3,300 heavyweight queries per second of pure background load, most of them re-reading the same freshly written data over and over, competing with the humans mid-incident who actually need the query path. Polling is a design that works in the demo and bankrupts you at scale.</p>
 
@@ -255,17 +255,17 @@
 
 <p>Then make the alerts humane, because a noisy pager is a disabled pager. A rule fires only after its condition holds for a configured duration ("for 5 minutes"), which forgives one bad scrape. It clears at a lower threshold than it fires (hysteresis) so a metric oscillating around the line doesn't page in a loop, and identical firings dedupe into one incident. And the platform natively supports burn-rate alerts on SLOs — chapter 2.8's fast-window-plus-slow-window pattern — because "the error budget is burning 14x too fast" is the page that matters, and customers shouldn't have to hand-build it.</p>
 
-<h2>The self-dependency rule: monitor from outside the blast radius</h2>
+<h2>The self-dependency rule: monitor from outside the blast radius (minutes 40–42)</h2>
 
 <p>Now the requirement I flagged in minute two. A monitoring platform that shares fate with what it monitors is a smoke detector wired to the house mains: it dies in exactly the fire it exists to announce. So the platform runs in its <strong>own failure domain</strong> — separate accounts, separate clusters, ideally separate regions from the monitored infrastructure; it must never depend on the customer's databases, queues, or service mesh. Internally the same razor applies one level down: the component that delivers pages depends on almost nothing — if every TSDB shard is dead, "evaluate stream, send page" must still work, and the final notification hop rides an independent third-party path, because a pager that depends on the platform it reports on has the same disease one layer deeper.</p>
 
 <p>The agent is the last line. When intake is unreachable, agents keep collecting and spool to their local disk buffer — say 30 minutes — because the customer's incident review will want the data measured <em>during</em> our outage. On reconnect, agents send the freshest points first (alerting needs <em>now</em>, not twenty minutes ago) and trickle the backlog behind them, rate-limited by intake so that 100K agents flushing simultaneously don't become the retry stampede of chapter 2.7 and kill the intake that just recovered.</p>
 
 <div class="box story"><div class="box-tag">War story — Datadog, March 8, 2023</div>
-<p>The monitoring vendor's nightmare happened in public. Starting around 06:00 UTC, a routine security update of systemd rolled out automatically — via an unattended-upgrades channel left enabled — across tens of thousands of Datadog's virtual machines, spanning multiple regions on multiple cloud providers. On the updated hosts, a systemd-networkd restart wiped the network routes used by the container networking layer, knocking the nodes off the network almost simultaneously. Datadog's web app, dashboards, and monitors degraded for many customers; full recovery took more than a day, and the company published an unusually detailed public postmortem. Three lessons map straight onto this chapter. First: the trigger wasn't customer traffic — it was a change applied everywhere at once; the fix included disabling the legacy auto-update channel and rolling out base-OS changes gradually, like any other deploy. Second: during recovery, Datadog explicitly prioritized restoring live telemetry and alerting over backfilling historical data — freshest-first, exactly the ordering our agents implement. Third: customers whose own systems were healthy were blind anyway, because their eyes lived in someone else's failure domain — the self-dependency rule doesn't stop applying just because monitoring is someone else's product. Some teams now keep a minimal independent probe — even a crude external ping — precisely so that "is the monitoring down, or is everything down?" has an answer.</p>
+<p>The monitoring vendor's nightmare happened in public. At 06:03 UTC, a routine security update of systemd rolled out automatically — through a legacy unattended-upgrades channel nobody remembered was enabled — across tens of thousands of Datadog's virtual machines in five regions, spread over three separate cloud providers. On each updated host, restarting systemd-networkd deleted the network routes that the container networking plugin (Cilium) had installed, so the nodes fell off the network within the same hour. Datadog's web app, dashboards, and monitors degraded for customers worldwide; full recovery took about two days, and the company published an unusually detailed postmortem. Three lessons map straight onto this chapter. First: the trigger wasn't customer traffic — it was one change applied everywhere at once; the remediations included disabling that legacy update channel and moving base-OS changes to staged, region-by-region rollout, like any other deploy. Second: during recovery Datadog explicitly restored live telemetry and alerting before backfilling history — freshest-first, exactly the ordering our agents implement, and the same lesson Gorilla's authors listed first. Third: customers whose own systems were perfectly healthy were blind anyway, because their eyes lived in someone else's failure domain — the self-dependency rule doesn't stop applying just because monitoring is a vendor's problem. Some teams now keep a minimal independent probe — even a crude external ping — precisely so that "is the monitoring down, or is everything down?" has an answer.</p>
 </div>
 
-<h2>Failure modes and operations (minutes 40–45)</h2>
+<h2>Failure modes and operations (minutes 42–45)</h2>
 
 <p><strong>Intake overload.</strong> A tenant's deploy goes wrong and their agents triple output; or a cardinality bomb slips past budgets. Intake sheds by priority, chapter 2.7 style: platform-health metrics and any series referenced by an alert rule are protected; unreferenced custom metrics shed first, per-tenant, with the drop counted and visible to that tenant. Degrade the nice-to-haves, defend the pager.</p>
 

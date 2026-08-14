@@ -5,28 +5,28 @@
       "id": "p3c01-q01", "level": 1, "type": "mcq", "tag": "encoding",
       "q": "Why base62 for short codes instead of base64?",
       "options": [
+        {"t": "Base62 packs more information into each character, so the codes come out shorter than the base64 equivalent", "correct": false,
+         "why": "Backwards on both counts — more symbols per character means base64 packs MORE per character, so its codes are marginally shorter. You give that up on purpose, for URL safety."},
+        {"t": "Databases can't build a usable index on strings containing + and /", "correct": false,
+         "why": "Databases index any string happily, plus signs and slashes included. The problem lives in the URL bar, not in the index."},
         {"t": "Base64's + and / characters need percent-encoding in URLs, which defeats the point of a short link", "correct": true,
          "why": "Right. Base62 is just 0-9, a-z, A-Z — every character URL-safe with no escaping. Base64 would give slightly shorter codes but ugly escaped ones."},
-        {"t": "Base62 compresses better", "correct": false,
-         "why": "Backwards — more symbols per character means base64 packs MORE into each character. The reason to give that up is URL safety, not compression."},
-        {"t": "Base64 is patented", "correct": false,
-         "why": "No — base64 is a free, ancient standard used everywhere. The objection is purely that + and / are not URL-safe characters."},
-        {"t": "Databases can't index base64 strings", "correct": false,
-         "why": "Databases index any string happily. The problem lives in the URL bar, not the index: + and / must be escaped in URLs."}
+        {"t": "Base64 output isn't stable across language runtimes, so the same ID could encode differently on different servers", "correct": false,
+         "why": "Base64 is a rigidly specified standard; the same bytes encode identically in every language. The objection is purely that + and / are not URL-safe."}
       ]
     },
     {
       "id": "p3c01-q02", "level": 1, "type": "mcq", "tag": "encoding",
       "q": "How many distinct codes does base62 with 7 characters give you?",
       "options": [
-        {"t": "About 3.5 trillion", "correct": true,
-         "why": "62^7 ≈ 3.5 × 10^12. Even 6 billion links over five years uses under 0.2% of that space — which is why 7 characters is enough forever and wasted IDs are free."},
         {"t": "About 3.5 billion", "correct": false,
          "why": "That's closer to 62^5 territory. The jump matters: billions would be tight against a 6-billion-link forecast; trillions makes the space a non-issue."},
-        {"t": "About 62 million", "correct": false,
-         "why": "Off by five orders of magnitude — that wouldn't last a month at 100M links/month. Each extra character multiplies the space by 62."},
+        {"t": "About 3.5 trillion", "correct": true,
+         "why": "62^7 ≈ 3.5 × 10^12. Even 6 billion links over five years uses under 0.2% of that space — which is why 7 characters is enough forever and wasted IDs are free."},
         {"t": "Exactly 7 × 62 = 434", "correct": false,
-         "why": "Positions multiply, they don't add. Seven independent slots of 62 choices each is 62 × 62 × ... seven times = 62^7."}
+         "why": "Positions multiply, they don't add. Seven independent slots of 62 choices each is 62 × 62 × ... seven times = 62^7."},
+        {"t": "About 62 million", "correct": false,
+         "why": "Off by five orders of magnitude — that wouldn't last a month at 100M links/month. Each extra character multiplies the space by 62."}
       ]
     },
     {
@@ -35,165 +35,165 @@
       "options": [
         {"t": "Write-heavy and large-data", "correct": false,
          "why": "Both wrong: writes are ~40/sec (a laptop's workload) and five years of links is ~3 TB. Designing for imaginary write volume is the classic junior misread here."},
-        {"t": "Read-heavy and small-data", "correct": true,
-         "why": "Yes — roughly 100 reads per write, and all links ever fit on one drive. So you design for read QPS and latency, and you refuse to shard for data size."},
+        {"t": "Balanced read/write with bursty storage growth", "correct": false,
+         "why": "Nothing balanced about 100:1, and storage grows linearly and slowly. The numbers exist precisely to kill vague characterizations like this."},
         {"t": "Read-heavy and large-data", "correct": false,
          "why": "Half right. Reads dominate, but 6B links × 500 bytes ≈ 3 TB — small data. Saying 'storage is a non-problem' out loud is worth real points."},
-        {"t": "Balanced read/write with bursty storage growth", "correct": false,
-         "why": "Nothing balanced about 100:1, and storage grows linearly and slowly. The numbers exist precisely to kill vague characterizations like this."}
+        {"t": "Read-heavy and small-data", "correct": true,
+         "why": "Yes — roughly 100 reads per write, and all links ever fit on one drive. So you design for read QPS and latency, and you refuse to shard for data size."}
       ]
     },
     {
       "id": "p3c01-q04", "level": 1, "type": "mcq", "tag": "redirect",
       "q": "What's the behavioral difference between a 301 and a 302 redirect?",
       "options": [
-        {"t": "301 is for HTTPS, 302 for HTTP", "correct": false,
-         "why": "Redirect codes have nothing to do with the transport protocol. The distinction is permanence: whether the browser may remember the answer."},
         {"t": "301 means 'permanent — browsers may cache it and skip you next time'; 302 means 'temporary — ask me again on every click'", "correct": true,
          "why": "Exactly, and it's the whole trade-off: 301 offloads repeat clicks to browser caches; 302 brings every click back to your servers where it can be counted, expired, or revoked."},
-        {"t": "302 is faster for the user", "correct": false,
+        {"t": "302 responses are faster, since a temporary redirect skips a cache-validation round trip", "correct": false,
          "why": "Per-click they're identical — one response either way. If anything, 301 makes REPEAT clicks faster by skipping your server entirely; that skipping is exactly what breaks analytics."},
-        {"t": "301 can only redirect within the same domain", "correct": false,
-         "why": "Both redirect anywhere. The only meaningful difference for a shortener is cacheability — permanent vs ask-again."}
+        {"t": "301 can only redirect within the same domain, so cross-domain short links must use 302 regardless", "correct": false,
+         "why": "Both redirect anywhere, cross-domain included — that's the entire job of a shortener. The only meaningful difference here is cacheability: permanent vs ask-again."},
+        {"t": "301 is for HTTPS, 302 for HTTP", "correct": false,
+         "why": "Redirect codes have nothing to do with the transport protocol. The distinction is permanence: whether the browser may remember the answer."}
       ]
     },
     {
       "id": "p3c01-q05", "level": 1, "type": "mcq", "tag": "ids",
       "q": "Why does the hash-and-truncate strategy (MD5 the URL, keep 7 characters) require a retry loop?",
       "options": [
+        {"t": "MD5 is too slow to run on the create path, so candidate codes are precomputed in the background and writes retry when that pool runs dry", "correct": false,
+         "why": "Hashing is microseconds — speed is not the issue, and no pool is involved. The issue is that a truncated hash is no longer collision-resistant, so two URLs can share a code."},
+        {"t": "MD5 output is binary, and the database rejects binary primary keys, so writes retry until a digest lands in the printable range", "correct": false,
+         "why": "You re-encode the hash bits into base62 before storing — keys are text either way. The loop exists because truncation makes collisions statistically inevitable at scale."},
         {"t": "Truncating to 7 characters shrinks the space enough that different URLs will sometimes produce the same code — a birthday collision — so inserts must detect the clash and re-salt", "correct": true,
          "why": "Right. Collisions start around a couple of million links (square root of 3.5T) and by 6 billion links roughly 1 insert in 600 clashes. Each clash means re-hash and retry — unbounded write latency."},
-        {"t": "MD5 is too slow to run inline", "correct": false,
-         "why": "Hashing is microseconds — speed is not the issue. The issue is that a truncated hash is no longer collision-resistant, so two URLs can share a code."},
-        {"t": "Hashes can produce non-base62 characters", "correct": false,
-         "why": "You just re-encode the hash bits into base62 — a formatting step, not a retry. The retry exists for collisions after truncation."},
-        {"t": "The database rejects binary keys", "correct": false,
-         "why": "Keys are stored as text either way. The loop exists because truncation makes collisions statistically inevitable at scale."}
+        {"t": "The digest contains characters outside the base62 alphabet, so every write retries with a fresh salt until the truncated hash happens to land entirely inside the URL-safe range", "correct": false,
+         "why": "You don't gamble on the bytes — you re-encode them into base62, a deterministic formatting step that always succeeds. The retry exists for collisions after truncation, nothing else."}
       ]
     },
     {
       "id": "p3c01-q06", "level": 1, "type": "mcq", "tag": "ids",
       "q": "What is a Key Generation Service (KGS) in the classic shortener design?",
       "options": [
-        {"t": "A service that hashes URLs on demand", "correct": false,
-         "why": "That's the hash strategy, which a KGS exists to avoid. A KGS mints keys ahead of time, unrelated to any URL's content."},
-        {"t": "An offline job that pre-generates a pool of unique random codes, which app servers then claim atomically", "correct": true,
-         "why": "Yes. Uniqueness is checked at generation time, off the hot path, so creates never collide. The cost: an extra service, a keys database, and claim bookkeeping to operate."},
-        {"t": "The database's auto-increment feature", "correct": false,
+        {"t": "A service that hashes each submitted URL on demand and hands back the truncated digest as its code", "correct": false,
+         "why": "That's the hash strategy, which a KGS exists to avoid. A KGS mints keys ahead of time, with no relationship to any URL's content."},
+        {"t": "The database's auto-increment sequence, exposed as a small service", "correct": false,
          "why": "Auto-increment is the raw counter approach — sequential and centralized, the two problems a KGS (or leased ranges) is built to escape."},
-        {"t": "A DNS service that assigns short domains", "correct": false,
-         "why": "Domains are fixed; a KGS mints the path tokens (the 7-character codes), not hostnames."}
+        {"t": "A DNS-backed service that assigns each customer their own short domain", "correct": false,
+         "why": "Domains are fixed infrastructure; a KGS mints the path tokens — the 7-character codes after the slash — not hostnames."},
+        {"t": "An offline job that pre-generates a pool of unique random codes, which app servers then claim atomically", "correct": true,
+         "why": "Yes. Uniqueness is checked at generation time, off the hot path, so creates never collide. The cost: an extra service, a keys database, and claim bookkeeping to operate."}
       ]
     },
     {
       "id": "p3c01-q07", "level": 1, "type": "mcq", "tag": "alias",
       "q": "Two users try to claim the custom alias 'my-launch' in the same millisecond. The correct mechanism to ensure exactly one wins is:",
       "options": [
+        {"t": "Read to check the alias is free, then insert it, retrying the whole sequence if the insert comes back with a conflict", "correct": false,
+         "why": "This is check-then-insert — the classic race. Between your read and your write, the other user's insert lands. The retry hides it rather than preventing it; the conditional insert never has the race at all."},
         {"t": "One atomic conditional insert — put-if-not-exists — and let the database referee", "correct": true,
          "why": "Right. A single atomic write cannot race: the database serializes the two claims and exactly one succeeds. Uniqueness is enforced by an atomic write, never by a read followed by hope."},
-        {"t": "Read to check the alias is free, then insert it", "correct": false,
-         "why": "This is check-then-insert — the classic race. Between your read and your write, the other user's insert lands, and now both believe they own it."},
-        {"t": "Lock the whole links table during claims", "correct": false,
-         "why": "It works and it's a sledgehammer: aliases are ~a hundred claims/sec sharing a table with every redirect's metadata. A row-level atomic insert gives the same guarantee at zero contention cost."},
-        {"t": "Queue all alias claims through one worker", "correct": false,
-         "why": "Serializing through one consumer does prevent the race, but you've built a coordination service to reproduce what a conditional write gives you in one call."}
+        {"t": "Route every alias claim through a single dedicated worker so claims are handled strictly one at a time", "correct": false,
+         "why": "Serializing through one consumer does prevent the race, but you've built and now operate a coordination service to reproduce what a conditional write gives you in one call."},
+        {"t": "Take an exclusive lock on the links table for the duration of every claim", "correct": false,
+         "why": "It works and it's a sledgehammer: that table also serves every redirect's metadata. A row-level atomic insert gives the same guarantee at zero contention cost."}
       ]
     },
     {
       "id": "p3c01-q08", "level": 1, "type": "mcq", "tag": "expiry",
       "q": "In 'lazy expiry', when is an expired link actually caught?",
       "options": [
-        {"t": "A cron job checks every link hourly", "correct": false,
+        {"t": "An hourly cron job scans the links table and deletes anything past its expires_at timestamp", "correct": false,
          "why": "That's the sweeper — the hygiene half. Lazy expiry is the correctness half: the read path itself checks the timestamp, so expiry works even if the sweeper never runs."},
+        {"t": "The browser's own cache entry for the redirect expires, so the next click asks the origin again", "correct": false,
+         "why": "With our 302 + no-cache choice the browser remembers nothing at all. Expiry is entirely server-side."},
         {"t": "At read time — the redirect path checks expires_at on every hit and serves 410 Gone if it's past", "correct": true,
          "why": "Exactly. The check rides along on a row you already fetched, costs nothing, and is the correctness guarantee. Cleanup of dead rows is a separate, best-effort hygiene job."},
-        {"t": "The database refuses to store rows past their expiry", "correct": false,
-         "why": "Databases store whatever you write; TTL features DELETE rows later (best-effort, possibly days late in DynamoDB's case). Something must still answer correctly in the gap — that's the lazy check."},
-        {"t": "The browser's cache expires the link", "correct": false,
-         "why": "With our 302 + no-cache choice the browser remembers nothing. Expiry is entirely server-side."}
+        {"t": "The database refuses to return rows whose expires_at has passed, so the read simply comes back empty", "correct": false,
+         "why": "Databases have no opinion about your timestamp columns; TTL features DELETE rows later (best-effort, possibly days late in DynamoDB's case). Something must still answer correctly in the gap."}
       ]
     },
     {
       "id": "p3c01-q09", "level": 1, "type": "mcq", "tag": "stats",
       "q": "Why does the design count clicks asynchronously through a queue instead of incrementing a counter during the redirect?",
       "options": [
-        {"t": "Queues make the counts more accurate", "correct": false,
+        {"t": "Queues make the counts more accurate, because the consumer can deduplicate repeat events before writing them to the stats table", "correct": false,
          "why": "Opposite — the async path is slightly LESS accurate (lag, possible drops), and we accept that. The win is protecting the hot path, not precision."},
-        {"t": "Redis can't do increments", "correct": false,
-         "why": "Redis increments happily (INCR). The issue is architectural: any synchronous side-work adds latency and a failure dependency to every single redirect."},
+        {"t": "Redis can't do atomic increments once the cache is sharded", "correct": false,
+         "why": "Redis increments happily, sharded or not — a counter lives on one shard. The issue is architectural: any synchronous side-work adds latency and a failure dependency to every single redirect."},
+        {"t": "Queue storage costs far less per event than database writes, so buffering counts there instead of the stats table is the cheaper design at ten billion clicks a month", "correct": false,
+         "why": "The queue isn't storage — it's a shock absorber that events pass through in seconds. Counts still land in a stats table; they just arrive batched and off the critical path."},
         {"t": "Synchronous counting would add 12K writes/sec and a new failure dependency to the latency-critical path, for data that tolerates delay and small loss", "correct": true,
-         "why": "Right. Click counts are decorative — seconds of lag is fine. Batched aggregation turns 12K events/sec into a few dozen DB writes/sec, and a dead queue degrades stats, never redirects."},
-        {"t": "It's cheaper to store counts in a queue", "correct": false,
-         "why": "The queue isn't storage — it's a shock absorber. Counts still land in a stats table; they just arrive batched and off the critical path."}
+         "why": "Right. Click counts are decorative — seconds of lag is fine. Batched aggregation turns 12K events/sec into a few dozen DB writes/sec, and a dead queue degrades stats, never redirects."}
       ]
     },
     {
       "id": "p3c01-q10", "level": 2, "type": "mcq", "tag": "failure",
       "q": "Peak traffic, 12K redirects/sec, and your entire Redis cache tier dies. In this chapter's design, what actually happens?",
       "options": [
-        {"t": "Redirects start failing until the cache is restored", "correct": false,
-         "why": "Only if you built cache-required instead of cache-aside. The DB holds the full mapping; the cache is an accelerator, not the source of truth."},
         {"t": "DynamoDB absorbs the full 12K/sec, p99 rises maybe 10ms, and users don't notice — because we sized the DB for this day", "correct": true,
          "why": "Yes. 12K key-value gets/sec is well within a properly provisioned Dynamo table. 'The design survives its cache dying' is a sentence you earn by sizing the fallback honestly."},
         {"t": "You must immediately fail over to a standby region", "correct": false,
          "why": "A regional failover for a cache outage is using a crane to pick up a pencil. The DB fallback handles it in-region; multi-region is for region-scale failures."},
-        {"t": "The redirect service serves stale links from local memory only", "correct": false,
-         "why": "A local hot-links cache helps with the top handful of keys, but it can't cover the long tail. The real absorber is the database — that's why the miss path was sized."}
+        {"t": "The redirect service serves only what's left in its own process memory", "correct": false,
+         "why": "A local hot-links cache helps with the top handful of keys, but it can't cover the long tail. The real absorber is the database — that's why the miss path was sized."},
+        {"t": "Redirects start failing until the cache tier is restored", "correct": false,
+         "why": "Only if you built cache-required instead of cache-aside. The DB holds the full mapping; the cache is an accelerator, not the source of truth."}
       ]
     },
     {
       "id": "p3c01-q11", "level": 2, "type": "mcq", "tag": "redirect",
       "q": "A teammate ships 301 redirects to cut server load. Three weeks later, marketing reports click counts are mysteriously low and still dropping. What happened?",
       "options": [
+        {"t": "The click-event queue consumer has been lagging since the deploy, so counts land in the stats table hours behind reality and every dashboard query reads a number that hasn't caught up yet", "correct": false,
+         "why": "Lag delays counts; it doesn't shrink them, and a steady-state lag stops getting worse. The 'still dropping over weeks' shape points at accumulating browser caches instead."},
+        {"t": "Short links decay naturally — as campaigns age, real click volume falls, and three weeks is long enough for that trend to show", "correct": false,
+         "why": "Maybe marginally, but a step-change right after a deploy plus steady decay is a system fingerprint, not a behavior trend. Correlate the metric drop with the 301 rollout."},
         {"t": "Browsers cached the 301s, so repeat clicks go straight to the destination without touching your servers — invisible to counting, and worsening as more browsers cache more links", "correct": true,
          "why": "Exactly the failure mode. Each browser only shows you a link's FIRST click. The decay over weeks is the tell: caches are progressively filling. Revocation is broken the same way."},
-        {"t": "The queue consumer is lagging", "correct": false,
-         "why": "Lag delays counts; it doesn't shrink them, and it doesn't correlate with a redirect-code deploy. The 'still dropping over weeks' shape points at accumulating browser caches."},
-        {"t": "Users click short links less over time naturally", "correct": false,
-         "why": "Maybe marginally, but a step-change after a deploy plus steady decay is a system fingerprint, not a behavior trend. Correlate the metric drop with the 301 rollout."},
-        {"t": "DynamoDB TTL deleted active links", "correct": false,
-         "why": "TTL only removes rows past their expires_at, which would cause 404 spikes, not silently shrinking counts on live links."}
+        {"t": "DynamoDB's TTL sweeper started deleting rows early, so a growing share of links 404 and those clicks never get counted", "correct": false,
+         "why": "TTL only removes rows past their expires_at and never fires early, and dead links would show as a 404 spike — a loud signal, not silently shrinking counts on live links."}
       ]
     },
     {
       "id": "p3c01-q12", "level": 2, "type": "mcq", "tag": "abuse",
       "q": "Overnight, your 404 rate jumps from 0.1% to 15% of requests, with traffic up 3x, spread across many IPs. Most likely explanation and first response?",
       "options": [
+        {"t": "Rows have gone missing from the links table, so previously working codes resolve to nothing — start a point-in-time restore from backup before the gap widens", "correct": false,
+         "why": "Data loss would spike 404s on PREVIOUSLY WORKING links, at normal traffic volume. Tripled traffic that's mostly misses across many IPs is an attacker's fingerprint, not corruption's."},
         {"t": "Someone is scanning your keyspace for valid codes — enable negative caching, tighten per-IP rate limits, and check what your valid codes might expose", "correct": true,
          "why": "Random probes overwhelmingly miss (your links use 0.2% of the space), so scanners announce themselves as a 404 flood. This is exactly why 404 rate belongs on the dashboard as a security signal, not just an error metric."},
-        {"t": "The database lost rows — start a restore from backup", "correct": false,
-         "why": "Data loss would spike 404s on PREVIOUSLY WORKING links, with normal traffic volume. 3x traffic of misses across many IPs is an attacker's fingerprint, not corruption's."},
-        {"t": "A deploy broke code parsing — roll back", "correct": false,
-         "why": "Worth a 30-second check of the deploy timeline, but a parsing bug 404s legitimate existing links at normal volume. Tripled traffic that's mostly misses is enumeration."},
-        {"t": "Normal growth — provision more servers", "correct": false,
-         "why": "Growth adds hits and misses proportionally; the 404 ratio stays flat. A ratio jumping 150x means the new traffic is almost all misses — nobody's real clicks look like that."}
+        {"t": "This is ordinary growth arriving faster than forecast — provision more redirect servers and cache capacity before p99 starts moving", "correct": false,
+         "why": "Growth adds hits and misses proportionally; the 404 ratio stays flat. A ratio jumping 150x means the new traffic is almost all misses — nobody's real clicks look like that."},
+        {"t": "Last night's deploy broke code parsing, so valid codes are rejected before they reach the database — roll it back", "correct": false,
+         "why": "Worth a 30-second check of the deploy timeline, but a parsing bug 404s legitimate existing links at normal volume. Tripled traffic that's mostly misses is enumeration."}
       ]
     },
     {
       "id": "p3c01-q13", "level": 2, "type": "mcq", "tag": "ids",
       "q": "The counter table that leases ID blocks goes down for two hours at noon. What's the user-visible impact in this chapter's design?",
       "options": [
+        {"t": "All link creation stops immediately across the fleet, since every POST has to reach the counter for its next ID before it can permute the number and encode a code", "correct": false,
+         "why": "That's the raw-central-counter design failing, where the counter sits on the write path of every create. Leased blocks exist precisely so a counter outage burns runway, not availability."},
+        {"t": "Redirects start failing, because decoding a short code back to its ID requires reading the counter's position", "correct": false,
+         "why": "A redirect never decodes anything — it looks the code up in the links table. The counter is write-path-only, and only at lease time."},
+        {"t": "Duplicate codes get minted while it's down, so some redirects point at the wrong destination", "correct": false,
+         "why": "Blocks already leased are disjoint — servers can't collide with each other no matter how long the counter sleeps. Uniqueness is baked in at lease time."},
         {"t": "Likely none: every server keeps minting from its already-leased block (hours of runway at 40 links/sec), and redirects never touch the counter at all", "correct": true,
-         "why": "The payoff of leasing 1M-ID blocks: coordination happens a few times a day, so servers carry a long runway. Creation only stalls if the outage outlives everyone's blocks. Redirects are untouched by construction."},
-        {"t": "All link creation stops immediately", "correct": false,
-         "why": "That's the raw-central-counter design failing. Leased blocks exist precisely so a counter outage burns runway, not availability."},
-        {"t": "Redirects fail because codes can't be decoded", "correct": false,
-         "why": "Decoding a redirect never consults the counter — the code is looked up in the links table. The counter is write-path-only, and only at lease time."},
-        {"t": "Duplicate codes get minted while it's down", "correct": false,
-         "why": "Blocks already leased are disjoint — servers can't collide with each other no matter how long the counter sleeps. Uniqueness is baked in at lease time."}
+         "why": "The payoff of leasing 1M-ID blocks: coordination happens a few times a day, so servers carry a long runway. Creation only stalls if the outage outlives everyone's blocks. Redirects are untouched by construction."}
       ]
     },
     {
       "id": "p3c01-q14", "level": 2, "type": "mcq", "tag": "ids",
       "q": "With hash-based code generation, two different users shorten the same news article URL. What happens, and why is it a product bug?",
       "options": [
-        {"t": "The second user gets an error", "correct": false,
-         "why": "No error — the write succeeds or is a no-op, which is what makes the bug silent. Both users walk away holding the same code."},
         {"t": "Both get the same code, so they share one click counter and neither can expire or manage 'their' link independently", "correct": true,
          "why": "Deterministic hashing means same input, same code. Dedup sounds like a feature until per-user stats, per-user expiry, and takedown all break. Salting with user ID fixes it — and erases hashing's only advantage."},
-        {"t": "A collision retry gives the second user a different code automatically", "correct": false,
-         "why": "The retry loop fires on collisions between DIFFERENT URLs. The same URL hashes identically every time — no collision is detected, that's the point of the bug."},
-        {"t": "Nothing — sharing codes is strictly good deduplication", "correct": false,
+        {"t": "The collision retry loop fires, re-salts the hash with a nonce, and quietly hands the second user a different code — the system self-heals", "correct": false,
+         "why": "The retry loop fires on collisions between DIFFERENT URLs, detected as an occupied row. The same URL hashes identically and matches its own existing row — no clash is detected, which is precisely what makes the bug silent."},
+        {"t": "The second user gets a duplicate-key error and has to resubmit", "correct": false,
+         "why": "No error surfaces — the write succeeds or is a harmless no-op. Both users walk away holding the same code, believing it's theirs."},
+        {"t": "Nothing goes wrong — sharing one row is strictly good deduplication and saves storage besides", "correct": false,
          "why": "Storage-wise, sure. Product-wise, two customers now co-own one analytics stream and one expiry setting. 'Whose link is it?' has no answer."}
       ]
     },
@@ -201,55 +201,55 @@
       "id": "p3c01-q15", "level": 2, "type": "mcq", "tag": "expiry",
       "q": "You enable DynamoDB TTL to clean up expired links and remove the expires_at check from the redirect path 'since TTL handles it.' What breaks?",
       "options": [
-        {"t": "Nothing — TTL is exactly for this", "correct": false,
-         "why": "TTL is for cleanup, not correctness. Dynamo documents TTL deletion as best-effort, potentially lagging up to ~48 hours past expiry."},
+        {"t": "Nothing — TTL deletion is exactly the feature for this, and it fires on the timestamp you set", "correct": false,
+         "why": "TTL is for cleanup, not correctness. Dynamo documents TTL deletion as best-effort, typically within 48 hours of expiry rather than at it."},
+        {"t": "The Redis entry outlives the deleted row and keeps serving the destination indefinitely, because nothing invalidates the cache when the sweeper removes the row underneath it", "correct": false,
+         "why": "There is a real second bug here — cached entries need eviction on expiry — but the cache's own one-day TTL bounds it. The unbounded 48-hour DB lag is the headline breakage."},
         {"t": "Expired links keep redirecting for up to ~48 hours, because TTL deletion is best-effort and lagged — the lazy check was the correctness mechanism", "correct": true,
          "why": "Right. A link that promised to die at midnight serves traffic well into tomorrow. Lazy check for correctness, TTL for hygiene — you need both, and only one is optional."},
-        {"t": "TTL deletes links early, causing 404s on live links", "correct": false,
-         "why": "TTL never fires before the timestamp — the lag is always in the late direction. The bug window is 'expired but still served', not 'live but deleted'."},
-        {"t": "The cache serves the link forever regardless", "correct": false,
-         "why": "There is a second, smaller bug here — cached entries need eviction on expiry — but the cache TTL (a day) bounds it. The 48-hour best-effort DB lag is the headline breakage."}
+        {"t": "TTL rounds timestamps down and deletes rows slightly early, so links 404 before they were meant to expire", "correct": false,
+         "why": "TTL never fires before the timestamp — the lag is always in the late direction. The bug window is 'expired but still served', not 'live but deleted'."}
       ]
     },
     {
       "id": "p3c01-q16", "level": 2, "type": "mcq", "tag": "cache",
       "q": "One link goes on a viral tweet: 100K clicks/minute on a single code. Where does this design absorb it?",
       "options": [
-        {"t": "The permutation spreads the load across shards", "correct": false,
+        {"t": "The permutation spreads the load, since consecutive IDs scatter across the keyspace onto different cache shards", "correct": false,
          "why": "The permutation randomizes which key it IS — but it's still one key. All 100K/min converge on one cache entry; hot keys can't be spread by hashing, only replicated or copied closer."},
-        {"t": "In caches: Redis serves the single hot key, and the redirect servers' small in-process LRU caps even that, since one immutable code→URL entry is trivially copyable everywhere", "correct": true,
-         "why": "Right. 100K/min ≈ 1.7K/sec — Redis shrugs, and the local LRU means even a 100x hotter key just gets served from every app server's own memory. Immutable tiny values are the easiest hot-key case (chapter 2.6)."},
-        {"t": "You must urgently reshard DynamoDB", "correct": false,
+        {"t": "You have to reshard DynamoDB in a hurry: a single partition key absorbing 100K reads a minute blows through the per-partition throughput ceiling and throttles everything sharing that partition", "correct": false,
          "why": "The DB sees this key roughly once — the first miss — then the cache owns it. Resharding the durable store for a cache-layer phenomenon is solving the wrong tier."},
-        {"t": "Rate-limit clicks on that link to protect the system", "correct": false,
-         "why": "Throttling legitimate users on your most successful link is the product harming itself. This load is tiny for a cache; absorb it, don't refuse it."}
+        {"t": "Rate-limit clicks on that one code so a single viral link can't starve every other link", "correct": false,
+         "why": "Throttling legitimate users on your most successful link is the product harming itself. This load is tiny for a cache; absorb it, don't refuse it."},
+        {"t": "In caches: Redis serves the single hot key, and the redirect servers' small in-process LRU caps even that, since one immutable code→URL entry is trivially copyable everywhere", "correct": true,
+         "why": "Right. 100K/min ≈ 1.7K/sec — Redis shrugs, and the local LRU means even a 100x hotter key just gets served from every app server's own memory. Immutable tiny values are the easiest hot-key case (chapter 2.6)."}
       ]
     },
     {
       "id": "p3c01-q17", "level": 2, "type": "mcq", "tag": "db",
       "q": "Interviewer: 'You picked DynamoDB. Wouldn't Postgres work?' The strongest reply:",
       "options": [
+        {"t": "\"No — a relational database can't sustain twelve thousand reads a second against a 3 TB table. The moment you add read replicas you inherit replication lag on the redirect path, and a stale replica answering a just-minted code with a 404 is exactly the kind of correctness bug you don't want on the hot path of the product.\"", "correct": false,
+         "why": "False, and the interviewer knows it: 12K/sec of primary-key lookups on 3 TB is comfortable Postgres territory, and replica lag is a solvable routing question. A confident defense built on a wrong claim collapses on the next question."},
         {"t": "\"Honestly, yes — Postgres with the same cache in front handles 12K reads/sec fine. I chose Dynamo because the access pattern is a single key-value get, conditional writes handle the alias race, TTL handles expiry, and I don't operate failover myself. If the team already ran Postgres expertly, I'd flip.\"", "correct": true,
          "why": "Conceding what's true, re-anchoring on the actual reasons, and naming the condition that would flip the choice — that's how a committed decision survives pushback without turning into stubbornness."},
-        {"t": "\"No — SQL can't handle this scale.\"", "correct": false,
-         "why": "False, and the interviewer knows it: 12K/sec of primary-key lookups on 3 TB is comfortable Postgres territory. A defense built on a wrong claim collapses on the next question."},
-        {"t": "\"Either works, whatever you prefer.\"", "correct": false,
-         "why": "Retreating from your commitment at the first probe reads worse than never committing. The probe is an invitation to show your reasons, not a demand to surrender."},
-        {"t": "\"Postgres would need heavy sharding for the 3 TB.\"", "correct": false,
-         "why": "You did the math yourself: 3 TB fits one box. Contradicting your own estimation to defend a database choice is the fastest way to lose both points."}
+        {"t": "\"Postgres would need heavy sharding to hold 3 TB, and once you're operating a sharded relational fleet — routing, rebalancing, failover, connection pools — you've taken on far more 3 a.m. surface than a managed key-value store ever costs.\"", "correct": false,
+         "why": "You did the math yourself: 3 TB fits on one box, so no sharding is needed and the whole operational argument is built on a premise you already disproved. Contradicting your own estimation to defend a database choice loses both points."},
+        {"t": "\"Either one works honestly — I don't have a strong view, so I'm happy to go with whichever the team prefers.\"", "correct": false,
+         "why": "Retreating from your commitment at the first probe reads worse than never committing. The probe is an invitation to show your reasons, not a demand to surrender."}
       ]
     },
     {
       "id": "p3c01-q18", "level": 2, "type": "mcq", "tag": "ops",
       "q": "You're rolling out a new version of the permutation/encoder logic. Why does this deploy deserve more paranoia than a redirect-service deploy?",
       "options": [
-        {"t": "It's slower code", "correct": false,
-         "why": "Performance isn't the fear — arithmetic is microseconds either way. The fear is correctness: bad codes, once minted and shared, are forever."},
+        {"t": "The new encoder is slower, and the create path can't absorb extra latency at peak", "correct": false,
+         "why": "Performance isn't the fear — the arithmetic is microseconds either way, on a path doing 120 writes/sec. The fear is correctness: bad codes, once minted and shared, are forever."},
+        {"t": "The permutation constant is a secret, so far fewer engineers are cleared to review the diff, and a change nobody can properly read is the one most likely to carry a bug", "correct": false,
+         "why": "The constant is secret-ish; the code path is normally reviewable and the constant lives in config, not the diff. The real asymmetry is blast radius: encoder bugs are permanent, redirect bugs are transient."},
         {"t": "A bug here mints wrong or colliding codes into permanent public circulation — so it ships behind a flag with an offline verifier replaying IDs through old and new paths, asserting identical output", "correct": true,
          "why": "Right. A bad redirect deploy serves errors until rollback — recoverable. A bad encoder writes poison into the permanent dataset; links are out in the world and can't be recalled. Verify equivalence offline, canary at 1%."},
-        {"t": "The permutation is secret, so fewer engineers can review it", "correct": false,
-         "why": "The constant is secret-ish; the code path is normally reviewable. The asymmetry is blast radius: encoder bugs are permanent, redirect bugs are transient."},
-        {"t": "It requires a coordinated database migration", "correct": false,
+        {"t": "It requires a coordinated schema migration across a 3 TB links table", "correct": false,
          "why": "No schema changes — same table, same columns. The danger is silent semantic drift in what gets written, which is exactly what a replay-and-compare verifier catches."}
       ]
     },
@@ -257,41 +257,41 @@
       "id": "p3c01-q19", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "The interviewer asks you to commit to an ID-generation strategy. Which answer performs at the senior bar?",
       "options": [
+        {"t": "\"There are four reasonable options here — a central counter, hashing the URL, a pre-generated key service, and leased ranges — and each carries trade-offs that depend on what the requirements turn out to be, so I'd want to pin those down before picking one of them.\"", "correct": false,
+         "why": "A correct taxonomy and zero judgment. The question was 'commit'; a survey answer to a commitment question is the exact hedge that caps candidates at mid-level. You already have the requirements — use them."},
+        {"t": "\"A pre-generated key pool — an offline job mints random codes into a table and servers claim them in batches. It's the standard answer for this problem and it's what essentially every reference design converges on, so I'd go with it and move on to the redirect path.\"", "correct": false,
+         "why": "KGS genuinely works, but 'it's the standard answer' is the tell — justification by textbook, not by reasoning. Say WHY (pre-checked uniqueness, random codes) and price the cost (an extra service to babysit) and this becomes defensible."},
+        {"t": "\"I'd use Snowflake IDs — a timestamp, a machine ID, and a per-millisecond sequence packed into 64 bits, then base62 the result. Twitter built it for exactly this class of problem, it needs no coordination between servers whatsoever, and it's been proven in production far past anything we're forecasting here, so I'd take the well-trodden path rather than invent one.\"", "correct": false,
+         "why": "Borrowed authority, poorly fitted: a 64-bit Snowflake ID encodes to ~11 base62 characters and embeds a timestamp — long AND partially guessable, failing two of this problem's four constraints. Name-dropping without checking fit reads junior."},
         {"t": "\"Leased ranges plus a bijective permutation: servers lease 1M-ID blocks so coordination is rare, the shuffle makes codes non-sequential without collision risk. Weaknesses I'll own: the shuffle is obscurity not security, and crashed servers strand partial blocks — which costs 0.03% of a 3.5T space, so I don't care.\"", "correct": true,
-         "why": "A commitment, the mechanism in one breath, and two self-identified weaknesses with one priced into irrelevance. Naming your design's flaws before the interviewer does is the strongest E5 signal in this entire problem."},
-        {"t": "\"There are four options — counter, hashing, KGS, and ranges — each with trade-offs depending on requirements.\"", "correct": false,
-         "why": "A correct taxonomy and zero judgment. The question was 'commit'; a survey answer to a commitment question is the exact hedge that caps candidates at mid-level."},
-        {"t": "\"Snowflake IDs — that's what Twitter uses at massive scale.\"", "correct": false,
-         "why": "Borrowed authority, poorly fitted: Snowflake's 64-bit timestamped IDs encode to ~11 base62 characters and embed a timestamp — long AND partially guessable, failing two of this problem's four constraints. Name-dropping without checking fit reads junior."},
-        {"t": "\"A pre-generated key pool — it's the standard answer for this problem.\"", "correct": false,
-         "why": "KGS genuinely works, but 'it's the standard answer' is the tell — justification by textbook, not by reasoning. Say WHY (pre-checked uniqueness, random codes) and address the cost (an extra service to babysit) and this becomes defensible."}
+         "why": "A commitment, the mechanism in one breath, and two self-identified weaknesses with one priced into irrelevance. Naming your design's flaws before the interviewer does is the strongest E5 signal in this entire problem."}
       ]
     },
     {
       "id": "p3c01-q20", "level": 3, "type": "mcq", "tag": "crux",
       "q": "Halfway through your walkthrough, the interviewer asks: 'What do you think is the actual hard part of this problem?' The crux-calibrated answer:",
       "options": [
-        {"t": "\"Storing billions of URLs durably\"", "correct": false,
-         "why": "Your own estimation said 3 TB — one drive. Naming a solved problem as the crux tells the interviewer your numbers and your attention aren't connected."},
         {"t": "\"Generating billions of unique short codes across many servers with no central bottleneck and no guessable sequence\"", "correct": true,
          "why": "That's the fire this question was invented to light. Every other component is routine plumbing; this one has four constraints in tension and a graveyard of plausible-but-flawed solutions."},
-        {"t": "\"Handling the enormous redirect traffic\"", "correct": false,
+        {"t": "\"Storing billions of URLs durably across replicas\"", "correct": false,
+         "why": "Your own estimation said 3 TB — one drive. Naming a solved problem as the crux tells the interviewer your numbers and your attention aren't connected."},
+        {"t": "\"Handling the enormous redirect traffic — ten billion requests a month, every one of them under 20 ms\"", "correct": false,
          "why": "12K/sec of cacheable key-value reads is a well-trodden path — cache plus KV store, done. Calling routine load 'the hard part' inflates a solved problem."},
-        {"t": "\"Designing the analytics pipeline\"", "correct": false,
-         "why": "Only because we scoped stats as 'lite'. Async queue plus batched increments is a pattern, not a puzzle. (Flip the requirement to billing-grade exact counts and this answer gets much more interesting.)"}
+        {"t": "\"Designing the analytics pipeline so counts stay accurate under twelve thousand events a second\"", "correct": false,
+         "why": "Only interesting if you scoped stats as exact — and we scoped them 'lite'. Async queue plus batched increments is a pattern, not a puzzle. (Flip the requirement to billing-grade counts and this answer gets much better.)"}
       ]
     },
     {
       "id": "p3c01-q21", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "\"What changes in your design at 10x traffic?\" The senior answer for THIS system is:",
       "options": [
+        {"t": "\"I'd move to multi-region active-active with consistent hashing across a much larger cache tier, and put a CDN in front so most redirects never reach my origin at all. At 120K/sec you want that headroom well before peak season, plus pre-warmed regional caches behind it.\"", "correct": false,
+         "why": "Multi-region is a fine LATENCY conversation, but as an answer to '10x traffic' it's unjustified machinery — 120K/sec doesn't need any of it, and a CDN can't cache a 302 you deliberately marked no-cache. Reflexive escalation reads as not trusting your own numbers."},
+        {"t": "\"I'd shard the database first — 30 TB in one logical table is where things start to hurt, so I'd pick a shard key, stand up a routing layer, and split the links table before traffic gets there.\"", "correct": false,
+         "why": "Sharding what? 30 TB of KV data in Dynamo is already automatically partitioned, and the permuted codes spread writes evenly by construction. This answer ignores both the storage math and the DB choice you already made."},
         {"t": "\"Almost nothing structural — more cache shards and a bigger Dynamo bill. 120K/sec is still cache-shaped, 30 TB is still small, the counter leases hourly instead of daily. What would force redesign isn't traffic, it's a requirement flip like exact-count billing.\"", "correct": true,
          "why": "The honest answer, with reasons, plus the insight that this design's pressure point is requirements, not scale. Resisting the urge to invent heroics for 10x is itself the senior signal — the design's shape was chosen so 10x is a bill."},
-        {"t": "\"I'd move to a multi-region active-active architecture with consistent hashing across a fleet of cache tiers.\"", "correct": false,
-         "why": "Multi-region is a fine LATENCY conversation, but as an answer to '10x traffic' it's unjustified machinery — 120K/sec doesn't need any of it. Reflexive escalation reads as not trusting your own numbers."},
-        {"t": "\"I'd shard the database before anything else.\"", "correct": false,
-         "why": "Sharding what? 30 TB of KV data in Dynamo is already automatically partitioned, and the permuted codes spread writes evenly. This answer ignores both the storage math and the DB choice already made."},
-        {"t": "\"Everything — I'd redesign for 10x from scratch to be safe.\"", "correct": false,
+        {"t": "\"Everything, honestly — a design that works at today's numbers rarely survives 10x, so I'd start from a clean sheet and build for the target load.\"", "correct": false,
          "why": "Throwing away a working design at the first stress question is the panic pattern. The interviewer wants to see you locate what actually bends — and here, honestly, almost nothing does."}
       ]
     },
@@ -299,13 +299,13 @@
       "id": "p3c01-q22", "level": 3, "type": "mcq", "tag": "abuse",
       "q": "A product manager wants to use your shortener for 'private' payslip links — security via the unguessable 7-character code, no login. Your call?",
       "options": [
+        {"t": "Agree — with 3.5 trillion possible codes and no way to tell a valid one from an invalid one without trying it, brute-forcing a specific payslip is hopeless; Microsoft and Google both shipped short links for shared cloud documents on exactly this reasoning", "correct": false,
+         "why": "They did ship it — and both retreated after researchers scanned the space successfully. Your VALID codes cluster (0.2% density and growing), scanners run distributed for months, and codes leak via referrers, previews, and logs regardless."},
         {"t": "Refuse the premise: a short code is a public name, not an access control. The destination must authenticate. Cite the OneDrive/goo.gl scanning research — enumerated 'private' short links exposed documents at scale, and 7% of exposed accounts were writable", "correct": true,
          "why": "The 2016 'Gone in Six Characters' study is the closing argument: token spaces get scanned, and entropy only slows the scanner. Codes leak through referrer headers, chat previews, and logs anyway. Auth at the destination is non-negotiable for private data."},
-        {"t": "Agree — 3.5 trillion codes can't be brute-forced", "correct": false,
-         "why": "3.5T random probes is a lot, but your VALID codes cluster (0.2% density and growing), scanners run distributed for months, and codes also leak via referrers, previews, and logs. Microsoft and Google both retreated from exactly this bet."},
-        {"t": "Agree, but lengthen payslip codes to 12 characters", "correct": false,
+        {"t": "Agree in principle, but mint payslip links with 12-character codes — that multiplies the search space by 62^5 and puts enumeration out of reach", "correct": false,
          "why": "Longer tokens raise the scanning cost (this is what Google Maps did) but leave every leak channel open — referrer headers, link previews, shared screens. For payslips the answer is authentication, not a longer secret in the URL."},
-        {"t": "Agree, with per-IP rate limiting to block scanners", "correct": false,
+        {"t": "Agree, and add per-IP rate limiting plus a CAPTCHA after a burst of 404s, so a scanner gets cut off early", "correct": false,
          "why": "Rate limits are a speed bump for a botnet spreading probes across thousands of IPs over months. Defense that must win every day against a patient attacker isn't defense — it's a countdown."}
       ]
     },
@@ -313,14 +313,14 @@
       "id": "p3c01-q23", "level": 3, "type": "mcq", "tag": "redirect",
       "q": "Interviewer pushes: 'Your 302 choice means you pay to serve every repeat click forever. That's a big bill for vanity stats, no?' Best response:",
       "options": [
-        {"t": "\"That bill IS the business — bit.ly survived losing Twitter's default slot precisely because the click log was sellable. But you're right that it's a real cost: if stats and revocation were ever descoped, I'd switch to 301 that day and let browsers absorb the repeats.\"", "correct": true,
-         "why": "Ties the cost to the requirement it purchases, uses a true industry precedent, and names the exact condition that flips the decision. A committed choice plus its flip condition is judgment; a committed choice defended unconditionally is ego."},
-        {"t": "\"Serving redirects is cheap, so the cost doesn't really matter.\"", "correct": false,
-         "why": "Dodges instead of engaging. Cheap per-click times ten billion clicks a month is a real number; the senior move is owning the cost and showing what it buys, not waving it away."},
-        {"t": "\"Good point — I'll switch to 301 to be safe.\"", "correct": false,
+        {"t": "\"Serving a redirect is a few hundred microseconds of CPU and a cache hit — at those unit costs the bill barely registers next to what we already spend on the database, so it isn't really a trade-off worth reopening at this stage of the design.\"", "correct": false,
+         "why": "Dodges instead of engaging. Cheap per-click times ten billion clicks a month is a real number; the senior move is owning the cost and showing what it buys, not waving it away with unit economics."},
+        {"t": "\"I'd tier it: 301 for free-tier links so browsers absorb their repeat traffic at no cost to us, and 302 for paying customers who are actually buying the analytics — the cost then lands squarely on the accounts that generate the revenue, which is the same logic behind every freemium rate limit we already ship.\"", "correct": false,
+         "why": "Creative, but it quietly breaks abuse takedown: free-tier links — where the abuse lives — become browser-cached and irrevocable. A tiering idea that hands attackers the better tier fails the two-minute sniff test."},
+        {"t": "\"That's a fair point — the cost argument is stronger than mine, so I'll switch to 301 and find another way to get analytics later.\"", "correct": false,
          "why": "Capitulating abandons the analytics and revocation requirements you committed to twenty minutes ago. Folding on a probe reads worse than the original choice ever could."},
-        {"t": "\"I'd do 301 for free users and 302 for paying users.\"", "correct": false,
-         "why": "Creative, but it quietly breaks abuse takedown: free-tier links — where the abuse lives — become browser-cached and irrevocable. A tiering idea that hands attackers the better tier fails the two-minute sniff test."}
+        {"t": "\"That bill IS the business — bit.ly survived losing Twitter's default slot precisely because the click log was sellable. But you're right that it's a real cost: if stats and revocation were ever descoped, I'd switch to 301 that day and let browsers absorb the repeats.\"", "correct": true,
+         "why": "Ties the cost to the requirement it purchases, uses a true industry precedent, and names the exact condition that flips the decision. A committed choice plus its flip condition is judgment; a committed choice defended unconditionally is ego."}
       ]
     },
     {
@@ -329,24 +329,24 @@
       "options": [
         {"t": "\"Four alerts: redirect p99, cache hit rate, queue lag — and 404 rate, which here is a security signal, not an error metric: a scanner enumerating the keyspace shows up as a 404 flood long before any other alarm.\"", "correct": true,
          "why": "Naming the metrics is table stakes; explaining why one of them means something unusual for THIS system — 404s as intrusion detection — shows the design and its threat model live in the same head."},
-        {"t": "\"I'd monitor CPU, memory, and disk on all hosts.\"", "correct": false,
-         "why": "Host metrics are the floor, and they say nothing about this system's promises. Monitoring should watch what you promised: latency, availability, and the abuse surface."},
-        {"t": "\"I'd set up dashboards for all key metrics and review them weekly.\"", "correct": false,
+        {"t": "\"I'd alert on any error rate above zero and page the on-call immediately — catching problems early is always cheaper\"", "correct": false,
+         "why": "A zero-tolerance alert on a public endpoint pages someone every time a user typos a link. Alert fatigue is how real incidents get slept through; thresholds exist to separate weather from fire."},
+        {"t": "\"I'd set up dashboards covering every key metric, review them in a weekly ops meeting, and ticket anything trending badly.\"", "correct": false,
          "why": "Process words with no content. WHICH metrics, and which ones page a human at 3am? The senior version commits to four numbers and can defend each."},
-        {"t": "\"I'd alert on any error rate above zero to catch problems early.\"", "correct": false,
-         "why": "A zero-tolerance alert on a public endpoint pages someone every time a user typos a link. Alert fatigue is how real incidents get slept through; thresholds exist to separate weather from fire."}
+        {"t": "\"I'd monitor CPU, memory, disk, and network on every host, alerting on each so we catch a degrading node early.\"", "correct": false,
+         "why": "Host metrics are the floor, and they say nothing about this system's promises. Monitoring should watch what you promised: latency, availability, and the abuse surface."}
       ]
     },
     {
       "id": "p3c01-q25", "level": 3, "type": "mcq", "tag": "failure",
       "q": "The click-event queue is down and events are piling up in redirect-service memory. An engineer proposes blocking redirects until the queue recovers 'so we don't lose data.' Your ruling as the senior on call:",
       "options": [
-        {"t": "Ship the 302s, drop the events, emit an undercount metric", "correct": true,
-         "why": "Correct — and note the correct answer is one line. Stats were scoped as approximate and lossy; redirects are the product. Trading the plane to save the passenger's snacks inverts the system's entire priority order. Bound the in-memory buffer, drop beyond it, count the drops."},
         {"t": "Block redirects briefly — data loss is always worse than latency", "correct": false,
          "why": "'Always' is doing junior work in that sentence. This data was DECLARED droppable at requirements time. Failing ten billion monthly redirects to protect approximate counters is the priority inversion the async design exists to prevent."},
         {"t": "Buffer events to local disk with no size limit until the queue returns", "correct": false,
          "why": "Better instinct — degrade stats, not redirects — but 'no size limit' means a long outage fills the disk, and now the redirect host itself falls over. Unbounded buffers convert someone else's outage into yours."},
+        {"t": "Ship the 302s, drop the events, emit an undercount metric", "correct": true,
+         "why": "Correct — and note the correct answer is one line. Stats were scoped as approximate and lossy; redirects are the product. Trading the plane to save the passenger's snacks inverts the system's entire priority order. Bound the in-memory buffer, drop beyond it, count the drops."},
         {"t": "Fail over click events to writing the database directly", "correct": false,
          "why": "The queue exists to protect the DB from 12K writes/sec; the fallback reintroduces exactly the load the design was built to avoid — during an incident, when you least want a second fire."}
       ]

@@ -71,11 +71,11 @@
   <text class="dg-txt-s" x="602" y="262">Snapshots</text>
   <text class="dg-txt-s" x="602" y="278">every N ops</text>
   <line class="dg-edge" x1="160" y1="120" x2="220" y2="135" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="150" y="112">where is doc 7?</text>
+  <text class="dg-txt-s" x="164" y="102">where is doc 7?</text>
   <line class="dg-edge" x1="370" y1="120" x2="440" y2="90" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="370" y1="150" x2="440" y2="165" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="500" y1="120" x2="495" y2="240" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="508" y="222">durable before broadcast</text>
+  <text class="dg-txt-s" x="300" y="212">durable before broadcast</text>
   <line class="dg-edge" x1="600" y1="120" x2="640" y2="240" marker-end="url(#arrow)"/>
 </svg>
 <figcaption>Every connection for doc 7 lands on the same session server. That server is the serialization point: it sees every edit, gives each a sequence number, and makes the merge problem solvable.</figcaption>
@@ -119,10 +119,10 @@
   <line class="dg-edge" x1="430" y1="60" x2="560" y2="140" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="510" y="100">Bob: delete(0, 4)</text>
   <line class="dg-edge" x1="160" y1="184" x2="310" y2="272" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="80" y="240">Bob′: delete(0, 4) — unchanged</text>
+  <text class="dg-txt-s" x="40" y="252">Bob′: delete(0, 4) — unchanged</text>
   <line class="dg-edge" x1="560" y1="184" x2="420" y2="272" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="452" y="240">Alice′: insert(0, "fat ")</text>
-  <text class="dg-txt-s" x="452" y="256">— shifted left by 4</text>
+  <text class="dg-txt-s" x="484" y="240">Alice′: insert(0, "fat ")</text>
+  <text class="dg-txt-s" x="484" y="256">— shifted left by 4</text>
 </svg>
 <figcaption>The transform square: each op is rewritten to account for the other, and both paths around the square land on the same text.</figcaption>
 </figure>
@@ -142,7 +142,7 @@
 <p>"For this product I commit to <strong>server-ordered OT</strong>, Jupiter-style. My reasons, tied to our requirements: (1) We already require a central server — permissions with mid-session revocation, durable history, and comments all need one, so OT's precondition costs us nothing extra. (2) Estimation showed every doc fits on one server, so the total order is free, and with it OT needs exactly one transform-pair for span-based text ops — a small, testable core. (3) The document stays a plain string: snapshots are just text, history is readable, memory per room is tiny — no per-character metadata or tombstone growth on billion-doc storage. (4) Our offline requirement is 'tolerate blips,' not 'edit on a plane for a week' — and blips are handled by the same transform machinery, as I'll show. I'd flip to a CRDT if the requirements flipped: offline-first, peer-to-peer, or end-to-end encryption, where no server may read — let alone transform — anyone's ops. The cost I accept: transform code must be <em>exactly</em> correct and deterministic everywhere it runs, client and server, forever — I'll treat it like crypto code: tiny, property-tested, versioned."</p>
 
 <div class="box story"><div class="box-tag">War story — Google Wave</div>
-<p>Wave (2009) was Google's attempt to generalize collaborative editing into a whole communication platform — concurrently edited rich XML documents with annotations, federation between servers, and full playback of history. Its concurrency engine was OT, extended far beyond Docs' narrow lane of server-ordered plain text. The product died within about a year, but the engineering lesson outlived it. Joseph Gentle, a former Wave engineer who then built the open-source ShareJS library to bring collaborative editing to the web, wrote candidly that implementing OT sucks: there's a maze of algorithms with different trade-offs, mostly trapped in academic papers, and they're brutally hard to implement correctly — "Wave took 2 years to write and if we rewrote it today, it would take almost as long to write a second time." Note what he was <em>not</em> saying: server-ordered text OT — the Jupiter core — is genuinely small. The complexity explosion came from leaving the narrow lane: richer data models, federation, transforming against long histories. That's the senior reading: OT is a scalpel that stays safe only if you keep the problem narrow, and Google Docs survived precisely by staying narrow where Wave sprawled.</p>
+<p>Wave (2009) was Google's attempt to generalize collaborative editing into a whole communication platform — concurrently edited rich XML documents with annotations, federation between servers, and full playback of history. Its concurrency engine was OT, extended far beyond Docs' narrow lane of server-ordered plain text. Google announced it was killing Wave in August 2010, about a year after the public preview opened, but the engineering lesson outlived it. Joseph Gentle, a former Wave engineer who then built the open-source ShareJS library to bring collaborative editing to the web, wrote candidly that implementing OT sucks: there's a maze of algorithms with different trade-offs, mostly trapped in academic papers, and they're brutally hard to implement correctly — "Wave took 2 years to write and if we rewrote it today, it would take almost as long to write a second time." Note what he was <em>not</em> saying: server-ordered text OT — the Jupiter core — is genuinely small. The complexity explosion came from leaving the narrow lane: richer data models, federation, transforming against long histories. That's the senior reading: OT is a scalpel that stays safe only if you keep the problem narrow, and Google Docs survived precisely by staying narrow where Wave sprawled.</p>
 </div>
 
 <div class="box story"><div class="box-tag">War story — Figma</div>
@@ -218,7 +218,7 @@
   <text class="dg-txt-s" x="594" y="94">2001–2317</text>
   <line class="dg-edge" x1="405" y1="40" x2="405" y2="70" marker-end="url(#arrow)"/>
   <text class="dg-txt-s" x="330" y="30">named version "Final draft" = tag @ seq 1500</text>
-  <text class="dg-txt-s" x="430" y="150">open doc = load snap @2000, replay 2001–2317</text>
+  <text class="dg-txt-s" x="390" y="150">open doc = load snap @2000, replay 2001–2317</text>
   <text class="dg-txt-s" x="30" y="150">history browser = replay any range of the log</text>
   <text class="dg-txt-s" x="30" y="180">restore = new ops that rewrite forward (the log itself is never edited)</text>
 </svg>
@@ -239,7 +239,7 @@
 
 <p><strong>Rollouts have a trap specific to this system:</strong> transform logic must produce identical results wherever it runs — old clients, new clients, the server. Ship a subtly changed transform to half the fleet and the same op pair reconciles differently on two screens: divergence, the unforgivable bug. So ops carry a schema version, servers hold transforms for N versions back, changes canary by doc cohort (a doc's whole room shares one code path — never mixed within a session), and a background checker replays samples of the log comparing state hashes across versions before anything ramps.</p>
 
-<p><strong>What breaks at 10x?</strong> Ten times the docs is the boring axis — 2,000 session servers instead of 200; doc-sharding scales linearly and the directory barely notices. The interesting 10x is <em>audience per doc</em>: a company all-hands doc with 20 editors and 10,000 viewers. Viewers don't need OT — they hold no pending edits, so they need only the ordered broadcast stream. I'd keep editors on the session server and hang viewers off a read-only fan-out tier of relays that tail the doc's op stream — same shape as a chat fan-out from Part 2 — so a viral doc never competes with its own editors for the serialization point.</p>
+<p><strong>What breaks at 10x?</strong> Ten times the docs is the boring axis — 2,000 session servers instead of 200; doc-sharding scales linearly and the directory barely notices. The interesting 10x is <em>audience per doc</em>: a company all-hands doc with 20 editors and 10,000 viewers. Viewers don't need OT — they hold no pending edits, so they need only the ordered broadcast stream. I'd keep editors on the session server and hang viewers off a read-only fan-out tier of relays that tail the doc's op stream — the same fan-out tree the chat chapter built — so a viral doc never competes with its own editors for the serialization point.</p>
 
 <div class="box lens"><div class="box-tag">At the whiteboard</div>
 <p>This problem is a depth probe wearing a product costume. Interviewers report the same follow-up ladder almost verbatim:</p>
@@ -304,7 +304,7 @@
 <ul>
 <li>Collaborative editing is a correctness problem, not a scale problem: naive position-based merging corrupts each replica differently even with two users.</li>
 <li>Estimation reveals the shape — millions of tiny rooms, no doc ever outgrowing one server — which licenses the key move: all of a doc's traffic through one session server, whose total order makes OT small and tractable.</li>
-<li>OT transforms concurrent ops to account for each other (Google Docs' server-ordered lineage); CRDTs restructure data with permanent IDs and tombstones so merges commute — choose by topology and data shape: central-server linear text → OT; offline-first, P2P, or E2E → CRDT, as Figma's object-property design and Wave's complexity lessons both illustrate from opposite directions.</li>
+<li>OT transforms concurrent ops to account for each other; CRDTs give every character a permanent ID and leave tombstones so merges commute — choose by topology and data shape, never by fashion: central-server linear text → OT, offline-first or peer-to-peer or end-to-end encrypted → CRDT.</li>
 <li>The client is a two-queue machine — screen = confirmed base + in-flight + pending — and one transform function serves ops, queues, cursors, and comment anchors alike.</li>
 <li>Append the op durably before ack or broadcast: "anyone has seen it" must imply "it can never be lost." Snapshots exist only to bound replay, and the op log doubles as the entire history/versions feature.</li>
 <li>Permissions are enforced per-op so revocation bites mid-session; closing the socket is courtesy, the per-op check is the guarantee.</li>

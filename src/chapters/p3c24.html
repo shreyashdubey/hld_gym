@@ -1,0 +1,369 @@
+<p>Final round. The interviewer smiles and delivers the 2026 closer: <em>"Our company has a hundred million internal documents. Design the system that lets an AI assistant answer questions about them — accurately, with citations, in a couple of seconds."</em></p>
+
+<p>Watch the trap spring. Mid-level candidates hear "AI assistant" and start comparing LLMs. That's the one part of this system you <em>rent</em>. The part you have to <em>design</em> is everything in front of the model: turning a billion pieces of text into vectors, searching them in under a hundred milliseconds, keeping them fresh as documents change, and making sure a sales rep never retrieves the CEO's M&amp;A folder. This is a full-blooded distributed systems problem wearing a GenAI costume — sharding, caching, migrations, multi-tenancy, the whole book.</p>
+
+<p>And the stakes are nastier than ordinary search. A search engine with bad ranking shows you bad links; you notice and rephrase. A RAG system — retrieval-augmented generation, where the model answers <em>from documents you hand it</em> — doesn't fail loudly. Feed the LLM the wrong paragraphs and it will compose a fluent, confident, cited, <strong>wrong</strong> answer. Retrieval quality gates the model's honesty. That single sentence is the frame for the next forty-five minutes, and I'll say it to the interviewer in the first two.</p>
+
+<h2>Requirements: commit to numbers early (minutes 0–5)</h2>
+
+<p><strong>Functional:</strong> semantic search over all tenant documents — meaning search by meaning, so "how do I expense a flight?" finds the travel policy even though it never contains the word "expense"; a Q&amp;A endpoint that retrieves relevant passages and feeds an LLM to compose an answer <em>with citations back to source documents</em>; multi-tenant — we're a B2B product, thousands of companies, and access control lists (ACLs) inside each tenant, because HR docs aren't for everyone; continuous ingestion — new and edited documents searchable within minutes, not after a nightly build. Out of scope: the LLM serving stack itself (that was last chapter, p3c23 — we call it over an API) and training our own embedding model.</p>
+
+<p><strong>Non-functional, with numbers I'll defend:</strong></p>
+<ul>
+<li><strong>Corpus:</strong> 100M documents today, chunked into ~1 billion searchable passages. Design for 1B vectors; know what changes at 10B.</li>
+<li><strong>Retrieval latency:</strong> under 100 ms p95 for the full retrieve-and-rerank stage. The LLM will take 1–3 seconds to write the answer; retrieval must not be the story.</li>
+<li><strong>Throughput:</strong> 5,000 retrievals/sec at peak across all tenants.</li>
+<li><strong>Freshness:</strong> a new or edited document is retrievable within 5 minutes.</li>
+<li><strong>Quality:</strong> measurable. Recall@10 ≥ 95% on a labeled evaluation set — and yes, I'm going to spend real time on how we measure that, because an unmeasured RAG system is a hallucination machine with extra steps.</li>
+<li><strong>Isolation:</strong> tenant A's documents never appear in tenant B's results. Not "rarely." Never.</li>
+</ul>
+
+<h2>Embeddings in ninety seconds — and the trap I'm naming now</h2>
+
+<p>An embedding model is a neural network that reads a piece of text and outputs a vector — a list of, say, 768 floating-point numbers. The magic property: texts with similar <em>meaning</em> land near each other in this 768-dimensional space. "How do I get reimbursed for a flight?" and "Travel expense policy" end up close; "flight" and "Apache Flink" end up far apart. Search becomes geometry: embed the query, find the nearest document vectors, return those documents. Distance is usually measured by cosine similarity or dot product — for this chapter, just read "nearest = most similar in meaning."</p>
+
+<p>Now the trap, stated up front because it's the most common silent failure in real RAG systems: <strong>the corpus and the queries must be embedded by the exact same model version.</strong> Each model defines its own private geometry. Vectors from model v7 and model v8 are maps of two different countries — comparing a v8 query against v7 documents doesn't throw an error, doesn't crash, doesn't log a warning. Every distance is simply meaningless, and search quietly returns garbage. So: every vector in my system is stamped with <code>model_version</code>, the query path asserts its version matches the index it's searching, and a mismatch is a hard, loud error. And upgrading the embedding model means re-embedding <em>the entire corpus</em> — a full migration we'll walk through later, because it's this problem's version of the p2c11 exam.</p>
+
+<h2>Estimation: the 3 TB that designs the system (minutes 5–9)</h2>
+
+<p>Do the one multiplication that matters, out loud:</p>
+
+<p><strong>1 billion vectors × 768 dimensions × 4 bytes (fp32) = 3,072 bytes each ≈ 3 TB of raw vectors.</strong></p>
+
+<p>That number makes three decisions for me in ten seconds. First, <strong>no single machine</strong> — 3 TB of vectors (plus index structure on top) must be sharded. Second, <strong>compression is mandatory</strong> — RAM at 3 TB+ across a fleet, replicated 3×, is real money; we'll squeeze vectors ~30× with quantization. Third, <strong>exact search is off the table at this size</strong> — comparing a query against a billion vectors is ~1.5 trillion floating-point operations per query; at 5,000 queries/sec that's a physics problem, not an engineering problem. We need <em>approximate</em> nearest neighbor search — ANN — which finds <em>almost certainly</em> the nearest vectors while touching only a tiny fraction of them. ANN at scale is this problem's crux, and I'll spend my longest deep dive there.</p>
+
+<p>But first, the honesty check that echoes p0c01's over-engineering warning. Flip the numbers small: at <strong>1–10 million vectors</strong>, brute force — literally computing the exact distance to every vector — is the <em>right</em> answer. 1M vectors × 3 KB = 3 GB: fits in one machine's RAM with room to spare. With SIMD instructions — the CPU feature that multiplies eight or sixteen numbers in one instruction instead of one at a time — or a single GPU, an exact scan over a million vectors takes single-digit milliseconds, batched. You get 100% recall, zero index build time, zero tuning knobs, and inserts are just appends. A startup with 2M vectors that deploys a sharded ANN cluster has bought itself an on-call rotation for nothing — pgvector inside the Postgres you already run, or a flat FAISS index, ends the conversation. Say this in the interview <em>before</em> building the big machine: "below ~10M vectors I wouldn't build any of what follows." That sentence is a senior signal all by itself.</p>
+
+<p>Two more numbers. Ingest: 1B chunks at ~250 tokens each is ~250 billion tokens through the embedding model — at realistic batched-GPU throughput, that's a day-or-more job on a serious GPU pool. Conclusion: full re-embeds are <em>projects</em>, so the pipeline must support incremental updates as the normal case. Query side: 5,000/sec × ~10 candidate lookups each is trivial for the document store, but the reranking stage (coming later) runs a neural model per candidate — that's the compute hotspot to budget, not the key-value reads.</p>
+
+<h2>API and data model: quick (minutes 9–12)</h2>
+
+<ul>
+<li><code>POST /v1/query</code> — <code>{tenant_id, user_id, query_text, top_k, filters}</code> → ranked passages with scores and doc references. This is the retrieval endpoint; the answer service calls it.</li>
+<li><code>POST /v1/answer</code> — same inputs → streamed LLM answer plus a <code>citations</code> array mapping each claim to chunk IDs.</li>
+<li><code>PUT /v1/documents/{doc_id}</code> / <code>DELETE ...</code> — upsert or remove a document; kicks the ingest pipeline.</li>
+</ul>
+
+<p>The unit of storage and retrieval is the <strong>chunk</strong>, not the document: <code>{chunk_id, doc_id, tenant_id, acl_refs, text, title, section_path, model_version, updated_at, vector}</code>. Vectors live in the ANN index (sharded); full chunk text and metadata live in a boring replicated document store keyed by <code>chunk_id</code>; the ANN index stores only vector + chunk_id + the filterable attributes (<code>tenant_id</code>, <code>acl_refs</code>, <code>updated_at</code>). Keep the fat text out of the RAM-expensive index.</p>
+
+<h2>The high-level machine (minutes 12–20)</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 420" role="img" aria-label="RAG end-to-end: ingest lane from documents through chunker and embedder into index shards, and query lane through hybrid retrieval, rerank, and LLM">
+  <rect class="dg-zone" x="4" y="14" width="712" height="150" rx="10"/>
+  <text class="dg-txt-s" x="16" y="34">INGEST — minutes</text>
+  <rect class="dg-node" x="16" y="60" width="86" height="52" rx="8"/>
+  <text class="dg-txt" x="30" y="82">Docs</text>
+  <text class="dg-txt-s" x="30" y="99">+ edits</text>
+  <rect class="dg-node" x="140" y="60" width="100" height="52" rx="8"/>
+  <text class="dg-txt" x="154" y="82">Chunker</text>
+  <text class="dg-txt-s" x="154" y="99">by structure</text>
+  <rect class="dg-node" x="278" y="60" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="292" y="82">Embedder</text>
+  <text class="dg-txt-s" x="292" y="99">batch, v7 tag</text>
+  <rect class="dg-node-alt" x="428" y="48" width="130" height="76" rx="8"/>
+  <text class="dg-txt" x="442" y="72">ANN shards</text>
+  <text class="dg-txt-s" x="442" y="90">×32 + replicas</text>
+  <text class="dg-txt-s" x="442" y="106">upsert &lt; 5 min</text>
+  <rect class="dg-node" x="600" y="60" width="104" height="52" rx="8"/>
+  <text class="dg-txt" x="614" y="82">Doc store</text>
+  <text class="dg-txt-s" x="614" y="99">chunk text</text>
+  <line class="dg-edge" x1="102" y1="86" x2="140" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="240" y1="86" x2="278" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="388" y1="86" x2="428" y2="86" marker-end="url(#arrow)"/>
+  <path class="dg-edge" d="M333 112 V 136 H 652 V 116" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="120" y="156">edited doc re-enters the same path: re-chunk, re-embed, upsert — the freshness loop</text>
+  <rect class="dg-zone" x="4" y="184" width="712" height="226" rx="10"/>
+  <text class="dg-txt-s" x="16" y="204">QUERY — milliseconds</text>
+  <rect class="dg-node" x="16" y="250" width="80" height="48" rx="8"/>
+  <text class="dg-txt" x="30" y="278">Query</text>
+  <rect class="dg-node" x="126" y="250" width="96" height="48" rx="8"/>
+  <text class="dg-txt" x="140" y="272">Embed</text>
+  <text class="dg-txt-s" x="140" y="289">same v7!</text>
+  <rect class="dg-node" x="256" y="212" width="96" height="44" rx="8"/>
+  <text class="dg-txt" x="270" y="238">BM25</text>
+  <rect class="dg-node" x="256" y="288" width="96" height="44" rx="8"/>
+  <text class="dg-txt" x="270" y="314">ANN</text>
+  <rect class="dg-node" x="386" y="250" width="76" height="48" rx="8"/>
+  <text class="dg-txt" x="400" y="278">RRF</text>
+  <rect class="dg-node-alt" x="492" y="250" width="100" height="48" rx="8"/>
+  <text class="dg-txt" x="506" y="272">Rerank</text>
+  <text class="dg-txt-s" x="506" y="289">100 → 10</text>
+  <rect class="dg-node" x="622" y="250" width="88" height="48" rx="8"/>
+  <text class="dg-txt" x="636" y="272">LLM</text>
+  <text class="dg-txt-s" x="636" y="289">+ citations</text>
+  <line class="dg-edge" x1="96" y1="274" x2="126" y2="274" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="222" y1="264" x2="256" y2="238" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="222" y1="284" x2="256" y2="306" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="352" y1="238" x2="386" y2="264" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="352" y1="306" x2="386" y2="284" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="462" y1="274" x2="492" y2="274" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="592" y1="274" x2="622" y2="274" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="130" y="386">ACL + tenant filters applied INSIDE BM25 and ANN search — never after (deep dive 3)</text>
+</svg>
+<figcaption>The whole machine. Top lane runs in minutes and keeps the index fresh; bottom lane runs in milliseconds per query. The version stamp (v7) appears in both lanes — that's the skew trap held shut.</figcaption>
+</figure>
+
+<p><strong>Write path (ingest):</strong> a document arrives or changes → the chunker splits it → the embedder batches chunks through the model, stamping <code>model_version</code> → vectors upsert into the ANN shards (routed by hash of chunk_id within the tenant's shard set), text into the doc store, tombstones for deleted chunks. It's a queue-driven pipeline (p1c11): bursty ingest never touches query latency, and a poison document can't wedge anything but its own retry.</p>
+
+<p><strong>Read path (query):</strong> embed the query with the same model → fire <em>two</em> searches in parallel — keyword search (BM25) and vector search (ANN) — merge the candidate lists, rerank the top 100 with a heavier model, assemble the top passages into a prompt with citation anchors, and hand it to the LLM. Every stage after "embed" is fanned out across shards and merged, classic scatter-gather.</p>
+
+<h3>Chunking: where answer quality is born</h3>
+
+<p>You can't embed a 40-page document as one vector — one vector can't represent forty pages of distinct meanings, and you can't stuff 40 pages into a prompt anyway. So we split. How you split matters more than most teams expect, because the chunk is what gets retrieved <em>and</em> what the LLM reads. My commitments: chunks of roughly <strong>200–500 tokens</strong> — big enough to carry a complete thought, small enough that one vector represents one topic. <strong>10–20% overlap</strong> between neighboring chunks, so a sentence living at a boundary exists whole in at least one chunk. <strong>Structure-aware splitting</strong>: break at headings, paragraphs, and list boundaries — never mid-sentence; a chunk that starts with "…and therefore the limit is $50" is a riddle, not a passage. And every chunk carries its context as metadata: document title and section path get prepended to the text <em>before</em> embedding ("Travel Policy &gt; International &gt; Reimbursement: …"), because the sentence "the limit is $50" embeds uselessly without knowing what it's a limit <em>on</em>. Cheap trick, large recall gains, ask me why in the eval section.</p>
+
+<h2>Deep dive 1: ANN — a billion vectors in ten milliseconds (minutes 20–31)</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>This is the hard part the question was invented to probe. Exact nearest-neighbor search at 1B vectors is computationally impossible within our latency budget, so every real system approximates — and approximation drags you into a three-way tug-of-war: <strong>recall</strong> (what fraction of the true nearest neighbors you actually find) vs <strong>latency</strong> (how much of the index you can afford to touch per query) vs <strong>memory</strong> (what the index costs to hold). Pull any corner and the other two move. Every index family — graphs, clusters, disk-based — is just a different stance in this triangle, and the senior move is to name the triangle, pick a stance for <em>these</em> numbers, and say what it costs.</p>
+</div>
+
+<p><strong>Option one: HNSW</strong> — Hierarchical Navigable Small World graphs, the index inside most modern vector databases. Every vector is a node connected to a few dozen near neighbors. Search greedily walks the graph: from an entry point, repeatedly hop to whichever neighbor is closest to the query, until no neighbor improves. The "hierarchical" part fixes greedy search's slowness: stack multiple layers, where the top layer holds a tiny sample of nodes with long-range links and each lower layer gets denser, down to layer 0 which holds everything.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Driving across a country to a specific house. You don't take neighborhood streets the whole way — you get on the highway (top layer: few exits, huge hops), exit near the right city (drop a layer: avenues, medium hops), then wind through local streets (layer 0: every house exists here) to the door. HNSW searches exactly like this: coarse fast hops first, precise short hops last — a skip list's trick, applied to a graph. Where the analogy breaks: roads are 2D and reliable; in 768 dimensions the "streets" are statistical, so occasionally greedy driving parks you at the wrong house — that's the "approximate" in ANN.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="HNSW layers: sparse top layer with long hops, denser middle layer, full bottom layer where the target is found">
+  <rect class="dg-zone" x="10" y="20" width="700" height="70" rx="8"/>
+  <text class="dg-txt-s" x="22" y="40">Layer 2 — highways: few nodes, long hops</text>
+  <circle class="dg-node" cx="80" cy="66" r="9"/>
+  <circle class="dg-node" cx="340" cy="66" r="9"/>
+  <circle class="dg-node" cx="600" cy="66" r="9"/>
+  <line class="dg-good" x1="89" y1="66" x2="331" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="349" y1="66" x2="591" y2="66"/>
+  <rect class="dg-zone" x="10" y="110" width="700" height="70" rx="8"/>
+  <text class="dg-txt-s" x="22" y="130">Layer 1 — avenues</text>
+  <circle class="dg-node" cx="80" cy="156" r="9"/>
+  <circle class="dg-node" cx="220" cy="156" r="9"/>
+  <circle class="dg-node" cx="340" cy="156" r="9"/>
+  <circle class="dg-node" cx="450" cy="156" r="9"/>
+  <circle class="dg-node" cx="600" cy="156" r="9"/>
+  <line class="dg-good" x1="340" y1="75" x2="340" y2="147" marker-end="url(#arrow)"/>
+  <line class="dg-good" x1="349" y1="156" x2="441" y2="156" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="10" y="200" width="700" height="80" rx="8"/>
+  <text class="dg-txt-s" x="22" y="220">Layer 0 — streets: every vector lives here</text>
+  <circle class="dg-node" cx="80" cy="250" r="9"/>
+  <circle class="dg-node" cx="160" cy="250" r="9"/>
+  <circle class="dg-node" cx="240" cy="250" r="9"/>
+  <circle class="dg-node" cx="320" cy="250" r="9"/>
+  <circle class="dg-node" cx="400" cy="250" r="9"/>
+  <circle class="dg-node" cx="450" cy="250" r="9"/>
+  <circle class="dg-good" cx="500" cy="250" r="11"/>
+  <circle class="dg-node" cx="580" cy="250" r="9"/>
+  <circle class="dg-node" cx="650" cy="250" r="9"/>
+  <line class="dg-good" x1="450" y1="165" x2="450" y2="241" marker-end="url(#arrow)"/>
+  <line class="dg-good" x1="459" y1="250" x2="489" y2="250" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="516" y="238">nearest found</text>
+  <text class="dg-txt-s" x="30" y="80">entry</text>
+</svg>
+<figcaption>An HNSW search: long hops on the sparse top layer get near the target fast; each layer down refines; layer 0 finishes locally. Total nodes touched: a few hundred out of millions.</figcaption>
+</figure>
+
+<p>HNSW's report card. Recall/latency: excellent — 95–99% recall at sub-10ms per shard, tunable at query time with one knob (<code>ef_search</code>: how wide a frontier the search keeps; higher = better recall, slower). Inserts: incremental and cheap — a new vector links itself in immediately, which is exactly what our 5-minute freshness demands. The bills: <strong>RAM-hungry</strong> — the graph needs the vectors plus the links, roughly 100–250 bytes per node at typical settings (32 neighbors at layer 0, four bytes an ID), all hot in memory; <strong>builds are slow</strong> (inserting a billion nodes one by one takes serious time — another reason to shard); deletes are awkward — you tombstone the node (mark it dead so queries skip it, leaving the bytes in place) and physically remove it in a later compaction.</p>
+
+<div class="box story"><div class="box-tag">War story — the paper that ate the industry</div>
+<p>HNSW comes from Yury Malkov and Dmitry Yashunin, who published it in 2016 building on their earlier "navigable small world" graph work — research done at institutes in Nizhny Novgorod, Russia, far from any hyperscaler. The paper's core trick is explicitly borrowed from the skip list: keep a hierarchy of ever-sparser levels so you can move coarsely first and precisely last. It spent a couple of years as an academic curiosity, then the embedding era arrived, and its recall-latency numbers on standard benchmarks beat everything practical. Within a few years it became the default index in nearly every vector database — Qdrant, Weaviate, Milvus — was added to Apache Lucene (and therefore Elasticsearch and OpenSearch), and landed in pgvector so a plain Postgres table could do it. Two researchers, one data structure, the retrieval backbone of the GenAI boom. When your interviewer asks "why HNSW?", "it won the benchmarks so thoroughly the whole industry converged on it" is a true and complete answer.</p>
+</div>
+
+<p><strong>Option two: IVF</strong> — inverted file index. Run k-means over the corpus — the clustering algorithm that groups points around a fixed number of centers and moves each center to the middle of its group until it stops moving — to produce, say, 64K cluster centroids (the "coarse quantizer"). Each vector is filed into its nearest centroid's list. At query time: compare the query to the 64K centroids (cheap), pick the nearest <code>nprobe</code> clusters — say 16 — and exhaustively scan only those lists. You've searched 16/64,000ths of the corpus. IVF is cheaper in memory than HNSW (lists, no graph), builds fast, and <code>nprobe</code> is a clean recall-vs-latency dial. Its weakness is the <strong>recall cliff at cluster boundaries</strong>: if the true nearest neighbor sits just across the border in a cluster you didn't probe, it is invisible — no amount of scanning the wrong lists finds it. And because centroids are computed once, a drifting corpus (new product names, new topics) slowly degrades the clustering until you re-train and rebuild — a scheduled operational burden HNSW doesn't have.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="IVF probing: query lands among clusters, three nearest clusters are scanned, true neighbor hides in an unprobed cluster">
+  <rect class="dg-node-alt" x="20" y="30" width="160" height="90" rx="10"/>
+  <rect class="dg-node-alt" x="200" y="30" width="160" height="90" rx="10"/>
+  <rect class="dg-node" x="380" y="30" width="160" height="90" rx="10"/>
+  <rect class="dg-node" x="20" y="140" width="160" height="90" rx="10"/>
+  <rect class="dg-node-alt" x="200" y="140" width="160" height="90" rx="10"/>
+  <rect class="dg-node" x="380" y="140" width="160" height="90" rx="10"/>
+  <text class="dg-txt-s" x="34" y="52">probed</text>
+  <text class="dg-txt-s" x="214" y="52">probed</text>
+  <text class="dg-txt-s" x="214" y="162">probed</text>
+  <text class="dg-txt-s" x="394" y="52">skipped</text>
+  <text class="dg-txt-s" x="34" y="162">skipped</text>
+  <text class="dg-txt-s" x="394" y="162">skipped</text>
+  <circle class="dg-edge-fill" cx="270" cy="90" r="7"/>
+  <text class="dg-txt" x="284" y="95">query</text>
+  <circle class="dg-bad" cx="404" cy="90" r="8"/>
+  <text class="dg-txt-s" x="420" y="95">true NN — missed!</text>
+  <rect class="dg-zone" x="560" y="40" width="150" height="180" rx="8"/>
+  <text class="dg-txt-s" x="572" y="64">nprobe = 3 of 6</text>
+  <text class="dg-txt-s" x="572" y="88">scan only probed</text>
+  <text class="dg-txt-s" x="572" y="106">lists (~1/2 here,</text>
+  <text class="dg-txt-s" x="572" y="124">~1/4000th at 1B)</text>
+  <text class="dg-txt-s" x="572" y="156">raise nprobe →</text>
+  <text class="dg-txt-s" x="572" y="174">recall up,</text>
+  <text class="dg-txt-s" x="572" y="192">latency up</text>
+</svg>
+<figcaption>IVF's bet and its failure mode: the query scans its nearest clusters, but a true neighbor sitting just across an unprobed boundary is unfindable. That's the recall cliff.</figcaption>
+</figure>
+
+<p><strong>Option three: disk-based graphs</strong> (the DiskANN family, from Microsoft Research, 2019). Keep compressed vectors in RAM for navigation but the full graph and exact vectors on NVMe SSD — the paper reported a billion points indexed and served from a single 64 GB workstation with a cheap SSD, over 5,000 queries/sec at under 3 ms mean latency and 95%+ recall@1. It trades tail latency and much slower index builds for fitting 5–10× more vectors per machine than an in-RAM graph. At our scale it's the credible cost-saving alternative, and I name it so the interviewer knows I know — then I commit elsewhere.</p>
+
+<p><strong>The commit.</strong> My sizing rule, stated as policy: <em>under ~10M vectors — brute force, no index. 10M–100M — HNSW in RAM on one box plus replicas. Around 1B — shard, compress, two-stage.</em> For this system: <strong>32 shards, ~30M vectors each, HNSW per shard, built over compressed vectors, with exact re-ranking on top</strong> (compression next paragraph). Why HNSW over IVF here: our 5-minute freshness requirement makes HNSW's incremental inserts decisive — IVF's centroid drift and periodic retrain-rebuild cycle is an operational tax that fights our freshness story. Why not DiskANN day one: RAM-resident HNSW with quantization already hits budget, and p99 predictability is easier to defend in RAM; if the fleet bill or a 10× corpus bites, DiskANN is my named escape hatch. Each shard gets 2 replicas — that's availability <em>and</em> read throughput, and the arithmetic is worth saying out loud: scatter-gather means every query touches every shard in the tenant's set, so each shard sees the full 5,000 QPS, not 5,000 ÷ 32. Three copies per shard is what turns that into ~1,700 QPS a box.</p>
+
+<h3>Product quantization: 3 TB → 100 GB, and the two-stage trick</h3>
+
+<p>Product quantization (PQ) compresses each vector ~30× by describing it with a small vocabulary. Chop the 768-dim vector into 96 sub-vectors of 8 dimensions. For each of the 96 positions, learn a "codebook" of 256 representative patterns (via k-means). Now store each sub-vector as just its closest pattern's ID — one byte. The whole vector becomes 96 bytes instead of 3,072: <strong>32× smaller</strong>, and 1B vectors drop from ~3 TB to ~96 GB — suddenly 32 shards of ~3 GB each plus graph links, comfortable RAM territory. Distances are computed against the codes via lookup tables, fast and SIMD-friendly.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A paint store doesn't describe a wall color by its full light spectrum; it says "Sherwin-Williams 6244." A small swatch book of named colors stands in for infinite possible colors. PQ gives every 8-dimensional slice of your vector a swatch book of 256 entries and records only the swatch numbers. You lose nuance — two slightly different walls may map to the same swatch — which is exactly why PQ costs recall: nearby-but-distinct vectors can become indistinguishable after compression.</p>
+</div>
+
+<p>That recall loss is real — and here's the standard two-stage trick that claws it back. <strong>Stage one:</strong> search the compressed index for the top ~100 candidates. Compressed distances are slightly wrong, so the true best answer is probably <em>in</em> that 100 but maybe not ranked first. <strong>Stage two:</strong> fetch the exact full-precision vectors for just those 100 candidates (from SSD — 100 random reads is nothing), recompute exact distances, re-sort, return the top 10. The cheap fuzzy index finds the right neighborhood; the exact re-rank picks the right house. You pay ~100 exact distance computations instead of a billion, and recover most of the recall PQ cost you. This candidates-then-refine shape is the same pattern the whole read path uses — you're about to see it again, one level up.</p>
+
+<div class="box story"><div class="box-tag">War story — Meta and the billion-vector itch</div>
+<p>Product quantization isn't GenAI-era tech — it comes from a 2011 paper by Hervé Jégou, Matthijs Douze, and Cordelia Schmid at INRIA, solving image search when "web-scale" meant matching billions of image descriptors on 2011 hardware. Jégou and Douze later landed at Meta AI, and in 2017 the same lineage shipped as FAISS — Facebook AI Similarity Search — the open-source library that first made billion-scale similarity search on GPUs a download instead of a research project; the companion paper was literally titled "Billion-scale similarity search with GPUs." FAISS's workhorse configuration is exactly the stack this chapter just built: IVF or graph navigation over PQ-compressed vectors, then exact re-ranking of a short candidate list. When the LLM wave hit in 2022–2023 and every company suddenly needed vector search, a decade of this quiet infrastructure was sitting there ready — FAISS became the embedding index inside countless RAG stacks, and its ideas (PQ codes, coarse quantizers, two-stage refinement) are load-bearing in nearly every vector database you can name today.</p>
+</div>
+
+<table>
+<thead><tr><th>Index</th><th>Recall / latency</th><th>Memory</th><th>Freshness</th><th>Pick it when</th></tr></thead>
+<tbody>
+<tr><td>Brute force (flat)</td><td>100% recall; fine to ~1–10M vectors</td><td>Raw vectors only</td><td>Perfect — append and go</td><td>Small corpus. The honest default; anything more is over-engineering.</td></tr>
+<tr><td>HNSW</td><td>95–99% recall, sub-10ms/shard; <code>ef_search</code> dial</td><td>Highest: vectors + graph links, all in RAM</td><td>Incremental inserts — best of the ANN family</td><td>Latency-critical, update-heavy, RAM affordable. <strong>Our commit (over PQ codes + exact re-rank).</strong></td></tr>
+<tr><td>IVF (+PQ)</td><td>Good, but recall cliff at unprobed clusters; <code>nprobe</code> dial</td><td>Low — lists, no graph</td><td>Inserts OK, but centroid drift forces periodic retrain/rebuild</td><td>Batch-built corpora, tight memory, GPU scan (FAISS-style).</td></tr>
+<tr><td>DiskANN-class</td><td>~95% recall, a few ms — from SSD</td><td>Lowest RAM: codes in memory, graph + exact vectors on NVMe</td><td>Builds slow; updates batched</td><td>Billions of vectors, hardware budget matters more than p99 tail. Our named 10× escape hatch.</td></tr>
+</tbody>
+</table>
+
+<h2>Deep dive 2: hybrid retrieval — because vectors can't spell (minutes 31–38)</h2>
+
+<p>Pure vector search has a blind spot that bites in production: <strong>exact tokens</strong>. A support engineer searches <code>ERR_CONN_RESET_4012</code>. That string is an arbitrary identifier — the embedding model has no semantic hook for it, so dense retrieval happily returns passages about "connection problems" in general while the one runbook containing that exact error code sits unretrieved. Meanwhile classic keyword search — BM25 over an inverted index (p3c19) — nails exact tokens, IDs, SKUs, function names, people's names… and is hopeless at paraphrase: "why can't my server reach the database at night" shares almost no words with "scheduled firewall rule blocks egress after 22:00," which dense retrieval catches easily. Each engine covers the other's blind spot. So run <strong>both, in parallel</strong>, and merge.</p>
+
+<p>Merging has a snag: BM25 scores and cosine similarities live on incomparable scales — you can't just sort the union by score. <strong>Reciprocal rank fusion (RRF)</strong> sidesteps scores entirely and uses only <em>ranks</em>: each document's fused score is the sum over lists of <code>1 / (60 + rank)</code>. Appear near the top of either list and you score well; appear in both and you score better; the constant 60 damps the difference between rank 1 and rank 3 so neither engine dominates. It's embarrassingly simple, needs no tuning or calibration, and is the industry-standard default — Elasticsearch, OpenSearch, and most vector databases ship exactly this.</p>
+
+<p>Then the final quality stage: the fused top ~100 goes through a <strong>cross-encoder reranker</strong>. Our retrieval embeddings come from a bi-encoder — query and document embedded <em>separately</em>, meeting only at a dot product; that separation is what makes indexing possible, and it's also a lossy summary. A cross-encoder reads the query and the candidate chunk <em>together</em> through one transformer, attending token-by-token across both — dramatically more accurate, and far too slow to run against a billion documents. Against 100? A batched GPU call, ~30–40 ms. Candidates-then-refine again: the index finds 100 plausible passages fast, the expensive model picks the best 10 carefully. In quality evaluations this stage is routinely the single biggest win in the whole pipeline — it is worth its latency, and the eval section is where that stops being a claim and becomes a number.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 280" role="img" aria-label="Hybrid retrieval: BM25 and dense ANN run in parallel, fused by RRF, reranked by cross-encoder to top ten">
+  <rect class="dg-node" x="10" y="116" width="90" height="48" rx="8"/>
+  <text class="dg-txt" x="24" y="144">Query</text>
+  <rect class="dg-node" x="150" y="40" width="130" height="56" rx="8"/>
+  <text class="dg-txt" x="164" y="62">BM25 top-50</text>
+  <text class="dg-txt-s" x="164" y="80">exact terms, IDs</text>
+  <rect class="dg-node" x="150" y="184" width="130" height="56" rx="8"/>
+  <text class="dg-txt" x="164" y="206">Dense top-50</text>
+  <text class="dg-txt-s" x="164" y="224">paraphrase</text>
+  <rect class="dg-node" x="330" y="112" width="120" height="56" rx="8"/>
+  <text class="dg-txt" x="344" y="134">RRF fuse</text>
+  <text class="dg-txt-s" x="344" y="152">rank-based</text>
+  <rect class="dg-node-alt" x="500" y="104" width="130" height="72" rx="8"/>
+  <text class="dg-txt" x="514" y="128">Cross-encoder</text>
+  <text class="dg-txt-s" x="514" y="146">reads query+chunk</text>
+  <text class="dg-txt-s" x="514" y="162">together, on GPU</text>
+  <rect class="dg-good" x="662" y="116" width="48" height="48" rx="8"/>
+  <text class="dg-txt-s" x="670" y="144">top 10</text>
+  <line class="dg-edge" x1="100" y1="128" x2="150" y2="76" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="100" y1="152" x2="150" y2="204" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="280" y1="76" x2="330" y2="126" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="280" y1="204" x2="330" y2="156" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="450" y1="140" x2="500" y2="140" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="630" y1="140" x2="662" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="336" y="188">~100 candidates</text>
+  <text class="dg-txt-s" x="150" y="264">parallel: total latency = max(BM25, ANN), not the sum</text>
+</svg>
+<figcaption>The quality workhorse. Lexical and semantic retrieval cover each other's blind spots; RRF merges by rank; the cross-encoder spends real compute on only 100 candidates.</figcaption>
+</figure>
+
+<p>The latency budget, out loud, because the interviewer is checking it fits inside 100 ms: embed query ~8 ms → BM25 and ANN in parallel, ~20 ms for the slower → RRF ~0 → fetch 100 chunk texts ~8 ms → cross-encoder ~35 ms → total ≈ 70–80 ms p50, with p95 inside budget. The reranker is the biggest line item and the first thing we shed under overload (ops section).</p>
+
+<h2>Deep dive 3: freshness, re-embedding, and tenants (minutes 38–43)</h2>
+
+<p><strong>Normal freshness</strong> is already solved by the index commit: HNSW takes incremental upserts, so edit-to-retrievable is just pipeline lag — seconds of queueing plus an embed call, comfortably inside 5 minutes. Deletes tombstone immediately (filtered at query time) and physically compact in background segment rebuilds, during which the old segment serves reads and swaps atomically — the reader never sees a half-built index, only a bounded-stale one.</p>
+
+<p><strong>Embedding model migration</strong> is the event that breaks naive designs, because of the skew trap from minute six: v8 queries cannot search v7 vectors, so there is no such thing as upgrading in place, chunk by chunk. It's a dual-index shadow migration — p2c11's playbook, almost verbatim: (1) stand up an empty v8 index alongside serving v7; (2) dual-write: from now on every upsert embeds twice, into both; (3) backfill: stream the whole corpus through the v8 embedder into the shadow — the day-scale GPU job from our estimate, rate-limited so it doesn't starve live ingest; (4) shadow-read: mirror a sample of production queries to v8 and compare against the eval suite — <em>this gate is why the eval section exists</em>; (5) cut over tenant by tenant behind a flag, queries now embedding with v8; (6) keep v7 warm for a rollback window, then delete. Cost: double embedding compute and double index RAM for the migration's duration. That's not waste — that's what "upgrade the embedding model" actually costs, and saying the price unprompted is the senior signal.</p>
+
+<p><strong>Multi-tenancy and ACLs.</strong> Here's the trap to teach concretely. Naive design: search first, filter after. An engineer at tenant Acme asks about "Project Falcon." Falcon is mostly discussed in an executives-only strategy folder — so the 100 nearest chunks are <em>all</em> documents this user can't read. Post-filter deletes all 100, and the user gets zero results — while a perfectly readable HR announcement mentioning Falcon sits at rank 140, never fetched. Post-filtering starves top-K whenever permissions correlate with topic, which in a company corpus is <em>always</em>. The fix: <strong>filter during search</strong> — push the predicate into the index, so HNSW's graph walk skips non-matching nodes but <em>keeps walking</em> until it accumulates K <em>visible</em> results. Every serious vector database supports filtered search natively for exactly this reason.</p>
+
+<p>Tenant placement, committed: <strong>big tenants (millions of chunks) get their own namespace</strong> — dedicated shard set, physical isolation, per-tenant index tuning, trivially satisfies "never." <strong>The long tail of small tenants shares sharded indexes</strong> with a mandatory, non-optional <code>tenant_id</code> filter compiled into every query at the gateway (defense in depth: the doc store checks it again at fetch). Pure per-tenant indexes for 10,000 tenants would mean 10,000 tiny fragmented indexes — operationally silly; pure sharing puts noisy neighbors in one blast radius. Split the difference where the numbers say to, and add per-tenant rate limits (p1c12) so one tenant's crawler can't eat the fleet's rerank GPUs.</p>
+
+<h2>Evaluation: the senior separator (minutes 43–45, and I'll fight for them)</h2>
+
+<p>Here's a sentence most candidates never say, and interviewers remember when someone does: <strong>"none of my retrieval choices are defensible without an evaluation set."</strong> Every knob in this system — <code>ef_search</code>, chunk size, RRF vs learned fusion, rerank depth, PQ bits — trades quality against cost, and without measurement you're tuning blind. So, minimum viable eval: a few hundred real user queries, each labeled by humans with the chunks that actually answer it — the golden set. Metric: <strong>recall@10</strong> — for what fraction of queries does the labeled chunk appear in our final top ten? Run it like a CI suite on every index config change, model upgrade, and chunker tweak. This is the gate in the migration's shadow-read step, the proof behind "the reranker is worth 35 ms," and the reason the metadata-prepending chunking trick earned its place — each of those claims becomes a number on this suite instead of a vibe.</p>
+
+<p>Answer-level quality needs one more layer: <strong>faithfulness</strong> — is every claim in the generated answer actually supported by a cited chunk? Check it by sampling production answers and asking a cheap LLM judge "does this cited passage support this sentence?" — imperfect, but it trends, and trends page people. And when a bad answer is reported, the debugging split that keeps teams sane: <em>look at the retrieved context first.</em> Was the right chunk in the prompt? <strong>No</strong> → retrieval bug: embedding, chunking, filters, index recall — this pipeline's problem. <strong>Yes, and the model ignored or contradicted it</strong> → generation bug: prompt assembly or the LLM — last chapter's problem. One question splits the debugging space in half, and it's the first question a senior asks.</p>
+
+<div class="box story"><div class="box-tag">War story — LinkedIn measures its way to better answers</div>
+<p>LinkedIn's customer-service teams used a RAG assistant to answer support questions from their internal knowledge base, and in a 2024 paper they documented what moved the needle — and it wasn't a bigger LLM. Their diagnosis was retrieval-side: naive chunk retrieval kept losing the structure connecting related issues, so the model answered from fragments. They rebuilt retrieval around a knowledge-graph representation of historical support tickets — preserving the relationships between an issue, its causes, and its resolutions instead of shredding everything into isolated text chunks — and evaluated end to end against their existing baseline. The published result: median per-issue resolution time dropped by 28.6%. The lesson this chapter cares about: they found the win by treating retrieval quality as the measurable bottleneck of answer quality, running the comparison, and shipping what the numbers picked — the eval-driven loop, working exactly as designed.</p>
+</div>
+
+<p><strong>The cost triangle</strong> closes the loop: this system spends money in three places — embedding compute (ingest and re-embeds), index memory (RAM fleets), and LLM tokens (every query, forever, scaling with how much context you stuff). The tempting hack is to skip retrieval quality and shovel 50 chunks into a giant context window "to be safe." That's the worst corner of the triangle: maximum token cost, <em>and</em> measurably worse answers, since irrelevant context actively distracts models. Better retrieval means sending 5 right chunks instead of 50 hopeful ones — cheaper per query and more faithful. Precision is the one investment that pays on both axes; the eval suite is what lets you buy it deliberately. Also assemble the prompt with intent: dedup near-identical chunks (don't spend budget on five copies of the same boilerplate), prefer diversity across documents, and attach citation anchors ([1], [2] → chunk IDs) so the LLM can ground each claim.</p>
+
+<h2>Failure modes and operations (unprompted, always)</h2>
+
+<ul>
+<li><strong>Shard death.</strong> Two replicas per shard; a replica loss is invisible. If an entire shard's replicas are gone, serve the query from surviving shards and <em>flag the response degraded</em> — results may be incomplete. Honest partial recall beats silent partial recall, because silent is how users learn to distrust the product. This is uniquely important in RAG: a missing shard doesn't error, it just quietly narrows what the LLM knows.</li>
+<li><strong>Recall regressions.</strong> Latency regressions page people; recall regressions don't — nothing errors when quality rots. So monitor a <strong>recall proxy</strong>: a canary set of queries with known-correct documents runs every minute in production; if a known doc drops out of the top ten, page before the users notice. Alongside: per-stage p99 (embed / ANN / rerank), index freshness lag (upsert timestamp vs searchable timestamp), rerank GPU queue depth, and per-tenant latency and QPS.</li>
+<li><strong>Overload.</strong> The rerank GPU pool is the choke point. Backpressure plan (p2c07): under load, shrink rerank depth 100 → 30, then bypass reranking entirely — each step degrades quality gracefully instead of latency catastrophically, and each step is a metric you can watch and a flag you can flip back.</li>
+<li><strong>Rebuild windows.</strong> Compactions and retrains serve from the old segment until atomic swap; the exposed risk is boundedly stale results, never missing ones. Version-stamp segments so a mixed-version read is impossible.</li>
+<li><strong>At 10×</strong> — 10B vectors: PQ codes alone reach ~1 TB and the RAM bill turns hostile; that's when the DiskANN escape hatch gets exercised, hot tenants stay in RAM, cold tenants serve from SSD, and ingestion gets a dedup pass (boilerplate and near-duplicate chunks are a shocking fraction of enterprise corpora — don't pay to embed the same email footer a billion times).</li>
+</ul>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>How interviewers probe this design once it's on the board — each question is checking whether the machine in your head actually runs:</p>
+<ul>
+<li>"Your recall@10 is 91% and product wants 96%. Which knob do you turn first, and what does each one cost?" — they want <code>ef_search</code> / rerank depth / chunking, priced in latency and GPU, chosen via the eval suite — not "use a better model."</li>
+<li>"A tenant uploads a document and asks about it 30 seconds later — nothing. Walk the path and find every place the lag can live." — queue depth, embed batching window, shard upsert, segment visibility.</li>
+<li>"Why not skip the reranker and stuff the top-1000 into a million-token context?" — the cost triangle: token spend per query forever, plus measurably worse faithfulness from distractor context.</li>
+<li>"How would you even know retrieval got worse after yesterday's deploy?" — canary queries and the eval-suite-as-CI habit; if your answer is "user complaints," that's the wrong answer.</li>
+<li>"Your BM25 index and your vector index disagree about whether a doc exists. What happened?" — dual-write drift between two indexes; they're probing whether ingest is one pipeline with one source of truth or two pipelines racing.</li>
+</ul>
+</div>
+
+<h2>The committed design, priced</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Chose</th><th>Over</th><th>The cost I accept</th></tr></thead>
+<tbody>
+<tr><td>Index</td><td>32-shard HNSW over PQ codes + exact re-rank</td><td>IVF-PQ; DiskANN</td><td>Highest RAM of the family; slow builds; tombstone-and-compact deletes</td></tr>
+<tr><td>Compression</td><td>PQ ~32× + two-stage exact re-rank</td><td>Raw fp32 in RAM</td><td>Recall loss partially recovered; extra SSD fetch + recompute per query</td></tr>
+<tr><td>Retrieval</td><td>Hybrid BM25 + dense, RRF fusion</td><td>Dense-only</td><td>Two indexes to keep consistent from one ingest pipeline</td></tr>
+<tr><td>Quality stage</td><td>Cross-encoder rerank 100 → 10</td><td>Trust index order</td><td>~35 ms and a GPU pool — the latency budget's biggest line</td></tr>
+<tr><td>Tenancy</td><td>Namespaces for big tenants, filtered shared shards + in-search ACL for the tail</td><td>All-shared or all-dedicated</td><td>Two placement code paths; filter pushdown must be bulletproof</td></tr>
+<tr><td>Model upgrades</td><td>Dual-index shadow + eval-gated cutover</td><td>In-place re-embed</td><td>~2× embed and index cost for the migration window</td></tr>
+<tr><td>Quality assurance</td><td>Golden-set recall@10 as CI + prod canaries + sampled faithfulness judge</td><td>Ship and hope</td><td>Ongoing labeling effort — the cheapest component in the system</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c24-f1">
+<p class="fey-prompt">A junior asks: "Why can't we just compare the query against all billion vectors and get the exact right answer? And what does HNSW actually do instead?" Explain in five or six sentences, including what we gave up.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Comparing against all billion vectors means about 1.5 trillion arithmetic operations per query — at thousands of queries per second, no fleet we can afford keeps up, so exact search dies at this scale. HNSW instead organizes vectors into a graph where each one links to its near neighbors, stacked in layers like highways over streets: the sparse top layer makes huge hops to get near the target fast, and each denser layer below refines the position until the bottom layer walks the last few steps. A search touches a few hundred vectors instead of a billion, which is why it returns in milliseconds. What we gave up is certainty: it's approximate, so maybe 1–5% of the time the true nearest neighbor isn't in our results — we measure that as recall and tune a knob to trade speed for accuracy. We also pay in memory, because the graph and vectors must sit in RAM, which is why we compress vectors and shard across machines. Below ten million vectors or so, none of this is worth it — brute force is exact, simple, and fast enough.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimation drill: a corpus of 200M chunks with 1024-dim fp32 embeddings. Raw vector size? After PQ at 128 bytes per vector? What deployment does each number imply?</p></div>
+<details><summary>Answer</summary><p>Raw: 200M × 1024 × 4 B = 4,096 B each ≈ 800 GB — too big for one box in RAM, so raw fp32 means sharding immediately. PQ at 128 B: 200M × 128 B ≈ 25.6 GB — fits in one machine's RAM with the graph on top, so the honest design is one HNSW-over-PQ node plus two replicas and exact re-rank from SSD, no sharding at all. Same corpus, opposite architectures — the compression decision <em>is</em> the topology decision, which is why you do this math before drawing boxes.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A legal-tech startup: 2M documents → ~20M chunks, 50 queries/sec, corpus grows 2% a month. The founder wants "the Pinecone-Kafka-Kubernetes stack a blog recommended." What do you build?</p></div>
+<details><summary>Answer</summary><p>20M × 3 KB = 60 GB of raw vectors — one large-memory machine holds it uncompressed. Commit: single-node HNSW (no PQ needed — skip the recall loss you don't have to pay), one replica for failover, batch ingest nightly plus a small upsert queue, hybrid BM25 via the Postgres/Elastic they already run. No sharding, no Kafka, no dedicated cluster. Name the escalation trigger like a senior: "when the corpus passes ~100M chunks or QPS makes replica fan-out insufficient, we shard — and the eval suite we build <em>now</em> is what makes that migration safe." Simplicity plus a named trigger beats the blog stack.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks: a support-agent tenant where 95% of documents are restricted to team leads. Agents report "search returns nothing" for topics they can partially see. Diagnose and fix.</p></div>
+<details><summary>Answer</summary><p>Classic post-filter starvation: the pipeline retrieves top-K by similarity <em>then</em> applies ACLs, and since restricted docs dominate the corpus (and the topic), all K candidates get filtered to zero — while readable results sit just below the cutoff, never fetched. Confirm by logging pre-filter vs post-filter counts (100 → 0 is the smoking gun). Fix: push the ACL predicate into the index so the search skips invisible nodes but keeps traversing until it accumulates K <em>visible</em> results. Interim mitigation while that ships: over-fetch (top-1000) before filtering — but say why it's a bandage: it burns latency and still starves in the worst cases.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: freshness tightens from 5 minutes to 5 seconds (you're now indexing live chat and incident channels). What changes in the design, and what stays?</p></div>
+<details><summary>Answer</summary><p>The index survives: HNSW upserts are already immediate — that's why we chose it. The enemy is the pipeline in front: batch embedding windows and queue latency eat the whole budget. Changes: stream per-message embedding with tiny batches (trade GPU efficiency for latency — say the price), a priority ingest lane for live sources so bulk backfills can't queue ahead of them, and a Lucene-style near-real-time pattern if needed: new vectors land in a small fresh segment searched brute-force (thousands of vectors — exact scan is free) and merge into the main index continuously. Freshness lag becomes a paged SLO, not a dashboard curiosity. What stays: hybrid retrieval, rerank, ACL pushdown, the eval loop — the quality machinery is freshness-agnostic.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>In RAG, retrieval quality gates the LLM's honesty — bad retrieval doesn't error, it produces fluent, cited, wrong answers, which is why the retrieval system is the design problem.</li>
+<li>Corpus and queries must be embedded by the same model version; stamp every vector, assert at query time, and treat a model upgrade as a full dual-index re-embed migration.</li>
+<li>1B × 768-dim fp32 ≈ 3 TB — one multiplication forces sharding, quantization, and ANN; below ~10M vectors, brute-force exact search is the senior answer, not an index.</li>
+<li>ANN is a recall–latency–memory triangle: HNSW buys recall and insert-friendliness with RAM, IVF buys cheapness with a recall cliff and rebuilds, DiskANN buys hardware savings with SSD latency — commit per corpus size and say the cost.</li>
+<li>Product quantization shrinks vectors ~30×; recover its recall loss with the two-stage trick — search compressed, re-rank the top 100 exactly.</li>
+<li>Hybrid retrieval is the quality workhorse: BM25 catches exact tokens, dense catches paraphrase, RRF fuses by rank, and a cross-encoder rerank of the top 100 is routinely the biggest quality win per millisecond.</li>
+<li>Filter during search, never after — post-filtering starves top-K whenever permissions correlate with topic, which in enterprise corpora is always.</li>
+<li>A labeled eval set (recall@10 as CI, canary queries in prod, sampled faithfulness checks) is what separates an engineered RAG system from a hallucination machine — and better retrieval is the one spend that cuts LLM token cost and improves answers at the same time.</li>
+</ul>
+</div>

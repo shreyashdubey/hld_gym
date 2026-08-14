@@ -1,0 +1,730 @@
+{
+  "chapter": "p3c23",
+  "items": [
+    {
+      "id": "p3c23-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "metrics",
+      "q": "What does TTFT measure in an LLM serving system?",
+      "options": [
+        {
+          "t": "Request in, first token out",
+          "correct": true,
+          "why": "Right — the 'is it broken?' window. Under 300 ms feels instant; past two seconds users start re-clicking. It is dominated by queue time plus prefill."
+        },
+        {
+          "t": "Total wall-clock time to generate the complete response, start to finish",
+          "correct": false,
+          "why": "That's end-to-end latency, which is mostly ITL × output length. TTFT deliberately isolates the wait *before* anything appears, because that's the part users experience as a hang."
+        },
+        {
+          "t": "The gap between consecutive tokens",
+          "correct": false,
+          "why": "That's ITL (inter-token latency, also called TPOT). Different metric, different bottleneck: TTFT is about prefill and queueing, ITL is about decode steps."
+        },
+        {
+          "t": "Tokens produced per second per GPU",
+          "correct": false,
+          "why": "That's the throughput/cost metric. It says nothing about how long any individual user waited."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "two-phase",
+      "q": "Which phase of an LLM request is memory-bandwidth-bound, and why?",
+      "options": [
+        {
+          "t": "Prefill, because it must push every prompt token through the network in one parallel pass",
+          "correct": false,
+          "why": "Backwards. Processing many tokens at once is exactly what makes prefill dense matrix math — it saturates the arithmetic units, so prefill is compute-bound."
+        },
+        {
+          "t": "Both equally — they run the same network",
+          "correct": false,
+          "why": "Same weights, opposite bottlenecks. Prefill amortises one weight read over 1,500 tokens; decode amortises it over one. That asymmetry is the whole design."
+        },
+        {
+          "t": "Decode, because each step re-reads all the model's weights",
+          "correct": true,
+          "why": "Correct. For a 70B model at 16-bit that's 140 GB of memory traffic per token, with trivial arithmetic on top — so the memory bus, not the math units, sets the pace."
+        },
+        {
+          "t": "Neither; the network round trip dominates",
+          "correct": false,
+          "why": "Network is noise next to twenty seconds of GPU work. Treating this as a networking problem is exactly the wrong instinct carried over from web services."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "kv-cache",
+      "q": "What is the KV cache, and what happens to it during a generation?",
+      "options": [
+        {
+          "t": "A cache of previous users' responses, reused whenever two prompts happen to match",
+          "correct": false,
+          "why": "That's a response cache — a different thing, and one that almost never hits in chat. The KV cache is per-request internal state, not shared answers."
+        },
+        {
+          "t": "Saved attention state for every token so far, growing each step",
+          "correct": true,
+          "why": "Exactly. It's why memory pressure rises for the whole life of a request, and why a long conversation can hold gigabytes on the GPU."
+        },
+        {
+          "t": "The model's weights, held in GPU memory",
+          "correct": false,
+          "why": "Weights are fixed and shared by every request in the batch. KV is per-sequence and elastic — that's the part you're really selling."
+        },
+        {
+          "t": "A disk-backed store of conversation history",
+          "correct": false,
+          "why": "Conversation history is text held by the client or product database. KV cache is GPU-resident numeric state that vanishes when the process dies."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "batching",
+      "q": "What is the 'convoy problem' in static batching?",
+      "options": [
+        {
+          "t": "Nothing returns until the longest generation finishes",
+          "correct": true,
+          "why": "Right. A 20-token answer waits on a 2,000-token essay, and the GPU burns paid capacity on padding for the difference. Generation lengths vary wildly, so this wastes most of a fleet."
+        },
+        {
+          "t": "Requests arrive faster than the batch can be assembled",
+          "correct": false,
+          "why": "That's a queueing problem, and it's a good problem to have. The convoy is about the *exit*, not the entrance — everyone leaves together, at the speed of the slowest."
+        },
+        {
+          "t": "GPUs in a tensor-parallel group spend the batch waiting on each other's all-reduce",
+          "correct": false,
+          "why": "Real, but that's tensor-parallel communication overhead. The convoy is about request lifetimes inside a batch, not GPUs inside a node."
+        },
+        {
+          "t": "The KV cache fragments between batches",
+          "correct": false,
+          "why": "Fragmentation is the *other* problem, solved by paged KV blocks. The convoy is a scheduling problem and needs a scheduling fix."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "batching",
+      "q": "Continuous (in-flight) batching changes the unit of scheduling to:",
+      "options": [
+        {
+          "t": "One batch",
+          "correct": false,
+          "why": "That's static batching — the thing being replaced. Scheduling per batch is what forces everyone to enter and leave together."
+        },
+        {
+          "t": "One GPU node",
+          "correct": false,
+          "why": "Node-level scheduling is routing, a layer above. Continuous batching is about what happens inside one model process between token steps."
+        },
+        {
+          "t": "One second of wall-clock time",
+          "correct": false,
+          "why": "A timer would still leave slots idle within the interval. The point is to react at the finest natural boundary the model gives you, which is the token step."
+        },
+        {
+          "t": "One decode step — the scheduler runs between every token",
+          "correct": true,
+          "why": "Yes. Between every single token step the scheduler runs: finished sequences leave and free their KV, queued ones join. Membership becomes rolling instead of fixed."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "paged-kv",
+      "q": "PagedAttention manages KV cache using an idea borrowed from:",
+      "options": [
+        {
+          "t": "Database write-ahead logging",
+          "correct": false,
+          "why": "WAL is about durability and crash recovery. KV cache is deliberately ephemeral — nothing here needs to survive a restart."
+        },
+        {
+          "t": "Consistent hashing",
+          "correct": false,
+          "why": "Consistent hashing distributes keys across nodes. PagedAttention is about allocating memory inside one GPU, not spreading load across many."
+        },
+        {
+          "t": "Operating-system virtual memory",
+          "correct": true,
+          "why": "Right. Fixed-size KV blocks, a per-sequence block table mapping logical to physical blocks, no contiguous reservation — and sharing by reference count, which gives prefix reuse for free."
+        },
+        {
+          "t": "Copy-on-write filesystem snapshots taken at regular checkpoints",
+          "correct": false,
+          "why": "Close cousins — PagedAttention does use copy-on-write for shared blocks — but the core idea it borrows is paging with a block table, not snapshotting."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "metrics",
+      "q": "How does goodput differ from throughput?",
+      "options": [
+        {
+          "t": "Goodput counts only the requests served within their latency SLO",
+          "correct": true,
+          "why": "Exactly. Cram enough users into a batch and throughput climbs while every one of them gets 200 ms per token — high throughput, zero interactive goodput. Goodput is the metric that catches that."
+        },
+        {
+          "t": "Goodput excludes failed requests; otherwise they're identical",
+          "correct": false,
+          "why": "Errors are part of it, but the sharper distinction is latency: a *successful* response delivered too slowly is also not goodput."
+        },
+        {
+          "t": "Goodput is measured per GPU, throughput per fleet",
+          "correct": false,
+          "why": "Both can be measured at either scope. The difference is the SLO filter, not the denominator."
+        },
+        {
+          "t": "They're two names for tokens per second",
+          "correct": false,
+          "why": "If they were the same, you could optimise the system by making everyone slower but more numerous — which is exactly the trap goodput exists to expose."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "batching",
+      "q": "Why does batching raise decode throughput so dramatically?",
+      "options": [
+        {
+          "t": "It lets the GPU skip transformer layers for the shorter requests",
+          "correct": false,
+          "why": "Every sequence goes through every layer. Nothing gets skipped — batching changes how the *weight read* is shared, not how much model each token traverses."
+        },
+        {
+          "t": "One weight read serves every sequence in the batch",
+          "correct": true,
+          "why": "That's it. The 140 GB read is the expensive part; at batch 1 it yields one token, at batch 64 it yields 64. Throughput climbs almost linearly until arithmetic intensity catches up with the hardware."
+        },
+        {
+          "t": "Batched requests share each other's KV cache",
+          "correct": false,
+          "why": "KV is per-sequence — sharing only happens for identical prefixes, which is a separate optimisation. The batching win is amortised weight reads."
+        },
+        {
+          "t": "It reduces network round trips to the client",
+          "correct": false,
+          "why": "Client I/O isn't the bottleneck. The bottleneck lives entirely inside the GPU's memory bus."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "kv-cache",
+      "q": "A 70B-class model with grouped-query attention uses 8 KV heads instead of 64. What does that buy?",
+      "options": [
+        {
+          "t": "8x less KV per token, so roughly 8x more concurrent chats",
+          "correct": true,
+          "why": "Right — 320 KB/token instead of 2.5 MB. Since KV memory caps the batch, that multiplies concurrency directly. It's a serving-economics decision baked into the model architecture."
+        },
+        {
+          "t": "8× faster prefill",
+          "correct": false,
+          "why": "Prefill is dominated by the big feed-forward and projection matmuls, which GQA barely touches. The win is memory, not compute."
+        },
+        {
+          "t": "8× fewer parameters",
+          "correct": false,
+          "why": "GQA shrinks the K and V projections a little, but the parameter count is dominated by the feed-forward layers. Model size barely moves."
+        },
+        {
+          "t": "8x lower inter-token latency, since less state is read each step",
+          "correct": false,
+          "why": "Decode still reads all the weights each step. GQA shrinks the KV that must be read alongside them, which helps at large batch — but not by 8×."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q10",
+      "level": 2,
+      "type": "mcq",
+      "tag": "kv-cache",
+      "q": "A node has 440 GB free for KV after weights and activations. KV costs 320 KB per token. Your traffic shifts from 8K-token conversations to 32K-token conversations. What happens to per-node concurrency?",
+      "options": [
+        {
+          "t": "It falls from roughly 170 concurrent sequences to roughly 42",
+          "correct": true,
+          "why": "8K × 320 KB = 2.6 GB → ~170 sequences; 32K × 320 KB = 10 GB → ~42. Four times the context, a quarter of the users, same hardware. This arithmetic is the one interviewers most want to see you do live."
+        },
+        {
+          "t": "It stays the same — context length doesn't affect memory",
+          "correct": false,
+          "why": "KV grows linearly with tokens held, so context length is *the* driver of memory. This is the misconception the whole ledger exists to kill."
+        },
+        {
+          "t": "It falls slightly, since only the newest tokens are cached",
+          "correct": false,
+          "why": "Every token's K and V are retained for the whole generation — that's what makes attention over history possible. Nothing is dropped as you go."
+        },
+        {
+          "t": "It roughly doubles, because longer prompts batch more efficiently",
+          "correct": false,
+          "why": "Longer prompts consume more memory per user, not less. Prefill efficiency is unrelated to how many sequences fit in KV."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "interference",
+      "q": "Overnight, your ITL p99 doubles. Fleet throughput is unchanged, nothing was deployed, and TTFT p50 looks normal. Most likely cause?",
+      "options": [
+        {
+          "t": "A GPU in the node is failing and silently throttling its clock speed",
+          "correct": false,
+          "why": "Possible, and worth checking — but hardware throttling would drag throughput down too. Throughput staying flat points at scheduling, not silicon."
+        },
+        {
+          "t": "Clients are reconnecting more often",
+          "correct": false,
+          "why": "Reconnects affect delivery, not generation speed. The buffer-and-drain design specifically prevents client behaviour from changing token pacing."
+        },
+        {
+          "t": "The prefix cache hit rate went up",
+          "correct": false,
+          "why": "A higher hit rate reduces prefill work, which would help ITL, not hurt it. A hit-rate *drop* is a real suspect; a rise is not."
+        },
+        {
+          "t": "Long prompts arrived, and their prefills stall decode",
+          "correct": true,
+          "why": "Yes — a 100K-token prefill takes seconds of solid compute, during which nobody's decode runs. One request, 170 stuttering victims. It's a hot-partition pattern, and chunked prefill is the fix."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "fairness",
+      "q": "You need per-tenant limits. Which enforcement scheme actually protects the fleet?",
+      "options": [
+        {
+          "t": "Requests per minute",
+          "correct": false,
+          "why": "One request can be 50 tokens or 200,000 — a 4,000× range. An RPM limit lets a tenant obey the rules and still consume a whole node."
+        },
+        {
+          "t": "Bandwidth quotas on the SSE stream",
+          "correct": false,
+          "why": "Bytes on the wire are trivial next to GPU seconds. You'd be metering the cheapest resource in the system."
+        },
+        {
+          "t": "Tokens per minute, plus a per-tenant concurrency cap",
+          "correct": true,
+          "why": "Right on both halves: tokens track the scarce decode work, and the concurrency cap covers KV memory, which is consumed by simultaneous streams rather than by token rate."
+        },
+        {
+          "t": "A single global queue with strict FIFO ordering across all tenants",
+          "correct": false,
+          "why": "FIFO is not isolation — one tenant flooding the queue delays everyone behind them. Fairness needs per-tenant accounting, not just ordering."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "routing",
+      "q": "Multi-turn chats resend their whole history. Your router currently picks the least-loaded node. What should change, and what does it cost?",
+      "options": [
+        {
+          "t": "Nothing — least-loaded is optimal because it balances GPU work evenly",
+          "correct": false,
+          "why": "It balances load and destroys the prefix cache, which is where roughly a third of your compute savings lives. Even load at the cost of doing all the work twice is a bad trade."
+        },
+        {
+          "t": "Route by conversation prefix hash, accepting uneven load",
+          "correct": true,
+          "why": "Correct, including the costs. It's p1c05's sticky routing inverted — stickiness is the point here — so temper it with a load-aware override above ~85% KV occupancy, and know that a degraded node stays degraded for whoever is pinned to it."
+        },
+        {
+          "t": "Cache completed responses at the gateway keyed by the full prompt",
+          "correct": false,
+          "why": "Exact-match response caching hits almost never in chat, because real conversations are unique. The reuse lives in the shared *prefix*, not the whole prompt."
+        },
+        {
+          "t": "Replicate the KV cache to every node so any router choice works",
+          "correct": false,
+          "why": "You'd be copying gigabytes per conversation across the fleet, spending more bandwidth than the prefill you saved. KV is too big to replicate casually."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "preemption",
+      "q": "You must preempt a request with a 1,500-token prompt to free KV for a high-priority arrival. Swap its KV to host memory, or discard and recompute later?",
+      "options": [
+        {
+          "t": "Swap — copying is always cheaper than recomputing",
+          "correct": false,
+          "why": "Not at this size. 2.6 GB over PCIe is on the order of 100 ms each way and contends for a bus everyone shares; re-prefilling 1,500 tokens is about 60 ms of compute at the node's 25,000 prompt-tokens/second."
+        },
+        {
+          "t": "Neither; let the allocation fail and restart the process",
+          "correct": false,
+          "why": "An OOM kills the whole batch — 170 live conversations — because the failure happens inside the shared model process. That's precisely the outcome admission control and preemption exist to make impossible."
+        },
+        {
+          "t": "Neither; reject the high-priority request instead",
+          "correct": false,
+          "why": "Then priority classes are decorative. Having a preemption mechanism is what lets you promise anything to the interactive tier under load."
+        },
+        {
+          "t": "Discard and recompute — re-prefill is cheaper here than a PCIe round trip",
+          "correct": true,
+          "why": "For short and medium prompts, re-prefill wins — cheaper, and it touches no PCIe. Flip to swapping past roughly 16K tokens, where re-prefill cost dominates."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "scaling",
+      "q": "You configure autoscaling to add GPU nodes when p95 TTFT exceeds target. Traffic spikes for four minutes. What happens?",
+      "options": [
+        {
+          "t": "The fleet grows within seconds and absorbs the spike",
+          "correct": false,
+          "why": "This is the web-service instinct that breaks hardest here. A new node must fetch and load 140 GB of weights and warm kernels — minutes, not seconds."
+        },
+        {
+          "t": "Autoscaling triggers a thundering herd of weight downloads that crashes object storage",
+          "correct": false,
+          "why": "A real secondary hazard, which is why you cache weights on node-local NVMe — but it isn't the primary failure. The primary failure is simply arriving too late to help."
+        },
+        {
+          "t": "The new nodes finish loading after the spike has passed",
+          "correct": true,
+          "why": "Right — cold start is minutes, so reactive scaling is always late. The real answers are predictive scaling on the very forecastable daily curve, a warm pool, and degrading (pause the batch tier, tighten defaults, shed) instead of growing."
+        },
+        {
+          "t": "Nothing — TTFT isn't affected by node count",
+          "correct": false,
+          "why": "TTFT absolutely reflects queue time and prefill contention, so capacity matters. The problem is the speed of the response, not the signal."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "streaming",
+      "q": "A user on a bad mobile connection drains their SSE stream at a trickle. What should the server do?",
+      "options": [
+        {
+          "t": "Pause generation until the client catches up",
+          "correct": false,
+          "why": "That pins a KV slot — 2.6 GB — on a slow socket, letting the cheapest component in the system throttle the most expensive one. Exactly backwards."
+        },
+        {
+          "t": "Buffer without limit in server memory until the client eventually drains it",
+          "correct": false,
+          "why": "Unbounded buffers are just a slower way to fall over. Bound it, and have a defined behaviour when the bound is hit."
+        },
+        {
+          "t": "Kill the request to protect the fleet",
+          "correct": false,
+          "why": "Harsh and wasteful — you'd throw away compute already spent and charge the user for nothing. The buffer already protects the fleet."
+        },
+        {
+          "t": "Generate into a bounded buffer, persist, let the client resume",
+          "correct": true,
+          "why": "Yes: decouple generation from delivery so the GPU slot frees on schedule. That's p2c07's backpressure applied at the right layer, with the persisted result making resume cheap."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "speculative",
+      "q": "You enable speculative decoding fleet-wide. At peak, aggregate tokens/second drops. Why?",
+      "options": [
+        {
+          "t": "The draft model's answers are wrong, so nothing gets accepted",
+          "correct": false,
+          "why": "Rejections cost some wasted verification, but a reasonable draft model has a healthy acceptance rate. The throughput loss shows up even when speculation works."
+        },
+        {
+          "t": "At high batch there are no spare FLOPs to speculate with",
+          "correct": true,
+          "why": "Exactly. Speculation trades spare FLOPs for latency, and at peak there are no spare FLOPs. Make it a dial: on at low batch and off-peak, off above a batch-size threshold."
+        },
+        {
+          "t": "It doubles KV cache usage",
+          "correct": false,
+          "why": "Draft tokens add a handful of KV blocks, not a doubling. Memory isn't where this regression comes from."
+        },
+        {
+          "t": "Speculative decoding changes the output distribution, forcing retries",
+          "correct": false,
+          "why": "Implemented properly, verification makes the output distribution identical to the big model's. There are no correctness retries to pay for."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "observability",
+      "q": "Your dashboard shows GPU utilization at 98%. What can you conclude?",
+      "options": [
+        {
+          "t": "The GPUs are nearly maxed out, so the only fix is buying more capacity",
+          "correct": false,
+          "why": "This is the most expensive misreading in the field. That counter says a kernel was resident, not that the chip did useful math."
+        },
+        {
+          "t": "KV cache must be nearly full",
+          "correct": false,
+          "why": "The two are unrelated. A small batch of long conversations can fill KV at low compute; a large batch of short ones does the opposite."
+        },
+        {
+          "t": "The batch size is optimal",
+          "correct": false,
+          "why": "You could be running batch 3 and still see near-100%. That's precisely why the metric is useless for sizing decisions here."
+        },
+        {
+          "t": "Very little — that counter reads high during memory-bound decode",
+          "correct": true,
+          "why": "Right. Judge this fleet on output tokens/second per GPU and KV cache occupancy, which are the metrics that actually track money and headroom."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q19",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Interviewer: 'Your node is at 92% KV occupancy and requests keep arriving. What's your policy?' Which answer reads senior?",
+      "options": [
+        {
+          "t": "\"Accept them — rejecting paying customers should be a last resort, and most requests finish well short of their max_tokens anyway.\"",
+          "correct": false,
+          "why": "Optimism as a memory policy. When the bet loses, the allocation fails inside the shared model process and kills the entire batch — 170 live conversations for one bad admission."
+        },
+        {
+          "t": "\"Add more nodes and let the autoscaler handle it.\"",
+          "correct": false,
+          "why": "Cold start is minutes here, so the capacity arrives after the incident. Reaching for autoscaling as an answer to a memory-allocation question also signals you've imported web-service instincts wholesale."
+        },
+        {
+          "t": "\"Admission control: reserve KV before accepting, queue or 429 otherwise, and overcommit with preemption as the net.\"",
+          "correct": true,
+          "why": "A committed policy with a stated failure direction, plus the honest admission that pure reservation wastes memory, so overcommit-with-preemption is the actual design. Deciding the failure direction in advance is the senior move."
+        },
+        {
+          "t": "\"Cap max_tokens globally at 512 so nothing can ever exhaust memory.\"",
+          "correct": false,
+          "why": "It works by breaking the product — long answers are a feature. Solving a scheduling problem by deleting a requirement is the move interviewers flag as avoidance."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "crux",
+      "q": "Five minutes in, which sentence best shows you've found this problem's crux?",
+      "options": [
+        {
+          "t": "\"We'll need a CDN for the static assets, a WAF for abuse, and an autoscaling group sized to peak concurrency.\"",
+          "correct": false,
+          "why": "True, routine, and irrelevant to the fire. This is touring the rooms that aren't burning."
+        },
+        {
+          "t": "\"KV memory caps the batch, and batch size is the throughput-versus-latency dial — that's the crux.\"",
+          "correct": true,
+          "why": "That's the crux stated as a tension with a named resource, plus an agenda. Everything else in the design — paging, admission control, preemption, chunked prefill — is a consequence of that single trade."
+        },
+        {
+          "t": "\"The hard part is picking the right model architecture for quality per FLOP.\"",
+          "correct": false,
+          "why": "Interesting, and explicitly out of scope — the question is serving a given model. Redefining the problem into your comfort zone reads as dodging."
+        },
+        {
+          "t": "\"The hard part is horizontal scaling — this needs many replicas.\"",
+          "correct": false,
+          "why": "Replicas are the easy part; any replica can serve any request. Naming a routine element as the crux is exactly the calibration error the interviewer is testing for."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "scale",
+      "q": "Interviewer: 'Now 10x the traffic.' What breaks first, and what do you say?",
+      "options": [
+        {
+          "t": "\"Decode bandwidth breaks first, so we'd need roughly ten times the GPUs — I'd start the capacity procurement conversation immediately.\"",
+          "correct": false,
+          "why": "Decode is the *last* thing to break, and 'buy 10× hardware' is the answer that skips the engineering. The interviewer is asking which constraint binds first, and why."
+        },
+        {
+          "t": "\"The gateway and rate limiter, since they see every request.\"",
+          "correct": false,
+          "why": "Those are cheap, stateless, and trivially scalable next to 500 GPUs. Pointing at the cheapest tier suggests the cost model hasn't sunk in."
+        },
+        {
+          "t": "\"Nothing structural — the design is horizontally scalable.\"",
+          "correct": false,
+          "why": "'Horizontally scalable' as an incantation is a buzzword shield, and interviewers push straight through it. Something always breaks first; not knowing what is the finding."
+        },
+        {
+          "t": "\"Prefill compute first, then KV memory — so: prefix caching, 8-bit KV, split pools, smaller model for easy traffic.\"",
+          "correct": true,
+          "why": "Failure order, a mechanism for each, and the honest closer that the biggest win is a product decision about model tiering. Naming the order before naming fixes is what separates this from a list of techniques."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "A regulated customer demands their requests never share a batch with another tenant's. Best response?",
+      "options": [
+        {
+          "t": "Agree — isolation requests from regulated enterprise customers should simply be honoured as written",
+          "correct": false,
+          "why": "You just agreed to run at roughly 1/170th the token throughput without saying so. Accepting a costly constraint without quantifying it is the opposite of ownership."
+        },
+        {
+          "t": "Refuse — batching is non-negotiable in this architecture",
+          "correct": false,
+          "why": "A flat no with no mechanism and no alternative. The customer has a real concern; you have information they don't."
+        },
+        {
+          "t": "Quantify the ~170x cost, name the prefix cache as the real risk, and offer dedicated nodes",
+          "correct": true,
+          "why": "This is the senior shape: price the demand, correct the threat model with a mechanism, identify the real risk (shared prefix blocks and TTFT timing), and ship a middle path that keeps most of the efficiency."
+        },
+        {
+          "t": "Offer them a separate model deployment with fine-tuned weights",
+          "correct": false,
+          "why": "Solves a different problem at higher cost, and every dedicated deployment is another 140 GB of weights and another thing to operate. It answers a question nobody asked."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "safety",
+      "q": "The output-safety classifier fleet becomes unavailable at peak. What's the right pre-decided policy?",
+      "options": [
+        {
+          "t": "Fail closed globally — refuse all traffic until the classifier fleet has fully recovered",
+          "correct": false,
+          "why": "That converts a dependency hiccup into a total product outage, and it makes the classifier fleet a single point of failure for the whole business. Blanket policies are rarely the right shape."
+        },
+        {
+          "t": "Fail open globally — serve everything and log it",
+          "correct": false,
+          "why": "Convenient, and it drops your highest-risk protections exactly when the system is stressed. If a category was worth a classifier, it's worth failing closed."
+        },
+        {
+          "t": "Fail closed for the highest-risk categories, fail open with loud logging elsewhere",
+          "correct": true,
+          "why": "The graded answer is a *pre-decided, category-scoped* rule — plus remembering the classifiers are models with their own GPUs, queues and capacity plan, which is what makes this outage foreseeable in the first place."
+        },
+        {
+          "t": "Fall back to a keyword blocklist for the duration",
+          "correct": false,
+          "why": "A reasonable degraded mode worth mentioning, but on its own it's a false sense of safety — keyword lists miss most of what classifiers catch. It's a supplement, not the policy."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "routing",
+      "q": "You've added prefix-aware sticky routing for the TTFT win. What risk must you raise unprompted?",
+      "options": [
+        {
+          "t": "Sticky routing pins users to a node, so a degraded node keeps serving them",
+          "correct": true,
+          "why": "This is the lesson from Anthropic's documented 2025 context-window routing incident: sticky routing meant follow-up turns kept landing on the same wrong servers, and impact grew to 16% of Sonnet 4 requests at the worst hour. Raise it yourself, and pair it with per-node quality telemetry, not just latency."
+        },
+        {
+          "t": "Prefix hashing becomes CPU-expensive at high request rates across the gateway fleet",
+          "correct": false,
+          "why": "Hashing a prompt is microseconds against twenty seconds of GPU work. Real, but far too small to be the risk worth volunteering."
+        },
+        {
+          "t": "Prefix caching makes responses non-deterministic",
+          "correct": false,
+          "why": "A cached prefix produces the same KV state the fresh prefill would have. Determinism is unaffected."
+        },
+        {
+          "t": "It increases KV memory usage per node",
+          "correct": false,
+          "why": "Backwards — shared prefix blocks are stored once, so sharing *reduces* memory. The cost is uneven load and stickiness, not extra memory."
+        }
+      ]
+    },
+    {
+      "id": "p3c23-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Your VP wants serving cost cut 40% this quarter. An engineer proposes doubling the max batch size — the dashboard shows it would lift tokens/second per GPU by 35%. What do you say?",
+      "options": [
+        {
+          "t": "Ship it — a 35% throughput gain nearly closes the gap",
+          "correct": false,
+          "why": "It closes the gap on a metric while breaking the product. Bigger batches mean more sequences sharing each decode step, so per-user ITL stretches — and if it crosses SLO, interactive goodput collapses while the dashboard looks great."
+        },
+        {
+          "t": "Reject it: the gain is bought with ITL — use prefix caching and 8-bit KV",
+          "correct": true,
+          "why": "The senior move is naming the metric being gamed, then redirecting to levers that don't spend the SLO: prefill reuse (half the compute) and KV quantization (doubles concurrency). Same target, no product regression."
+        },
+        {
+          "t": "Ship it, but only for the batch tier",
+          "correct": false,
+          "why": "Partially right instinct — the batch tier genuinely has no ITL SLO — but batch traffic is the minority of the bill, so this can't reach 40% on its own. Good move, wrong headline."
+        },
+        {
+          "t": "Counter-propose a committed-use discount on reserved GPU capacity, which needs no engineering change",
+          "correct": false,
+          "why": "A procurement answer to an engineering question. It may help the bill, but it dodges the actual trade-off you were asked to evaluate."
+        }
+      ]
+    }
+  ]
+}
