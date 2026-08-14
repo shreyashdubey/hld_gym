@@ -107,21 +107,105 @@ function renderChrome() {
   $('#streak-pill').innerHTML = `🔥 <b>${S.streak}</b>d · ${S.xp} XP`;
   renderSidebar();
 }
+// Only the part you are working through is expanded. 51 chapters in one flat
+// scroll is a wall; one part at a time is a place.
+let openPart = null, sidebarFor = null;
+
 function renderSidebar() {
   const cur = location.hash.replace('#ch/', '');
+  if (cur !== sidebarFor) {
+    sidebarFor = cur;
+    const p = TOC.parts.find(p => p.chapters.some(c => c.id === cur));
+    if (p) openPart = p.n;
+  }
+  if (openPart === null) openPart = TOC.parts[0].n;
+
   let html = '';
   for (const p of TOC.parts) {
     const done = p.chapters.filter(c => mastered(c.id)).length;
-    html += `<div class="side-part"><div class="side-part-title">Part ${p.n} — ${p.title}<span class="prog">${done}/${p.chapters.length}</span></div>`;
+    const pct = Math.round(done / p.chapters.length * 100);
+    const open = p.n === openPart ? 1 : 0;
+    html += `<div class="side-part" data-part="${p.n}" data-open="${open}">
+      <button class="side-part-btn" aria-expanded="${open ? 'true' : 'false'}">
+        <span class="pn">Part ${p.n}<span class="frac">${done}/${p.chapters.length}</span></span>
+        <span class="pt">${p.title}</span>
+        <span class="pbar"><i style="width:${pct}%"></i></span>
+      </button>
+      <div class="side-list">`;
     p.chapters.forEach((c, i) => {
       const ready = isReady(c.id);
       const cls = ['side-ch', ready ? '' : 'soon', cur === c.id ? 'active' : ''].join(' ');
       const mark = mastered(c.id) ? '<span class="m done">✔</span>' : '';
       html += `<a class="${cls}" href="#ch/${c.id}"><span class="n">${p.n}.${i + 1}</span><span>${c.title}</span>${mark}</a>`;
     });
-    html += `</div>`;
+    html += `</div></div>`;
   }
-  $('#sidebar').innerHTML = html;
+  const sb = $('#sidebar');
+  sb.innerHTML = html;
+  sb.querySelectorAll('.side-part-btn').forEach(b => b.addEventListener('click', () => {
+    const n = +b.parentElement.dataset.part;
+    openPart = openPart === n ? -1 : n;
+    renderSidebar();
+  }));
+  const active = sb.querySelector('.side-ch.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+/* ---------- right rail: where you are inside the chapter ---------- */
+let railSpy = null;
+
+function clearRail() {
+  if (railSpy) { removeEventListener('scroll', railSpy); railSpy = null; }
+  $('#rail').innerHTML = '';
+  $('.shell').classList.add('no-rail');
+}
+
+function renderRail(id) {
+  clearRail();
+  const rail = $('#rail');
+  const heads = [...VIEW.querySelectorAll('.ch-body h2')];
+  const levels = S.levels[id] || {};
+  const names = { 1: 'L1 · Recall', 2: 'L2 · Apply', 3: 'L3 · Senior bar' };
+
+  let html = '';
+  if (heads.length) {
+    html += `<div class="rail-title">On this page</div><nav class="rail-toc">`;
+    heads.forEach((h, i) => { html += `<button class="rail-link" data-i="${i}">${h.textContent}</button>`; });
+    html += `</nav><div class="rail-sep"></div>`;
+  }
+  html += `<div class="rail-title">Quiz</div>`;
+  [1, 2, 3].forEach(lv => {
+    const b = levels[lv];
+    const cls = b === undefined ? 'none' : (b >= 80 ? 'pass' : '');
+    html += `<button class="rq" data-lv="${lv}">${names[lv]}<b class="${cls}">${b === undefined ? '—' : b + '%'}</b></button>`;
+  });
+  rail.innerHTML = html;
+  $('.shell').classList.remove('no-rail');
+
+  const how = { behavior: REDUCED ? 'auto' : 'smooth', block: 'start' };
+  rail.querySelectorAll('.rail-link').forEach(b =>
+    b.addEventListener('click', () => heads[+b.dataset.i].scrollIntoView(how)));
+  rail.querySelectorAll('.rq').forEach(b => b.addEventListener('click', () => {
+    VIEW.querySelector('.quiz-wrap').scrollIntoView(how);
+    const tab = VIEW.querySelector(`.q-level-tab[data-lv="${b.dataset.lv}"]`);
+    if (tab) tab.click();
+  }));
+
+  const links = [...rail.querySelectorAll('.rail-link')];
+  if (!links.length) return;
+  let queued = false;
+  railSpy = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      let idx = 0;
+      heads.forEach((h, i) => { if (h.getBoundingClientRect().top <= 130) idx = i; });
+      links.forEach((l, i) => l.classList.toggle('here', i === idx));
+    });
+  };
+  addEventListener('scroll', railSpy, { passive: true });
+  railSpy();
 }
 
 /* ---------- quiz rendering ---------- */
@@ -516,7 +600,7 @@ function initDiagrams(root) {
 function renderChapter(id) {
   const c = chById(id);
   const tpl = document.querySelector(`template[data-ch="${id}"]`);
-  if (!c || !tpl) { VIEW.innerHTML = `<div class="content"><h1 class="ch-title">Coming soon</h1><p>This chapter isn't written yet.</p></div>`; return; }
+  if (!c || !tpl) { VIEW.innerHTML = `<div class="content"><h1 class="ch-title">Coming soon</h1><p>This chapter isn't written yet.</p></div>`; clearRail(); return; }
   S.lastCh = id; save();
 
   const words = tpl.content.textContent.split(/\s+/).length;
@@ -605,6 +689,7 @@ function renderChapter(id) {
     (prev ? `<a class="btn ghost" href="#ch/${prev.id}">← ${prev.title}</a>` : '<span></span>') +
     (next ? `<a class="btn" href="#ch/${next.id}">${next.title} →</a>` : '');
   window.scrollTo(0, 0);
+  renderRail(id);
 }
 
 function renderReview() {
@@ -683,6 +768,7 @@ function renderBoss(part) {
 function route() {
   const h = location.hash || '#home';
   $('#sidebar').classList.remove('open'); $('#scrim').hidden = true;
+  clearRail(); // renderChapter puts it back; every other view runs full width
   if (h.startsWith('#ch/')) renderChapter(h.slice(4));
   else if (h === '#review') renderReview();
   else if (h.startsWith('#boss/')) renderBoss(h.slice(6));

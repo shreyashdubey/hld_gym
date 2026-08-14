@@ -117,13 +117,17 @@ body {
 /* ---------- chrome ---------- */
 .topbar {
   position: sticky; top: 0; z-index: 40;
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 16px;
+  padding: 10px 0;
   background: color-mix(in srgb, var(--paper) 88%, transparent);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
 }
-.brand { color: var(--ink); text-decoration: none; font-weight: 700; font-size: 1.05rem; letter-spacing: .01em; }
+/* same frame as .shell, so the brand sits on the sidebar's text edge */
+.topbar-inner {
+  display: flex; align-items: center; gap: 10px;
+  max-width: 1620px; margin-inline: auto; padding-inline: 22px;
+}
+.brand { color: var(--ink); text-decoration: none; font-weight: 700; font-size: 1.05rem; letter-spacing: .01em; white-space: nowrap; }
 .brand-mark {
   font-family: "IBM Plex Mono", monospace; font-weight: 600; color: var(--accent);
   border: 1.5px solid var(--accent); border-radius: 6px; padding: 1px 6px; margin-right: 2px; font-size: .9em;
@@ -137,43 +141,108 @@ body {
 .pill {
   font-size: .72rem; color: var(--ink-2); border: 1px solid var(--line);
   background: var(--panel); border-radius: 999px; padding: 4px 10px;
+  white-space: nowrap; flex: none;
 }
 .pill b { color: var(--warm); }
 
-.shell { display: flex; min-height: calc(100vh - 57px); }
+/* Three columns on desktop: where you are in the book, the reading column,
+   and where you are inside the chapter. The reading column stays near 740px
+   because that is the measure long-form reading wants; the rails exist so it
+   is framed rather than adrift in whatever space is left over. */
+.shell {
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr) 248px;
+  min-height: calc(100vh - 57px);
+}
+.shell.no-rail { grid-template-columns: 264px minmax(0, 1fr); }
+/* past this the three columns stop being a composition and start being one
+   column marooned in leftover space, so cap the whole frame instead */
+@media (min-width: 1500px) {
+  .shell { max-width: 1620px; margin-inline: auto; }
+}
+.sidebar, .rail { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.sidebar::-webkit-scrollbar, .rail::-webkit-scrollbar { width: 7px; }
+.sidebar::-webkit-scrollbar-thumb, .rail::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.sidebar::-webkit-scrollbar-track, .rail::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- sidebar ---------- */
 .sidebar {
-  width: 300px; flex: none;
   border-right: 1px solid var(--line);
-  background: color-mix(in srgb, var(--panel) 60%, var(--paper));
-  padding: 18px 14px 40px;
-  overflow-y: auto;
+  padding: 20px 14px 40px;
+  overflow-y: auto; overscroll-behavior: contain;
   position: sticky; top: 57px; height: calc(100vh - 57px);
 }
-.side-part { margin: 14px 0 4px; }
-.side-part-title {
-  font-family: "IBM Plex Mono", monospace; font-size: .68rem; letter-spacing: .14em;
-  text-transform: uppercase; color: var(--ink-3); margin: 0 8px 6px;
+.side-part { margin: 0 0 2px; }
+.side-part-btn {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: none; border: 0; border-radius: 8px; padding: 9px 8px 8px;
+  color: var(--ink-2); font: inherit;
+}
+.side-part-btn:hover { background: var(--accent-soft); }
+.side-part-btn .pn {
+  font-family: "IBM Plex Mono", monospace; font-size: .66rem; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-3);
   display: flex; align-items: baseline; gap: 8px;
 }
-.side-part-title .prog { margin-left: auto; letter-spacing: 0; color: var(--ink-3); }
+.side-part-btn .pn .frac { margin-left: auto; letter-spacing: 0; }
+.side-part-btn .pt { display: block; font-size: .9rem; font-weight: 600; color: var(--ink); margin-top: 2px; }
+.side-part[data-open="1"] .side-part-btn .pt { color: var(--accent-ink); }
+.pbar { display: block; height: 3px; margin-top: 7px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.pbar i { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width .3s ease; }
+.side-list { padding: 2px 0 10px; }
+.side-part[data-open="0"] .side-list { display: none; }
 .side-ch {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: baseline; gap: 9px;
   color: var(--ink-2); text-decoration: none;
-  padding: 6px 8px; border-radius: 8px; font-size: .87rem; line-height: 1.35;
+  padding: 5px 8px; border-radius: 8px; font-size: .85rem; line-height: 1.35;
 }
 .side-ch:hover { background: var(--accent-soft); color: var(--accent-ink); }
 .side-ch.active { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 .side-ch.soon { color: var(--ink-3); opacity: .55; pointer-events: none; }
-.side-ch .n { font-family: "IBM Plex Mono", monospace; font-size: .7rem; color: var(--ink-3); flex: none; width: 1.7em; }
-.side-ch .m { margin-left: auto; flex: none; font-size: .8rem; }
+/* wide enough for two-digit chapters — 3.10 needs more room than 1.7 */
+.side-ch .n {
+  font-family: "IBM Plex Mono", monospace; font-size: .68rem; color: var(--ink-3);
+  flex: none; width: 2.6em; text-align: right;
+}
+.side-ch.active .n { color: var(--accent-ink); }
+.side-ch .m { margin-left: auto; flex: none; font-size: .78rem; }
 .side-ch .m.done { color: var(--good); }
 .scrim { position: fixed; inset: 0; background: rgba(10, 18, 30, .45); z-index: 45; }
 
+/* ---------- right rail: where you are inside the chapter ---------- */
+.rail {
+  position: sticky; top: 57px; height: calc(100vh - 57px);
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 34px 20px 40px 4px;
+  border-left: 1px solid var(--line);
+}
+.rail-title {
+  font-family: "IBM Plex Mono", monospace; font-size: .64rem; letter-spacing: .16em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 10px 10px;
+}
+.rail-toc { display: flex; flex-direction: column; border-left: 2px solid var(--line); }
+.rail-link {
+  text-align: left; background: none; border: 0; cursor: pointer; font: inherit;
+  color: var(--ink-3); font-size: .82rem; line-height: 1.35;
+  padding: 6px 8px 6px 10px; margin-left: -2px;
+  border-left: 2px solid transparent;
+}
+.rail-link:hover { color: var(--accent-ink); }
+.rail-link.here { color: var(--accent-ink); border-left-color: var(--accent); font-weight: 600; }
+.rail-sep { height: 1px; background: var(--line); margin: 22px 0 18px; }
+.rq {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  background: none; border: 0; cursor: pointer; font: inherit; text-align: left;
+  color: var(--ink-2); font-size: .82rem; padding: 5px 10px; border-radius: 7px;
+}
+.rq:hover { background: var(--accent-soft); color: var(--accent-ink); }
+.rq b { margin-left: auto; font-family: "IBM Plex Mono", monospace; font-size: .74rem; font-weight: 600; }
+.rq b.pass { color: var(--good); }
+.rq b.none { color: var(--ink-3); font-weight: 400; }
+
 /* ---------- main view ---------- */
-.view { flex: 1; min-width: 0; padding: 34px 22px 90px; }
-.content { max-width: 700px; margin: 0 auto; }
+.view { min-width: 0; padding: 34px 30px 90px; }
+.content { max-width: 740px; margin: 0 auto; }
 
 .eyebrow {
   font-size: .7rem; letter-spacing: .16em; text-transform: uppercase;
@@ -186,6 +255,8 @@ h1.ch-title {
 }
 .ch-meta { color: var(--ink-3); font-size: .85rem; margin-bottom: 30px; font-family: "IBM Plex Mono", monospace; }
 .content h2 { font-size: 1.45rem; line-height: 1.25; font-weight: 700; margin: 2.2em 0 .5em; letter-spacing: -.005em; }
+/* clears the sticky topbar when the rail jumps to a section */
+.content h2, .quiz-wrap { scroll-margin-top: 74px; }
 .content h3 { font-size: 1.12rem; font-weight: 700; margin: 1.8em 0 .4em; }
 .content p { margin: .9em 0; }
 .content li { margin: .35em 0; }
@@ -443,6 +514,22 @@ details[open] > summary { margin-bottom: 6px; }
 @keyframes toast-out { to { transform: translateY(8px); opacity: 0; } }
 
 /* ---------- mobile ---------- */
+/* Below this the reading column would have to give up width to keep the rail,
+   and the column matters more than the outline. */
+@media (max-width: 1240px) {
+  .shell, .shell.no-rail { grid-template-columns: 264px minmax(0, 1fr); }
+  .rail { display: none; }
+}
+@media (max-width: 880px) {
+  .shell, .shell.no-rail { grid-template-columns: 1fr; }
+  .topbar-inner { padding-inline: 12px; gap: 8px; }
+}
+/* iPhone SE and friends: the top row is 11px too wide at this width */
+@media (max-width: 360px) {
+  .topbar-inner { padding-inline: 8px; gap: 6px; }
+  .icon-btn { width: 32px; height: 32px; }
+  .pill { font-size: .66rem; padding: 3px 8px; }
+}
 @media (max-width: 880px) {
   .sidebar {
     position: fixed; left: 0; top: 57px; bottom: 0; height: auto; z-index: 50;
@@ -471,17 +558,20 @@ details[open] > summary { margin-bottom: 6px; }
 </svg>
 
 <header class="topbar">
-  <button id="nav-toggle" class="icon-btn" aria-label="Open chapters">☰</button>
-  <a class="brand" href="#home"><span class="brand-mark">HLD</span> Gym</a>
-  <span class="topbar-spacer"></span>
-  <span id="streak-pill" class="pill" title="Current streak"></span>
-  <button id="theme-toggle" class="icon-btn" aria-label="Switch theme">◐</button>
+  <div class="topbar-inner">
+    <button id="nav-toggle" class="icon-btn" aria-label="Open chapters">☰</button>
+    <a class="brand" href="#home"><span class="brand-mark">HLD</span> Gym</a>
+    <span class="topbar-spacer"></span>
+    <span id="streak-pill" class="pill" title="Current streak"></span>
+    <button id="theme-toggle" class="icon-btn" aria-label="Switch theme">◐</button>
+  </div>
 </header>
 
 <div class="shell">
   <nav id="sidebar" class="sidebar" aria-label="Chapters"></nav>
   <div id="scrim" class="scrim" hidden></div>
   <main id="view" class="view" tabindex="-1"></main>
+  <aside id="rail" class="rail" aria-label="On this page"></aside>
 </div>
 
 <div id="toast-root" aria-live="polite"></div>
@@ -17639,21 +17729,105 @@ function renderChrome() {
   $('#streak-pill').innerHTML = `🔥 <b>${S.streak}</b>d · ${S.xp} XP`;
   renderSidebar();
 }
+// Only the part you are working through is expanded. 51 chapters in one flat
+// scroll is a wall; one part at a time is a place.
+let openPart = null, sidebarFor = null;
+
 function renderSidebar() {
   const cur = location.hash.replace('#ch/', '');
+  if (cur !== sidebarFor) {
+    sidebarFor = cur;
+    const p = TOC.parts.find(p => p.chapters.some(c => c.id === cur));
+    if (p) openPart = p.n;
+  }
+  if (openPart === null) openPart = TOC.parts[0].n;
+
   let html = '';
   for (const p of TOC.parts) {
     const done = p.chapters.filter(c => mastered(c.id)).length;
-    html += `<div class="side-part"><div class="side-part-title">Part ${p.n} — ${p.title}<span class="prog">${done}/${p.chapters.length}</span></div>`;
+    const pct = Math.round(done / p.chapters.length * 100);
+    const open = p.n === openPart ? 1 : 0;
+    html += `<div class="side-part" data-part="${p.n}" data-open="${open}">
+      <button class="side-part-btn" aria-expanded="${open ? 'true' : 'false'}">
+        <span class="pn">Part ${p.n}<span class="frac">${done}/${p.chapters.length}</span></span>
+        <span class="pt">${p.title}</span>
+        <span class="pbar"><i style="width:${pct}%"></i></span>
+      </button>
+      <div class="side-list">`;
     p.chapters.forEach((c, i) => {
       const ready = isReady(c.id);
       const cls = ['side-ch', ready ? '' : 'soon', cur === c.id ? 'active' : ''].join(' ');
       const mark = mastered(c.id) ? '<span class="m done">✔</span>' : '';
       html += `<a class="${cls}" href="#ch/${c.id}"><span class="n">${p.n}.${i + 1}</span><span>${c.title}</span>${mark}</a>`;
     });
-    html += `</div>`;
+    html += `</div></div>`;
   }
-  $('#sidebar').innerHTML = html;
+  const sb = $('#sidebar');
+  sb.innerHTML = html;
+  sb.querySelectorAll('.side-part-btn').forEach(b => b.addEventListener('click', () => {
+    const n = +b.parentElement.dataset.part;
+    openPart = openPart === n ? -1 : n;
+    renderSidebar();
+  }));
+  const active = sb.querySelector('.side-ch.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+
+/* ---------- right rail: where you are inside the chapter ---------- */
+let railSpy = null;
+
+function clearRail() {
+  if (railSpy) { removeEventListener('scroll', railSpy); railSpy = null; }
+  $('#rail').innerHTML = '';
+  $('.shell').classList.add('no-rail');
+}
+
+function renderRail(id) {
+  clearRail();
+  const rail = $('#rail');
+  const heads = [...VIEW.querySelectorAll('.ch-body h2')];
+  const levels = S.levels[id] || {};
+  const names = { 1: 'L1 · Recall', 2: 'L2 · Apply', 3: 'L3 · Senior bar' };
+
+  let html = '';
+  if (heads.length) {
+    html += `<div class="rail-title">On this page</div><nav class="rail-toc">`;
+    heads.forEach((h, i) => { html += `<button class="rail-link" data-i="${i}">${h.textContent}</button>`; });
+    html += `</nav><div class="rail-sep"></div>`;
+  }
+  html += `<div class="rail-title">Quiz</div>`;
+  [1, 2, 3].forEach(lv => {
+    const b = levels[lv];
+    const cls = b === undefined ? 'none' : (b >= 80 ? 'pass' : '');
+    html += `<button class="rq" data-lv="${lv}">${names[lv]}<b class="${cls}">${b === undefined ? '—' : b + '%'}</b></button>`;
+  });
+  rail.innerHTML = html;
+  $('.shell').classList.remove('no-rail');
+
+  const how = { behavior: REDUCED ? 'auto' : 'smooth', block: 'start' };
+  rail.querySelectorAll('.rail-link').forEach(b =>
+    b.addEventListener('click', () => heads[+b.dataset.i].scrollIntoView(how)));
+  rail.querySelectorAll('.rq').forEach(b => b.addEventListener('click', () => {
+    VIEW.querySelector('.quiz-wrap').scrollIntoView(how);
+    const tab = VIEW.querySelector(`.q-level-tab[data-lv="${b.dataset.lv}"]`);
+    if (tab) tab.click();
+  }));
+
+  const links = [...rail.querySelectorAll('.rail-link')];
+  if (!links.length) return;
+  let queued = false;
+  railSpy = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      let idx = 0;
+      heads.forEach((h, i) => { if (h.getBoundingClientRect().top <= 130) idx = i; });
+      links.forEach((l, i) => l.classList.toggle('here', i === idx));
+    });
+  };
+  addEventListener('scroll', railSpy, { passive: true });
+  railSpy();
 }
 
 /* ---------- quiz rendering ---------- */
@@ -18048,7 +18222,7 @@ function initDiagrams(root) {
 function renderChapter(id) {
   const c = chById(id);
   const tpl = document.querySelector(`template[data-ch="${id}"]`);
-  if (!c || !tpl) { VIEW.innerHTML = `<div class="content"><h1 class="ch-title">Coming soon</h1><p>This chapter isn't written yet.</p></div>`; return; }
+  if (!c || !tpl) { VIEW.innerHTML = `<div class="content"><h1 class="ch-title">Coming soon</h1><p>This chapter isn't written yet.</p></div>`; clearRail(); return; }
   S.lastCh = id; save();
 
   const words = tpl.content.textContent.split(/\s+/).length;
@@ -18137,6 +18311,7 @@ function renderChapter(id) {
     (prev ? `<a class="btn ghost" href="#ch/${prev.id}">← ${prev.title}</a>` : '<span></span>') +
     (next ? `<a class="btn" href="#ch/${next.id}">${next.title} →</a>` : '');
   window.scrollTo(0, 0);
+  renderRail(id);
 }
 
 function renderReview() {
@@ -18215,6 +18390,7 @@ function renderBoss(part) {
 function route() {
   const h = location.hash || '#home';
   $('#sidebar').classList.remove('open'); $('#scrim').hidden = true;
+  clearRail(); // renderChapter puts it back; every other view runs full width
   if (h.startsWith('#ch/')) renderChapter(h.slice(4));
   else if (h === '#review') renderReview();
   else if (h.startsWith('#boss/')) renderBoss(h.slice(6));
