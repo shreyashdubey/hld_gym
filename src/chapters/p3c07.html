@@ -1,0 +1,321 @@
+<p>"Design Dropbox." The interviewer draws a laptop, a phone, and a desktop on the whiteboard, connects them with a cloud, and adds one sentence that changes everything: "The user edits the same file on two of these while offline. Neither edit may be lost."</p>
+
+<p>Most candidates hear "Dropbox" and think <em>storage problem</em> — big files, lots of disks, a CDN somewhere. That framing fails the interview. Storing bytes is the easy half; blob storage is a solved, buyable product. The question was invented to probe the other half: <strong>sync correctness</strong>. A student writes two thesis paragraphs on a plane with no Wi-Fi. Earlier that day she fixed a citation on the library desktop. Both machines come online tonight. If your design picks a winner silently, one of those edits evaporates and she finds out the week the thesis is due.</p>
+
+<p>So I'll say the crux out loud in the first two minutes: the hard part of Dropbox is not storing files, it's making independent copies of a file <em>converge without losing work</em> — and doing it cheaply enough that a one-line edit to a 1&nbsp;GB file doesn't re-upload a gigabyte. Chunking, dedup, and conflict handling. That's where I'll spend the deep dives.</p>
+
+<h2>Requirements: what we're promising</h2>
+
+<p><strong>Functional</strong> — I'll scope to five things and cut the rest out loud:</p>
+<ul>
+<li>Upload and download files of any type, up to 50&nbsp;GB.</li>
+<li>Sync automatically across all of a user's devices — no "save to cloud" button.</li>
+<li>Share folders with other users, with read/write permissions.</li>
+<li>Version history and trash: restore any version from the last 30 days.</li>
+<li>Work offline; reconcile when the device reconnects.</li>
+</ul>
+<p>Out of scope: real-time co-editing (that's Google Docs, a different machine — p2c04), search, previews, and mobile camera backup (exercise at the end).</p>
+
+<p><strong>Non-functional</strong> — with numbers I'll commit to:</p>
+<ul>
+<li><strong>Durability above all.</strong> Once the server acknowledges a file version, it is never lost. This is the product. A sync tool that loses files is a virus with a logo.</li>
+<li><strong>Sync latency in seconds, not milliseconds.</strong> A small edit should appear on the other online device within ~5 seconds typically. Nobody needs 50&nbsp;ms here — that headroom is a gift, and I'll spend it on correctness.</li>
+<li><strong>Scale:</strong> 500M registered users, ~100M devices active daily, average ~8&nbsp;GB stored per user.</li>
+<li><strong>No torn reads:</strong> a device never sees a half-updated file. Versions switch atomically or not at all.</li>
+<li><strong>Resumable everything:</strong> laptops sleep mid-upload constantly. That's normal operation, not a failure.</li>
+</ul>
+
+<h2>Estimation: two numbers that shape the whole design</h2>
+
+<p><strong>Number one: file sizes follow a power law.</strong> Most <em>files</em> are tiny — documents, code, configs, a few hundred KB at most. Most <em>bytes</em> live in a few huge files — videos, design files, disk images. This one fact splits the system in two. The small files mean metadata operations (what changed? which version? who can see it?) dominate request volume, so metadata must live in its own fast, strongly consistent service. The huge files mean bandwidth is dominated by big blobs, so the byte-moving path must never re-send what the other side already has. Two workloads, two planes. That's the architecture, derived before drawing a single box.</p>
+
+<p><strong>Number two: the dedup ratio — the number that pays for all the chunking complexity.</strong> 500M users × 8&nbsp;GB ≈ 4&nbsp;exabytes of logical data. Users store the same things: the same installers, the same shared team folders on ten laptops, twelve near-identical versions of the same presentation. If splitting files into chunks and storing each unique chunk once cuts stored bytes by even a third, that's over an exabyte we never buy disks for. At a rough all-in cost of $100 per usable TB per year (disks, servers, power, replication overhead), an exabyte avoided is on the order of $100M per year. Chunking adds real complexity — hash indexes, refcounts, a garbage collector with a race condition we'll meet later. This number is why the complexity is worth it. If dedup saved 2%, I'd store whole files and go home early.</p>
+
+<p><strong>And a worked example for delta sync, because it gates a design choice.</strong> Take a 1&nbsp;GB slide deck, cut into 4&nbsp;MB blocks — 256 blocks. You edit three slides; the changed bytes fall in two blocks. Delta sync uploads 8&nbsp;MB instead of 1&nbsp;GB. On a 2&nbsp;Mbps home uplink, 1&nbsp;GB takes about 67 minutes; 8&nbsp;MB takes about 32 seconds. That's the difference between "sync is invisible" and "sync is a progress bar you watch." The bandwidth math, not elegance, is why every file becomes a list of chunks.</p>
+
+<h2>API and data model: quick, then out of the way</h2>
+
+<p>Four calls carry the whole system. Every file lives in a <em>namespace</em> — one per user, plus one per shared folder.</p>
+
+<pre><code>POST /ns/{ns}/check      body: list of block hashes -&gt; which are missing
+PUT  (presigned URL)     upload one 4 MB block to the blob store
+POST /ns/{ns}/commit     body: path, base_version, ordered block hashes
+                         -&gt; new version, or 409 CONFLICT
+GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</code></pre>
+
+<p>Data model, five tables: <code>namespaces</code>; <code>files</code> (namespace, path, current version, pointer to manifest); <code>manifests</code> — immutable, an ordered list of (block hash, size) pairs, one per file version; <code>blocks</code> (hash → storage location, size, refcount); <code>journal</code> (namespace, sequence number, change record) — an append-only log of every change in a namespace, which is what cursors read. Sharing is just membership: mount a shared namespace into your view, ACL checked at the namespace boundary.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A file here is IKEA furniture. The manifest is the instruction sheet: "this wardrobe = part 4711, part 8003, part 4711 again…" The blob store is the warehouse, which keeps exactly one bin per part number no matter how many wardrobes use that part. Editing a file doesn't rebuild the wardrobe — it prints a new instruction sheet that reuses most of the old part numbers and adds a few new ones. And "which version is current" is just which instruction sheet is clipped to the front of the folder. Swapping that clip is one tiny atomic action, no matter how big the wardrobe is.</p>
+</div>
+
+<h2>High-level design: two planes, one linearization point</h2>
+
+<p>The spine of this design is the split the estimation demanded: a <strong>metadata plane</strong> and a <strong>data plane</strong>.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Architecture: client talks to metadata plane for small strongly consistent operations and directly to the blob store data plane for bytes">
+  <rect class="dg-node" x="15" y="130" width="120" height="60" rx="8"/>
+  <text class="dg-txt" x="35" y="155">Client</text>
+  <text class="dg-txt-s" x="28" y="174">chunks + hashes</text>
+  <rect class="dg-zone" x="205" y="20" width="250" height="295" rx="10"/>
+  <text class="dg-txt-s" x="220" y="42">METADATA PLANE (strongly consistent)</text>
+  <rect class="dg-node" x="230" y="60" width="200" height="48" rx="8"/>
+  <text class="dg-txt" x="248" y="80">Metadata API</text>
+  <text class="dg-txt-s" x="248" y="97">check / commit / ACL</text>
+  <rect class="dg-node" x="230" y="140" width="200" height="48" rx="8"/>
+  <text class="dg-txt" x="248" y="160">Metadata DB</text>
+  <text class="dg-txt-s" x="248" y="177">sharded by namespace</text>
+  <rect class="dg-node" x="230" y="220" width="200" height="48" rx="8"/>
+  <text class="dg-txt" x="248" y="240">Journal + notifier</text>
+  <text class="dg-txt-s" x="248" y="257">cursor per namespace</text>
+  <rect class="dg-zone" x="495" y="20" width="210" height="295" rx="10"/>
+  <text class="dg-txt-s" x="510" y="42">DATA PLANE (immutable)</text>
+  <rect class="dg-node-alt" x="520" y="110" width="165" height="80" rx="8"/>
+  <text class="dg-txt" x="538" y="140">Blob store</text>
+  <text class="dg-txt-s" x="538" y="158">blocks keyed by</text>
+  <text class="dg-txt-s" x="538" y="174">SHA-256 hash</text>
+  <line class="dg-edge" x1="135" y1="145" x2="230" y2="90" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="130" y="105">check / commit (KB)</text>
+  <line class="dg-edge" x1="135" y1="180" x2="520" y2="165" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="200" y="205">blocks via presigned URL (the big bytes)</text>
+  <line class="dg-edge" x1="330" y1="108" x2="330" y2="140" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="330" y1="188" x2="330" y2="220" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="230" y1="255" x2="90" y2="255" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="90" y1="255" x2="75" y2="192" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="95" y="275">long-poll: "anything new since cursor C?"</text>
+</svg>
+<figcaption>The spine: tiny strongly consistent metadata operations on the left plane; huge immutable content-addressed bytes on the right. Bytes never pass through the metadata servers.</figcaption>
+</figure>
+
+<p>The metadata plane is a sharded SQL database plus a thin API. It holds namespaces, file rows, manifests, ACLs, and the journal. Everything in it is small and must be <strong>strongly consistent</strong> — "which version is current" is exactly the kind of question where stale answers destroy data. The data plane is a blob store holding 4&nbsp;MB blocks keyed by their SHA-256 hash. Blocks are immutable and content-addressed: the name of a block <em>is</em> the hash of its content, so a block can never be "updated," only referenced or not. Immutable content-addressed data can be cached anywhere, replicated lazily, and stored on the cheapest thing that spins — it needs none of the coordination the metadata needs. Clients upload and download blocks <em>directly</em> against the blob store using short-lived presigned URLs (p1c07), so the metadata plane never touches bulk bytes.</p>
+
+<p><strong>The write path</strong>, end to end. The client watches the filesystem, sees <code>thesis.docx</code> change, and: (1) cuts the file into 4&nbsp;MB blocks and hashes each one locally; (2) calls <code>check</code> with the hash list — the server answers "I already have 254 of these 256, send me 2"; (3) uploads the 2 missing blocks to the blob store, in parallel, resumable per block; (4) calls <code>commit</code> with the manifest — the ordered hash list — and the version it based its edit on. The server validates every referenced block exists, then atomically advances the file row from base version to new version and appends to the journal.</p>
+
+<p><strong>Step 4 is the linearization point, and I want to name that explicitly.</strong> A linearization point is the single instant where an operation goes from "hasn't happened" to "happened" for every observer. Blocks can be half-uploaded, retried, duplicated, abandoned — none of it matters, none of it is visible. The universe only changes when the manifest commit lands in the metadata DB. Before it: old version, everywhere. After it: new version, everywhere. This one property gives us atomic updates of arbitrarily large files using a boring single-row transaction, and it makes every failure before the commit harmless by construction.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Upload flow: hash locally, check which blocks are new, upload only those, then commit the manifest atomically">
+  <rect class="dg-node" x="15" y="60" width="150" height="70" rx="8"/>
+  <text class="dg-txt" x="32" y="86">1. Chunk + hash</text>
+  <text class="dg-txt-s" x="32" y="104">256 blocks, SHA-256</text>
+  <text class="dg-txt-s" x="32" y="120">all local, no network</text>
+  <rect class="dg-node" x="200" y="60" width="150" height="70" rx="8"/>
+  <text class="dg-txt" x="217" y="86">2. check(hashes)</text>
+  <text class="dg-txt-s" x="217" y="104">server: "254 known,</text>
+  <text class="dg-txt-s" x="217" y="120">send 2"</text>
+  <rect class="dg-node" x="385" y="60" width="150" height="70" rx="8"/>
+  <text class="dg-txt" x="402" y="86">3. Upload 2 blocks</text>
+  <text class="dg-txt-s" x="402" y="104">8 MB, not 1 GB</text>
+  <text class="dg-txt-s" x="402" y="120">parallel, resumable</text>
+  <rect class="dg-node-alt" x="570" y="50" width="140" height="90" rx="8"/>
+  <text class="dg-txt" x="586" y="78">4. Commit</text>
+  <text class="dg-txt-s" x="586" y="96">manifest, base ver</text>
+  <text class="dg-txt-s" x="586" y="112">= linearization</text>
+  <text class="dg-txt-s" x="586" y="128">point</text>
+  <line class="dg-edge" x1="165" y1="95" x2="200" y2="95" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="350" y1="95" x2="385" y2="95" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="535" y1="95" x2="570" y2="95" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="15" y="180">Crash anywhere before step 4: nothing visible changed. Worst case = a few orphan</text>
+  <text class="dg-txt-s" x="15" y="200">blocks in the store, cleaned by GC. Retry re-runs check and sends only what's missing.</text>
+</svg>
+<figcaption>Manifest-last is the whole safety story: steps 1–3 are freely retryable because step 4 is the only step the world can see.</figcaption>
+</figure>
+
+<p><strong>The read/sync path.</strong> Every device keeps one cursor per namespace — its position in that namespace's journal. Devices hold a long-poll connection to the notifier; when a commit lands, the notifier pokes every device subscribed to that namespace, and each device pulls <code>changes?cursor=C</code>, gets the new manifests, diffs them against local state, downloads only the blocks it doesn't already have, assembles the new file version in a temp file, and renames it into place — the local filesystem's own atomic swap, mirroring the server's. Cursors make sync stateless-server and resumable: a laptop closed for three weeks just replays the journal from its old cursor. Same protocol whether you were gone three seconds or three weeks.</p>
+
+<div class="box story"><div class="box-tag">War story — Dropbox's Magic Pocket</div>
+<p>The metadata/data split isn't academic — it's what let Dropbox pull off one of the boldest infrastructure moves of the decade. From its founding, Dropbox kept file blocks in Amazon S3 and metadata on its own servers. Around 2013 they decided the economics no longer worked at their scale and spent two and a half years building Magic Pocket, a custom exabyte-scale blob store, then quietly moved more than 90% of over 500 petabytes of user data onto their own hardware, finishing in early 2016. The migration ran a custom data mover for months while the sync product kept working — possible only because blocks are immutable and content-addressed, so the data plane could be swapped underneath the sync logic like changing warehouses without reprinting a single instruction sheet. Their 2018 IPO filing put the payoff on paper: roughly $75M in infrastructure cost savings over the two years after the migration, with gross margins climbing from 46% to 67%. When your interviewer asks why you're splitting metadata from data, this is the answer with a dollar sign on it.</p>
+</div>
+
+<h2>Deep dive 1: chunking and dedup — where the money is</h2>
+
+<p>First decision: how do you cut files into blocks? The obvious way is a ruler: every 4&nbsp;MB, cut. Fixed-size chunking is fast, simple, and has one famous weakness: <strong>insertions shift everything</strong>. Add one sentence to page 1 of a 500-page document and every byte after it moves; every 4&nbsp;MB window now contains different bytes; every hash changes; you re-upload the whole file to change one sentence.</p>
+
+<p>The fix is <strong>content-defined chunking</strong>: let the file's own content decide where the cuts go. Slide a small window (say 48 bytes) along the file computing a <em>rolling hash</em> — a hash that's cheap to update as the window slides one byte, rather than recomputed from scratch. Whenever the hash's last 22 bits are all zero — which happens on average every ~4&nbsp;MB, at positions determined purely by local content — declare a boundary. Now insert a sentence on page 1: the bytes shifted, but the same content patterns still produce boundaries at the same <em>content</em>, so a few chunks near the edit change and every later chunk keeps its old boundaries and old hashes. Insertions stay local.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Fixed chunking is tearing a novel into 10-page bundles by page number; content-defined chunking is tearing it at chapter breaks. Add a paragraph to chapter 1 and the page-number bundles all shift — bundle 7 now starts mid-sentence somewhere new, so every bundle looks "changed." The chapter-break bundles don't care: chapter 1 got longer, chapters 2 through 40 are identical bundles you already have. The analogy's honest edge: rolling-hash boundaries are statistical, not guaranteed — you enforce minimum and maximum chunk sizes so a weird file can't produce a million tiny chunks or one giant one.</p>
+</div>
+
+<p><strong>My commitment: fixed 4&nbsp;MB blocks, not content-defined chunking — and here's the reasoning.</strong> Most real edits are in-place overwrites or appends (office docs rewritten by apps, logs, exports), where fixed blocks already localize the change; insert-heavy byte-shifting edits are the minority. Fixed blocks buy me trivially predictable offsets (block <em>i</em> = bytes at 4<em>i</em>&nbsp;MB — resumable ranged downloads for free), simpler server logic, and less client CPU. This is also what Dropbox actually shipped: 4&nbsp;MB blocks, SHA-256 per block. The senior part of the commitment is naming the metric that would flip it: I'll dashboard the fleet-wide dedup ratio and bytes-uploaded-per-edit, and if telemetry shows a large population of insert-heavy files paying full re-uploads, content-defined chunking is the targeted upgrade — it changes only the client cutter and nothing in the server contract, because the server never cared where the cuts came from, only what the hashes are.</p>
+
+<p><strong>Second decision, and it's a security decision wearing a storage costume: dedup across users?</strong> The chunk hash is the chunk's identity, so dedup falls out naturally — the <code>check</code> call skips any block the store already has. But have it skip blocks that <em>other users</em> uploaded and you've quietly turned a hash into a bearer token: anyone who learns a file's block hashes can "sync" the file into their account without ever possessing it, and the <code>check</code> response doubles as an oracle for "does anyone on this service store this file?"</p>
+
+<div class="box story"><div class="box-tag">War story — Dropship, 2011</div>
+<p>This isn't hypothetical; it happened to Dropbox. In April 2011, developer Wladimir van der Laan released Dropship, an open-source tool that exploited exactly this design. Dropbox at the time deduplicated across all users: if any user had ever uploaded a block, the client protocol let you claim it by hash alone. Dropship serialized a file's block hashes into a small JSON file; anyone could feed that JSON to the tool and the full file would materialize in their own Dropbox — a movie "transferred" by passing around a kilobyte of hashes, with Dropbox's storage doing all the work. It effectively turned the dedup system into a file-sharing network. Dropbox scrambled to shut it down — takedown notices went to mirrors (Dropbox later said the DMCA notice was fired by an automated banned-file system), and they changed the backend so hash-only claims no longer worked. The lesson is precise: a content hash proves you know a file's <em>name</em>, not that you ever had its bytes. The moment "server already has it" becomes "you may have it," dedup is an access-control bug.</p>
+</div>
+
+<p><strong>My commitment: scope client-visible dedup to the account, and dedup across accounts only inside the storage layer.</strong> Concretely: <code>check</code> answers "already have it" only if the block is already referenced by <em>your</em> account or a namespace you're a member of; otherwise you upload it. Server-side, the blob store still keys blocks by hash globally, so if a thousand accounts upload the same installer it's stored once — the full storage saving survives. What I give up is the <em>bandwidth</em> saving on the first upload of a popular file per account, and I'll pay it gladly: the storage dollars were the big prize from the estimation, and no hash ever acts as a read capability across a trust boundary. (Proof-of-possession challenges — "hash bytes 1&nbsp;M–2&nbsp;M with this salt" — can recover some cross-user bandwidth savings later; that's an optimization with a threat model attached, not a day-one feature.)</p>
+
+<h2>Deep dive 2: the crux — two laptops, one file, zero lost homework</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Everything so far is plumbing a strong mid-level candidate can assemble. The reason this question exists is here: two devices edit the same file while disconnected, and the system must converge without human-invisible data loss. There is no clever algorithm that merges two arbitrary binary edits correctly — a .docx is a zip file; "merging" two zips byte-wise produces garbage. So the design goal is not to be smart. It is to <em>detect</em> concurrency reliably, <em>refuse</em> to guess, and <em>preserve both versions</em> where the human can see them. The mechanism is a base-version check at the linearization point plus the conflicted-copy pattern. Get this right and the rest of the chapter is engineering; get it wrong and you built a data-loss machine with great bandwidth efficiency.</p>
+</div>
+
+<p>Walk the scenario precisely. <code>thesis.docx</code> is at version 7 everywhere. Laptop A (the plane) edits offline. Desktop B (the library) edits offline. Both hold the same fact: "my edit is based on v7." A lands first: commits with base_version&nbsp;7, server sees current&nbsp;=&nbsp;7, accepts, current becomes 8. B commits with base_version&nbsp;7 — but current is now 8. <strong>The base-version check is a compare-and-swap:</strong> "advance 7→my-version only if still 7." It fails. That failure <em>is</em> the concurrency detector: B's edit provably did not see A's edit, so these are concurrent, not sequential.</p>
+
+<p>Now the committed policy: <strong>never last-write-wins, never silent merge — fork.</strong> B's client receives the 409, downloads v8, and commits its own local content as a <em>new file</em>: <code>thesis (B's conflicted copy 2026-08-14).docx</code>. Both versions now exist side by side in the folder on every device; the human — the only agent that understands thesis semantics — merges. This is Dropbox's actual documented behavior, right down to the filename format with the device name and date baked in so you can tell at a glance which machine and when.</p>
+
+<p>Why commit so hard against LWW? Because LWW answers "who wins?" with a clock, and clocks don't know anything about homework. Whichever laptop syncs second — not edits second, <em>syncs</em> second — silently annihilates the other's work, and the victim gets no signal until they go looking for a paragraph that no longer exists. A conflicted copy is ugly; users mock the filename. But ugly-and-loud beats clean-and-lossy in any system whose one promise is "never lose your files." The conflict is a fact about reality — two humans really did diverge — and the system's job is to report facts, not hide them.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Conflict fork: both laptops start at version 7, laptop A commits version 8, laptop B's commit with base 7 is rejected and becomes a conflicted copy file">
+  <rect class="dg-node" x="20" y="120" width="120" height="56" rx="8"/>
+  <text class="dg-txt" x="38" y="143">thesis.docx</text>
+  <text class="dg-txt-s" x="38" y="161">v7 everywhere</text>
+  <rect class="dg-node" x="250" y="30" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="266" y="53">Laptop A (plane)</text>
+  <text class="dg-txt-s" x="266" y="71">edits offline, base v7</text>
+  <rect class="dg-node" x="250" y="210" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="266" y="233">Desktop B (library)</text>
+  <text class="dg-txt-s" x="266" y="251">edits offline, base v7</text>
+  <rect class="dg-good" x="510" y="30" width="190" height="56" rx="8"/>
+  <text class="dg-txt" x="526" y="53">commit(base=7): OK</text>
+  <text class="dg-txt-s" x="526" y="71">current becomes v8</text>
+  <rect class="dg-bad" x="510" y="130" width="190" height="50" rx="8"/>
+  <text class="dg-txt" x="526" y="151">commit(base=7): 409</text>
+  <text class="dg-txt-s" x="526" y="168">current is 8, not 7</text>
+  <rect class="dg-node-alt" x="480" y="215" width="228" height="66" rx="8"/>
+  <text class="dg-txt-s" x="494" y="238">new file: thesis (B's conflicted</text>
+  <text class="dg-txt-s" x="494" y="254">copy 2026-08-14).docx</text>
+  <text class="dg-txt-s" x="494" y="270">both versions survive</text>
+  <line class="dg-edge" x1="140" y1="130" x2="250" y2="65" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="140" y1="165" x2="250" y2="230" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="58" x2="510" y2="58" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="240" x2="530" y2="160" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="600" y1="180" x2="600" y2="215" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>The base-version compare-and-swap turns "two people edited concurrently" from a silent overwrite into a detected fork. The reject path creates work for a human; the accept path would have destroyed some.</figcaption>
+</figure>
+
+<p>One honest simplification to flag to the interviewer: I'm using a plain base-version integer, not a version vector. Version vectors — one counter per device, so you can order any two versions or prove them concurrent — are necessary when there's no single authority, e.g. peer-to-peer sync or multi-master replication. Here the metadata shard is the single serializer for its namespace, so "does current still equal base?" answers the only question that matters, with one integer. Simpler machine, same guarantee — as long as the metadata DB stays single-writer per namespace, which I've made a load-bearing property and will name again under failure modes.</p>
+
+<p>Edge policies, stated fast because the interviewer will probe them: edit-vs-delete conflict → the edit wins and the file resurrects (deleting content someone is actively editing is the destructive guess; trash makes real deletes recoverable anyway). Concurrent renames → one wins by CAS, the other becomes a second name conflict-copied the same way. Two devices creating the same path independently → first commit wins, second forks. One policy generates all of these: <strong>when in doubt, keep both; never destroy content on a guess.</strong></p>
+
+<div class="box story"><div class="box-tag">War story — rewriting the sync engine, Dropbox 2020</div>
+<p>How hard is this state machine really? Dropbox's original sync engine ("Sync Engine Classic," ~2007) accumulated a decade of edge cases — shared folders, selective sync, case-insensitive filesystems, offline forks — until its own engineers described it as nearly impossible to reason about or extend. In 2020 they shipped Nucleus, a ground-up rewrite in Rust, and the published design centers on exactly the concept this deep dive is built on: the client keeps <em>three trees</em> — the Remote Tree (server's latest state), the Local Tree (what's on disk), and the Synced Tree (the last state both sides agreed on — the recorded base). Diff Remote against Synced: that's what the server changed. Diff Local against Synced: that's what you changed. Both differ for the same node: that's a conflict, detected structurally rather than guessed. They validated the engine with randomized simulation testing — millions of generated offline/online interleavings replayed against the state machine, hunting for any sequence that loses a file. When a company rewrites the heart of a 700-million-user product mostly to make <em>this</em> logic provable, believe them about where the crux is.</p>
+</div>
+
+<h2>Deep dive 3: version history is free — until the garbage collector races an upload</h2>
+
+<p>Version history and trash cost almost nothing to build in this design, and that's worth saying in the interview: manifests are immutable, so every version of every file is already a frozen snapshot — a list of hashes. "Restore Tuesday's version" = commit Tuesday's manifest as the new current. Trash = keep the file row, flagged, for 30 days. No copies made, ever, because blocks are shared between versions by reference.</p>
+
+<p>The bill arrives as growth: old versions pin blocks forever unless something deletes them. So: each block carries a <strong>refcount</strong> — how many live manifests reference it. Prune a version past retention → decrement its blocks. Refcount zero → the block is garbage. Delete it, reclaim an exabyte-scale storage bill's worth of dead bytes over time. Simple.</p>
+
+<p>Except refcount-zero-then-delete has a race that causes <em>silent data loss</em>, and spotting it unprompted is a strong senior signal. Recall the upload flow: <code>check</code> says "block <code>h</code> already exists, don't send it." The client obediently doesn't. Between that answer and the client's <code>commit</code> — seconds, or hours if the laptop lids shut — the last other reference to <code>h</code> gets pruned, refcount hits zero, GC deletes <code>h</code>. The commit then lands, validates… or worse, doesn't validate, and now a live manifest points at bytes that no longer exist. The file corrupts on next download, discovered weeks later.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="GC race: check says block exists, GC deletes it at refcount zero, then the commit references a dead block">
+  <text class="dg-txt-s" x="20" y="30">Client</text>
+  <line class="dg-edge" x1="70" y1="25" x2="700" y2="25"/>
+  <rect class="dg-node" x="90" y="45" width="180" height="46" rx="8"/>
+  <text class="dg-txt-s" x="104" y="64">check(h): "exists"</text>
+  <text class="dg-txt-s" x="104" y="80">client skips upload</text>
+  <rect class="dg-bad" x="480" y="45" width="200" height="46" rx="8"/>
+  <text class="dg-txt-s" x="494" y="64">commit(manifest with h)</text>
+  <text class="dg-txt-s" x="494" y="80">points at deleted bytes!</text>
+  <text class="dg-txt-s" x="20" y="140">GC</text>
+  <line class="dg-edge" x1="70" y1="135" x2="700" y2="135"/>
+  <rect class="dg-bad" x="290" y="150" width="160" height="46" rx="8"/>
+  <text class="dg-txt-s" x="304" y="169">refcount(h) = 0</text>
+  <text class="dg-txt-s" x="304" y="185">delete h</text>
+  <line class="dg-edge" x1="180" y1="91" x2="180" y2="150" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="370" y1="150" x2="370" y2="100" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="370" y1="100" x2="480" y2="68" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="90" y="230">Fix: check() grants a lease pinning h; GC deletes only blocks at refcount 0 whose</text>
+  <text class="dg-txt-s" x="90" y="248">grace window (&gt; max lease) has expired, after re-checking the count. Delete late, never early.</text>
+</svg>
+<figcaption>The dedup answer "already exists" is a promise the GC must be forbidden to break. Same shape as every fencing problem: two actors, one resource, and a stale belief.</figcaption>
+</figure>
+
+<p><strong>The fix is a lease plus a grace period — fencing logic (p2c03) wearing a GC hat.</strong> A <code>check</code> answer of "exists" writes a short-lived lease pinning that hash (say 24 hours, matching the upload session TTL); commit renews or consumes it. And GC never deletes at the moment refcount hits zero: it marks the block a candidate, waits a grace window strictly longer than any lease can live, re-verifies the count and lease table, then deletes. Two-phase, deliberately slow. The deep principle to say out loud: <strong>in storage systems, deleting late is an efficiency bug; deleting early is data loss. Every tie breaks toward late.</strong> The same grace-window sweep also mops up orphan blocks from crashed uploads — one mechanism, both messes.</p>
+
+<h2>Failure modes and operations</h2>
+
+<p><strong>What breaks, and why it's mostly fine by construction:</strong></p>
+<ul>
+<li><strong>Client dies mid-upload.</strong> Manifest-last means nothing visible happened. Retry re-runs <code>check</code>; only still-missing blocks travel. Orphans → GC.</li>
+<li><strong>Commit response lost after commit applied.</strong> Client retries commit with the same base version and content — the server sees the version already exists with identical manifest and returns success idempotently (p2c02). Commits must be idempotent on (namespace, path, base, manifest hash); say it, because interviewers ask.</li>
+<li><strong>Notifier down.</strong> Sync degrades to periodic polling of <code>changes</code> — latency grows from seconds to minutes, nothing is lost, cursors don't care. Graceful degradation was designed in, not bolted on.</li>
+<li><strong>Metadata shard fails over.</strong> Single-writer-per-namespace is our correctness anchor, so failover uses synchronous replication within the shard and fencing on the new primary — a stale old primary accepting one commit breaks the CAS guarantee, which is the one thing this design cannot survive.</li>
+</ul>
+
+<p><strong>The scaling bottleneck is the metadata DB, and I'd say so before being asked.</strong> Blob storage scales flat — immutable content-addressed blocks shard perfectly by hash. The metadata plane is where the pressure lands: 100M daily devices × checks, commits, cursor pulls. Shard by <code>namespace_id</code>: every row a commit touches lives on one shard, so the CAS transaction never crosses shards, and a shared folder — its own namespace — lands wholly on one shard too. The hot-partition risk (p2c06) is the 10,000-employee company's shared namespace: every commit fans out to 10,000 cursors. Mitigations in order: cache journal tails aggressively (fan-out is read-heavy and identical for all listeners), batch notifications (coalesce N changes in a second into one poke), and only then consider splitting monster namespaces.</p>
+
+<p><strong>At 10x</strong> (a billion devices): the notifier's held connections and the journal fan-out melt first — that tier goes cell-based (p2c05). Metadata shards split further; namespace-sharding already gave us the clean cut lines. The blob store mostly just buys more disks. And dedup ratio becomes a board-level number: at 40&nbsp;EB logical, each percentage point of dedup is real money.</p>
+
+<p><strong>What I'd watch on the dashboard</strong> — the four numbers that describe this system's health: <em>sync lag</em> (commit → other-device-applied, p95 — the product promise in one metric); <em>conflict rate</em> (a step change means a client bug is mis-detecting bases, not that users suddenly got collaborative); <em>dedup ratio and bytes-per-edit</em> (a regression means a chunking bug is quietly multiplying our storage and bandwidth bills); <em>journal/notifier lag and 409 rate per namespace</em> (hot-partition early warning). Rollouts: the sync client ships staged (1% → 10% → all) with the protocol versioned, because the scariest deploy in this company is a client bug that mass-produces wrong manifests — server-side validation and the version-history escape hatch are the blast-radius limiters.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>How interviewers actually probe this design once it's on the board:</p>
+<ul>
+<li>"Two devices edit the same file offline. Walk me through <em>exactly</em> what happens when each comes online — every message, every state." (They want the CAS at commit and the conflicted-copy fork, step by step. Hand-waving 'we detect the conflict' fails here.)</li>
+<li>"Your check call said the block exists, so the client skipped the upload. What could make that answer a lie by commit time?" (The GC race. Knowing your own dedup answer is a promise that must be leased is the depth being tested.)</li>
+<li>"Why not merge the two versions automatically? Git does." (Git merges line-structured text and <em>still</em> punts conflicts to a human. Arbitrary binaries have no merge semantics — the honest system forks and tells the user.)</li>
+<li>"A 10,000-person company puts everything in one shared folder. What melts first?" (Journal fan-out on one hot namespace shard — and they want your mitigation ladder, not just the diagnosis.)</li>
+<li>"A user says sync is 'stuck.' First three things you look at?" (Their cursor vs journal head, the notifier connection, and the 409/commit-retry loop for their namespace — an answer that shows you'd actually operate this.)</li>
+</ul>
+</div>
+
+<h2>The committed choices, priced</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Why</th><th>What it costs</th></tr></thead>
+<tbody>
+<tr><td>Metadata plane / data plane split; presigned direct block upload</td><td>Two workloads with opposite needs; bytes never transit app servers; data plane swappable (Magic Pocket)</td><td>Two systems to operate; client is smarter and therefore buggier</td></tr>
+<tr><td>Fixed 4&nbsp;MB blocks over content-defined chunking</td><td>Predictable offsets, cheap CPU, covers in-place/append edits — most real edits</td><td>Insert-heavy files re-upload from the edit point onward; CDC held as a measured upgrade</td></tr>
+<tr><td>Client-visible dedup scoped per account; cross-account dedup only inside the storage layer</td><td>Hash never becomes a bearer token (Dropship); no "does anyone store this file?" oracle; storage savings fully retained</td><td>First upload of a popular file pays full bandwidth per account</td></tr>
+<tr><td>Base-version CAS at commit; conflicted copy on failure; no LWW, no auto-merge</td><td>Detects concurrency exactly; preserves both humans' work; matches the durability promise</td><td>Users see ugly duplicate files and must merge by hand</td></tr>
+<tr><td>Metadata in sharded SQL, sharded by namespace</td><td>Commit CAS is a single-shard transaction; shared folders stay co-located</td><td>Giant shared namespaces become hot shards needing cache/batch mitigation</td></tr>
+<tr><td>Refcount GC with leases + grace window</td><td>Closes the check/GC race; also sweeps orphan blocks</td><td>Dead bytes linger for the grace period — paid storage for safety</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c07-f1">
+<p class="fey-prompt">A junior asks: "Why does Dropbox make those annoying 'conflicted copy' files instead of just merging, and how does it even know a conflict happened?" Explain in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Every edit you sync carries a note saying which version it was based on, and the server only accepts the edit if that's still the newest version — like "I'm updating draft 7" being rejected because someone already made draft 8. When that rejection happens, the server has proof that two people edited the same starting point without seeing each other's work: a real conflict, not a guess. Now, most files are things like .docx or .xlsx — binary formats where smashing two versions together byte-by-byte produces a corrupted file, so automatic merging isn't cautious, it's impossible to do safely. Picking a winner by timestamp is worse: whoever synced last would silently erase the other person's work, and they'd only find out when the paragraph they wrote is just gone. So Dropbox does the only honest thing — it keeps both versions and names the second one "conflicted copy" with the device and date, so a human can merge with full information. The file is annoying precisely because it's evidence the system refused to destroy someone's work quietly.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Now add:</strong> camera-roll backup from phones — millions of users, each with tens of thousands of small photos, on batteries and metered connections. What in the design strains, and what do you change?</p></div>
+<details><summary>Answer</summary><p>The strain is metadata, not bytes: a 3&nbsp;MB photo is one block, so blob storage is easy, but 30,000 photos = 30,000 file rows, manifests, and journal entries — per-file commits would hammer the metadata shard and drain the battery with radio wake-ups. Changes: batch commits (one metadata transaction covering hundreds of new files), delta sync stops mattering (photos never get edited in place — write-once), dedup stays valuable (the same photo shared through five apps), and the client scheduler becomes a real component: upload on Wi-Fi + charging by default. Small-file-heavy workloads can also pack many tiny files' bytes into shared container blocks to keep blob-store object counts sane. The core insight: this workload flips the system from bandwidth-bound to metadata-QPS-bound, so the optimizations move planes.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>10x the file size:</strong> a video-production team syncs 500&nbsp;GB project files. Walk through where the current design creaks, number by number.</p></div>
+<details><summary>Answer</summary><p>500&nbsp;GB / 4&nbsp;MB = 125,000 blocks. The check call now carries 125K hashes (~4&nbsp;MB of hashes — page it); the manifest is similarly huge (store it chunked, or as a Merkle tree so two versions can be diffed without reading 125K entries). Upload time at 100&nbsp;Mbps is ~11 hours, so the upload session and dedup leases must survive sleeps and IP changes for days — session TTLs and the GC grace window must stretch accordingly. The commit CAS itself doesn't care about file size — that's the payoff of manifest-last. Consider larger blocks (16–64&nbsp;MB) for huge files to cut per-block overhead 4–16x, at the cost of coarser dedup and delta granularity — a per-file-size-tier block size is a reasonable committed answer.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Requirement flip:</strong> the PM wants Google-Docs-style live co-editing inside this system. What survives from your design and what must be rebuilt?</p></div>
+<details><summary>Answer</summary><p>Almost nothing on the write path survives, and saying so is the right answer. This design syncs <em>opaque files</em> with whole-version granularity: conflicts are detected at commit and resolved by forking, on a timescale of seconds to days. Live co-editing needs <em>operation</em>-granularity sync — keystrokes as operational transforms or CRDT updates (p2c04) — flowing through a server that understands the document's structure, with conflicts merged in milliseconds, automatically, because the ops are designed to commute. The blob store, sharing/ACL model, and version-snapshot machinery survive as the persistence layer underneath. This is why Dropbox built Paper as a separate product rather than a feature of file sync: same company, different machine, because "converge two offline binaries" and "merge concurrent keystrokes" are different problems that only sound alike.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Requirement flip:</strong> a new enterprise tier demands end-to-end encryption — the server may never see plaintext. Which parts of your design die, and what's your least-bad rescue?</p></div>
+<details><summary>Answer</summary><p>Cross-account dedup dies cleanly: encrypting the same block under different user keys yields different ciphertexts, so identical files stop deduplicating across accounts — the storage economics from the estimation take the hit, and you should quote it. Per-account dedup and delta sync can survive: the client encrypts per-block with an account key, and since the client sees plaintext it still computes hashes and diffs before encrypting. The tempting rescue — convergent encryption, deriving the key from the content hash so identical plaintexts encrypt identically and dedup revives — reintroduces the Dropship-style oracle: anyone can test whether a specific known file exists in the store. Least-bad committed answer: E2E tier = per-account dedup only, priced accordingly; the conflict machinery is untouched because CAS and manifests never needed plaintext.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Estimation drill:</strong> your notifier tier holds one long-poll connection per active device. At 100M daily-active devices with a 60-second poll cycle, size the tier — and name the failure mode that dwarfs steady state.</p></div>
+<details><summary>Answer</summary><p>Steady state is mild: ~100M held connections (mostly idle — a tuned server holds ~1M mostly-idle connections, so ~100–150 machines with headroom) and 100M/60 ≈ 1.7M polls/sec of trivial "anything new?" checks. The killer is <em>synchronized reconnection</em>: a notifier-tier deploy, a regional network blip, or a mobile-carrier hiccup disconnects tens of millions of devices that all reconnect at once — a self-inflicted thundering herd 100x steady state, which also stampedes the changes endpoint behind it. Defenses: client reconnect jitter (randomized backoff spreading reconnects over minutes), connection draining on deploys, and admission control at the edge (p2c07). The senior tell is naming the herd unprompted — steady-state math on this tier is the easy 20%.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Dropbox is a correctness problem disguised as a storage problem: the crux is making offline copies converge without losing anyone's work.</li>
+<li>Split the machine into a small strongly consistent metadata plane and a huge immutable content-addressed data plane; bytes travel directly between client and blob store via presigned URLs.</li>
+<li>Files become manifests — ordered lists of 4&nbsp;MB block hashes — so dedup, delta sync, resumable uploads, and free version snapshots all fall out of one representation.</li>
+<li>The manifest commit is the linearization point: everything before it is invisible and retryable, which makes crashes boring by construction.</li>
+<li>Detect conflicts with a base-version compare-and-swap and resolve them with conflicted copies — never LWW, never auto-merge of binaries, never destroy content on a guess.</li>
+<li>Dedup by hash is a security surface: a content hash proves knowledge of a name, not possession of bytes — scope client-visible dedup to the account (Dropship, 2011).</li>
+<li>Refcount GC races in-flight uploads; the fix is leases plus a grace window, because in storage systems deleting late is a cost and deleting early is data loss.</li>
+<li>The metadata DB is the scaling bottleneck — shard by namespace, watch the giant shared folder as your hot partition, and monitor sync lag, conflict rate, and dedup ratio as the system's vital signs.</li>
+</ul>
+</div>

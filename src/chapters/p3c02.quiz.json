@@ -1,0 +1,730 @@
+{
+  "chapter": "p3c02",
+  "items": [
+    {
+      "id": "p3c02-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "estimation",
+      "q": "Why does autocomplete handle roughly 10x more traffic than the search engine it serves?",
+      "options": [
+        {
+          "t": "Autocomplete responses are about 10x larger than search responses, so the bytes served are 10x too",
+          "correct": false,
+          "why": "Backwards — suggestion responses are tiny (ten short strings). The amplification is in request count, not response size."
+        },
+        {
+          "t": "Bots and scrapers hammer the suggest endpoint far more than the search endpoint",
+          "correct": false,
+          "why": "Bots exist but they're not the structural cause. The 10x comes from legitimate users: typing one search means passing through many prefixes, each firing a request."
+        },
+        {
+          "t": "Users retry suggestions when they load slowly",
+          "correct": false,
+          "why": "Retries add a little load, but the fan-out is inherent to typing itself — it happens even when every response is instant."
+        },
+        {
+          "t": "Every keystroke fires a query, so one typed search fans out into many requests",
+          "correct": true,
+          "why": "Right. A 20-character search generates a request stream as it's typed — even after debouncing, roughly 10 requests leave the client per search. Keystroke QPS = search QPS × requests-per-search."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "like-dies",
+      "q": "A B-tree index on the query column handles LIKE 'ca%' as a range scan. So why does the database approach still die?",
+      "options": [
+        {
+          "t": "The ORDER BY frequency forces scanning and sorting every row in the range, per keystroke",
+          "correct": true,
+          "why": "Exactly. The index returns rows in alphabetical order; you need the top 10 by popularity. That means fetch-everything-then-rank — millions of rows for short prefixes, which are also the hottest keys."
+        },
+        {
+          "t": "B-tree indexes can't match string prefixes at all",
+          "correct": false,
+          "why": "They can — a prefix is a range in sorted order, and the index walks it fine. The scan isn't the problem; the ranking after the scan is."
+        },
+        {
+          "t": "Relational databases fundamentally can't sustain request rates in the hundreds of thousands per second, no matter how cheap each query is",
+          "correct": false,
+          "why": "Databases serve very high QPS when each query is cheap. The issue is that this specific query does millions of rows of work, and no engine survives expensive work times a million requests a second."
+        },
+        {
+          "t": "The table would be too large to index",
+          "correct": false,
+          "why": "A few billion rows index fine. Size isn't the killer — per-request scan-then-rank work is."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "precompute",
+      "q": "What exactly does the production system precompute?",
+      "options": [
+        {
+          "t": "For every prefix, the top 5-10 completions, already ranked",
+          "correct": true,
+          "why": "Yes — the serving system is one giant read-only dictionary: prefix → pre-ranked top-K list. All ranking work happens at build time, so the read path is a single lookup."
+        },
+        {
+          "t": "The full list of every query matching each prefix, so any completion the user might want can be served from it",
+          "correct": false,
+          "why": "That would be millions of entries for short prefixes — enormous and useless, since only the top handful are ever shown. Store the answer, not the haystack."
+        },
+        {
+          "t": "A compressed copy of the search engine's document index",
+          "correct": false,
+          "why": "Autocomplete doesn't search documents at all — it suggests past queries. Its data comes from query logs, not the web index."
+        },
+        {
+          "t": "Per-user suggestion lists for every registered user",
+          "correct": false,
+          "why": "We explicitly scoped personalization out — per-user precomputation would mean billions of lists and would destroy shared caching. The precomputed data is global."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "serving",
+      "q": "Why must the prefix→top-K store live in RAM rather than on disk?",
+      "options": [
+        {
+          "t": "Disk data can't be sharded",
+          "correct": false,
+          "why": "Disk shards fine — databases do it everywhere. The constraint here is latency, not shardability."
+        },
+        {
+          "t": "After network costs, the server has ~10-20 ms of budget at up to a million requests/sec",
+          "correct": true,
+          "why": "Right. The 100 ms end-to-end budget is mostly eaten by network RTT, and the ~5 TB dataset fits comfortably across a RAM fleet — so memory serving is both necessary and affordable. Nothing on the hot path touches disk."
+        },
+        {
+          "t": "RAM is cheaper than disk at this scale",
+          "correct": false,
+          "why": "RAM is more expensive per byte. We pay for it because the latency budget demands it — a cost accepted, not a saving."
+        },
+        {
+          "t": "SSDs wear out quickly under read-heavy load at this request rate, so the fleet would need constant drive replacement",
+          "correct": false,
+          "why": "Reads barely wear SSDs (writes do). The reason is the latency and throughput math, not hardware endurance."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "edge-cache",
+      "q": "Why does CDN edge caching work unusually well for autocomplete?",
+      "options": [
+        {
+          "t": "Suggestion responses compress extremely well over the wire",
+          "correct": false,
+          "why": "They're already tiny — compression isn't the win. The win is shared demand for identical keys."
+        },
+        {
+          "t": "Everyone types through the same short prefixes, so a small set of keys covers a huge share of traffic",
+          "correct": true,
+          "why": "Exactly. You can't type 'cats' without requesting 'c' and 'ca' first — short prefixes are universal chokepoints, so edge hit rates are enormous. A short TTL (~60s) keeps trending data acceptably fresh."
+        },
+        {
+          "t": "Modern CDNs can run the ranking logic in edge workers, computing suggestions close to the user instead of at the origin",
+          "correct": false,
+          "why": "No ranking runs at request time anywhere — that's the whole design. The CDN just caches finished responses."
+        },
+        {
+          "t": "It removes the need for backend shards entirely",
+          "correct": false,
+          "why": "The long tail of prefixes still misses the edge, and someone must fill the cache. The CDN is the top of a funnel, not a replacement for the origin."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "client",
+      "q": "What is debouncing in the autocomplete client?",
+      "options": [
+        {
+          "t": "Waiting for a short pause (~50-100 ms) in typing before sending a request",
+          "correct": true,
+          "why": "Right — a fast typist would otherwise fire a request per ~80 ms keystroke for prefixes they've already typed past. Debounce roughly halves backend traffic; it's a client behavior that shrinks the server fleet."
+        },
+        {
+          "t": "Retrying failed suggestion requests with exponential backoff so transient network errors never reach the user",
+          "correct": false,
+          "why": "That's retry policy. Debouncing is about not sending requests in the first place while the user is mid-burst."
+        },
+        {
+          "t": "Deduplicating identical responses before rendering them",
+          "correct": false,
+          "why": "Response handling matters (cancel-stale does that job), but debouncing acts on the request side, before anything is sent."
+        },
+        {
+          "t": "Rate limiting each user server-side",
+          "correct": false,
+          "why": "Rate limiting is a server defense. Debouncing lives in the client and helps the user too — fewer wasted requests racing each other."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "pipeline",
+      "q": "In the dual pipeline, what are the batch layer and streaming layer each responsible for?",
+      "options": [
+        {
+          "t": "Batch: writes to shards. Streaming: reads from shards",
+          "correct": false,
+          "why": "Both are on the write/build side; neither serves reads. The split is by time horizon — deep history versus the last few minutes."
+        },
+        {
+          "t": "Batch: the daily top-K rebuild from weeks of history. Streaming: a small trending overlay from ~5-minute windows",
+          "correct": true,
+          "why": "Yes — the big oven and the counter oven. Batch does the thorough, cheap, offline ranking work with decay and filtering; the tiny streaming overlay catches breaking events between builds, merged at read time."
+        },
+        {
+          "t": "Batch handles popular queries while streaming handles the rare long-tail ones",
+          "correct": false,
+          "why": "Both layers deal mostly with popular queries — rare queries get filtered out entirely. The split is recency, not popularity."
+        },
+        {
+          "t": "They're redundant copies of the same computation, kept in sync so either one can take over if the other fails",
+          "correct": false,
+          "why": "They compute different things over different windows. Losing the stream costs trending freshness; losing batch costs nothing immediately — serving runs on yesterday's snapshot."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "filtering",
+      "q": "Where are safe-search filters and blocklists applied, and why there?",
+      "options": [
+        {
+          "t": "At read time on every request, so a newly blocklisted term disappears immediately instead of waiting for the next build",
+          "correct": false,
+          "why": "That's paying a classifier cost ×1M QPS for identical data. Build-time filtering plus a tiny read-time suppression list for emergencies gets the same safety at ~zero serving cost."
+        },
+        {
+          "t": "In the client, keeping the servers simple",
+          "correct": false,
+          "why": "Client-side filtering ships the offensive strings to the device before hiding them — a privacy and safety failure. Filtered content should never leave the backend."
+        },
+        {
+          "t": "In the CDN configuration",
+          "correct": false,
+          "why": "CDNs cache responses; they don't understand suggestion content. Filtering needs to happen where the lists are built."
+        },
+        {
+          "t": "At build time — one check per build replaces the same check a million times a second",
+          "correct": true,
+          "why": "Right — never do per-request what you can do per-build. The top-K lists ship pre-cleaned. Only the tiny emergency suppression list is checked at read time, against ~10 strings."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "availability",
+      "q": "All replicas of one prefix shard die. What should users typing those prefixes experience?",
+      "options": [
+        {
+          "t": "An error message explaining that suggestions are temporarily unavailable",
+          "correct": false,
+          "why": "Never — autocomplete is an enhancement, and an error banner makes a non-event feel like an outage. Absence is the correct failure mode."
+        },
+        {
+          "t": "The request waits until a replica recovers",
+          "correct": false,
+          "why": "Waiting turns a data gap into a latency problem — the one thing this product must never have. A slow search box feels broken; an empty dropdown doesn't."
+        },
+        {
+          "t": "Stale suggestions from the CDN if cached, else an empty list, returned fast",
+          "correct": true,
+          "why": "Exactly the availability-over-freshness commitment: degrade silently, never slowly. Serve-stale-on-error at the edge covers hot prefixes; the rest quietly show nothing while search itself is untouched."
+        },
+        {
+          "t": "Suggestions computed on the fly from the search index — a slower fallback beats showing users nothing at all",
+          "correct": false,
+          "why": "A fallback that does the expensive work we designed the whole system to avoid would collapse under exactly the load that finds it. Fallbacks must be cheaper than the primary, not costlier."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q10",
+      "level": 2,
+      "type": "mcq",
+      "tag": "hot-prefix",
+      "q": "Your shards are hash-partitioned by prefix, yet one shard runs at 40x median load. Most likely cause and best fix?",
+      "options": [
+        {
+          "t": "The hash function is biased — switch to a better one",
+          "correct": false,
+          "why": "Standard hashes spread distinct keys near-uniformly. The skew isn't in key placement — it's that a few individual keys carry monstrous traffic. A new hash just moves the hot key to a different victim shard."
+        },
+        {
+          "t": "It owns a hot short prefix like \"c\" — replicate short prefixes to every node and over-replicate hot shards",
+          "correct": true,
+          "why": "Right. Hashing spreads keys, not traffic; every session types through single characters, so those few keys are colossal. All two-character prefixes total a few MB — give every node a local copy, and add replicas for remaining hot shards. Part 2's celebrity problem, on a text box."
+        },
+        {
+          "t": "Add more shards so the keyspace spreads more thinly — with enough shards no single machine holds enough keys to overload",
+          "correct": false,
+          "why": "Resharding redistributes keys, but a single hot key still lands entirely on one shard. When one key exceeds one machine's capacity, only replication of that key helps."
+        },
+        {
+          "t": "Move the hot shard to bigger hardware",
+          "correct": false,
+          "why": "A stopgap that buys one hardware generation of headroom. The load pattern is permanent and predictable — architecture (replication + local copies) should absorb it, not procurement."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "trending",
+      "q": "A major public figure dies at 14:00. By 14:03 millions are typing their name, which yesterday's build barely ranks. Which mechanism gets the name into suggestions, and by when?",
+      "options": [
+        {
+          "t": "The streaming overlay — windowed counts flag the spike and push it to serving nodes within ~5 minutes",
+          "correct": true,
+          "why": "This is exactly what the speed layer exists for. Sketch-based counters see the rate explosion, the query enters the small trending overlay, and every node merges it into results at read time. The daily batch layer won't know until tonight."
+        },
+        {
+          "t": "The CDN — its 60-second TTL means edge caches worldwide refetch the answer every minute, pulling the new name in automatically",
+          "correct": false,
+          "why": "The TTL controls how quickly origin changes propagate — but the origin must change first. Until the overlay updates, the CDN just refreshes the same stale answer faster."
+        },
+        {
+          "t": "An emergency batch rebuild triggered by the traffic alarm",
+          "correct": false,
+          "why": "A full rebuild takes hours and shuffles terabytes — it can't be your minutes-scale path. That's precisely why the always-on streaming layer exists, so nothing 'emergency' is needed."
+        },
+        {
+          "t": "Nothing — suggestions stay stale until tomorrow's build, and the design accepts that",
+          "correct": false,
+          "why": "We accepted staleness for ordinary ranking drift, not for trending — the trending requirement was functional, and the streaming layer is its implementation."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "client",
+      "q": "Users report suggestions 'flickering backward': typing \"cat\" briefly shows results for \"ca\" after showing results for \"cat\". What's the bug?",
+      "options": [
+        {
+          "t": "The CDN is serving stale entries",
+          "correct": false,
+          "why": "A stale entry would show old completions for the right prefix — not completions for a shorter prefix arriving late. The symptom is ordering, which points at the client's response handling."
+        },
+        {
+          "t": "The debounce window is too short, so overlapping requests pile up in flight; lengthening the window will restore rendering order",
+          "correct": false,
+          "why": "A short debounce raises the odds of the race but doesn't cause it — even well-spaced requests can arrive out of order, and a longer debounce just makes the UI feel laggy. Only response discipline fixes ordering."
+        },
+        {
+          "t": "Responses race: the \"ca\" reply landed after the \"cat\" reply, and the client renders whatever arrives last",
+          "correct": true,
+          "why": "Exactly — nothing guarantees network ordering. The fix: abort in-flight requests on new keystrokes and tag responses with their prefix, dropping any that don't match the current input. A distributed-systems race living inside a text box."
+        },
+        {
+          "t": "Two shards returned conflicting data for the query",
+          "correct": false,
+          "why": "Each prefix is one key on one shard; shards can't conflict about different prefixes. The interleaving happens on the wire and in the client, not in storage."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "ops",
+      "q": "Client-measured p99 doubled in an hour; server-side latency is flat at 4 ms. Which dashboard do you open first?",
+      "options": [
+        {
+          "t": "Shard CPU and memory graphs, to catch a node quietly running out of headroom before it starts failing requests",
+          "correct": false,
+          "why": "The 4 ms flat server latency already exonerates the shards. Starting there is looking under the streetlight because the light is better."
+        },
+        {
+          "t": "Kafka consumer lag on the pipeline",
+          "correct": false,
+          "why": "Pipeline lag makes suggestions stale, never slow — serving is decoupled from the pipeline by design. Freshness bugs and latency bugs have different suspects."
+        },
+        {
+          "t": "CDN hit rate by region",
+          "correct": true,
+          "why": "Server-fine-but-user-slow means the problem lives between user and origin. The classic culprit is a cold edge cache — a cache-key change, a zeroed TTL, or a POP failover — and a regional hit-rate cliff matching the p99 timeline closes the case fast."
+        },
+        {
+          "t": "The batch job's last run status",
+          "correct": false,
+          "why": "A failed build means serving runs on yesterday's snapshot at full speed. It cannot move client latency."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "rollout",
+      "q": "Tonight's snapshot has a subtle ranking bug that slipped past offline validation and is now on one canary replica. What does the well-designed system do next?",
+      "options": [
+        {
+          "t": "Patch the ranking values in place on the live canary shard so corrected data keeps serving while the build is repaired",
+          "correct": false,
+          "why": "In-place mutation of serving data is the thing the immutable-snapshot design exists to forbid — it creates unreproducible state and races with reads. Fix the build, not the artifact."
+        },
+        {
+          "t": "Promote anyway — ranking bugs are cosmetic and tomorrow's build will fix it",
+          "correct": false,
+          "why": "A known-bad artifact promoted fleet-wide is a choice you can't un-make quickly if 'subtle' turns out worse than it looked (blocklist misses, garbage top hits). Promotion gates exist to be respected precisely when it's tempting not to."
+        },
+        {
+          "t": "Roll back the serving binary to last week's release",
+          "correct": false,
+          "why": "The binary didn't change — the data did. Data deploys need their own rollback machinery, which is exactly what versioned snapshots provide."
+        },
+        {
+          "t": "Halt promotion; the fleet keeps the previous snapshot, and the canary reloads it from disk",
+          "correct": true,
+          "why": "This is why snapshots are immutable and kept N-back: rollback is a file reload, not a rebuild. The canary existed to catch exactly this — blast radius was one replica, and recovery costs minutes."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "estimation",
+      "q": "Memory is over budget and you must cut the prefix store significantly without gutting quality. Which lever is best?",
+      "options": [
+        {
+          "t": "Store top-3 instead of top-10 completions per prefix",
+          "correct": false,
+          "why": "This cuts the visible product (a 3-item dropdown) for a modest memory win — the completions are only part of each entry's cost. You're spending user experience to save the cheapest resource."
+        },
+        {
+          "t": "Drop the score fields to save bytes per entry",
+          "correct": false,
+          "why": "Scores are a few bytes per entry and the trending merge needs them at read time. Marginal savings, real functional loss."
+        },
+        {
+          "t": "Cap stored prefixes at ~10 characters; clients filter a longer stored list for rarer, longer prefixes",
+          "correct": true,
+          "why": "Traffic past 10 characters is a trickle, and completions for long prefixes are largely derivable by filtering the 10-char entry's list client-side. Big memory cut, invisible quality cost — the lever the data's shape offers you."
+        },
+        {
+          "t": "Tier the store: keep hot prefixes in RAM and demote the cold half to SSD, promoting entries back on access like any cache",
+          "correct": false,
+          "why": "Tempting, and a real design exists here — but 'cold' prefixes still get keystrokes inside the tight budget, and now you've got two storage tiers, promotion logic, and a p99 cliff to manage. The prefix-cap gets similar savings for near-zero complexity."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "freshness",
+      "q": "Product asks: \"Can trending suggestions appear within 10 seconds instead of ~5 minutes?\" The senior-calibrated answer starts with:",
+      "options": [
+        {
+          "t": "\"Yes — shrink the stream windows to seconds and push overlays continuously; the backend can absolutely move that fast if we provision for it\"",
+          "correct": false,
+          "why": "Technically true and incomplete in the way that matters: it prices the backend work while ignoring that the client cache and 60-second CDN TTL will still smear staleness over a minute. Quoting a speedup users can't see isn't senior."
+        },
+        {
+          "t": "\"No — batch systems can't move that fast\"",
+          "correct": false,
+          "why": "The batch layer isn't even involved — trending is the stream job's territory, and streams can absolutely run 10-second windows. Wrong mechanism, wrong refusal."
+        },
+        {
+          "t": "\"Freshness is a chain — overlay period + CDN TTL + browser cache — so backend speedups are invisible until the TTLs also shrink, which costs origin traffic. Here's the number the user would actually see.\"",
+          "correct": true,
+          "why": "The user sees the chain's slowest visible link. Reasoning through the whole chain — and pricing the TTL change that would make the backend work visible — is the difference between answering the ticket and answering the question."
+        },
+        {
+          "t": "\"We'd need to migrate from lambda to kappa architecture first\"",
+          "correct": false,
+          "why": "Architecture-name-dropping that doesn't touch the actual bottleneck. The lambda/kappa choice is about pipeline code duplication, not about how fast an overlay can reach serving nodes."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "scoping",
+      "q": "Interviewer: \"Now add personalization — my own recent searches should rank first.\" Which response best protects your architecture?",
+      "options": [
+        {
+          "t": "Store per-user suggestion lists in the shards, keyed by user+prefix",
+          "correct": false,
+          "why": "Billions of users × their prefixes explodes storage by orders of magnitude, and every entry is cold. This is the brute-force answer that shows the cache math wasn't internalized."
+        },
+        {
+          "t": "Keep the server global; the client stores the user's history and merges it on top of fetched results",
+          "correct": true,
+          "why": "The user's history is small, private, and already on their device — the one cache that's per-user for free. The global request stays CDN-cacheable, so the layer carrying most traffic survives. Personalization is shallow, and you say that cost out loud."
+        },
+        {
+          "t": "Add the user ID to the request and re-rank server-side with a lightweight model — the standard way ranking systems personalize",
+          "correct": false,
+          "why": "The moment responses vary per user, CDN and shared-cache hit rates go to zero and origin traffic jumps ~10x. It's a buildable system — a much more expensive one, and proposing it casually without pricing the cache loss is the trap."
+        },
+        {
+          "t": "Decline: personalization was scoped out at the start of the interview",
+          "correct": false,
+          "why": "Scoping it out bought focus earlier; refusing the follow-up wastes the interviewer's deliberate probe. The senior move is showing where it bolts on and what it costs."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "pipeline",
+      "q": "The Kafka pipeline backs up for 6 hours. What do users experience, and what does that reveal about the design?",
+      "options": [
+        {
+          "t": "Nothing visible except trending going quiet — serving runs on already-delivered data",
+          "correct": true,
+          "why": "Right — and 'nothing happens when the pipeline dies' is the operational payoff of immutable-snapshot serving. Trending staleness is a warning-level page, not a 3am one. The read path has no runtime dependency on the write path."
+        },
+        {
+          "t": "Suggestion requests start timing out as the backlog grows, since the serving path reads through Kafka to reach fresh data",
+          "correct": false,
+          "why": "Serving never reads from Kafka — it reads snapshots and overlays already delivered. A pipeline backlog cannot generate serving timeouts; conflating the two paths is the misconception this design specifically kills."
+        },
+        {
+          "t": "Suggestions gradually disappear as the serving data expires",
+          "correct": false,
+          "why": "Snapshots don't expire — a shard happily serves yesterday's data forever. Staleness accumulates; availability doesn't degrade."
+        },
+        {
+          "t": "The system automatically falls back to live database queries",
+          "correct": false,
+          "why": "There is no database fallback — by design. The expensive path we eliminated can't be a fallback, because it would collapse under exactly the traffic that reaches it."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q19",
+      "level": 3,
+      "type": "mcq",
+      "tag": "crux",
+      "q": "Sixty seconds into the interview, which sentence shows you've found this problem's crux?",
+      "options": [
+        {
+          "t": "\"The hard part is the trie — billions of queries make a massive tree, so I'll design the node structure and memory layout carefully before anything else\"",
+          "correct": false,
+          "why": "The trie is the textbook's souvenir, not the fire. Fixating on the data structure — especially one production replaces with a flat table — signals a memorized answer rather than a diagnosed problem."
+        },
+        {
+          "t": "\"Every keystroke is a query — ~10x search's QPS on a tighter budget — so nothing can be computed at read time. I'll design around precomputed answers.\"",
+          "correct": true,
+          "why": "That's the crux: the amplification math plus its consequence, committed early. Everything else — flat table, shards, CDN, dual pipeline — falls out of this one sentence, and announcing it in the first minute frames the whole interview."
+        },
+        {
+          "t": "\"The hard part is storage — billions of queries is a lot of data\"",
+          "correct": false,
+          "why": "It's ~5 TB — a modest RAM fleet, and the estimation proves it quickly. Calling the tractable dimension the hard one suggests the numbers weren't run."
+        },
+        {
+          "t": "\"The hard part is ranking quality — we should discuss the ML models before the boxes\"",
+          "correct": false,
+          "why": "Ranking matters, but frequency-plus-decay is accepted as fine here, and ML at request time re-imports the compute the latency budget forbids. The crux of this question is systems, and steering to models dodges it."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "commit",
+      "q": "You must commit: trie with cached top-K at nodes, or flat hash table of prefix→top-K? The senior answer is:",
+      "options": [
+        {
+          "t": "The trie — it's the canonical autocomplete structure, it shares prefix storage so memory stays manageable, and interviewers expect to see it",
+          "correct": false,
+          "why": "Canonical in textbooks, and the memory saving is real — but 'how do you shard a tree?' has no good answer (subtree sharding = hot partitions), and that question decides the system at 5 TB. Choosing by canon over operations is the tell."
+        },
+        {
+          "t": "Both — the trie for lookups, with a hash table as a cache in front of it",
+          "correct": false,
+          "why": "The 'cache' would need to hold essentially everything (short prefixes dominate), at which point the trie behind it is dead weight with an ops bill. Two structures where one suffices is complexity without a payer."
+        },
+        {
+          "t": "Either works; at this scale the difference is implementation detail",
+          "correct": false,
+          "why": "The sharding story differs fundamentally — uniform-by-hash versus hot-subtrees — and sharding is the load-bearing wall here. 'Either works' on the load-bearing wall is the option-listing hedge that caps grades."
+        },
+        {
+          "t": "The flat table — uniform hash-sharding, one-hop lookups, trivial offline rebuilds — accepting ~2x memory over a trie",
+          "correct": true,
+          "why": "A commitment, three operational reasons, and the cost named without being asked. The trie shards by subtree (hello, hot partitions) and chases pointers; the table's extra RAM is the cheapest resource in the design. Paying a cheap cost to delete a hard problem is the senior trade."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Interviewer: \"Your suggestions can be a full day stale for non-trending queries. Defend that, or fix it.\" Best response:",
+      "options": [
+        {
+          "t": "Fix: move to hourly rebuilds — a middle ground that removes the staleness objection without touching the architecture",
+          "correct": false,
+          "why": "Caving instantly to pressure on a sound decision reads worse than the staleness does — it says your trade-offs are negotiable decorations, and it spends 24x compute freshening data the trending layer already covers."
+        },
+        {
+          "t": "Fix: extend the streaming layer to cover all queries, not just trending ones",
+          "correct": false,
+          "why": "Now the overlay is no longer tiny — it's the full dataset, streamed, which un-deletes the very problem the small-overlay design solved. The overlay's power came from its smallness."
+        },
+        {
+          "t": "Defend: \"Users can't tell fresh suggestions from stale ones anyway\"",
+          "correct": false,
+          "why": "Right conclusion, argued lazily — and false in general (trending is precisely where users can tell, which is why it got a fast path). The defensible claim is 'invisible for this query class,' with the class boundary named."
+        },
+        {
+          "t": "Defend: \"Non-trending popularity drifts over weeks, so a day's lag is invisible — and the staleness users could notice, breaking events, already has its own 5-minute path.\"",
+          "correct": true,
+          "why": "Staleness was priced per query class, and the visible class got the fast path. Defending a chosen trade-off with its reasoning — rather than reflexively 'fixing' whatever gets challenged — is what commit-and-justify means. Interviewers push on trade-offs to see if you own them."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "what-breaks",
+      "q": "Traffic goes 10x overnight. Which component genuinely changes shape, rather than just scaling out?",
+      "options": [
+        {
+          "t": "The serving shards — the flat hash-table design stops working and needs restructuring",
+          "correct": false,
+          "why": "The shards scale exactly linearly — add machines, rebalance the hash ring. That linearity was the reason for choosing flat-table-by-hash; if serving changed shape at 10x, the original choice was wrong."
+        },
+        {
+          "t": "The CDN — at 10x volume the edge tier saturates first, since it sits in front of everything and takes every keystroke",
+          "correct": false,
+          "why": "Opposite: edge caches get better under more traffic, because hot keys get hotter and hit rates rise. The funnel's top absorbs a growing share for free."
+        },
+        {
+          "t": "The stream counter — you switch from counting every event to sampling the log",
+          "correct": true,
+          "why": "Right, and the reasoning is the senior part: trending detection needs signal, not census, so a 1-in-100 sample preserves the product while cutting the stream job's load 100x. Knowing which component's approach (not just size) changes is what the 10x question probes."
+        },
+        {
+          "t": "The client — its debounce logic must be rewritten for the new load",
+          "correct": false,
+          "why": "Per-device behavior is independent of global traffic — each user still types at human speed. Client logic doesn't know or care how many other users exist."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "ops",
+      "q": "Legal demands a defamatory suggestion be gone in minutes, fleet-wide. Tonight's rebuild is 9 hours away. Commit to a mechanism.",
+      "options": [
+        {
+          "t": "Trigger an immediate emergency rebuild with the string removed, fast-tracking the snapshot through validation and canary so it ships within the deadline",
+          "correct": false,
+          "why": "Hours of shuffle to remove one string — the deadline is blown and the pipeline becomes an incident-response tool it was never designed to be. Rebuild speed should never gate takedown speed."
+        },
+        {
+          "t": "Push the string onto a small suppression list replicated to every node, checked at read time; purge the CDN key; remove properly at the next build",
+          "correct": true,
+          "why": "The overlay-distribution machinery already exists for trending — reuse it for suppression. Checking ten candidate strings against a small set costs nanoseconds, so the read-time-filtering rule bends without breaking: emergencies get the fast path, the build makes it permanent."
+        },
+        {
+          "t": "Ship the string to clients in a config flag so the apps filter it out",
+          "correct": false,
+          "why": "Client configs reach devices over hours-to-days, and old clients linger for months. Compliance can't ride the slowest deployment channel you own — and it ships the string to the device before hiding it."
+        },
+        {
+          "t": "Delete the entry from each serving shard's in-memory table by hand",
+          "correct": false,
+          "why": "Mutating immutable snapshots in place, on ~150 nodes, under time pressure — and the next snapshot load silently resurrects the string. Fighting your own design's invariants during an incident is how one incident becomes two."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Two candidates handle the latency requirement. A: \"I'll make the servers fast — memory store, no locks, ~1 ms responses.\" B: \"Server time is the small slice; the budget is mostly network. My design is a funnel — browser cache, then edge, then origin — and I'll measure p99 from the client.\" Who reads senior, and why?",
+      "options": [
+        {
+          "t": "A — sub-millisecond servers are the foundation; once the origin is fast, every layer above it inherits that speed",
+          "correct": false,
+          "why": "Fast servers are necessary and nearly free here (a RAM lookup is fast by construction), but layers above the origin don't 'inherit' speed — the network adds its cost regardless. Treating the solved slice as the battle is optimizing under the streetlight."
+        },
+        {
+          "t": "B — they located where the latency lives and designed the whole path, measuring what users experience",
+          "correct": true,
+          "why": "A optimizes the 4 ms they control and ignores the 60 ms they don't. B treats the budget end-to-end, spends effort where the milliseconds are, and instruments the number users feel. Owning the user-perceived metric is the senior tell."
+        },
+        {
+          "t": "Both equal — they describe the same architecture at different layers",
+          "correct": false,
+          "why": "They differ where it counts: A's framing yields a server dashboard that stays green while users suffer; B's yields client-measured p99 and a caching funnel. Same boxes, different understanding of the problem."
+        },
+        {
+          "t": "B, but only because mentioning measurement earns operational bonus points",
+          "correct": false,
+          "why": "The measurement follows from the insight, not the other way around. B's core claim — the budget is spent on the network, so the design must keep requests near the user — is the architectural judgment; client-side p99 just makes it observable."
+        }
+      ]
+    },
+    {
+      "id": "p3c02-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "commit",
+      "q": "You chose a lambda-shaped pipeline (batch + streaming) after Part 2 argued kappa is usually the better default. An interviewer calls out the inconsistency. Your best defense:",
+      "options": [
+        {
+          "t": "\"You're right — consistency matters more than preference; I'll collapse it into a single streaming path with replay so there's one codebase, as the default recommends\"",
+          "correct": false,
+          "why": "Replaying weeks of full-volume query logs to rebuild ranking makes recomputation enormously expensive, and heavy filtering fits batch naturally. Abandoning a sound choice at the first challenge signals the choice was never reasoned."
+        },
+        {
+          "t": "\"Lambda is what real autocomplete systems use in practice, so I'm following proven industry precedent here\"",
+          "correct": false,
+          "why": "Appeal to industry practice without the mechanism behind it — the interviewer asked why, and 'others do it' is borrowed authority, not reasoning. It also invites 'and why do they?', which you must answer anyway."
+        },
+        {
+          "t": "\"Kappa wins when two paths duplicate one computation. Mine compute different things — weeks of decayed ranking versus 5-minute spike detection — and the overlay is tiny, so lambda's maintenance sin mostly vanishes. Defaults are priors, not rules.\"",
+          "correct": true,
+          "why": "This shows the default was understood, not memorized: kappa's advantage targets duplicated computation, and this design's two paths genuinely differ. Knowing when a good default doesn't apply — and saying why in one breath — is the strongest form of commit-and-justify."
+        },
+        {
+          "t": "\"They're equivalent — lambda and kappa converge at this scale\"",
+          "correct": false,
+          "why": "They don't converge; they trade differently (code duplication versus replay cost), and this problem lands clearly on one side. Papering over a real distinction to escape a challenge reads as not knowing the distinction."
+        }
+      ]
+    }
+  ]
+}

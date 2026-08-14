@@ -1,0 +1,373 @@
+<p>It's 8:58am. You're on call for a fintech app with 100 million users. Marketing has scheduled a promo blast — "Flash sale! 40% off gold purchases" — to 40 million phones, going out at 9:00 sharp. At 9:00 the campaign fires. At 9:03, support tickets start arriving. Not about the sale. The tickets say: <em>"I can't log in. My OTP never came."</em></p>
+
+<p>You open the dashboard. The SMS queue has 3 million messages in it. Somewhere in the middle of that pile, behind hundreds of thousands of promo texts, sit a few thousand two-factor login codes — codes that expire in five minutes, for users who are staring at their screens right now. The users retry. Each retry generates <em>another</em> OTP into the same queue. The pile grows. Your notification system is working exactly as built, and it is locking your own customers out of their money.</p>
+
+<p>When an interviewer says "design a notification system," it sounds like a warm-up — take a message, send it to a phone, done. It is not a warm-up. It's a fan-out problem stapled to a priority problem stapled to a distributed-systems problem where the last hop runs on someone else's servers that throttle you, fail on you, and lie to you. That last part is the interesting part: this is the rare system where the final mile is <strong>infrastructure you do not control</strong>.</p>
+
+<h2>Requirements: pin the promises down</h2>
+
+<p>I'd scope it out loud like this. <strong>Functional:</strong> the system delivers notifications over four channels — mobile push (iOS and Android), SMS, email, and in-app (a bell-icon inbox). Any internal service can be a producer: the auth service sends OTPs, the order service sends "your order shipped," the marketing service sends campaigns. Users control preferences per category and per channel ("order updates: push yes, email no"), including quiet hours. Some notifications are scheduled for later. Out of scope: composing marketing campaigns, audience analytics dashboards, and the details of email content rendering — fair?</p>
+
+<p><strong>Non-functional — and these carry the design:</strong></p>
+
+<ul>
+<li><strong>Priority classes exist and are sacred.</strong> I'll commit to three: <strong>P0 critical</strong> (OTPs, security alerts, fraud warnings) delivered in under 30 seconds, end to end. <strong>P1 transactional</strong> ("order shipped," "you were mentioned") within 2 minutes. <strong>P2 bulk</strong> (marketing, digests) within hours, best effort. A P2 blast must never delay a P0 message. This is the requirement the cold open violated.</li>
+<li><strong>Never lose a P0.</strong> Once the auth service hands us an OTP, "we dropped it" is not an acceptable outcome. That means durable queues and at-least-once delivery.</li>
+<li><strong>No duplicates the user can blame us for.</strong> At-least-once means retries; retries mean the same notification can be attempted twice. We need deduplication so a retry doesn't buzz the phone twice.</li>
+<li><strong>Respect the user:</strong> preferences, quiet hours, and a rate cap — no user gets more than N bulk notifications a day, no matter how many campaigns marketing runs.</li>
+<li><strong>Scale:</strong> 100M users, and the load is spiky by nature — one event can address 40 million people at once.</li>
+</ul>
+
+<h2>Estimation: the real number is events × recipients</h2>
+
+<p>Here's the trap in estimating this system: counting <em>events</em>. Events are tiny. One marketing campaign is one event. The real unit of work is <strong>event × recipients</strong>, because every recipient needs their own preference check, their own dedup key, their own device tokens, their own rendered payload.</p>
+
+<p>Transactional traffic: 100M daily users, maybe 5 transactional notifications each per day — 500M sends/day, about 6,000/sec average, call it 20,000/sec at peak. A big number but a smooth one. Now the broadcast: one campaign to 40M users, and product wants it delivered "within 10 minutes" so it lands before the sale starts. 40M ÷ 600 seconds ≈ <strong>70,000 notifications per second</strong> — from a single row in a campaigns table. Peak system throughput is therefore ~90–100K/sec through the pipeline, and it arrives as a wall, not a ramp. That number makes the first architectural decision for me: this is <strong>fan-out at write, through durable queues, processed by horizontally scaled workers</strong>. No synchronous path survives a 40M-recipient write.</p>
+
+<p>Now the number that gates the crux decision. Our SMS providers, combined, drain maybe 1,000 messages/sec (SMS throughput is contractual and carrier-limited — you buy it, you don't scale it). If a campaign ever puts 500K SMS in front of an OTP in a shared queue, that OTP waits 500 seconds. The OTP expires at 300. The user retries, adding more load. So: <strong>queue position is latency</strong>, drain rates differ per channel by 100x, and therefore priorities must be separate queues with separate workers — not a priority field sorted inside one queue. The math forces the design; we'll commit properly in the deep dive.</p>
+
+<p>Storage: log every send attempt for tracking — ~500 bytes × 1B/day ≈ 500GB/day, ~45TB at 90-day retention. That's an LSM-style store (Cassandra/Scylla) partitioned by user_id — straight from the sharding chapter. Device tokens: 100M users × ~1.3 devices = 130M rows. Small. Gate state (dedup keys, rate counters): at 100K sends/sec with ~4 lookups each, that's 400K ops/sec against Redis at burst — fine for a modest cluster, but it tells me gates must be O(1) in-memory checks, never SQL queries.</p>
+
+<h2>API and data model — quickly</h2>
+
+<p>One internal API for all producers:</p>
+
+<pre><code>POST /v1/notifications
+{
+  "event_id":  "order-shipped-88213",      // producer-chosen, idempotency root
+  "priority":  "P1",
+  "category":  "order_updates",
+  "audience":  { "user_ids": [...] } | { "segment": "gold-buyers-in" },
+  "template":  "order_shipped_v3",
+  "data":      { "order_id": "...", "eta": "..." },
+  "channels":  ["push", "email"],          // omit = per-user preference decides
+  "ttl_sec":   7200,
+  "send_at":   null                        // or a future timestamp
+}</code></pre>
+
+<p>Core tables: <code>preferences</code> (user_id, category, channel opt-ins, quiet-hours window, timezone), <code>device_tokens</code> (user_id, token, platform, last_seen_at), <code>notification_log</code> (event_id, user_id, channel, status, timestamps — the tracking store), plus an in-app <code>inbox</code> table. Dedup keys and rate counters live in Redis with TTLs, not in a database.</p>
+
+<h2>High-level design: the complete machine</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Notification pipeline from producers through fan-out, gates, per-channel queues, workers, and external gateways">
+  <rect class="dg-node" x="8" y="30" width="112" height="40" rx="8"/>
+  <text class="dg-txt-s" x="20" y="54">Auth service</text>
+  <rect class="dg-node" x="8" y="90" width="112" height="40" rx="8"/>
+  <text class="dg-txt-s" x="20" y="114">Order service</text>
+  <rect class="dg-node" x="8" y="150" width="112" height="40" rx="8"/>
+  <text class="dg-txt-s" x="20" y="174">Campaigns</text>
+  <rect class="dg-node" x="150" y="85" width="90" height="50" rx="8"/>
+  <text class="dg-txt-s" x="164" y="106">Ingest API</text>
+  <text class="dg-txt-s" x="164" y="121">validate+enqueue</text>
+  <rect class="dg-node-alt" x="270" y="75" width="130" height="70" rx="8"/>
+  <text class="dg-txt-s" x="282" y="98">Fan-out workers</text>
+  <text class="dg-txt-s" x="282" y="114">resolve audience,</text>
+  <text class="dg-txt-s" x="282" y="130">gates, render</text>
+  <rect class="dg-node" x="430" y="30" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="440" y="47">push · critical</text>
+  <rect class="dg-node" x="430" y="64" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="440" y="81">push · bulk</text>
+  <rect class="dg-node" x="430" y="98" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="440" y="115">sms · critical</text>
+  <rect class="dg-node" x="430" y="132" width="120" height="26" rx="6"/>
+  <text class="dg-txt-s" x="440" y="149">email · bulk …</text>
+  <rect class="dg-node" x="590" y="30" width="122" height="40" rx="8"/>
+  <text class="dg-txt-s" x="600" y="54">APNs / FCM</text>
+  <rect class="dg-node" x="590" y="88" width="122" height="40" rx="8"/>
+  <text class="dg-txt-s" x="600" y="112">SMS providers</text>
+  <rect class="dg-node" x="590" y="146" width="122" height="40" rx="8"/>
+  <text class="dg-txt-s" x="600" y="170">SES (email)</text>
+  <line class="dg-edge" x1="120" y1="50" x2="150" y2="100" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="120" y1="110" x2="150" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="120" y1="170" x2="150" y2="120" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="240" y1="110" x2="270" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="400" y1="95" x2="430" y2="45" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="400" y1="102" x2="430" y2="77" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="400" y1="112" x2="430" y2="111" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="400" y1="120" x2="430" y2="145" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="550" y1="43" x2="590" y2="48" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="550" y1="111" x2="590" y2="108" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="550" y1="145" x2="590" y2="160" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="150" y="215" width="562" height="90" rx="8"/>
+  <text class="dg-txt-s" x="166" y="238">Feedback path (async)</text>
+  <rect class="dg-node" x="166" y="250" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="178" y="274">Receipts webhook</text>
+  <rect class="dg-node" x="356" y="250" width="140" height="40" rx="8"/>
+  <text class="dg-txt-s" x="368" y="274">Tracking store</text>
+  <rect class="dg-node" x="536" y="250" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="548" y="274">Token cleanup</text>
+  <line class="dg-edge" x1="651" y1="186" x2="300" y2="250" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="316" y1="270" x2="356" y2="270" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="496" y1="270" x2="536" y2="270" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>The machine. Left to right is the write path. The bottom zone is the feedback path: gateways report delivery receipts and dead tokens back, minutes later, asynchronously.</figcaption>
+</figure>
+
+<p><strong>Write path:</strong> a producer POSTs one event. The ingest API validates it, writes it durably to a raw-events queue, and returns 202 immediately — producers never wait on fan-out. Fan-out workers pick up the event and resolve the audience: for direct sends, the user IDs are in the request; for a segment ("all gold buyers in India"), we read a precomputed member list, not a live database scan — resolving 40M users must be a file read handed out in chunks, not a query. For each recipient, the worker runs the <strong>gates pipeline</strong> (next section), renders the template into a per-channel payload, and enqueues it into the right queue: one queue per channel per priority class. Channel workers — APNs workers, FCM workers, SMS workers, email workers — consume their queues and talk to the external gateways. In-app is the easy channel: write to the inbox table, push over a websocket if the user is connected.</p>
+
+<p><strong>Read path:</strong> three readers. The user reads their in-app inbox (<code>GET /inbox?cursor=…</code>, straight from the inbox table). The producer reads status ("was event X delivered to user Y?") from the tracking store. And the phone-facing channels have a delayed read path of their own: delivery receipts. APNs/FCM tell us about dead tokens; SMS providers send delivery reports (DLRs) minutes later via webhook; email providers report bounces. Those receipts update the tracking store and drive token cleanup and provider health scores. Delivery status is <em>eventually</em> consistent — by design, because the truth arrives late.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>This system is a post office, and the crucial detail is that you only run the <em>sorting floor</em>. Letters pour in from thousands of senders. Your job: check the recipient actually wants mail from this sender (preferences), don't deliver at midnight (quiet hours), don't dump forty catalogs on one doorstep in a day (rate limit), and don't deliver the same letter twice when a sender nervously mails a copy (dedup). Then you hand every letter to an outside carrier — the airline that flies it (APNs, Twilio) — and the airline is not yours. It has its own capacity, its own bad days, and it tells you "delivered" with a shrug and a delay. Where the analogy breaks: a real post office has one priority lane. You will need entirely separate trucks.</p>
+</div>
+
+<h2>Deep dive 1 — the gates, and at-least-once into servers you don't own</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>The hard part of this problem is the last mile you don't control, multiplied by fan-out. Every notification must pass per-user gates (preferences, quiet hours, rate limit, dedup) at 100K/sec, and then be handed to a third-party gateway with <strong>at-least-once</strong> semantics — because we promised never to lose a P0 — without buzzing the phone twice, even though the gateway gives us no transaction, sometimes no timely acknowledgment, and no way to un-send. Exactly-once delivery to a phone is impossible; the crux is engineering which failure you get — a rare duplicate or a rare loss — and choosing per priority class. I want to spend most of our time here.</p>
+</div>
+
+<h3>The gates pipeline</h3>
+
+<p>Every (event, recipient) pair walks through four gates before it becomes a queued message. Order matters — cheapest and most-likely-to-drop first:</p>
+
+<ol>
+<li><strong>Dedup.</strong> Idempotency key = <code>event_id + user_id + channel</code> — the exact pattern from the idempotency chapter, applied per recipient. Check Redis: seen? Drop. This runs first because producer retries are common (the ingest API returned 202 but the producer timed out and re-sent), and it's one O(1) lookup.</li>
+<li><strong>Preferences.</strong> Has this user opted out of this category on this channel? Drop. Also consult the compliance suppression list (unsubscribes, bounced emails) — that one is legally load-bearing, never cached stale.</li>
+<li><strong>Quiet hours.</strong> It's 2am in the user's timezone and this is P1/P2? Don't drop — <em>defer</em>: schedule it for 8am local. P0 ignores this gate; a fraud alert at 2am is the point.</li>
+<li><strong>Rate limit.</strong> Sliding counter per user per day for bulk: "max 4 marketing pushes/day." Runs last so a message that would die at an earlier gate doesn't consume budget. P0 is exempt — an OTP is never rate-limited.</li>
+</ol>
+
+<p>Then the template render: template + locale + <code>data</code> → a per-channel payload (push JSON, SMS text, email MIME). Render <em>after</em> the gates — rendering 40M payloads for messages that 30% of users opted out of is pure waste.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Gates funnel: one million recipients shrink through dedup, preferences, quiet hours, and rate limit before rendering">
+  <text class="dg-txt" x="10" y="30">campaign event × 1,000,000 recipients</text>
+  <rect class="dg-node" x="10" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt-s" x="24" y="83">1. Dedup</text>
+  <text class="dg-txt-s" x="24" y="100">retries out</text>
+  <rect class="dg-node" x="138" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt-s" x="152" y="83">2. Prefs</text>
+  <text class="dg-txt-s" x="152" y="100">opt-outs out</text>
+  <rect class="dg-node" x="266" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt-s" x="280" y="83">3. Quiet hrs</text>
+  <text class="dg-txt-s" x="280" y="100">defer to 8am</text>
+  <rect class="dg-node" x="394" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt-s" x="408" y="83">4. Rate limit</text>
+  <text class="dg-txt-s" x="408" y="100">cap N/day</text>
+  <rect class="dg-node-alt" x="522" y="60" width="104" height="54" rx="8"/>
+  <text class="dg-txt-s" x="536" y="83">5. Render</text>
+  <text class="dg-txt-s" x="536" y="100">per channel</text>
+  <rect class="dg-node" x="650" y="60" width="62" height="54" rx="8"/>
+  <text class="dg-txt-s" x="660" y="91">queue</text>
+  <line class="dg-edge" x1="114" y1="87" x2="138" y2="87" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="242" y1="87" x2="266" y2="87" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="370" y1="87" x2="394" y2="87" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="498" y1="87" x2="522" y2="87" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="626" y1="87" x2="650" y2="87" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="24" y="150">1.00M in</text>
+  <text class="dg-txt-s" x="152" y="150">0.99M</text>
+  <text class="dg-txt-s" x="280" y="150">0.64M</text>
+  <text class="dg-txt-s" x="408" y="150">0.58M (+60K deferred)</text>
+  <text class="dg-txt-s" x="24" y="180">P0 skips gates 3 and 4 — critical messages are never silenced or budgeted.</text>
+  <text class="dg-txt-s" x="24" y="205">All gates are O(1) Redis/cache lookups: ~4 ops × 100K/sec = 400K ops/sec at burst.</text>
+</svg>
+<figcaption>The funnel. A third of the blast never becomes a message — which is exactly why gates run before rendering and queueing, not after.</figcaption>
+</figure>
+
+<h3>At-least-once, dedup, and the crash window</h3>
+
+<p>Now the delivery handshake. A channel worker pulls a message, sends it to APNs, and acks the queue. Two crash windows, and they fail in opposite directions:</p>
+
+<ul>
+<li><strong>Send, crash before ack:</strong> the queue redelivers → a second send → the phone buzzes twice. At-least-once doing what it says.</li>
+<li><strong>Claim dedup, crash before send:</strong> if we mark "sent" in Redis <em>before</em> actually sending and then die, the redelivery sees the mark and skips → the notification is silently lost.</li>
+</ul>
+
+<p>Neither "check-then-send" nor "mark-then-send" alone is safe. I'll commit to the lease pattern from the idempotency chapter: before sending, <code>SET key "inflight" NX PX 60000</code> — claim the key for 60 seconds. If the claim fails and the value is <code>sent</code>, skip (duplicate suppressed). If it's a stale <code>inflight</code> lease, the previous worker died mid-flight — take over and retry. After the gateway accepts, overwrite the key to <code>sent</code> with a 24-hour TTL, then ack the queue.</p>
+
+<p>The honest residue: if the worker sends, then dies before writing <code>sent</code>, and the lease expires, the retry produces a duplicate. That window is real and cannot be closed, because "send to APNs" and "write to Redis" are two systems with no transaction spanning them. So the senior move is to <em>choose the failure direction per priority</em>: for P0, bias toward duplicates — a user who gets two copies of an OTP shrugs; a user who gets zero is locked out. For P2, bias toward loss — a marketing push that quietly disappears costs nothing. Same machinery, different retry aggressiveness, chosen on purpose.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Sending through APNs is dropping a letter through a mail slot in a wall. You can't see through the wall. If the lights go out the moment your hand comes back — did the letter go through? Post it again and maybe two arrive; don't and maybe none did. No amount of cleverness on your side of the wall creates certainty, because the certainty would have to live on <em>both</em> sides at once. All you choose is which mistake you'd rather make — and for a login code, "two letters" beats "no letter" every time.</p>
+</div>
+
+<h2>Deep dive 2 — priority isolation: the 2FA lane is physically separate</h2>
+
+<p>Back to the cold open. The instinctive fix is a priority <em>field</em>: one queue, sort critical first. In a distributed queue that's somewhere between hard and fake — Kafka partitions are FIFO, and even with a priority-supporting broker, 40M enqueued messages ahead of you means the sort itself is the bottleneck, and one slow bulk consumer still holds shared resources. I'll commit to <strong>physical isolation</strong>: per channel, separate queues per priority class, separate worker pools, separate provider budgets.</p>
+
+<ul>
+<li><code>sms.critical</code> drains through dedicated SMS workers with a <em>reserved</em> slice of provider throughput — say 200 of our 1,000 msg/sec is untouchable by anything else.</li>
+<li><code>sms.bulk</code> gets the leftovers, rate-capped so it can never consume the reserve. A 40M campaign makes <em>its own</em> queue deep — bulk latency stretches to hours, which the P2 SLA explicitly allows — and the critical lane never notices.</li>
+<li>Deployment isolation too: bulk workers can be preemptible instances that scale to zero at night; critical workers are always-on, multi-AZ, and their configs change rarely and carefully.</li>
+</ul>
+
+<p>The cost, stated plainly: more queues, more worker fleets, more dashboards — roughly 3× the operational surface per channel. Worth it, because the failure it prevents is the worst one this system has: self-inflicted denial of service on login. Head-of-line blocking is a queueing law, not a bug; the only real fix is a second lane.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 240" role="img" aria-label="Two isolated lanes: a shallow critical queue with reserved workers and a deep bulk queue with capped workers">
+  <rect class="dg-zone" x="8" y="20" width="704" height="92" rx="8"/>
+  <text class="dg-txt-s" x="20" y="40">CRITICAL LANE — always-on workers, reserved provider budget</text>
+  <rect class="dg-node" x="20" y="52" width="90" height="40" rx="8"/>
+  <text class="dg-txt-s" x="34" y="76">2FA event</text>
+  <rect class="dg-good" x="140" y="52" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="152" y="70">sms.critical</text>
+  <text class="dg-txt-s" x="152" y="86">depth: 12</text>
+  <rect class="dg-node" x="330" y="52" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="342" y="70">dedicated workers</text>
+  <text class="dg-txt-s" x="342" y="86">200 msg/s reserved</text>
+  <rect class="dg-node" x="530" y="52" width="170" height="40" rx="8"/>
+  <text class="dg-txt-s" x="542" y="76">provider → phone ~3s</text>
+  <line class="dg-edge" x1="110" y1="72" x2="140" y2="72" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="290" y1="72" x2="330" y2="72" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="480" y1="72" x2="530" y2="72" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="8" y="126" width="704" height="92" rx="8"/>
+  <text class="dg-txt-s" x="20" y="146">BULK LANE — capped workers, can starve only itself</text>
+  <rect class="dg-node" x="20" y="158" width="90" height="40" rx="8"/>
+  <text class="dg-txt-s" x="30" y="176">campaign</text>
+  <text class="dg-txt-s" x="30" y="192">40M users</text>
+  <rect class="dg-bad" x="140" y="158" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="152" y="176">sms.bulk</text>
+  <text class="dg-txt-s" x="152" y="192">depth: 1,800,000</text>
+  <rect class="dg-node" x="330" y="158" width="150" height="40" rx="8"/>
+  <text class="dg-txt-s" x="342" y="176">capped workers</text>
+  <text class="dg-txt-s" x="342" y="192">≤ 800 msg/s</text>
+  <rect class="dg-node" x="530" y="158" width="170" height="40" rx="8"/>
+  <text class="dg-txt-s" x="542" y="182">drains over hours — fine</text>
+  <line class="dg-edge" x1="110" y1="178" x2="140" y2="178" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="290" y1="178" x2="330" y2="178" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="480" y1="178" x2="530" y2="178" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Priority as infrastructure, not as a field. The blast deepens its own queue and nobody else's; the OTP never queues behind marketing.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — HBO Max and the intern's test email</div>
+<p>On June 17, 2021, a large chunk of HBO Max's subscriber base received an email with the subject line "Integration Test Email #1" — an empty template blasted to the real production mailing list. HBO Max's own tweet became famous: "We mistakenly sent out an empty test email to a portion of our HBO Max mailing list this evening… yes, it was the intern." Twitter responded with #DearIntern, thousands of engineers sharing their own worst sends in solidarity. The kind part of the story is the intern being forgiven; the engineering part is why it happened at all: the platform allowed a test event to resolve to a production audience of millions with no guardrail between "send" and forty million inboxes. A notification platform is the last line of defense against every producer's worst day. That's why the design above puts audience-size checks, staged ramp-up (send to 1%, watch, then proceed), and a per-campaign kill switch inside the platform — not in the good intentions of whoever clicks the button.</p>
+</div>
+
+<h2>Deep dive 3 — third parties throttle, fail, and lie</h2>
+
+<p>Everything so far assumed the gateway at the end behaves. It doesn't. Three behaviors to design for:</p>
+
+<p><strong>They throttle you.</strong> APNs and FCM are generous but will push back (HTTP 429/503) under bursts; SMS throughput is a hard purchased ceiling; SES enforces sending quotas. Channel workers therefore treat provider capacity as a token bucket and respect backpressure signals — when the provider says slow down, workers slow down and the queue absorbs the difference. That's what the queue is <em>for</em>. Retries use exponential backoff with jitter (Part 2 reflex — a synchronized retry wave after a provider blip is a self-made DDoS). After N failed attempts, the message goes to a dead-letter queue for inspection, not into an infinite retry loop.</p>
+
+<p><strong>They fail — so expire messages honestly.</strong> Every message carries a TTL matched to its meaning. A marketing push has <code>ttl = 4h</code>; if APNs is down for five hours, those messages should die in the queue, unsent (APNs even supports this natively — the <code>apns-expiration</code> header tells Apple to discard undeliverable pushes after a deadline). And here's the counterintuitive one: <strong>P0 gets the shortest TTL of all</strong> — an OTP older than two minutes must be dropped, because the code has expired, the user has already re-requested, and delivering hour-old login codes in a burst after recovery is confusing at best and an attack surface at worst. Never-lose-a-P0 means "never lose it <em>while it's still meaningful</em>." Retry hard within the window; drop dead-certain at its end.</p>
+
+<p><strong>They lie.</strong> A 200 from APNs means "accepted," not "delivered" — the push can still silently die if the device is offline for days. FCM happily accepts messages for tokens whose app was uninstalled weeks ago. SMS providers accept your message and only find out from the carrier minutes later that the number is disconnected — the truth arrives as an async delivery receipt, or never. Consequence one: track <em>sent</em> (we handed it over) and <em>delivered</em> (a receipt confirmed it) as separate statuses in the tracking store, updated asynchronously by the receipts webhook. Consequence two: dashboards and provider-health decisions run on <em>delivered</em> rate, because "sent" is a vanity metric when the provider is lying.</p>
+
+<h3>SMS provider failover</h3>
+
+<p>SMS deserves its own reliability answer because any single provider has regional bad days (a carrier route in one country degrades while the provider's API happily returns 200). I'll run <strong>two providers minimum</strong>, with a router in front: per country-route, track a health score — an exponentially weighted moving average of acceptance rate and DLR (delivery receipt) rate over the last few minutes. Healthy: split traffic by cost, cheapest first. Degraded route: circuit-break it and shift traffic to the backup, automatically, with a manual override for the humans. The cost: two contracts, two webhook formats, message-ID mapping for both, and the failover provider is usually pricier — which is fine, because P0 fails over unconditionally while bulk can simply wait out the blip on the cheap provider.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 230" role="img" aria-label="SMS router choosing between two providers using health scores fed by delivery receipts">
+  <rect class="dg-node" x="10" y="90" width="120" height="46" rx="8"/>
+  <text class="dg-txt-s" x="24" y="110">SMS worker</text>
+  <text class="dg-txt-s" x="24" y="126">(critical lane)</text>
+  <rect class="dg-node-alt" x="180" y="84" width="150" height="58" rx="8"/>
+  <text class="dg-txt-s" x="194" y="106">Route: health score</text>
+  <text class="dg-txt-s" x="194" y="122">per provider+country</text>
+  <rect class="dg-bad" x="420" y="30" width="180" height="52" rx="8"/>
+  <text class="dg-txt-s" x="434" y="52">Provider A — IN route</text>
+  <text class="dg-txt-s" x="434" y="68">DLR 61% → circuit OPEN</text>
+  <rect class="dg-good" x="420" y="140" width="180" height="52" rx="8"/>
+  <text class="dg-txt-s" x="434" y="162">Provider B — healthy</text>
+  <text class="dg-txt-s" x="434" y="178">DLR 97% → takes 100%</text>
+  <line class="dg-edge" x1="130" y1="113" x2="180" y2="113" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="330" y1="100" x2="420" y2="62" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="330" y1="126" x2="420" y2="160" marker-end="url(#arrow)"/>
+  <path class="dg-edge" fill="none" d="M 600 82 C 680 100, 680 120, 600 150"/>
+  <text class="dg-txt-s" x="608" y="120">DLRs</text>
+  <path class="dg-edge" fill="none" d="M 420 190 C 300 210, 260 180, 255 146" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="290" y="205">receipts update health scores</text>
+  <text class="dg-txt-s" x="10" y="30">Failover trigger is the DELIVERED rate, not the accept rate —</text>
+  <text class="dg-txt-s" x="10" y="48">a provider returning 200 while carriers drop messages still gets circuit-broken.</text>
+</svg>
+<figcaption>Health-scored routing. The provider's own API status is not trusted; the delivery receipts are the vote that counts.</figcaption>
+</figure>
+
+<h3>Device token lifecycle</h3>
+
+<p>Push tokens rot. Users uninstall the app, switch phones, or the OS rotates the token — a few percent of your token table dies every month. If you keep sending to dead tokens, two things happen: your delivery-rate metric sinks into noise, and providers notice — a sender with a high invalid-token rate looks like a spammer and can get throttled. So the feedback loop is mandatory: APNs' HTTP/2 API returns <code>410 Unregistered</code> (with a timestamp) for a dead token; FCM returns <code>UNREGISTERED</code>. The receipts pipeline deletes those tokens immediately. On the front end, the app re-registers its token on every launch and we stamp <code>last_seen_at</code>; tokens silent for 90+ days get demoted out of broadcast audiences. Hygiene, not glamour — and skipping it is a slow-motion outage.</p>
+
+<h3>Two smaller rooms: batching and scheduling</h3>
+
+<p><strong>Batching/digests:</strong> nobody wants 37 pushes titled "someone liked your photo." For digestible categories, low-priority notifications land in a per-user buffer; flush on a count threshold or a time window ("37 people liked your photo" after 30 minutes), whichever comes first. On-device, set a collapse key (APNs <code>apns-collapse-id</code>, FCM <code>collapse_key</code>) so a newer notification replaces the older one instead of stacking. Digests are P2 by definition and go through every gate.</p>
+
+<p><strong>Scheduled sends</strong> (<code>send_at</code> in the API, and quiet-hours deferrals) go to a job scheduler — the design of which is its own chapter (p3c11). One rule matters here: gates run at <em>send</em> time, not schedule time. A user who unsubscribes on Tuesday must not get the blast scheduled on Monday.</p>
+
+<h2>Failure modes and operations</h2>
+
+<p><strong>The incident pattern to design against</strong> is exactly the cold open — the marketing blast that melts 2FA. It's an entire genre of outage: a bulk producer saturates a shared resource (queue, worker pool, provider quota) and the highest-stakes traffic in the company dies quietly behind it. Priority isolation is the structural fix; the operational fixes on top: campaigns ramp (1% → 10% → 100% with delivery-rate checks between stages), an audience-size threshold above which a send requires a second human approval, and a per-campaign kill switch that stops queued sends — the queue is per-campaign-taggable precisely so a bad blast can be surgically drained.</p>
+
+<div class="box story"><div class="box-tag">War story — Hawaii's false missile alert</div>
+<p>On January 13, 2018, at 8:07am, every phone in Hawaii buzzed with: "BALLISTIC MISSILE THREAT INBOUND TO HAWAII. SEEK IMMEDIATE SHELTER. THIS IS NOT A DRILL." There was no missile. During a shift-change drill at the Hawaii Emergency Management Agency, an operator triggered the <em>live</em> alert instead of the test version — the real send and the drill sat next to each other in the same menu. The FCC's investigation found the deeper failure: it took <strong>38 minutes</strong> to push a correction, because no pre-scripted "false alarm" message existed in the system and officials had to compose and authorize one while the state panicked. The fixes are a notification-platform checklist: two-person confirmation for the highest-stakes sends, test environments that physically cannot reach production audiences, and — the one everyone forgets — a pre-built correction path, because a notification system has no undo. You cannot recall a million buzzes. You can only be fast with the follow-up, and only if you built it before you needed it.</p>
+</div>
+
+<p><strong>What I'd monitor</strong>, per channel × priority: <em>age of the oldest message</em> in each queue (better than depth — a deep bulk queue is normal, an old critical message is an incident), send rate vs. baseline, gateway error rate by code (429s = throttling, 410s spiking = token-table problem, 5xx = provider incident), delivered rate from receipts, and token-invalidation rate. Plus one end-to-end canary: a synthetic user receives a real push through the full pipeline every minute; the alert fires when the canary goes quiet — this catches whole-pipeline failures that every per-component metric misses. Alert thresholds differ by lane: critical-queue oldest-message age &gt; 30s pages someone at 3am; bulk-queue depth alone never does.</p>
+
+<p><strong>Rollout:</strong> template and routing changes ship behind flags to 1% of traffic first — a malformed payload can crash a mobile app in the field, and you cannot roll back a million delivered pushes. Provider config changes (new SMS route, new APNs cert/key) get canaried against the synthetic user before real traffic. Certificates and provider keys expire; their expiry dates are monitored like disk space.</p>
+
+<p><strong>What breaks at 10x</strong> (1B users, multiple 400M blasts a day): first, audience resolution — "resolve 400M users" must become a precomputed segment file split into thousands of chunks checkpointed by fan-out workers, because any single scanner is hours of work and a single point of restart-from-zero. Second, the gate store — 4M Redis ops/sec needs a properly sharded cluster with per-user hash-tagging so one user's gates stay on one node. Third — and this one has no engineering fix — SMS: provider throughput is bought, not scaled, and at 10x the honest answer is to migrate 2FA off SMS toward TOTP apps and passkeys, and reserve SMS for the long tail. Sometimes the senior answer to "how does this scale?" is "this channel doesn't — here's the product change that sidesteps it."</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Interviewers use this problem to test whether you respect boundaries you don't control, and whether "priority" is a word or an architecture in your answer. Expect these, nearly verbatim:</p>
+<ul>
+<li>"APNs goes down for an hour. Walk me through what your system does during the outage and in the first five minutes after recovery." (They want: queues absorb, TTLs expire the stale, workers ramp the drain on recovery instead of stampeding a just-recovered provider.)</li>
+<li>"Marketing schedules a 50M-user blast at 9:00. A user requests an OTP at 9:01. Trace both messages through your diagram." (If both trace through any shared queue, worker pool, or provider quota, the answer fails.)</li>
+<li>"Can you guarantee a user never receives the same notification twice?" (The honest answer is no — name the send-then-crash window, then show the dedup design that makes duplicates rare, and say which priority classes prefer duplicates over loss and why.)</li>
+<li>"Your delivery rate in one country dropped 20% overnight but every provider API returns 200. How does your system notice, and what does it do before you wake up?" (Delivery receipts feeding per-route health scores; automatic failover; the accept rate is explicitly not trusted.)</li>
+</ul>
+</div>
+
+<h2>The committed choices, and what they cost</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Why I committed to it</th><th>The cost I accept</th></tr></thead>
+<tbody>
+<tr><td>Fan-out at write, through durable queues</td><td>One event → 40M sends; no synchronous path survives that, and queues absorb provider outages for free</td><td>Delivery status is async; producers get 202 "accepted," never "delivered"</td></tr>
+<tr><td>Physical priority isolation (queues + workers + budgets per class)</td><td>Queue position is latency; a priority field can't stop head-of-line blocking behind 40M messages</td><td>~3× operational surface per channel: more queues, fleets, dashboards</td></tr>
+<tr><td>At-least-once + idempotency-key dedup, duplicate-biased for P0</td><td>Exactly-once into a third party is impossible; a lost OTP locks a user out, a doubled one is a shrug</td><td>Rare duplicates in the send-then-crash window; Redis is a hot dependency of the send path</td></tr>
+<tr><td>Per-priority TTLs; expired messages are dropped unsent</td><td>An hour-old OTP or a stale flash-sale push is worse than nothing; queues must not become time capsules</td><td>During long outages we knowingly discard messages — "never lose" is bounded by "still meaningful"</td></tr>
+<tr><td>Two SMS providers, health-routed on delivered rate</td><td>Single provider = single point of failure we can't fix from outside; accept-rate 200s can't be trusted</td><td>Double contracts and integration work; failover route costs more per message</td></tr>
+<tr><td>Tracking via async receipts; "sent" ≠ "delivered"</td><td>The truth about delivery arrives minutes late or never; pretending otherwise poisons every metric</td><td>Eventual consistency in status; support sees "sent" for messages that will never arrive</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c03-f1">
+<p class="fey-prompt">A junior asks: "Why can't we just guarantee each notification is delivered exactly once? Retry until it works, dedup so it never doubles." Explain in five or six sentences why that guarantee is impossible here, and what we do instead.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Because the last step — handing the message to Apple's or Google's or a carrier's servers — happens outside our system, and there's no transaction that covers both their side and ours. After we send, we might crash before recording that we sent; on restart we can't tell whether the message got through, so we either retry (risking a duplicate) or don't (risking a loss). Recording <em>before</em> sending just flips the failure: crash after recording but before sending, and the message is lost while our books say it went. So instead of chasing an impossible guarantee, we choose which mistake to make, per message type: for login codes we retry aggressively — a duplicate OTP is harmless but a missing one locks someone out — and for marketing we let unclear cases die quietly. Dedup keys shrink the duplicate window to a rare crash-timing accident; they can't close it. Exactly-once isn't a feature you build here — it's a direction you lean.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Add a digest feature: "likes" on a social app should batch into "N people liked your post" instead of N pushes. Design the batching logic — where does the buffer live, what flushes it, and what happens if the user opens the app mid-window?</p></div>
+<details><summary>Answer</summary><p>Per-user, per-post buffer in Redis (key: <code>digest:{user}:{post}</code>, a counter plus first/last actor names for the copy). Flush on whichever comes first: count threshold (say 25) or time window (30 min), driven by a delayed job set on first like. The flushed digest is a normal P2 notification — full gates apply, and it carries a collapse key so a later digest for the same post replaces the earlier one on the device rather than stacking. If the user opens the app mid-window, the in-app read marks the buffer consumed and cancels the pending flush — pushing someone a summary of likes they've already seen on screen is the digest version of a duplicate. Edge to note: the buffer is lossy if Redis dies; acceptable for likes (P2), which is exactly why 2FA never goes near this path.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>APNs goes down hard for one hour during your evening peak (20K pushes/sec). Do the queue math: what builds up, what should your system do during the hour, and — the part most candidates miss — what must it NOT do in the first minutes after APNs recovers?</p></div>
+<details><summary>Answer</summary><p>Build-up: 20K/sec × 3600s = 72M queued pushes. During the outage: workers see connection failures/5xx, back off with jitter, and stop hammering; the queue absorbs — that's its job, and 72M × ~1KB ≈ 72GB is nothing for Kafka-class storage. TTLs quietly prune: OTP-class pushes expire in minutes (users already retried via SMS fallback), time-sensitive bulk dies at its 4-hour TTL. On recovery, the trap: 72M messages and a fleet of eager workers are a thundering herd aimed at a service that just got back on its feet — you will re-injure the patient and get throttled into a second outage. Drain through a rate limiter ramping from a fraction of normal throughput upward while watching APNs error rates, critical queues first (they're small — minutes to clear), bulk over the following hours. Bonus signal: mention that during the outage your delivered-rate dashboards go dark, so the on-call needs an explicit "provider outage" status to suppress a wall of misleading alerts.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: this is now a chat app, and push notifications for messages must arrive <em>in order</em> per conversation — a preview of message 5 before message 4 confuses users. What changes in the architecture, and what does ordering cost you?</p></div>
+<details><summary>Answer</summary><p>Ordering requires serializing per conversation: partition the push queue by conversation_id (or user_id) so one partition — consumed by one worker at a time — holds a conversation's messages in sequence, exactly the Kafka partitioning model from the streams chapter. The costs: (1) head-of-line blocking returns in miniature — one undeliverable message stalls that conversation's queue until retry or TTL, so you need a skip-after-N-attempts rule that trades ordering back for progress; (2) hot partitions — a 5,000-member group chat serializes through one partition; (3) worker parallelism is capped by partition count. Cheaper alternative worth saying out loud: don't order the pushes — put a sequence number in the payload and let the client drop stale previews, moving the problem to the edge where it's one integer comparison. Collapse keys (newest replaces oldest) get you most of the UX for none of the server cost. Committing to client-side ordering with a reason is the senior answer; server-side FIFO is the fallback if clients can't be changed.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>10x the broadcast: a news app with 500M users wants breaking-news pushes delivered within 5 minutes of the editor hitting send. Which component breaks first, and walk the numbers to your redesign.</p></div>
+<details><summary>Answer</summary><p>Target rate: 500M ÷ 300s ≈ 1.7M sends/sec — 17x our design's burst. First break: audience resolution — a single scanner reading 500M users at even 100K rows/sec needs 83 minutes before the first push leaves. Fix: precompute the all-users audience as a segment file in object storage, pre-split into ~5,000 chunks of 100K users; on send, fan the chunks out to thousands of workers, each checkpointing per chunk so a crashed worker re-does 100K users, not 500M. Second break: the gate store — ~4 lookups × 1.7M/sec ≈ 7M Redis ops/sec, needing a properly sharded cluster; better, for breaking news specifically, collapse per-user gates to a bitmap check (opted-out bitmap in memory on each worker, refreshed every minute) since breaking news ignores rate limits and quiet hours anyway. Third: APNs/FCM connection management — thousands of HTTP/2 connections with tuned concurrent-stream limits, pre-warmed, because opening them during the event is too late. Note what did NOT need redesign: queues, priority lanes, dedup — the skeleton holds; the feeding of it is what changes.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Now add multi-tenancy: your notification system becomes a platform product (like Twilio or OneSignal) serving 2,000 business customers. One tenant queues 80M sends. What's the new failure mode, and what do you add?</p></div>
+<details><summary>Answer</summary><p>The noisy neighbor: priority classes no longer protect you, because the 80M blast and a tiny tenant's P0 traffic can both be legitimately "bulk" or "critical" — isolation must now be per-tenant as well. Add: per-tenant rate limits and quotas enforced at ingest (token bucket per tenant per channel); fair-share scheduling across tenants in the worker layer (weighted round-robin over per-tenant sub-queues, so 80M queued messages from tenant A still leaves tenant B's 50 messages draining immediately); per-tenant provider budgets so one tenant can't exhaust the shared SMS throughput; and per-tenant dashboards/alerts, because their on-call is now your customer support. The deeper shift to name: shared provider reputation. One tenant sending spam gets your shared IPs and sender IDs throttled for everyone — so tenant isolation extends to reputation (dedicated sending identities for big tenants) and an abuse-detection gate at ingest becomes a first-class citizen, not an afterthought.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>The unit of work is event × recipients: one campaign row can be 40 million sends, so the architecture is fan-out at write through durable queues — never a synchronous path.</li>
+<li>Every (event, user, channel) passes gates in order — dedup, preferences/suppression, quiet hours, rate limit — as O(1) in-memory checks, before rendering, with P0 exempt from silencing and budgets.</li>
+<li>Priority must be physical — separate queues, worker pools, and provider budgets per class — because queue position is latency and a priority field cannot stop head-of-line blocking behind a blast.</li>
+<li>Exactly-once into third-party gateways is impossible; commit to at-least-once with idempotency-key dedup, and choose the failure direction per class: duplicates for OTPs, silent loss for marketing.</li>
+<li>Gateways throttle, fail, and lie: respect backpressure with jittered backoff and DLQs, expire messages with per-priority TTLs, and trust delivery receipts — never accept-rate 200s — for health and failover decisions.</li>
+<li>Tokens rot and providers punish senders who ignore it: process 410/UNREGISTERED feedback immediately and prune stale tokens, or watch delivery metrics decay into noise.</li>
+<li>The platform is the last line of defense against its producers: ramped sends, audience-size confirmation, and per-campaign kill switches belong in the system, because notifications have no undo.</li>
+<li>Monitor age-of-oldest-message per queue, delivered rate per provider route, and one end-to-end canary push — and page only on the critical lane.</li>
+</ul>
+</div>

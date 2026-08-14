@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c12",
+  "items": [
+    {
+      "id": "p3c12-q01", "level": 1, "type": "mcq", "tag": "estimation",
+      "q": "Why does an exact hash map fail for real-time top-K at 10M events/sec over a billion keys?",
+      "options": [
+        {"t": "Per-key state doesn't fit: a billion 64-byte entries is tens of GB per window, ~190 GB for a sliding hour of minute buckets, under 10M random writes/sec", "correct": true,
+         "why": "Right — and note the estimate came first. The map's memory grows with the number of keys; that's the property the sketch removes. This is the number that forces the design."},
+        {"t": "Hash maps can't count events, only store them", "correct": false,
+         "why": "A hash map counts fine — key to counter is the textbook approach. It fails on cost, not capability: the memory scales with distinct keys."},
+        {"t": "Hash collisions would make the counts wrong", "correct": false,
+         "why": "A proper hash map resolves collisions and stays exact. Ironically, the structure we replace it with (the sketch) is the one that embraces collisions."},
+        {"t": "Databases lock tables during GROUP BY", "correct": false,
+         "why": "Locking is not the issue — even a lock-free in-memory map dies here. The killer is per-key state at billion-key cardinality, plus the write rate through it."}
+      ]
+    },
+    {
+      "id": "p3c12-q02", "level": 1, "type": "mcq", "tag": "cms",
+      "q": "A count-min sketch's error points in exactly one direction. Which, and why?",
+      "options": [
+        {"t": "It can only overestimate — other keys collide into your counters and add; nothing ever subtracts", "correct": true,
+         "why": "Correct. Every one of the d counters is truth plus junk, so even the minimum is at least the truth. One-directional error is a property you can design around, which is exactly what the top-K logic does."},
+        {"t": "It can only underestimate, because counters overflow and wrap", "correct": false,
+         "why": "Backwards, and overflow isn't the mechanism — sized counters (4 bytes here) handle the load. Collisions inflate counts; they never shrink them."},
+        {"t": "Error is symmetric, like random noise around the true value", "correct": false,
+         "why": "That's the intuition to unlearn. CMS error is strictly one-sided: estimates are always greater than or equal to the truth, never below."},
+        {"t": "It has no error if you use enough hash functions", "correct": false,
+         "why": "More rows (depth) reduce the chance of a bad estimate, but collisions still happen in every row. The error is bounded and tunable, never zero."}
+      ]
+    },
+    {
+      "id": "p3c12-q03", "level": 1, "type": "mcq", "tag": "cms",
+      "q": "How do you read a key's count out of a count-min sketch?",
+      "options": [
+        {"t": "Average the d counters the key hashes to", "correct": false,
+         "why": "Averaging mixes in the junk from every row. Since every counter is an overestimate, the smallest one is the closest to the truth — take the min."},
+        {"t": "Hash the key with each row's hash function and take the minimum of the d counters", "correct": true,
+         "why": "Yes — that's the 'min' in count-min. Each row's counter is truth plus that row's collisions, so the smallest counter carries the least junk and is still never below the truth."},
+        {"t": "Sum the d counters", "correct": false,
+         "why": "That would count the key d times plus all the collision noise. The rows are independent estimates of the same count, not shares of it."},
+        {"t": "Read the one counter in the widest row", "correct": false,
+         "why": "All d rows get read on a query. The whole point of multiple rows is that a key sharing a cell with a giant in one row probably doesn't in another — the min filters the unlucky rows out."}
+      ]
+    },
+    {
+      "id": "p3c12-q04", "level": 1, "type": "mcq", "tag": "merge",
+      "q": "How do you merge two count-min sketches from two shards (same width, depth, hash seeds)?",
+      "options": [
+        {"t": "Take the element-wise max of the counter arrays", "correct": false,
+         "why": "That's the Bloom-filter-union instinct sneaking in. Max undercounts a merge: a key seen 5 times on each shard would show ~5, not ~10. Counts add; take the sum."},
+        {"t": "Add the counter arrays cell by cell", "correct": true,
+         "why": "Right. Same dimensions and hashes mean each key hits the same cells in both sketches, so cell-wise addition gives the sketch you'd have built from the combined stream. This mergeability is why the design scales without coordination."},
+        {"t": "Re-hash every key from one sketch into the other", "correct": false,
+         "why": "You can't — the sketch never stored the keys. They were hashed away at write time. Merging must work on the counter arrays alone, and cell-wise addition is exactly that."},
+        {"t": "They can't be merged; you must recount from the log", "correct": false,
+         "why": "Mergeability is one of CMS's superpowers (Twitter's Algebird built it as a monoid for exactly this reason). Only sketches with different width/depth/seeds are unmergeable."}
+      ]
+    },
+    {
+      "id": "p3c12-q05", "level": 1, "type": "mcq", "tag": "heap",
+      "q": "The fast path pairs the sketch with a min-heap of candidates. What job does the heap do that the sketch can't?",
+      "options": [
+        {"t": "It remembers which keys are big — the sketch can answer counts for a named key but cannot list the keys it has seen", "correct": true,
+         "why": "Exactly. Keys are hashed away on write, so a sketch alone can't enumerate anything. The heap catches identities as events stream past — one pass, no second chance — while the sketch supplies the counts."},
+        {"t": "It stores exact counts to fix the sketch's errors", "correct": false,
+         "why": "The heap stores sketch estimates, not exact counts — corrections come from the hourly batch path. Its job is identity tracking, not accuracy."},
+        {"t": "It speeds up sketch queries with caching", "correct": false,
+         "why": "Sketch queries are already O(d) array reads — nothing to cache. The heap solves a different problem entirely: knowing which keys to ask about."},
+        {"t": "It deduplicates events before they hit the sketch", "correct": false,
+         "why": "Dedup is a different concern (and a different structure — think Bloom filter or idempotency keys). The heap is the guest list of current top-K suspects."}
+      ]
+    },
+    {
+      "id": "p3c12-q06", "level": 1, "type": "mcq", "tag": "windowing",
+      "q": "How does the design compute a sliding 'last hour' count without recounting anything?",
+      "options": [
+        {"t": "One hour-sized sketch, rebuilt from scratch every minute", "correct": false,
+         "why": "Rebuilding means re-reading an hour of the stream every minute — the recounting we're trying to avoid. The ring makes old data fall off for free instead."},
+        {"t": "A ring of 60 per-minute sketches: sum the key's estimate across the last 60 buckets; each new minute zeroes the oldest bucket", "correct": true,
+         "why": "Right — tumbling minute buckets composed into a sliding hour. Constant work per event, constant memory, and expiry is just overwriting the oldest slot in the ring."},
+        {"t": "Timestamps stored inside the sketch cells, filtered at query time", "correct": false,
+         "why": "Sketch cells are bare counters — there's no room for timestamps and no way to subtract expired events from a cell. Time lives in the bucket structure, not the cells."},
+        {"t": "Subtract last hour's sketch from the all-time sketch", "correct": false,
+         "why": "Sketch subtraction breaks the overestimate-only guarantee (you'd subtract someone else's collisions) and 'last hour's sketch' is the thing being asked for. The ring sidesteps both problems."}
+      ]
+    },
+    {
+      "id": "p3c12-q07", "level": 1, "type": "mcq", "tag": "trending-score",
+      "q": "What distinguishes 'trending' from 'most viewed'?",
+      "options": [
+        {"t": "Trending uses a bigger K", "correct": false,
+         "why": "K is just list length. The lists differ in what they rank by, not how many entries they show."},
+        {"t": "Trending is velocity — rate of change against the key's own baseline; most-viewed is raw volume", "correct": true,
+         "why": "Right. Rice outsells everything daily and never trends; 400 umbrellas by 9am trends. Twitter had to publicly explain this in 2010 when huge-but-steady topics like #wikileaks didn't trend."},
+        {"t": "Trending excludes old content by upload date", "correct": false,
+         "why": "A three-year-old video can absolutely trend if its view rate suddenly spikes. The signal is acceleration of events, not the age of the item."},
+        {"t": "Trending uses exact counts, most-viewed uses estimates", "correct": false,
+         "why": "Both run on the same sketches and candidates. The difference is the scoring function on top — a ratio against baseline versus a raw count."}
+      ]
+    },
+    {
+      "id": "p3c12-q08", "level": 1, "type": "mcq", "tag": "partitioning",
+      "q": "Why does the design partition the event stream by hash(key)?",
+      "options": [
+        {"t": "It spreads load most evenly across shards", "correct": false,
+         "why": "Actually it's random/round-robin that spreads most evenly — hash-by-key concentrates viral keys on one partition. We accept that cost to buy something better: complete per-key counts on a single shard."},
+        {"t": "So each key's full count lives on exactly one shard, making global top-K a simple merge of per-shard candidate lists", "correct": true,
+         "why": "Right. If a key's events were scattered, a key could be big globally while small on every shard, and no local list would contain it. Whole-key-per-shard means the union of local winners must contain the global winners."},
+        {"t": "Kafka requires a partition key", "correct": false,
+         "why": "Kafka happily does round-robin without one. The key choice here is an architectural decision about where counts live, not a Kafka requirement."},
+        {"t": "It encrypts the keys for privacy", "correct": false,
+         "why": "Partition hashing is routing, not security — the key travels in the event either way."}
+      ]
+    },
+    {
+      "id": "p3c12-q09", "level": 1, "type": "mcq", "tag": "serving",
+      "q": "How do user requests read the leaderboard?",
+      "options": [
+        {"t": "From a small cached blob the aggregator republishes every couple of seconds — reads never touch the counting machinery", "correct": true,
+         "why": "Right. Millions of readers share one few-KB list that's honestly a few seconds stale (the response carries as_of). Compute once, serve endlessly — the counting path and the read path never meet."},
+        {"t": "Each request queries all 64 shards and merges", "correct": false,
+         "why": "That's a scatter-gather on every page view — the aggregator's 2-second job redone millions of times. One process does the merge; everyone else reads its output."},
+        {"t": "Requests query the sketch directly for the top keys", "correct": false,
+         "why": "Two problems: sketches live sharded across the fleet, and a sketch can't tell you which keys are top — that needed the heaps. Readers get the finished list, not the raw structures."},
+        {"t": "From the hourly batch output", "correct": false,
+         "why": "The batch is an hour behind — fine for corrections and payouts, useless for 'right now'. The fast path exists precisely so the visible board is seconds fresh."}
+      ]
+    },
+    {
+      "id": "p3c12-q10", "level": 2, "type": "mcq", "tag": "error-direction",
+      "q": "Your K is 100. Where in the leaderboard does count-min sketch error actually cause wrong results, and why there?",
+      "options": [
+        {"t": "The top ranks are most affected because they get the most collisions", "correct": false,
+         "why": "Collisions land uniformly, and noise of a few hundred is invisible against a #1 count in the millions. Relative error is what matters, and it's tiny at the top."},
+        {"t": "Near the rank-100 boundary: mid-sized keys inflated by collisions can sneak in as false entrants, while true giants can never be pushed off", "correct": true,
+         "why": "Right. Overestimate-only error means a giant's estimate is at least its (huge) truth — it can't be hidden. But at the boundary, a few hundred phantom counts can flip #98 and #103. The top is solid; the tail shimmers."},
+        {"t": "Uniformly across all ranks", "correct": false,
+         "why": "Absolute noise is roughly uniform, but its effect isn't: a fixed few-hundred error is nothing to a 40M count and decisive between two ~50K counts fighting for rank 100."},
+        {"t": "Nowhere, if the sketch is properly sized", "correct": false,
+         "why": "Sizing shrinks the fuzzy zone but can't eliminate it — some pair of keys near the boundary will always be closer together than the error bound. The design accepts this and says who it's acceptable for."}
+      ]
+    },
+    {
+      "id": "p3c12-q11", "level": 2, "type": "mcq", "tag": "hot-key",
+      "q": "A video goes viral: 2M views/sec, all hashing to one partition. What keeps that shard alive?",
+      "options": [
+        {"t": "Consistent hashing moves the key to a bigger shard", "correct": false,
+         "why": "A single key can't be split by moving it — wherever it lands, it brings its full 2M/sec. Hot-key problems aren't solved by better placement of the key; they're solved by shrinking its traffic."},
+        {"t": "Edge pre-aggregation collapses the flood into per-100ms deltas like (cat_v9, +1830), and the sketch increment is per-key stateless — 4 array adds regardless of key", "correct": true,
+         "why": "Both halves matter. API servers count locally and emit weighted deltas, so Kafka sees thousands of messages/sec, not millions; and CMS has no per-key row to contend on — a weighted add costs the same as any increment."},
+        {"t": "The aggregator throttles events for keys already known to be top-ranked", "correct": false,
+         "why": "The aggregator is downstream of counting and never sees raw events — and dropping events would corrupt the counts. The fix belongs upstream, at the edge."},
+        {"t": "Nothing — this design melts on viral keys and needs random partitioning instead", "correct": false,
+         "why": "Random partitioning trades this problem for a worse one: no shard would hold a key's complete count, breaking the cheap merge. The hot partition is real but affordable once deltas are batched at the edge."}
+      ]
+    },
+    {
+      "id": "p3c12-q12", "level": 2, "type": "mcq", "tag": "ops",
+      "q": "The aggregator process dies. What does recovery look like, and what do users notice?",
+      "options": [
+        {"t": "Failover to a standby that re-pulls candidate lists from the shards; users see a list a few seconds staler than usual, served from cache throughout", "correct": true,
+         "why": "Right — the aggregator is deliberately stateless: everything it knows can be re-asked of the shards in one tick. The cache keeps serving the last blob, so the failure degrades to 'slightly older list', never errors."},
+        {"t": "Leaderboards are down until it restarts", "correct": false,
+         "why": "Only if reads went through the aggregator — they don't. Readers hit the cache, which still holds the last published blob. The aggregator's absence just pauses updates."},
+        {"t": "An hour of counts is lost and must be replayed from Kafka", "correct": false,
+         "why": "Counts live in the shards' sketch rings, which the aggregator crash doesn't touch. Kafka replay is the shard recovery story, not the aggregator's."},
+        {"t": "The batch path takes over serving until the aggregator returns", "correct": false,
+         "why": "The batch path is an hour behind and produces corrections, not a live board. Failing over to it would be a visible freshness cliff — unnecessary, since the standby rebuilds in seconds."}
+      ]
+    },
+    {
+      "id": "p3c12-q13", "level": 2, "type": "mcq", "tag": "divergence",
+      "q": "The hourly batch says a video got 3.2M views; your fast path reported 4.1M. What does this tell you?",
+      "options": [
+        {"t": "Normal sketch behavior — CMS overestimates, so a 28% overshoot is expected", "correct": false,
+         "why": "Direction is right, magnitude is wildly wrong. A properly sized sketch overshoots by a fraction of a percent on counts this large. 28% means a bug, not noise — treat the error bound as a budget with an alarm on it."},
+        {"t": "Way outside the error budget: suspect a fast-path bug — a double-consumed partition, replayed segment, or event-definition drift between the two paths", "correct": true,
+         "why": "Right. The divergence metric exists exactly for this: expected divergence is small and positive; a jump means the paths disagree about reality. Batch (a plain exact count over the log) is the referee; investigate the fast path."},
+        {"t": "The batch job undercounted; trust the fast path since it saw events live", "correct": false,
+         "why": "The batch is an exact GROUP BY over the durable log — the simplest, most auditable component in the system. When referee and player disagree by 28%, you don't fire the referee first."},
+        {"t": "Restart the shards to clear accumulated sketch error", "correct": false,
+         "why": "Sketch error doesn't 'accumulate' across restarts — it's bounded per window by construction. Restarting destroys evidence and fixes nothing; diagnose the discrepancy instead."}
+      ]
+    },
+    {
+      "id": "p3c12-q14", "level": 2, "type": "mcq", "tag": "sizing",
+      "q": "Ops reports too many false entrants near the boundary of the top-1000 list. Which knob do you reach for first?",
+      "options": [
+        {"t": "Double the sketch width w — error is roughly total-count ÷ width, so error halves for 2x memory (16 MB → 32 MB per bucket)", "correct": true,
+         "why": "Right — width is the error-size knob and the memory is trivial. Depth buys confidence (fewer all-rows-unlucky flukes); width shrinks the noise itself, which is what boundary churn calls for."},
+        {"t": "Add more hash rows (depth) since more rows mean more accuracy", "correct": false,
+         "why": "Depth reduces the probability of a badly unlucky estimate but barely moves typical error, and it adds cost to every single event. For systematic boundary noise, width is the right knob."},
+        {"t": "Shrink K so the boundary has fewer entries", "correct": false,
+         "why": "That changes the product to dodge an engineering fix — and the boundary just moves to the new K with the same fuzz. Fix the error, not the requirement."},
+        {"t": "Switch the boundary entries to exact database counters", "correct": false,
+         "why": "A real technique (exact counters for candidates) but heavyweight as a first response when a 16 MB knob is sitting right there. Try doubling width; escalate only if precision demands outgrow the sketch."}
+      ]
+    },
+    {
+      "id": "p3c12-q15", "level": 2, "type": "mcq", "tag": "alternatives",
+      "q": "\"Why not one Redis instance with a sorted set — ZINCRBY per view, ZREVRANGE for top-K?\" What's the senior answer?",
+      "options": [
+        {"t": "Sorted sets are O(log n), too slow at this scale", "correct": false,
+         "why": "log n on even a billion members is ~30 steps — not the bottleneck. Naming big-O while missing the memory wall and the single hot node is exactly the trap this question sets."},
+        {"t": "Great design below maybe tens of millions of keys — but here it recreates per-key memory (billions of members × windows) on one node absorbing 10M writes/sec, which is the wall the sketch exists to avoid", "correct": true,
+         "why": "Right — and note the shape: name where the simple answer wins, then the two reasons it dies at this scale (cardinality-proportional memory, single hot writer). Scale-aware judgment beats reflexive dismissal."},
+        {"t": "Redis is a cache and loses data on restart", "correct": false,
+         "why": "Redis has persistence (RDB/AOF) — durability isn't the disqualifier. The disqualifiers are memory that grows with key count and one node eating the whole write stream."},
+        {"t": "Sorted sets can't do sliding windows", "correct": false,
+         "why": "They can, with a set per minute-bucket and a merge at query time — same ring idea. What they can't do is escape per-member memory: each bucket stores every distinct key it saw."}
+      ]
+    },
+    {
+      "id": "p3c12-q16", "level": 2, "type": "mcq", "tag": "candidate-tracking",
+      "q": "A key ranks #400 for the hour but never cracked any single minute's top candidates on its shard. How does the design avoid missing it?",
+      "options": [
+        {"t": "It can't be missed — sketch error guarantees finding all top keys", "correct": false,
+         "why": "Sketch error and candidate tracking are separate concerns. The sketch would report this key's count perfectly well — but only if something knows to ask about it. Identity tracking is the heap's job, and heaps can miss."},
+        {"t": "Per-minute buckets keep a margin (top-M, M much larger than K), and each minute the shard re-scores the union of the last 60 buckets' candidate lists against the full ring", "correct": true,
+         "why": "Right — the two mitigations work together: a steady #400-for-the-hour key almost certainly appears in many minutes' top-5000, and the union re-score computes its true hour total. The batch path is the final backstop within the hour."},
+        {"t": "The aggregator queries every shard for every key it has ever seen", "correct": false,
+         "why": "'Every key ever seen' is the billion-key enumeration problem again — no component can hold or iterate that list. Candidates are the only identities the fast path knows."},
+        {"t": "Keys are pre-registered so the system always knows the full key list", "correct": false,
+         "why": "A registry of a billion keys is the per-key state we refused to pay for, and new keys (fresh uploads, new hashtags) are exactly the ones that spike. The design must discover identities from the stream itself."}
+      ]
+    },
+    {
+      "id": "p3c12-q17", "level": 2, "type": "mcq", "tag": "ops",
+      "q": "A counter shard crashes. Walk the recovery.",
+      "options": [
+        {"t": "Its keys are rehashed to the surviving shards, which take over counting them", "correct": false,
+         "why": "Moving the keys abandons their history — the counts so far live in the dead shard's sketches, and the new shards' sketches (even mergeable ones) don't contain them. Restore state, don't re-route."},
+        {"t": "Load the latest minute snapshot of its sketch ring from object storage, replay Kafka from the recorded offset (≤1 minute), resume; the board briefly lacks that shard's keys", "correct": true,
+         "why": "Right — ~1 GB of state and a minute of replay makes recovery fast, and this is why small snapshottable state was worth designing for. Serving degraded (63 of 64 shards) beats blocking a trending UI."},
+        {"t": "Rebuild by replaying the full hour of events from Kafka", "correct": false,
+         "why": "Works but slow — an hour of a partition's traffic through one recovering consumer means long staleness for its keys. Minute snapshots exist precisely to cap replay at a minute."},
+        {"t": "Nothing to do — the aggregator's cached blob has all the data", "correct": false,
+         "why": "The blob holds only the current top-K names and numbers — a few KB. The counting state (the ring) exists nowhere but the shard and its snapshots; without recovery, that shard's keys go dark."}
+      ]
+    },
+    {
+      "id": "p3c12-q18", "level": 2, "type": "mcq", "tag": "trending-score",
+      "q": "Your trending score is count_15m / (baseline_15m + 500). A brand-new hashtag with 300 views in 15 minutes tops the trending list. What went wrong?",
+      "options": [
+        {"t": "The smoothing constant is doing its job — new keys should trend", "correct": false,
+         "why": "New keys should be able to trend, but 300 views is noise, not a phenomenon. The smoothing constant limits the ratio (300/500 < 1 here — so something else let it win), but the real guard against tiny keys is the eligibility floor."},
+        {"t": "The eligibility floor is missing or too low — a minimum absolute volume (say 10K in the window) must gate entry before the ratio ranks anything", "correct": true,
+         "why": "Right. Ratios amplify small numbers: a near-zero baseline makes modest counts look explosive. The floor ensures only keys with real volume compete on velocity — commit to both knobs, floor first."},
+        {"t": "Baselines should update in real time instead of from batch", "correct": false,
+         "why": "Real-time baselines would chase the spike and suppress genuine trends — the baseline must be the key's *normal* rate, which is exactly what a batch view over the past week gives you."},
+        {"t": "The score should use raw counts to prevent this", "correct": false,
+         "why": "Raw counts put rice on the umbrella shelf — the perennially-huge keys would occupy trending forever, which is the failure Twitter had to redesign away in 2010. Fix the guard rails on the ratio, don't abandon velocity."}
+      ]
+    },
+    {
+      "id": "p3c12-q19", "level": 3, "type": "mcq", "tag": "commit-justify",
+      "q": "The interviewer pushes: \"Two pipelines is complexity. Why not one exact streaming job with keyed state — Flink and RocksDB can do this?\" Your best answer:",
+      "options": [
+        {"t": "\"It can, and below ~tens of millions of keys I'd do exactly that. At a billion keys it recreates the memory wall inside the stream processor — huge checkpoints, slow rescaling. The product needs approximate-fast AND exact-slow, which are two different jobs; I take lambda's real cost — two paths that must agree — and turn it into my correctness alarm.\"", "correct": true,
+         "why": "This is the full senior package: concede where the alternative wins, name the number that kills it here, tie the choice to the actual requirements, and own the cost with a mitigation. Note the divergence monitor converts lambda's weakness into a feature."},
+        {"t": "\"Kappa is the more modern architecture, so I'd actually switch to it.\"", "correct": false,
+         "why": "Abandoning your design because an alternative sounds newer is the opposite of commitment — and 'modern' is not a mechanism. The push was an invitation to defend with numbers, not to fold."},
+        {"t": "\"Lambda is the industry standard for this problem.\"", "correct": false,
+         "why": "Appeal to convention with zero mechanism. The interviewer asked *why*; 'everyone does it' answers 'who'. State-size math and the two-SLO argument are the actual reasons."},
+        {"t": "\"Streaming state is unreliable, so batch must be the backbone.\"", "correct": false,
+         "why": "False — Flink's checkpointed state is production-grade at enormous scale. Dismissing a technology with an untrue generalization invites a probe you'll lose; the honest objection is state *size* at this cardinality, not reliability."}
+      ]
+    },
+    {
+      "id": "p3c12-q20", "level": 3, "type": "mcq", "tag": "crux-spotting",
+      "q": "Which candidate has correctly identified the crux of 'design trending topics'?",
+      "options": [
+        {"t": "\"The hard part is serving reads at scale — millions of users loading the board.\"", "correct": false,
+         "why": "Serving is the *easy* part — one small cached blob, refreshed every 2 seconds, covers any read volume. Spending deep-dive time there is touring rooms that aren't on fire."},
+        {"t": "\"The hard part is identifying the top K among a billion keys in one pass with bounded memory — exact counting can't fit, so I need an approximate path plus an exact corrector.\"", "correct": true,
+         "why": "That's the fire. The whole architecture — sketch, heap, ring, dual path — exists because per-key exact state is unaffordable in real time. Naming it early and steering there is the strongest signal in this interview."},
+        {"t": "\"The hard part is storing 860 billion events a day durably.\"", "correct": false,
+         "why": "Big but solved: Kafka into object storage is routine plumbing at every log-heavy company. Volume alone isn't difficulty — the interesting tension is memory-vs-exactness in real time."},
+        {"t": "\"The hard part is choosing between Flink, Spark, and Storm.\"", "correct": false,
+         "why": "Tool selection is the least interesting decision here — any of them can run either path. Mistaking a vendor menu for the problem reads as buzzword architecture."}
+      ]
+    },
+    {
+      "id": "p3c12-q21", "level": 3, "type": "mcq", "tag": "what-breaks",
+      "q": "\"Can a genuinely popular video be missing from your top-100?\" The senior answer:",
+      "options": [
+        {"t": "\"No — the math guarantees the sketch finds every heavy hitter.\"", "correct": false,
+         "why": "Overclaiming invites the counterexample. The sketch's guarantee covers counts for keys you *ask about*; identity discovery is the heap's job, and heap admission is heuristic. 'Guaranteed' is one probe away from collapsing."},
+        {"t": "\"Sketch error can't hide it — error only inflates. The real risk is candidate tracking: a key that never beat any minute-heap's minimum. My margin M=5000 and the 60-bucket union re-score make that vanishingly rare for anything near top-100, and the hourly batch catches any escapee within the hour.\"", "correct": true,
+         "why": "Right — it separates the two mechanisms (error direction vs identity tracking), locates the true risk in the second, quantifies the mitigations, and names the backstop. That decomposition is exactly what the question probes."},
+        {"t": "\"Yes, sketches are approximate, so misses are expected and acceptable.\"", "correct": false,
+         "why": "Concedes too much and misdiagnoses: approximation fuzzes *counts near the boundary*; it cannot suppress a giant, whose estimate is at least its huge truth. Vague fatalism about error reads as not understanding which way it points."},
+        {"t": "\"I'd prevent it by tracking all keys exactly for safety.\"", "correct": false,
+         "why": "'Track everything exactly' un-decides the central decision — it's the 190 GB design walking back in the door. Reversing your architecture under one probing question is the anti-commitment signal."}
+      ]
+    },
+    {
+      "id": "p3c12-q22", "level": 3, "type": "mcq", "tag": "consumers",
+      "q": "Which consumers may read the fast path's approximate counts, and which must not?",
+      "options": [
+        {"t": "All internal consumers may; only user-facing surfaces need exact numbers", "correct": false,
+         "why": "Inverted. Users tolerate (and can't detect) approximate ranks; it's internal *contractual* consumers — billing, payouts — where a fraction-of-a-percent inflation becomes systematically overpaying. The line is consequences, not visibility."},
+        {"t": "Trending widgets, discovery shelves, ops dashboards: yes. Creator payouts, ad billing, anything contractual: exact path only — CMS strictly overestimates, so paying on estimates means always overpaying", "correct": true,
+         "why": "Right — and the error *direction* is what makes this crisp: one-sided error turns into one-sided money loss. Drawing the consumer line unprompted is the ownership signal this problem rewards."},
+        {"t": "Nobody should see approximate counts; hide numbers until batch confirms them", "correct": false,
+         "why": "That deletes the product — near-real-time was a requirement. The design's honesty mechanism (as_of, exact:false, hourly hardening) exists so estimates can be shown safely."},
+        {"t": "Everyone — the error is under a percent, which rounds away for all uses", "correct": false,
+         "why": "Small × billions = large: a systematic +0.5% on payout counts is real money leaking in one direction forever. 'The error is small' without asking 'small for whom, compounding how' is the junior version of this analysis."}
+      ]
+    },
+    {
+      "id": "p3c12-q23", "level": 3, "type": "mcq", "tag": "what-breaks",
+      "q": "Product wants the window changed from 'last hour' to 'last 5 minutes' for a breaking-news surface. What actually needs rethinking?",
+      "options": [
+        {"t": "Nothing — serve the last 5 buckets of the existing ring", "correct": false,
+         "why": "Mechanically true and it's the right starting point — but calling it 'nothing' misses the granularity problem: a 1-minute hop is 20% of a 5-minute window, so the board lurches at each minute boundary. Senior answers notice the ratio changed."},
+        {"t": "The ring already supports it (sum 5 buckets), but window-edge granularity now matters — 1-minute hops are 20% of the window, so drop to 10-second buckets for this surface; also revisit the eligibility floor, since 5-minute counts are far smaller", "correct": true,
+         "why": "Right — reuse the mechanism, re-derive the constants. Bucket size relative to window length and volume-dependent thresholds are exactly the parameters that silently break when a requirement flips. Checking them unprompted is the senior reflex."},
+        {"t": "Sketches can't handle short windows; switch to exact maps for 5 minutes", "correct": false,
+         "why": "Backwards — shorter windows are *easier* for sketches: less stream per bucket means less collision noise, and distinct-keys-per-5-min would still make exact maps expensive. The constraint that changed is granularity, not feasibility."},
+        {"t": "Rebuild the pipeline around a stream processor with native sliding windows", "correct": false,
+         "why": "A platform rewrite in response to a parameter change is the over-engineering tell. The ring *is* a sliding-window implementation; it needs smaller buckets, not a new engine."}
+      ]
+    },
+    {
+      "id": "p3c12-q24", "level": 3, "type": "mcq", "tag": "ops-judgment",
+      "q": "You can afford one high-quality alarm on this system's correctness (not liveness). Where does it go?",
+      "options": [
+        {"t": "Fast-path vs hourly-batch divergence per top key, alerting when it leaves its expected small-positive band — in either direction", "correct": true,
+         "why": "Right. Lag and crash alarms catch slowness; only comparing the two paths catches *wrongness* — silent drops, double-consumes, seed mismatches. And a negative divergence is mathematically impossible for a healthy CMS, making it a free bug detector."},
+        {"t": "Kafka consumer lag per partition", "correct": false,
+         "why": "Essential, but it's a liveness alarm — it fires when counting falls behind, not when counting is wrong. A shard double-consuming a partition has *great* lag numbers and corrupt counts."},
+        {"t": "p99 latency on the leaderboard endpoint", "correct": false,
+         "why": "It's a cache read of a tiny blob — the least likely component to fail interestingly. Guarding the easiest part while correctness goes unwatched is alarm-placement by habit, not by risk."},
+        {"t": "Sketch memory utilization per shard", "correct": false,
+         "why": "Sketch memory is *constant by construction* — 16 MB per bucket regardless of traffic. An alarm on a value that cannot vary teaches you nothing; the interesting failure is disagreement between the two paths."}
+      ]
+    },
+    {
+      "id": "p3c12-q25", "level": 3, "type": "mcq", "tag": "commit-justify",
+      "q": "Interviewer: \"Legal now requires the public leaderboard itself to show exact counts. React.\" The strongest response:",
+      "options": [
+        {"t": "\"Then the sketch design is dead — back to sharded exact maps for everything.\"", "correct": false,
+         "why": "Overreaction. Exactness is now needed for ~1000 visible keys, not a billion — throwing away the discovery machinery because the *display* requirement changed conflates two different jobs the design deliberately separated."},
+        {"t": "\"Keep the sketch+heap for discovery — finding the top keys — and add exact counters (sharded, batched increments) for the current candidate set only: thousands of keys, not billions. Ranks come from discovery; displayed numbers come from the exact counters. Cost: a small counter service and reconciliation when candidates rotate.\"", "correct": true,
+         "why": "Right — the requirement changed for a tiny, enumerable subset, so pay exactness only there. Splitting 'find the winners' from 'display their numbers' keeps each part cheap, and pricing the addition out loud is the commit-and-justify pattern."},
+        {"t": "\"Push back — legal doesn't understand the technical constraints.\"", "correct": false,
+         "why": "Compliance requirements are requirements. 'Fight the stakeholder' dodges the design question being asked and reads as inflexibility; the accommodation here is genuinely cheap once you see it's per-candidate, not per-key."},
+        {"t": "\"Show batch-exact numbers and accept the leaderboard being an hour stale.\"", "correct": false,
+         "why": "Silently sacrificing the near-real-time requirement to satisfy the new one is trading a core product property away without flagging it — the kind of quiet regression an interviewer pounces on. Name the tension; then resolve it without giving up freshness."}
+      ]
+    }
+  ]
+}

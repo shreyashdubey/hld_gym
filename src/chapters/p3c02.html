@@ -1,0 +1,336 @@
+<p>The interviewer writes one line on the board: <em>"Design search autocomplete — the suggestions under the search box as you type."</em> Then the trap, delivered casually: "Assume Google-ish scale."</p>
+
+<p>Most candidates hear "search suggestions" and think <em>small</em>. It's a dropdown. Ten strings. How hard can ten strings be? Then the first honest piece of math drops the floor out: the search engine answers one query per search, but autocomplete answers a query <strong>per keystroke</strong>. Whatever traffic the search engine handles, this little dropdown handles ten times more — and it has to be <em>faster</em> than search, because it's racing the user's fingers. A suggestion that arrives 300 milliseconds after the keystroke arrives after the next keystroke. It's useless.</p>
+
+<p>This problem is a favorite at Meta and Google because it looks cute and is secretly brutal. It has a clean crux, it punishes "just use a database," and it rewards letting numbers make the decisions. Let's play it at the senior bar: commit, justify, find the fire early.</p>
+
+<div class="box story"><div class="box-tag">War story — Google Suggest, born on a shuttle bus</div>
+<p>Autocomplete at Google wasn't a grand roadmap item. In 2004, Kevin Gibbs — a recent Stanford grad who'd joined months before the IPO — used his rides on the new San Francisco–Mountain View employee shuttle as 20% time. His first prototype predicted URLs as you typed, by mining Google's crawl of the web; that morphed into predicting <em>search queries</em> from query logs. Google Suggest launched on Google Labs in December 2004 — one engineer, a lunch-table idea, a few months of shuttle rides. Then it took nearly four more years of hardening before graduating to the google.com homepage in 2008, because a Labs demo and a system eating ten times google.com's query traffic at lower latency are very different machines. The feature is trivial; the scale is the product. That gap is exactly what this interview question measures.</p>
+</div>
+
+<h2>Requirements: scope it before it scopes you</h2>
+
+<p>First move, out loud: shrink the problem and get agreement.</p>
+
+<p><strong>Functional:</strong></p>
+<ul>
+<li>As the user types, return the top 5–10 query completions for the current prefix, ranked by likelihood.</li>
+<li>Suggestions reflect what people actually search — including <em>trending</em> queries. When news breaks, suggestions follow within minutes, not next week.</li>
+<li>Filtered: no offensive, unsafe, or legally-removed suggestions.</li>
+</ul>
+
+<p><strong>Deliberately out of scope, and I'll say why:</strong> per-user personalization (your own history ranked first). Personalization makes every response user-specific, which destroys shared caching — and shared caching is going to carry half this system. I'll design the global system and show at the end where a "personalization lite" layer bolts on client-side. That's a product trade-off stated as an architecture decision, made out loud.</p>
+
+<p><strong>Non-functional, with numbers I'm committing to:</strong></p>
+<ul>
+<li><strong>p99 latency under 100 ms</strong>, keystroke to rendered suggestion. Below ~100 ms feels instant; above it, the dropdown visibly lags the fingers and users stop trusting it.</li>
+<li><strong>Scale:</strong> 5 billion searches/day on the parent search product.</li>
+<li><strong>Availability over freshness:</strong> suggestions may be minutes or hours stale, but the box should essentially never be empty or slow. Stale is mildly imperfect; laggy feels broken.</li>
+</ul>
+
+<p>That last line is a CAP-flavored commitment (Part 1) made in product terms, and it decides several designs below.</p>
+
+<h2>Estimation: the multiplication that designs the system</h2>
+
+<p>One multiplication drives this entire chapter, so let's do it slowly.</p>
+
+<p>5 billion searches/day ÷ 86,400 seconds ≈ <strong>~60,000 searches/sec</strong> average; call peak 2×, ~120K/sec. Now the amplifier: the average query is ~20 characters, and the client asks for suggestions as the user types. Even after client-side tricks we'll add later (debouncing, caching), figure roughly <strong>10 suggestion requests leave the device per search typed</strong>.</p>
+
+<p>10 × 60K = <strong>600,000 requests/sec average. Past a million at peak.</strong></p>
+
+<p>Sit with that. Autocomplete serves <em>an order of magnitude more traffic than the search engine it decorates</em>, with a <em>tighter</em> latency budget — and the budget is mostly pre-spent: on mobile, the round trip alone eats 30–60 ms of our 100. The server gets maybe 10–20 ms, a million times per second.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="One search for pizza generates five suggestion requests, one per keystroke">
+  <rect class="dg-node" x="20" y="95" width="120" height="56" rx="8"/>
+  <text class="dg-txt" x="38" y="119">User types</text>
+  <text class="dg-txt" x="38" y="137">"pizza"</text>
+  <rect class="dg-node-alt" x="540" y="85" width="160" height="76" rx="8"/>
+  <text class="dg-txt" x="558" y="113">Suggest</text>
+  <text class="dg-txt" x="558" y="131">service</text>
+  <text class="dg-txt-s" x="558" y="149">10-20 ms budget</text>
+  <line class="dg-edge" x1="140" y1="105" x2="540" y2="95" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="140" y1="115" x2="540" y2="108" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="140" y1="125" x2="540" y2="121" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="140" y1="135" x2="540" y2="134" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="140" y1="145" x2="540" y2="147" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="250" y="80">"p"  "pi"  "piz"  "pizz"  "pizza"</text>
+  <text class="dg-txt-s" x="250" y="190">5 requests for 1 search — then only 1 request ever reaches the search engine</text>
+  <text class="dg-txt-s" x="250" y="212">60K searches/sec  →  ~600K suggest requests/sec</text>
+</svg>
+<figcaption>The keystroke fan. Every search is amplified into many suggestion queries. Autocomplete out-scales the search engine it serves.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Imagine a shop assistant who must run over and offer help after every <em>letter</em> a customer writes on their shopping list, not every item. One customer buying five things generates fifty interruptions. That's autocomplete's life: the "real" work happens once, but the assistant sprints on every pen stroke. Any design where each sprint is expensive — a scan, a disk read — collapses under the sheer count of sprints. The only survivable design is one where the assistant already holds the answer in hand.</p>
+</div>
+
+<p><strong>Storage estimate, because it gates where data lives.</strong> Keep the top ~2 billion distinct queries worth suggesting (the junk long tail adds nothing), and precompute an answer for every prefix of every kept query. Prefixes overlap heavily ("car", "care", "career" share "car"), so call it ~10 billion distinct prefixes. Each entry — ~20-byte key, 10 completions with scores, overhead — ~500 bytes. That's <strong>~5 TB</strong>. Two conclusions: it doesn't fit on one machine, so we shard; and 5 TB across a fleet is comfortably RAM-sized, so <em>nothing on the hot path ever touches disk</em>. About 50 shards of ~100 GB, times 3 replicas — ~150 nodes. Big, but boring-big. The math just designed the storage tier.</p>
+
+<h2>Why the obvious answer dies</h2>
+
+<p>Every candidate's first instinct is a table of queries with counts and:</p>
+
+<pre><code>SELECT query FROM searches
+WHERE query LIKE 'ca%'
+ORDER BY freq DESC LIMIT 10;</code></pre>
+
+<p>A B-tree index on <code>query</code> handles the <code>LIKE 'ca%'</code> part fine — it's a range scan (Part 1, indexes). The killer is the <code>ORDER BY freq</code>. The index gives rows sorted <em>alphabetically</em>; you want the top 10 by <em>frequency</em>. So the database must fetch <strong>every</strong> row in the range — millions for a two-letter prefix — sort them, and throw away all but 10. Per keystroke.</p>
+
+<p>And here's the cruel correlation: the shortest prefixes are both the <em>most expensive</em> (widest ranges) and the <em>most frequent</em> — you can't reach "cats" without passing "c" and "ca". Your worst query is your hottest query, a million times a second. No index tuning escapes this; the scan-then-rank work is real. The fix isn't a faster database. The fix is to <strong>stop doing the work at request time</strong>.</p>
+
+<p>Say the senior sentence out loud: <em>"The read path can't afford to compute anything. So I'll precompute the answer to every possible question."</em></p>
+
+<h2>API and data model — quick, then move on</h2>
+
+<pre><code>GET /suggest?q=cat
+→ 200 {"q":"cat","s":["cat videos","cat food","cat memes", ...]}</code></pre>
+
+<p>Notes worth saying, then dropping: the prefix is normalized (lowercased, trimmed, Unicode-normalized) so "Cat" and "cat " hit the same cache entry; the response is a few hundred bytes; and the endpoint is read-only and cacheable, which we will exploit hard. The core data model is one logical structure:</p>
+
+<pre><code>prefix (string, normalized)  →  top-K completions [ (text, score) × 10 ]</code></pre>
+
+<p>That's it. The entire serving system is a giant read-only dictionary from prefix to pre-ranked list. Everything interesting is in how we build, shard, and refresh it.</p>
+
+<h2>High-level design: the complete machine</h2>
+
+<p>Two loops, fully closed. The <strong>read path</strong>: keystroke → client cache and debounce → edge/CDN → suggest service → in-memory prefix shards → back. The <strong>write path</strong>: every executed search is logged → Kafka → two consumers: a batch job that periodically rebuilds the whole prefix→top-K world, and a streaming job that catches what's trending <em>right now</em>. The serving fleet merges both at read time.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="Read path from client through CDN and suggest service to prefix-hash shards, with a hot shard replicated">
+  <rect class="dg-node" x="10" y="120" width="100" height="56" rx="8"/>
+  <text class="dg-txt" x="26" y="144">Client</text>
+  <text class="dg-txt-s" x="26" y="162">debounce</text>
+  <rect class="dg-node" x="160" y="120" width="110" height="56" rx="8"/>
+  <text class="dg-txt" x="176" y="144">Edge CDN</text>
+  <text class="dg-txt-s" x="176" y="162">TTL 60s</text>
+  <rect class="dg-node" x="320" y="120" width="130" height="56" rx="8"/>
+  <text class="dg-txt" x="336" y="144">Suggest svc</text>
+  <text class="dg-txt-s" x="336" y="162">short prefixes local</text>
+  <line class="dg-edge" x1="110" y1="148" x2="160" y2="148" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="270" y1="148" x2="320" y2="148" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="510" y="20" width="200" height="280" rx="10"/>
+  <text class="dg-txt-s" x="524" y="44">prefix-hash shards (RAM)</text>
+  <rect class="dg-node" x="530" y="58" width="160" height="40" rx="8"/>
+  <text class="dg-txt" x="546" y="83">shard 1</text>
+  <rect class="dg-node-alt" x="530" y="112" width="160" height="40" rx="8"/>
+  <text class="dg-txt" x="546" y="137">shard 2 (hot) ×5</text>
+  <rect class="dg-node" x="530" y="166" width="160" height="40" rx="8"/>
+  <text class="dg-txt" x="546" y="191">shard 3</text>
+  <rect class="dg-node" x="530" y="220" width="160" height="40" rx="8"/>
+  <text class="dg-txt" x="546" y="245">shard N  ×3 replicas</text>
+  <line class="dg-edge" x1="450" y1="140" x2="530" y2="80" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="450" y1="148" x2="530" y2="132" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="450" y1="156" x2="530" y2="186" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="20" y="230">Most requests die at the left: browser cache first,</text>
+  <text class="dg-txt-s" x="20" y="250">then CDN. Only cache misses reach the shards —</text>
+  <text class="dg-txt-s" x="20" y="270">one hash, one RAM lookup, no disk, no compute.</text>
+</svg>
+<figcaption>The read path is a funnel of caches. Each layer exists to stop a keystroke from traveling further than it must.</figcaption>
+</figure>
+
+<p>Walk the read path like a request: a keystroke fires. The client checks its tiny session cache and applies a debounce. If a request goes out, it hits the CDN edge — and because <em>everyone on Earth types through the same short prefixes</em>, the edge answers a huge fraction of traffic a few milliseconds away, with a short TTL (~60 seconds) so trending stays fresh-ish. Misses reach the suggest service: hash the prefix, call the owning shard, get the precomputed list in under a millisecond, merge any trending overlay (below), return. No step computes anything meaningful. That's the whole point.</p>
+
+<p>The write path gets its own deep dive — it's where ranking and freshness live. First, the crux.</p>
+
+<h2>Deep dive 1: the top-K store — trie in your head, hash table in production</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>This is the fire in this house: <strong>p99 under 100 ms, at a million requests per second, ranking billions of historical queries — which means the ranking must already be done before the request arrives.</strong> Everything else in this design is plumbing around one idea: precompute the top-K answers for every prefix and store the system as a read-only dictionary in RAM. Candidates who try to make request-time search fast (better indexes, faster databases, clever tries traversed per request with live re-ranking) are fighting physics. Candidates who move all the work to build time and make the read path a single hash lookup have found the crux. The interview question is secretly: <em>do you know when to precompute?</em></p>
+</div>
+
+<p>The classic mental model is a <strong>trie</strong> — a tree where each node is one more character of prefix: root → c → ca → cat. The subtree below any node contains every query starting with that prefix, and to avoid scanning subtrees per request you cache the top-K completions <em>at every node</em> during the build. Lookups become: walk down, read the stored list. A beautiful teaching model — I'll keep it in my head.</p>
+
+<p>But I won't deploy it, and here's my reasoning. Our data is 5 TB — it must be sharded. How do you shard a tree? By subtree: one machine owns everything under "a", another under "b"... and you've recreated Part 2's hot-partition problem — "s" and "c" subtrees are enormous and scorching, "x" and "z" idle, and rebalancing means moving subtrees. Trie lookups also chase pointers node to node, and the structure invites clever in-place updates that turn a simple system into a concurrent data-structure project.</p>
+
+<p><strong>My commitment: a flat hash table — prefix → top-K list — sharded by hash of the prefix.</strong> Because:</p>
+<ul>
+<li><strong>Sharding is solved by construction.</strong> Hashing scatters prefixes uniformly (Part 1, consistent hashing). "ca" and "cat" may live on different machines — fine, each request needs exactly one key.</li>
+<li><strong>Lookup is one hash and one memory read.</strong> No pointer walks. Microseconds.</li>
+<li><strong>Rebuild-friendly.</strong> Generated offline as immutable snapshot files, loaded by shards. No in-place mutation, no locks. Boring — the highest compliment.</li>
+</ul>
+
+<p>The cost I'm accepting: storing every prefix explicitly duplicates data a trie would share, roughly doubling memory. RAM is the cheapest thing in this design; I'll pay it. (A lever if memory hurts: cap stored prefixes at ~10 characters and let the client filter a longer stored list — traffic past 10 characters is a trickle.)</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 270" role="img" aria-label="Trie with cached top-K at each node versus flat hash table of prefix to top-K, which shards cleanly">
+  <text class="dg-txt" x="80" y="30">Mental model: trie</text>
+  <rect class="dg-node" x="110" y="45" width="56" height="34" rx="8"/>
+  <text class="dg-txt" x="128" y="67">c</text>
+  <rect class="dg-node" x="110" y="105" width="56" height="34" rx="8"/>
+  <text class="dg-txt" x="124" y="127">ca</text>
+  <rect class="dg-node" x="60" y="165" width="60" height="34" rx="8"/>
+  <text class="dg-txt" x="74" y="187">cat</text>
+  <rect class="dg-node" x="150" y="165" width="60" height="34" rx="8"/>
+  <text class="dg-txt" x="162" y="187">car</text>
+  <line class="dg-edge" x1="138" y1="79" x2="138" y2="105" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="126" y1="139" x2="98" y2="165" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="150" y1="139" x2="172" y2="165" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="40" y="230">top-K cached at every node,</text>
+  <text class="dg-txt-s" x="40" y="248">but sharding a tree = hot subtrees</text>
+  <text class="dg-txt" x="420" y="30">Production: flat hash table</text>
+  <rect class="dg-node-alt" x="400" y="45" width="290" height="34" rx="8"/>
+  <text class="dg-txt-s" x="412" y="67">"c"    → [chatgpt, cricket, ...]  shard 7</text>
+  <rect class="dg-node-alt" x="400" y="89" width="290" height="34" rx="8"/>
+  <text class="dg-txt-s" x="412" y="111">"ca"   → [canva, cats, ...]      shard 2</text>
+  <rect class="dg-node-alt" x="400" y="133" width="290" height="34" rx="8"/>
+  <text class="dg-txt-s" x="412" y="155">"cat"  → [cat videos, ...]       shard 5</text>
+  <rect class="dg-node-alt" x="400" y="177" width="290" height="34" rx="8"/>
+  <text class="dg-txt-s" x="412" y="199">"car"  → [car rental, ...]       shard 1</text>
+  <text class="dg-txt-s" x="400" y="240">hash(prefix) → uniform spread, 1 lookup,</text>
+  <text class="dg-txt-s" x="400" y="258">rebuilt offline as immutable files</text>
+</svg>
+<figcaption>Think in tries, ship a dictionary. The flat table trades ~2× memory for trivial sharding and one-hop lookups.</figcaption>
+</figure>
+
+<p><strong>Self-identified weakness: hot prefixes.</strong> Hashing spreads <em>distinct</em> keys evenly, but not <em>traffic</em> — everyone typing anything starting with "c" hammers whichever shard owns key "c", tens of thousands of requests per second on one key. Two-layer fix, committed: short prefixes (length ≤ 2) are a rounding error in size — 36² ≈ 1,300 two-character keys, a few megabytes — so every suggest-service node keeps a full local copy and never calls a shard for them. For hot longer prefixes, run extra replicas of hot shards (hot-key replication, straight from Part 2's celebrity-problem playbook). And the CDN already absorbed most short-prefix traffic before it got here. Defense in depth against a completely predictable skew.</p>
+
+<h2>Deep dive 2: the pipeline — one bakery, two ovens</h2>
+
+<p>Where do the top-K lists come from? From the users: every executed search is a vote. The write path turns billions of votes into ranked lists.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Run it like a bakery. Overnight, the big ovens bake the day's stock of proven bestsellers — the batch rebuild, thorough and cheap per loaf, done while nobody's watching. But if a cake goes viral on TV at noon, you don't wait for tomorrow's bake: a small counter oven handles today's rush — the streaming layer. Customers see one shelf holding output from both ovens. The counter oven's cakes are rougher (approximate counts, short history) — fine, they only exist until tonight's big bake incorporates them properly.</p>
+</div>
+
+<p><strong>Oven 1 — the batch layer.</strong> Search logs flow into Kafka; a daily MapReduce-style job aggregates weeks of history: count query frequencies with <strong>exponential recency decay</strong> (halve a query's weight every ~week, so dead memes sink without needing deletion), apply <strong>quality filters</strong> (drop queries below a minimum count — killing both junk and privacy-sensitive rare strings — plus misspellings, safe-search hits, and blocklist matches), then emit each prefix's top 10 by score, packed into immutable snapshot files per shard. Filtering at build time is deliberate: a blocklist applied once per build costs nothing; the same check per request would run a million times a second on identical data. Never do per-request what you can do per-build.</p>
+
+<p><strong>Oven 2 — the streaming layer.</strong> A daily build means breaking news wouldn't appear until tomorrow — failing the trending requirement. So a stream job (Part 2) consumes the same Kafka topic, counting queries in ~5-minute windows — sketch-based counting (count-min) is fine, approximate is acceptable. Queries whose current rate massively exceeds their historical rate get promoted into a small <strong>trending overlay</strong>: a few thousand hot queries and their prefixes. It's tiny, so we don't shard it — we push the whole overlay to <em>every</em> serving node every few minutes. At read time a node merges: <code>score = batch_score + boost × trending_count</code>, re-sorts ten-ish items, returns. Nanoseconds of work.</p>
+
+<p>If you did Part 2's pipelines chapter, you've spotted the shape: a textbook <strong>lambda architecture</strong> — batch layer plus speed layer, merged at read. We argued there that kappa (one streaming path, replay to recompute) is usually the cleaner default. Why lambda here? Because the two layers genuinely compute different things: ranking wants <em>weeks</em> of decayed, heavily filtered history — natural as a batch job — while trending wants a five-minute window. When the speed layer fits in a pocket, lambda's usual sin — two full codebases that must agree — mostly disappears. Committed, with the reason attached.</p>
+
+<p><strong>Update cadence, committed:</strong> full rebuild daily, trending overlay every ~5 minutes, CDN TTL 60 seconds. Rebuild hourly? That's 24× the compute to freshen data the trending layer already covers. Make trending 10-second-fresh? The CDN TTL and browser cache would still smear staleness over a minute — real money spent improving a number the user can't see. The cadence lands where marginal freshness stops being visible.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Dual pipeline: query logs flow to Kafka, then to a daily batch build producing snapshots for shards, and to a streaming job producing a trending overlay pushed to serving nodes">
+  <rect class="dg-node" x="15" y="130" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="33" y="152">Search</text>
+  <text class="dg-txt-s" x="33" y="170">query logs</text>
+  <rect class="dg-node" x="175" y="130" width="90" height="52" rx="8"/>
+  <text class="dg-txt" x="197" y="161">Kafka</text>
+  <line class="dg-edge" x1="125" y1="156" x2="175" y2="156" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="330" y="40" width="160" height="62" rx="8"/>
+  <text class="dg-txt" x="346" y="64">Batch build</text>
+  <text class="dg-txt-s" x="346" y="82">daily · decay · filters</text>
+  <rect class="dg-node-alt" x="330" y="210" width="160" height="62" rx="8"/>
+  <text class="dg-txt" x="346" y="234">Stream job</text>
+  <text class="dg-txt-s" x="346" y="252">5-min windows · sketch</text>
+  <line class="dg-edge" x1="265" y1="145" x2="330" y2="75" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="265" y1="168" x2="330" y2="236" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="560" y="40" width="145" height="62" rx="8"/>
+  <text class="dg-txt" x="574" y="64">Snapshots</text>
+  <text class="dg-txt-s" x="574" y="82">→ prefix shards</text>
+  <rect class="dg-node" x="560" y="210" width="145" height="62" rx="8"/>
+  <text class="dg-txt" x="574" y="234">Trending</text>
+  <text class="dg-txt-s" x="574" y="252">overlay → all nodes</text>
+  <line class="dg-edge" x1="490" y1="71" x2="560" y2="71" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="490" y1="241" x2="560" y2="241" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="545" y="20" width="170" height="270" rx="10"/>
+  <text class="dg-txt-s" x="558" y="315">merged at read time</text>
+  <text class="dg-txt-s" x="330" y="140">heavy, thorough, cheap:</text>
+  <text class="dg-txt-s" x="330" y="158">weeks of decayed history</text>
+  <text class="dg-txt-s" x="330" y="185">light, fast, approximate:</text>
+  <text class="dg-txt-s" x="330" y="203">what exploded this hour</text>
+</svg>
+<figcaption>One log, two consumers. The batch layer builds the world nightly; the tiny streaming overlay keeps "right now" alive between bakes.</figcaption>
+</figure>
+
+<h2>Deep dive 3: the client is part of the architecture</h2>
+
+<p>Backend-minded candidates skip this, and it's a mistake — especially in Meta's product-architecture track, where "the client is a tier of your system" is house religion. Three client behaviors change our backend math:</p>
+
+<p><strong>Debounce.</strong> A fast typist emits a keystroke every ~80 ms. Firing per raw keystroke wastes half your traffic on prefixes already typed past; wait ~50–100 ms of typing silence first. This is where "10 requests per search, not 20" came from — the client already halved the fleet. Tune carefully: debounce too long and you've spent the latency budget standing still.</p>
+
+<p><strong>Cancel stale responses.</strong> You send "ca", then "cat". Nothing guarantees arrival order — the "ca" response can land <em>after</em> the "cat" response, and if the client renders whatever arrived last, suggestions flicker backward while the user types forward. The fix is small and mandatory: abort in-flight requests on new keystrokes, and tag each response with its prefix so the client drops anything not matching the current input. Volunteering this out-of-order bug — a distributed-systems race living inside a text box — is a cheap, genuine senior signal.</p>
+
+<p><strong>Cache and filter locally.</strong> Backspacing "cats" to "cat"? The answer for "cat" is in session memory — no request. And a client holding results for "cat" can filter them to serve "cats" instantly while the network catches up.</p>
+
+<div class="box story"><div class="box-tag">War story — Facebook's typeahead: the fastest request is no request</div>
+<p>In 2010 Facebook's engineers published "The Life of a Typeahead Query," walking through how friend-and-page search-as-you-type actually worked — and the striking part is how much of the architecture lives <em>before</em> their servers. The moment a user merely <em>focuses</em> the search box, before typing one character, the browser prefetches that user's friends, pages, groups, and events into a local cache, so the first keystrokes resolve entirely on-device — zero network round trips. Only when local results run thin does a request go out, carrying the list of results already displayed so the backend won't resend them. Server-side it hits an aggregator: a stateless root fanning out to specialized leaf index services in parallel, merging results. Their typeahead is personalized by definition (your friends, not the world's top queries) — which is exactly why per-user data got pushed to the one cache that's per-user for free: the user's own browser. Put each piece of data in the cheapest tier that can own it.</p>
+</div>
+
+<h2>Failure modes and operations</h2>
+
+<p>Design something you'd be on call for. What breaks, unprompted:</p>
+
+<ul>
+<li><strong>A shard (and its replicas) goes dark.</strong> Serve the CDN's stale copy if present (serve-stale-on-error is standard CDN behavior worth naming), else return an empty list fast. An empty dropdown for some prefixes for a few minutes is a non-event; search itself is untouched. The availability-over-freshness commitment cashing out: <strong>degrade silently, never slowly.</strong> Autocomplete is an enhancement — its worst allowed failure is absence.</li>
+<li><strong>The pipeline stalls.</strong> Kafka backs up or the batch job fails. Serving is unaffected — it runs on yesterday's snapshot; trending goes quiet, suggestions slowly stale. A warning-level page, not a 3am one. That decoupling — serving never waits on the pipeline — is the operational payoff of immutable snapshots.</li>
+<li><strong>A bad snapshot ships.</strong> The scarier data bug: a build with a broken filter or poisoned ranking. Treat data like code: validate offline (size bounds, zero blocklist hits, golden spot-checks), canary on one shard's replica, then promote. Rollback is instant by design — the previous immutable snapshot is still on disk; reload it. Part 2's rollout machinery, applied to data.</li>
+<li><strong>Emergency takedown.</strong> Legal demands a suggestion vanish <em>now</em>, not at tonight's build. Push a tiny suppression list (replicated to all nodes like the trending overlay) checked at read time against ten candidate strings — nanoseconds — and fold real removal into the next build.</li>
+<li><strong>Monitoring:</strong> the two numbers that define this product are <strong>end-to-end keystroke p99</strong> (measured from the client, not the server — a server-side 5 ms means nothing if mobile users see 400) and <strong>cache hit rates</strong> per layer: browser, CDN, local short-prefix copies. They move together — a 20-point CDN slip triples origin traffic and p99 follows. Alongside: per-shard QPS skew (hot-prefix drift), pipeline lag (trending freshness), empty-result rate (data bug or dead shard), and snapshot age (an alarm if two builds fail quietly).</li>
+<li><strong>At 10×:</strong> nothing conceptually changes — that's the design's real test. The CDN absorbs proportionally more (hit rate <em>improves</em> with traffic: hotter keys, denser caches); shard count grows linearly; hot-prefix replication gets re-tuned first. The component that actually changes shape is the stream job's counting — at 10× volume you sample the log rather than count every event, which is fine because trending detection needs signal, not census.</li>
+</ul>
+
+<div class="box lens"><div class="box-tag">At the whiteboard — what the interviewer probes next</div>
+<p>Typeahead's follow-ups are well-worn. Expect these, near-verbatim:</p>
+<ul>
+<li>"Why not just a database with an index on the query column?" — They want scan-then-rank and the precompute conclusion. If you started with precompute, they may probe backward: "what would make the DB version work?" (Nothing reasonable; the work is real.)</li>
+<li>"A celebrity dies. Within a minute, millions type their name. Walk me through your system, layer by layer." — Trending path and hot-key story at once: sketch counters promote it, the overlay ships within ~5 minutes, the CDN absorbs the prefix storm meanwhile.</li>
+<li>"How stale are suggestions, worst case? Make trending 10× fresher — what does it cost?" — They want the freshness chain (build age + overlay period + TTL + browser cache) and the insight that client-visible layers cap what backend freshness can buy.</li>
+<li>"Now add personalization." — Scope trap and architecture probe in one: per-user responses kill the CDN. The senior answer re-ranks global results on the client with local history (exercise 1).</li>
+<li>"Your p99 from India is 350 ms but servers answer in 5 ms. Fix it." — Speed of light: the fix is edge presence and client caching, not server tuning. They're checking you know where your latency lives.</li>
+</ul>
+</div>
+
+<h2>The trade-offs you committed to</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Chosen because</th><th>The cost you accepted</th></tr></thead>
+<tbody>
+<tr><td>Precompute top-K per prefix (no request-time search)</td><td>Read path must be O(1) at 1M QPS with ~10 ms of budget</td><td>Freshness bounded by build/overlay cadence; storage duplicated across prefixes</td></tr>
+<tr><td>Flat hash table over trie</td><td>Uniform hash-sharding; one-hop lookups; immutable offline rebuilds</td><td>~2× memory vs a shared-structure trie</td></tr>
+<tr><td>Lambda-shaped pipeline (daily batch + tiny streaming overlay)</td><td>The layers compute different things; the overlay is small enough to replicate everywhere</td><td>Two codepaths; scores briefly inconsistent as overlays roll out</td></tr>
+<tr><td>Daily rebuild + 5-min overlay + 60 s CDN TTL</td><td>Matches the freshness users can perceive through the cache layers</td><td>Non-trending ranking shifts land up to a day late</td></tr>
+<tr><td>Availability over freshness (serve stale, degrade to empty)</td><td>Autocomplete is an enhancement; latency is the product</td><td>Outdated or missing suggestions during incidents — accepted silently</td></tr>
+<tr><td>Filtering at build time + tiny read-time suppression list</td><td>Per-build checks are ~free; per-request checks ×1M QPS are not</td><td>Non-emergency filter fixes wait for the next build</td></tr>
+<tr><td>No server-side personalization</td><td>Per-user responses would zero out CDN and shared-cache hit rates</td><td>Personally irrelevant suggestions rank high; mitigated client-side only</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c02-f1">
+<p class="fey-prompt">A junior asks: "Why does autocomplete need all this? Why not just query the database for matching strings when the user types?" Explain it in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Because autocomplete gets asked on every keystroke, it serves about ten times more traffic than search itself, and each answer must arrive in tens of milliseconds or it loses the race with the next keystroke. A database query for "ca" would fetch millions of matching rows and sort them by popularity just to return ten — and the shortest, most expensive prefixes are exactly the ones everyone types through. No database survives that much work that often. So we flip it: overnight, a batch job computes the ten best completions for every possible prefix and stores them in memory as a giant lookup table — answering a keystroke is one dictionary read. A small streaming job layers on whatever is trending in the last few minutes, so breaking news still shows up. The rule underneath: when the same questions arrive millions of times per second, you stop answering at question time — you precompute the answer sheet.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>The PM wins: "suggestions must consider my own recent searches." Add personalization <em>without</em> destroying the CDN hit rate. Sketch the approach and name what you gave up.</p></div>
+<details><summary>Answer</summary><p>Keep the server global and cacheable; personalize at the edge — the client. The device stores the user's own recent searches locally (private data on the user's own hardware — free storage, free privacy win). On each keystroke the client fetches the global top-10 as before (CDN-cacheable, unchanged) and merges: matching local history pinned on top, global results filling the rest. Gave up: personalization is shallow — one device's history, no learned model, no cross-device sync. Kept: every shared cache layer, the entire cost model, and most of the perceived benefit, since users mostly want their own recent searches back. Deep model-driven personalization is a different, far more expensive system — say so with the price tag attached.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Traffic 10×: 50 billion searches/day. Recompute the load and storage, and name the first two components you'd change — and one you deliberately wouldn't touch.</p></div>
+<details><summary>Answer</summary><p>Load: ~600K searches/sec average → ~6M suggest requests/sec, north of 10M peak. Storage barely moves — 10× the searches mostly re-vote for the same queries; unique prefixes might grow 2–3×, say ~10–15 TB → 100–150 shards. First change: edge capacity and short-prefix local copies — the funnel's top absorbs proportionally more, and hit rates improve with traffic density. Second: the stream counter — switch to sampling (1-in-100 is plenty; trending needs signal, not census). Untouched: the core serving design — hash-sharded immutable snapshots in RAM scale linearly by adding shards, which is exactly why we chose it. If your architecture changes shape at 10×, it was the wrong architecture at 1×.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: not web search anymore — autocomplete for an e-commerce catalog of 50 million products, and suggestions must never show out-of-stock items. What changes?</p></div>
+<details><summary>Answer</summary><p>Two things flip. First, scale collapses: 50M products generate a few hundred million prefixes — single-digit gigabytes. The whole table fits in RAM on <em>every</em> node; sharding disappears. Deleting components is the senior move here. Second, freshness hardens from "nice" to "correctness-ish": stock changes minute-to-minute, and a daily build guarantees wrong suggestions. Don't rebuild constantly — decouple: build ranked lists daily (popularity moves slowly), store top-30 per prefix instead of top-10, and filter at read time against a live stock bitmap (50M booleans, a few MB, updated by stock events within seconds), returning the first 10 in-stock. Per-request filtering is affordable now precisely because scale collapsed. Same skeleton, opposite trade-offs — which is why memorizing architectures instead of reasoning from load numbers fails.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Global suggest p99 jumped from 80 ms to 240 ms in an hour. Server-side latency is flat at 4 ms. Your first three checks, in order, with reasoning.</p></div>
+<details><summary>Answer</summary><p>Server-flat-but-user-slow means the regression lives between user and origin. (1) CDN hit rate, per region: the classic cause is an edge cache going cold — a config push changed the cache key (a new query param will do it), a TTL got zeroed, or a POP outage rerouted users to distant edges. A regional hit-rate cliff matching the p99 timeline closes the case. (2) A client release ramping that hour: broken debounce (flooding), broken response-cancellation, or a bundle regression shows up exactly as client-measured latency with innocent servers. (3) Response size: new fields or disabled compression spilling into extra round trips moves p99 by exactly this magnitude on mobile RTTs. Meta-lesson: instrument from the client, or you'll page the only team whose component is healthy.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimation drill: the batch build must process one day of logs — 5B searches — and emit snapshot files for 50 shards within 4 hours. Roughly how much parallelism, and where's the shuffle?</p></div>
+<details><summary>Answer</summary><p>5B log lines at ~100 bytes ≈ 500 GB/day of raw input — small by batch standards. Two phases: count query frequencies (map over logs, shuffle by query, sum with decay against the historical table), then explode queries into prefixes and shuffle by prefix to pick each top-10. The prefix explosion is the fat middle: 2B kept queries × ~20 prefixes ≈ 40B intermediate records, a few TB shuffled. At ~50 MB/sec of useful shuffle throughput per worker, a few TB in 4 hours needs on the order of 100 workers — a small job, which is the point: the write path is cheap <em>because</em> it's offline. Landing within 5× passes; the graded part is knowing the shuffle-by-prefix is where the bytes are.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Autocomplete serves roughly 10× the traffic of the search engine it decorates — keystroke QPS = search QPS × requests-per-search — and that one multiplication drives the whole design.</li>
+<li>The crux: p99 under 100 ms at ~1M QPS over billions of ranked queries means the read path can't compute anything — precompute top-K per prefix, or die.</li>
+<li>Database LIKE-with-index dies on scan-then-rank: short prefixes match millions of rows and are also the hottest keys — your worst query is your most frequent one.</li>
+<li>Think in tries, ship a flat hash table: hash-sharding is uniform by construction, lookups are one hop, and immutable offline rebuilds keep serving boring.</li>
+<li>Hot prefixes are predictable, so pre-solve them: replicate short prefixes to every node, over-replicate hot shards, let the CDN's short TTL absorb the storm.</li>
+<li>Build the data with two ovens: a daily batch layer for deep decayed history and filtering, plus a tiny streaming overlay for trending, merged at read time.</li>
+<li>Filter at build time, never per request — and keep a tiny replicated suppression list for emergency takedowns between builds.</li>
+<li>Commit to availability over freshness out loud: serve stale, degrade to empty, never to slow — and monitor client-measured p99 and per-layer cache hit rates, because that's where this product lives.</li>
+</ul>
+</div>

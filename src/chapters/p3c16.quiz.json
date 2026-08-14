@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c16",
+  "items": [
+    {
+      "id": "p3c16-q01", "level": 1, "type": "mcq", "tag": "lru",
+      "q": "In an LRU cache built from a hash table plus a doubly-linked list, what is each structure's job?",
+      "options": [
+        {"t": "The hash table finds an entry in O(1); the list keeps entries ordered by recency so eviction pops the tail in O(1)", "correct": true,
+         "why": "Right — both structures point at the same entry objects. Lookup never scans, and eviction never searches: a GET is one hash lookup plus two pointer splices to move the entry to the head."},
+        {"t": "The hash table stores keys, the list stores values", "correct": false,
+         "why": "Keys and values live together in one entry object. The two structures are two different ways of reaching that same object — by name, and by recency."},
+        {"t": "The list speeds up lookups when the hash table has collisions", "correct": false,
+         "why": "The recency list has nothing to do with collision handling. Its only job is ordering entries by last use so the coldest one is always at the tail."},
+        {"t": "The hash table handles reads and the list handles writes", "correct": false,
+         "why": "Both reads and writes touch both structures: any access looks up via the table and then re-links the entry to the list head."}
+      ]
+    },
+    {
+      "id": "p3c16-q02", "level": 1, "type": "mcq", "tag": "lru",
+      "q": "Why must the recency list be doubly linked rather than singly linked?",
+      "options": [
+        {"t": "Removing an arbitrary entry needs its predecessor; a doubly-linked node knows it in O(1), a singly-linked list must walk to find it", "correct": true,
+         "why": "Exactly. Every GET unlinks an entry from mid-list to move it to the head. With billions of entries, an O(n) walk per access is dead on arrival."},
+        {"t": "Doubly-linked lists use less memory", "correct": false,
+         "why": "The opposite — the extra back-pointer costs 8 bytes per entry. You pay that memory precisely to buy O(1) mid-list removal."},
+        {"t": "Singly-linked lists can't be iterated", "correct": false,
+         "why": "They iterate fine, forward. Iteration isn't the issue — surgically removing a node from the middle without walking is."},
+        {"t": "It makes the list thread-safe", "correct": false,
+         "why": "Pointer direction has nothing to do with thread safety — a doubly-linked list under concurrency still needs a lock or sharding. That contention is one reason real caches approximate LRU instead."}
+      ]
+    },
+    {
+      "id": "p3c16-q03", "level": 1, "type": "mcq", "tag": "ttl",
+      "q": "A cache uses only lazy expiry (check TTL on read). What problem does the active sampler solve?",
+      "options": [
+        {"t": "Expired keys that are never read again would occupy memory until eviction stumbles on them", "correct": true,
+         "why": "Right. Lazy expiry only fires on access. The sampler (Redis's version: 20 random TTL keys, 10x/sec, loop while >25% are expired) reclaims dead keys nobody will ever touch."},
+        {"t": "Lazy expiry can serve expired values", "correct": false,
+         "why": "No — lazy expiry is correct: the read checks the timestamp and treats an expired entry as a miss. The problem is memory, not correctness."},
+        {"t": "It makes TTLs more precise", "correct": false,
+         "why": "Expiry precision is already exact at read time under lazy checking. The sampler is about reclaiming memory from keys that will never be read."},
+        {"t": "It reduces read latency", "correct": false,
+         "why": "The timestamp check on read costs nanoseconds either way. The sampler trades a little background CPU for reclaimed memory — latency is unchanged."}
+      ]
+    },
+    {
+      "id": "p3c16-q04", "level": 1, "type": "mcq", "tag": "hashing",
+      "q": "A 56-node cluster adds one node. Roughly what fraction of keys change owner with consistent hashing, versus hash(key) mod N?",
+      "options": [
+        {"t": "About 1/57 with the ring; about 98% with mod N", "correct": true,
+         "why": "Right — the ring moves only K/N keys (the arcs the new node claims); mod N re-addresses nearly every key because the divisor changed. That difference is a ripple versus a cluster-wide cold start."},
+        {"t": "About half in both cases", "correct": false,
+         "why": "Neither. The whole point of consistent hashing is that membership change moves only ~K/N keys — a couple of percent here, not half."},
+        {"t": "About 1/57 in both cases", "correct": false,
+         "why": "Mod N isn't that gentle: a key keeps its slot only if hash mod 56 equals hash mod 57, which almost never holds. Roughly 98% of keys move."},
+        {"t": "Zero with the ring — existing keys never move", "correct": false,
+         "why": "The new node has to own something, so the keys in its claimed arcs do move. 'Small and bounded', not 'zero', is the ring's promise."}
+      ]
+    },
+    {
+      "id": "p3c16-q05", "level": 1, "type": "mcq", "tag": "vnodes",
+      "q": "Why does each physical node appear at ~200 positions on the ring instead of one?",
+      "options": [
+        {"t": "Many positions average out arc sizes for even load, and a dead node's ranges scatter across all survivors", "correct": true,
+         "why": "Both halves matter: 200 samples per node tightens load spread to a few percent, and failure dumps 200 crumbs onto many nodes instead of one boulder onto a single neighbor."},
+        {"t": "It increases total cache capacity", "correct": false,
+         "why": "Vnodes are just extra ring positions — pointers, not memory. Capacity is set by RAM, and 200 vnodes add none."},
+        {"t": "It makes key lookups faster", "correct": false,
+         "why": "Slightly the opposite — more ring entries mean a marginally bigger binary search. You pay that tiny cost to buy even load and gentle failure."},
+        {"t": "It provides replication for each key", "correct": false,
+         "why": "Vnodes are 200 addresses for the same physical machine — copies of the node's ring presence, not of any data. Replication is a separate primary-to-replica stream."}
+      ]
+    },
+    {
+      "id": "p3c16-q06", "level": 1, "type": "mcq", "tag": "replication",
+      "q": "In this design, what is the primary purpose of each shard's replica?",
+      "options": [
+        {"t": "Protecting hit rate and latency when the primary dies — not durability", "correct": true,
+         "why": "Right. The database is the source of truth; nothing in the cache needs to survive. The replica exists so a primary failure doesn't turn 1/56th of the working set into a database stampede."},
+        {"t": "Guaranteeing no acknowledged write is ever lost", "correct": false,
+         "why": "That's a database's promise. Replication here is async with no acknowledgment — a dying primary can lose its last few milliseconds of writes, and that's fine: loss = misses."},
+        {"t": "Serving all reads while the primary serves writes", "correct": false,
+         "why": "By default reads go to the primary (freshest data, one hop). Replica reads are an opt-in (STALE_OK) used for hot keys, not the standard path."},
+        {"t": "Storing a second copy in case of disk failure", "correct": false,
+         "why": "There are no disks in the hot design — it's an in-memory cache. The replica guards against process and machine loss, for hit-rate reasons."}
+      ]
+    },
+    {
+      "id": "p3c16-q07", "level": 1, "type": "mcq", "tag": "topology",
+      "q": "A client sends GET to a node and receives MOVED shard=9 epoch=14. What happened?",
+      "options": [
+        {"t": "The client routed with a stale map; it should refresh its topology and retry against the current owner", "correct": true,
+         "why": "Right — MOVED is a redirect plus a nudge. The epoch tells the client its map (say, epoch 13) is behind; one config fetch and one retry later, the app never sees an error."},
+        {"t": "The key was evicted and must be re-fetched from the database", "correct": false,
+         "why": "That would be a plain MISS. MOVED says nothing about the key's presence — it says you asked the wrong node."},
+        {"t": "The cluster is in a failed state and rejecting traffic", "correct": false,
+         "why": "MOVED is routine, not an emergency — it's exactly how requests keep succeeding during rebalances and failovers, at the cost of one extra round trip."},
+        {"t": "The node is overloaded and shedding load", "correct": false,
+         "why": "Load shedding would be a busy/throttle signal. MOVED is about ownership: this key's slot now belongs to another node, per a newer epoch."}
+      ]
+    },
+    {
+      "id": "p3c16-q08", "level": 1, "type": "mcq", "tag": "leases",
+      "q": "What is a lease, in the Facebook memcache sense?",
+      "options": [
+        {"t": "A token handed to the first client that misses; only a SET carrying it is accepted, and others briefly wait or take stale data", "correct": true,
+         "why": "Right — one mechanism, two kills: the miss stampede collapses to one database query, and a DEL invalidating the token stops a slow reader from writing stale data back."},
+        {"t": "A time-limited lock a client takes before any read", "correct": false,
+         "why": "Locking every read would put a coordination step on the hot path. Leases only appear on a miss — the slow path — where coordination pays for itself."},
+        {"t": "A reservation of memory for a key before its value arrives", "correct": false,
+         "why": "No memory is reserved. The lease is a small token binding 'whoever is refilling this key' to the eventual SET."},
+        {"t": "A subscription that pushes value changes to clients", "correct": false,
+         "why": "That's an invalidation/pub-sub channel — a different mechanism. Leases coordinate who refills a missing key, not who hears about changes."}
+      ]
+    },
+    {
+      "id": "p3c16-q09", "level": 1, "type": "mcq", "tag": "eviction",
+      "q": "What's the difference between allkeys-LRU and volatile-LRU eviction?",
+      "options": [
+        {"t": "allkeys may evict any key; volatile evicts only keys that carry a TTL", "correct": true,
+         "why": "Right. Pure caches run allkeys — everything is refetchable. Volatile suits mixed workloads where some keys (no TTL) must never silently vanish under memory pressure."},
+        {"t": "allkeys is exact LRU; volatile is approximate", "correct": false,
+         "why": "Both are typically sampled/approximate. The policies differ in which keys are eligible for eviction, not in how recency is tracked."},
+        {"t": "volatile evicts keys the moment they expire; allkeys waits for pressure", "correct": false,
+         "why": "Expiry and eviction are different machines. Expiry removes keys past their TTL regardless of pressure; eviction picks victims under memory pressure — volatile just restricts the victim pool to TTL-carrying keys."},
+        {"t": "They're two names for the same policy", "correct": false,
+         "why": "They differ exactly when a no-TTL key exists under memory pressure: allkeys can evict it, volatile cannot — which can mean volatile runs out of victims and must refuse writes."}
+      ]
+    },
+    {
+      "id": "p3c16-q10", "level": 2, "type": "mcq", "tag": "failure",
+      "q": "A 56-primary cluster at 95% hit rate loses one primary that has no replica. The database normally sees 100K reads/sec. What happens next?",
+      "options": [
+        {"t": "Roughly 34K extra reads/sec hit the database — about +34% load, instantly, until the shard re-warms", "correct": true,
+         "why": "Right: ~1.8% of the working set went dark, and its reads (about 1.7% of 2M/sec) become misses. This math is why replicas exist and why the database needs N−1 headroom."},
+        {"t": "Hit rate falls about 2%, which the remaining nodes absorb", "correct": false,
+         "why": "The hit rate drop is small, but the other cache nodes can't absorb it — misses go to the database, and a +34% sudden spike on the DB is the actual risk."},
+        {"t": "The other 55 primaries take over its keys automatically with data intact", "correct": false,
+         "why": "The ring reassigns ownership of the key ranges, but the data in RAM died with the node. New owners start cold for those keys — that's exactly the miss storm."},
+        {"t": "Nothing significant — caches are designed to lose nodes", "correct": false,
+         "why": "The cache is fine; the database is the concern. 'Designed to lose nodes' only holds if the DB was provisioned for the resulting miss storm — that's the N−1 rule."}
+      ]
+    },
+    {
+      "id": "p3c16-q11", "level": 2, "type": "mcq", "tag": "consistency",
+      "q": "Reader R misses, reads v1 from the DB, then stalls in a GC pause. Writer W updates the DB to v2 and DELs the cache key. R wakes and SETs v1. Which mechanism prevents the cache serving stale v1 until TTL?",
+      "options": [
+        {"t": "Leases or versioned SETs — the DEL invalidates R's lease (or v1's version is lower), so R's late write is refused", "correct": true,
+         "why": "Right — this is the read-modify race, and the fix is making the cache refuse writes that lost the race: an invalidated lease token or a version regression check at SET time."},
+        {"t": "Shorter TTLs on hot keys", "correct": false,
+         "why": "TTL only bounds how long the wrong value survives; it doesn't stop it being written. You'd still serve stale data for the whole TTL window — a mitigation, not a fix."},
+        {"t": "Having W update the cache instead of deleting", "correct": false,
+         "why": "Set-on-write makes it worse: now W's v2 SET and R's v1 SET race directly, and network reordering decides who wins. Without versions, last-writer-wins is decided by luck."},
+        {"t": "Retrying the DEL a few times", "correct": false,
+         "why": "The DEL succeeded! It just happened before R's stale SET arrived. No amount of DEL retries fixes an ordering problem — refusing the stale write does."}
+      ]
+    },
+    {
+      "id": "p3c16-q12", "level": 2, "type": "mcq", "tag": "hot-keys",
+      "q": "Your top-N sketch shows one key taking 500K reads/sec against a primary sized for 36K. First mitigation to reach for?",
+      "options": [
+        {"t": "A tiny client-side L1 cache with ~1s TTL for detected hot keys", "correct": true,
+         "why": "Right — it collapses per-key load to at most one refresh per app server per second, costs almost nothing, bounds staleness at 1s, and requires no cluster change. Cheapest lever first."},
+        {"t": "Reshard the cluster to spread the key", "correct": false,
+         "why": "One key hashes to one place no matter how many shards exist — resharding moves the hot spot, it doesn't split it. A single hot key is a routing/edge problem, not a capacity problem."},
+        {"t": "Move that shard to a bigger machine", "correct": false,
+         "why": "A vertical band-aid: 14x over capacity today, and the next viral key lands wherever it hashes. You'd be buying hardware to chase a routing problem."},
+        {"t": "Rate-limit reads for that key", "correct": false,
+         "why": "Throttling your own cache turns a hot key into user-visible errors or DB load. The load is legitimate; serve it cheaply at the edge instead of refusing it."}
+      ]
+    },
+    {
+      "id": "p3c16-q13", "level": 2, "type": "mcq", "tag": "memory",
+      "q": "After a deploy that changed object serialization, hit rate drops 14 points. Traffic flat, nodes healthy, TTLs unchanged, evictions/sec tripled, boxes show free-ish memory locked in unused size classes. Diagnosis?",
+      "options": [
+        {"t": "Slab calcification — pages committed to old size classes starve the new sizes, so new-size entries evict each other furiously", "correct": true,
+         "why": "Right — Twitter's exact incident. The value-size distribution shifted, the allocator's page assignments didn't. Fix: slab page rebalancing (Twemcache's random slab eviction) or a careful replica-promote roll to reset allocator state."},
+        {"t": "The working set grew and the cluster needs more nodes", "correct": false,
+         "why": "Growth would show as gradually rising evictions with rising traffic — not a step change on deploy day with memory idle in the wrong size classes. Ask 'what changed?' before buying nodes."},
+        {"t": "The active TTL sampler is deleting too aggressively", "correct": false,
+         "why": "The sampler only removes already-expired keys, and TTLs didn't change. Tripled evictions (not expirations) point at memory pressure, not expiry."},
+        {"t": "Hash collisions increased because keys changed", "correct": false,
+         "why": "Collisions degrade lookup speed marginally; they don't evict anything or cause misses. The eviction spike plus stranded slab memory is the tell."}
+      ]
+    },
+    {
+      "id": "p3c16-q14", "level": 2, "type": "mcq", "tag": "routing",
+      "q": "The p99 budget is 1ms in-datacenter, where one network round trip costs 100–500µs. What does this imply for routing?",
+      "options": [
+        {"t": "Clients must route directly to the owning node — a proxy hop would spend most of the remaining budget", "correct": true,
+         "why": "Right — the lookup is ~1µs; the network IS the latency. Adding a proxy roughly doubles the wire time, so the ring must live in the client. Estimation gating an architecture choice."},
+        {"t": "Use a proxy tier so routing logic stays centralized", "correct": false,
+         "why": "Centralized routing is a real benefit (Facebook chose it with mcrouter for polyglot-fleet reasons) — but it costs the extra hop this latency budget can't pay. Know which constraint is binding here."},
+        {"t": "Co-locate the cache on every app server", "correct": false,
+         "why": "Local caches eliminate the hop but shatter the shared working set — each host caches its own copy, slashing effective capacity and hit rate. That's what the small L1 is for, scoped to hot keys only."},
+        {"t": "The budget is impossible without kernel bypass", "correct": false,
+         "why": "300µs round trip + microseconds of processing fits 1ms with room to spare — with one hop. Exotic networking isn't needed; avoiding a second hop is."}
+      ]
+    },
+    {
+      "id": "p3c16-q15", "level": 2, "type": "mcq", "tag": "fencing",
+      "q": "A primary pauses for 20s of GC. The config service promotes its replica at epoch 13. The old primary wakes, still thinking it owns shard 7. What stops it doing damage?",
+      "options": [
+        {"t": "Epoch fencing — peers and current clients refuse anything stamped epoch 12, and the zombie demotes itself on seeing 13", "correct": true,
+         "why": "Right. Nobody relies on the zombie realizing it's dead; everyone else just compares numbers. In a cache the damage would only be staleness — but the fence (chapter 2.3) makes even that window tiny."},
+        {"t": "The health checker kills the process before it can serve", "correct": false,
+         "why": "You can't count on kill signals reaching a partitioned or paused node in time — that race is exactly why fencing exists. Correctness can't depend on the murder arriving first."},
+        {"t": "GC pauses under 30s are within the failover timeout, so this can't happen", "correct": false,
+         "why": "The failover already happened at ~5s of missed heartbeats — a 20s pause sails past it. Designs that assume pauses stay conveniently short meet reality quickly."},
+        {"t": "Nothing — but it doesn't matter in a cache", "correct": false,
+         "why": "Half-right instincts, wrong conclusion: unfenced split-brain means two nodes accepting writes for the same keys indefinitely, and clients ping-ponging between fresh and stale. Cheap insurance (an integer compare) buys it off."}
+      ]
+    },
+    {
+      "id": "p3c16-q16", "level": 2, "type": "mcq", "tag": "operations",
+      "q": "You need to roll a new cache binary to all 112 nodes. What's the right deploy dance?",
+      "options": [
+        {"t": "Per shard: start the new version as an extra replica, warm it from the stream, promote it via epoch bump, retire the old node", "correct": true,
+         "why": "Right — the fleet upgrades with hit rate intact, one epoch at a time, and you watch per-shard hit rate between steps. A cache's memory is its value; a deploy must never empty it."},
+        {"t": "Rolling restart, one node at a time, like any stateless service", "correct": false,
+         "why": "A cache isn't stateless — restart discards RAM. Rolling through 112 nodes is 112 sequential cold shards, hours of elevated DB load. 'Like any service' is the trap phrase."},
+        {"t": "Restart everything at 3am during low traffic", "correct": false,
+         "why": "A fully cold cluster at 40% hit rate can overwhelm the DB even at overnight traffic — and you've bet the site on nothing else going wrong before it warms. Blast radius, not clock time, is the knob."},
+        {"t": "Snapshot each node to disk, restart, reload", "correct": false,
+         "why": "Workable (Redis persists this way) but we deliberately built no persistence — and snapshot-reload adds minutes of staleness and disk machinery for what replica-promote does warm and live."}
+      ]
+    },
+    {
+      "id": "p3c16-q17", "level": 2, "type": "mcq", "tag": "stampede",
+      "q": "A popular key expires and 1,000 servers miss within 50ms. With leases plus STALE_OK, what does the database experience?",
+      "options": [
+        {"t": "One query — the lease holder refills while everyone else gets WAIT or the just-expired value", "correct": true,
+         "why": "Right — that's the coalescing contract, and it's the documented effect in Facebook's paper (one experiment: peak DB queries fell from ~17K/s to ~1.3K/s with leases on)."},
+        {"t": "1,000 queries, but spread over a few seconds", "correct": false,
+         "why": "That's what jittered retries alone would buy you — smearing the stampede, not shrinking it. Leases change the count, not just the shape."},
+        {"t": "Zero queries — stale data is served until the next natural write", "correct": false,
+         "why": "Someone must still refresh the value — the lease holder does, once. Serving stale forever with no refill path isn't a cache, it's a rumor mill."},
+        {"t": "One query per cache node that holds the key", "correct": false,
+         "why": "A key lives on one shard (plus replica) — and coalescing happens at that owner, so it's one query total, not per-node."}
+      ]
+    },
+    {
+      "id": "p3c16-q18", "level": 2, "type": "mcq", "tag": "estimation",
+      "q": "30 TB database, top 10% of data serves ~93% of reads, 2M GETs/sec peak, 128 GB nodes budgeting 64 GB of entries each. What sets the primary count, and roughly what is it?",
+      "options": [
+        {"t": "Memory: ~3.3 TB working set / 64 GB ≈ 52 → ~56 primaries; CPU would be loafing at ~36K ops/sec/node", "correct": true,
+         "why": "Right — and saying 'RAM sets the count, cores will be bored' is the estimation-driving-design moment. Throughput per node lands far below what an event loop handles."},
+        {"t": "CPU: 2M ops/sec / 100K per node ≈ 20 primaries", "correct": false,
+         "why": "20 nodes × 64 GB is 1.3 TB — less than half the working set fits, and hit rate collapses. When both constraints exist, the binding one (memory) wins."},
+        {"t": "You need to cache all 30 TB, so ~470 primaries", "correct": false,
+         "why": "Caching everything ignores the skew that makes caching economical — the cold 90% of data would occupy RAM to serve 7% of reads. Working set, not dataset, sizes a cache."},
+        {"t": "Network bandwidth per node", "correct": false,
+         "why": "36K ops/sec × ~1 KB ≈ 36 MB/s — a few percent of a modern NIC. Bandwidth matters for value-heavy workloads, but the numbers here say RAM binds first."}
+      ]
+    },
+    {
+      "id": "p3c16-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your replication can lose acknowledged writes. Why not make it synchronous?' The senior answer:",
+      "options": [
+        {"t": "\"Because it's a cache — losing a write means a miss, and the DB self-heals it. Sync replication doubles write latency to protect data that doesn't need protecting.\"", "correct": true,
+         "why": "Right — the failure model does the arguing. Matching guarantees to actual requirements, and naming what you deliberately gave up, is the judgment being probed."},
+        {"t": "\"Good point — I'd make replication synchronous to be safe.\"", "correct": false,
+         "why": "Folding under a probe reads worse than the original choice. 'To be safe' buys nothing here (the DB already holds truth) and silently spends your p99 — that's cost without benefit."},
+        {"t": "\"I'd offer both modes and let each team choose per keyspace.\"", "correct": false,
+         "why": "Configurability as a dodge — you now maintain two consistency modes, and the question ('what does THIS system need?') is still unanswered. Commit, then bend only for a named requirement."},
+        {"t": "\"Async is what Redis does, so it's the industry standard.\"", "correct": false,
+         "why": "Appeal to authority instead of reasoning. Redis async replication exists for reasons — say the reasons. 'X does it' collapses under one follow-up: 'why does X do it?'"}
+      ]
+    },
+    {
+      "id": "p3c16-q20", "level": 3, "type": "mcq", "tag": "crux",
+      "q": "In 'build a distributed cache', where should a senior candidate spend the deepest 10 minutes?",
+      "options": [
+        {"t": "Cluster behavior under change: ring rebalancing, epoch-stamped topology, fencing failover — correctness while ownership moves", "correct": true,
+         "why": "That's the fire. A static cluster is easy and a single node is well-trodden; the traps interviewers hold in reserve (zombie primaries, stale maps, in-flight ops during migration) all live in the transitions."},
+        {"t": "The LRU implementation — it's the algorithmic heart", "correct": false,
+         "why": "It's a classic warm-up (know the O(1) dance cold), but it's also on every study list — depth there differentiates nobody at the senior bar. Ten minutes on pointers is ten minutes not spent on the hard part."},
+        {"t": "Choosing the fastest hash function", "correct": false,
+         "why": "Any modern non-cryptographic hash disappears into the noise next to a 300µs network hop. This is bikeshedding dressed as rigor."},
+        {"t": "The wire protocol design", "correct": false,
+         "why": "Worth two committed minutes (framing, pipelining, the lease/version flags) — the flags matter, the byte layout doesn't. The protocol serves the deep dives; it isn't one."}
+      ]
+    },
+    {
+      "id": "p3c16-q21", "level": 3, "type": "mcq", "tag": "scale",
+      "q": "The interviewer 10x's everything: 33 TB working set, 6M GETs/sec. What breaks first in the committed design?",
+      "options": [
+        {"t": "The smart-client trade-off comes due: ~560 primaries × thousands of app servers = millions of connections — time for a per-host sidecar proxy; and RAM cost starts arguing for an NVMe warm tier", "correct": true,
+         "why": "Right — and the senior tell is naming which committed choice stops paying (direct connections) and evolving it, while noting the epoch/ring protocol survives 10x untouched."},
+        {"t": "The consistent hashing ring can't handle 560 nodes", "correct": false,
+         "why": "The ring is a sorted array of ~112K entries with binary search — nanoseconds. Topology metadata scales logarithmically in effort; it's the last thing to break."},
+        {"t": "The config service becomes the bottleneck", "correct": false,
+         "why": "It's off the data path and its state is tiny; it publishes maps on change, not per request. 10x traffic doesn't touch it — this answer confuses control plane with data plane."},
+        {"t": "Nothing — the design scales horizontally", "correct": false,
+         "why": "'Horizontally scalable' as an incantation is the buzzword shield from chapter 0.1. Every design has a next wall; claiming otherwise tells the interviewer you haven't looked for yours."}
+      ]
+    },
+    {
+      "id": "p3c16-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Requirement flip: 'after a DB write, no cached read may be more than 1 second stale.' The strongest response:",
+      "options": [
+        {"t": "\"Plain cache-aside can't promise that. I'd add versioned SETs plus CDC-driven invalidation with its lag monitored as an SLO, scope it to the keyspaces that need it — and ask whether those keys belong in the cache at all.\"", "correct": true,
+         "why": "Names the honest limit, the mechanism, the new dependency's cost, and scopes the guarantee instead of re-architecting everything — including questioning the requirement. That's the full senior package."},
+        {"t": "\"Set TTLs to 1 second on everything.\"", "correct": false,
+         "why": "This nukes the hit rate — every key now refetches every second whether it changed or not — and still doesn't bound staleness from the race conditions. It confuses expiry with invalidation."},
+        {"t": "\"Make all writes write-through to the cache synchronously.\"", "correct": false,
+         "why": "Closer, but without versioning the write-write races reappear, every write path in the company must now participate correctly, and DB transactions + cache writes can't be made atomic — the gap this 'fix' pretends away."},
+        {"t": "\"Caches are eventually consistent; the requirement is unreasonable.\"", "correct": false,
+         "why": "Refusing the requirement isn't engineering it. Bounded staleness IS achievable (CDC lag + version guards) — the senior move is pricing it, not denying it."}
+      ]
+    },
+    {
+      "id": "p3c16-q23", "level": 3, "type": "mcq", "tag": "failure",
+      "q": "A cache node dies and its keys' traffic must go somewhere. Facebook chose a small 'gutter' pool with short TTLs over rehashing the dead node's keys to surviving neighbors. Why?",
+      "options": [
+        {"t": "Rehashing shifts the dead node's load onto already-busy survivors — a hot key can topple them in sequence; the gutter absorbs the blast in isolated capacity, and short TTLs sidestep invalidation bookkeeping", "correct": true,
+         "why": "Right — it's cascade prevention. Failure traffic goes to idle, disposable capacity instead of loading the healthy fleet, and expiring fast means the gutter never needs to be invalidation-correct."},
+        {"t": "Rehashing would permanently corrupt the ring", "correct": false,
+         "why": "Nothing corrupts — the ring handles reassignment cleanly. The problem is load dynamics on the survivors, not data structure correctness."},
+        {"t": "The gutter provides stronger consistency than the main pool", "correct": false,
+         "why": "Weaker, if anything — gutter entries dodge the invalidation machinery entirely, which is why their TTLs are kept short. The trade is deliberate: brief staleness for cascade immunity."},
+        {"t": "Gutter machines are cheaper than regular cache machines", "correct": false,
+         "why": "Same hardware — about 1% of the fleet held idle. The insight is where failure traffic lands, not what it costs; you pay for the idle pool precisely so failures have a padded room."}
+      ]
+    },
+    {
+      "id": "p3c16-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your sampled eviction isn't true LRU. Make it exact.' The senior response:",
+      "options": [
+        {"t": "\"I'd push back: exact LRU costs a globally serialized order — a lock on every GET — plus pointer memory, and sampling measurably tracks true LRU's hit rate. I'd spend that complexity budget where it buys hit rate: better sizing or smarter TTLs.\"", "correct": true,
+         "why": "Quantified pushback beats compliance: name the cost of exactness, the near-zero benefit, and where the budget would actually pay. Redis's own documented design makes this a defensible hill."},
+        {"t": "\"Sure — one global doubly-linked list with a mutex around it.\"", "correct": false,
+         "why": "Obedient and wrong: you just serialized every GET on every connection through one lock in a system sized for 100K ops/sec/node. Complying with a bad requirement is not collaboration."},
+        {"t": "\"Exact LRU is impossible in distributed systems.\"", "correct": false,
+         "why": "Overclaim — it's entirely possible per node (chapter 1.6 built one); it's just a poor trade at this concurrency and scale. 'Impossible' where the truth is 'expensive and pointless' invites an easy counterexample."},
+        {"t": "\"I'd switch to LFU instead, it's more accurate.\"", "correct": false,
+         "why": "A lateral dodge — LFU is a different policy with its own approximations and its own aging problems, not 'more accurate LRU.' The question was about the exactness trade-off; answer that."}
+      ]
+    },
+    {
+      "id": "p3c16-q25", "level": 3, "type": "mcq", "tag": "operations",
+      "q": "You get one 3am page for this cache. What should trigger it?",
+      "options": [
+        {"t": "Database read QPS breaching the headroom the cache exists to protect — with per-shard hit rate as the paired diagnostic", "correct": true,
+         "why": "Page on the harm, not the mechanism: every cache failure mode (dead node, calcification, stuck epochs, stampede) matters exactly insofar as it drives DB load toward the cliff. Hit rate tells you which shard; DB QPS tells you it's 3am-worthy."},
+        {"t": "Any single node going unhealthy", "correct": false,
+         "why": "That's designed-for and self-healing (replica promotes in seconds) — a ticket, not a page. Paging on expected events trains on-call to ignore the pager."},
+        {"t": "Evictions/sec exceeding a fixed threshold", "correct": false,
+         "why": "Evictions at steady state are normal cache breathing — a full cache evicts on every insert. The trend against traffic is a capacity warning for daytime review, not a 3am wake-up."},
+        {"t": "p99 latency above 1ms on any shard", "correct": false,
+         "why": "Worth alerting during the day, but a brief p99 wobble doesn't threaten the business the way DB saturation does. If the wobble is real trouble, it shows up in the miss path — which the DB QPS page catches."}
+      ]
+    }
+  ]
+}

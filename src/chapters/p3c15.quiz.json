@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c15",
+  "items": [
+    {
+      "id": "p3c15-q01", "level": 1, "type": "mcq", "tag": "convergence",
+      "q": "Why can't a client just apply a concurrent remote edit at the positions it arrived with?",
+      "options": [
+        {"t": "The positions were computed against a document state the receiving client no longer has", "correct": true,
+         "why": "Right. 'Insert at 4' only means something in the exact text the sender was looking at. The receiver's own optimistic edits already shifted everything, so raw positions land on the wrong characters — and each replica corrupts differently."},
+        {"t": "Network reordering means the edit might arrive twice", "correct": false,
+         "why": "Duplicates are a real concern, but they're solved by idempotent op_ids. The corruption problem exists even with perfect, exactly-once delivery — it's about stale positions, not transport."},
+        {"t": "The edit might be from a user without permission", "correct": false,
+         "why": "Permissions are checked server-side per-op, but that's orthogonal. A fully authorized concurrent edit still corrupts the doc if applied at stale positions."},
+        {"t": "Remote edits are compressed and must be decoded first", "correct": false,
+         "why": "Encoding is a non-issue. The problem is semantic: positional references go stale the moment any other edit lands first."}
+      ]
+    },
+    {
+      "id": "p3c15-q02", "level": 1, "type": "mcq", "tag": "ot",
+      "q": "In one sentence, what does Operational Transformation actually do?",
+      "options": [
+        {"t": "It rewrites a concurrent op's positions to account for the ops it hadn't seen, so it applies correctly on the changed document", "correct": true,
+         "why": "Exactly. Ops stay position-based; the transform function adjusts those positions. Delete 4 chars at the start, and an incoming 'insert at 4' becomes 'insert at 0' — both screens converge."},
+        {"t": "It locks the paragraph being edited so only one user can change it at a time", "correct": false,
+         "why": "That's locking, the approach OT exists to avoid. Locks would kill the 'both people type in the same sentence simultaneously' experience that defines Docs."},
+        {"t": "It merges edits by timestamp, latest writer wins", "correct": false,
+         "why": "Last-writer-wins discards someone's typing — acceptable for a rectangle's fill color (Figma's property registers), catastrophic for prose. OT preserves both edits' intent."},
+        {"t": "It converts text into a tree so edits can't conflict", "correct": false,
+         "why": "Restructuring the data so merges are trivial is the CRDT family's move (permanent IDs, tombstones). OT keeps the plain string and fixes the ops instead."}
+      ]
+    },
+    {
+      "id": "p3c15-q03", "level": 1, "type": "mcq", "tag": "crdt",
+      "q": "How does a text CRDT avoid the stale-position problem entirely?",
+      "options": [
+        {"t": "Every character gets a permanent unique ID; edits reference IDs, and deletes become tombstones", "correct": true,
+         "why": "Yes. 'Insert after character ␣₄' is true forever, no matter how the document shifts. Tombstones keep deleted characters as anchors. Merging becomes order-independent set union — no transform function at all."},
+        {"t": "It routes all edits through a coordinator that serializes them", "correct": false,
+         "why": "Central serialization is the OT-side trick. CRDTs are specifically designed to converge without any coordinator — that's their whole selling point for P2P and offline."},
+        {"t": "It rejects any edit whose base version is stale", "correct": false,
+         "why": "Reject-and-retry is optimistic concurrency control from the transactions chapter. In an editor it would mean your typing bounces whenever anyone else types — unusable."},
+        {"t": "It batches edits so conflicts become rare", "correct": false,
+         "why": "Batching reduces message count, not conflicts. Two people editing the same sentence conflict no matter how you batch; the fix must change what edits reference."}
+      ]
+    },
+    {
+      "id": "p3c15-q04", "level": 1, "type": "mcq", "tag": "serialization",
+      "q": "Why does the design send ALL of a document's traffic to one session server?",
+      "options": [
+        {"t": "So one machine totally orders the doc's ops — the serialization point that makes OT small and tractable", "correct": true,
+         "why": "Right. With a single sequencer, the server only transforms an op against those accepted since its base_seq, and clients only reconcile against their own short queues. Without it you're in distributed OT territory, where published algorithms have been proven wrong."},
+        {"t": "To reduce the number of servers needed", "correct": false,
+         "why": "Fleet size is unchanged — you still need ~200 boxes for 6M sockets. Doc-sharding is about where each doc's traffic goes, not how much hardware exists."},
+        {"t": "Because WebSockets can't be load-balanced", "correct": false,
+         "why": "They can be, sticky routing is routine. The reason is stronger than a transport limitation: the design *wants* one server per doc for ordering, and estimation proved no doc outgrows one."},
+        {"t": "To keep all of a user's documents in one place", "correct": false,
+         "why": "Sharding is by doc, not by user — your five open docs may live on five servers. What must be together is one doc's editors, because they share an op stream."}
+      ]
+    },
+    {
+      "id": "p3c15-q05", "level": 1, "type": "mcq", "tag": "two-queue",
+      "q": "In the two-queue client model, what does the screen always show?",
+      "options": [
+        {"t": "Confirmed server state + the in-flight op + the pending buffer", "correct": true,
+         "why": "That's the invariant. Base = settled truth up to the last seen seq; in-flight = one sent-but-unacked op; pending = local edits waiting their turn. Every event (keystroke, ack, remote op) updates the parts without breaking the sum."},
+        {"t": "Exactly what the server's copy shows, updated on every ack", "correct": false,
+         "why": "If the screen waited for server truth, your own keystroke couldn't appear in 16 ms. Optimistic local apply means the screen deliberately runs ahead of the server."},
+        {"t": "The last snapshot plus whatever ops have arrived", "correct": false,
+         "why": "That's a read-only viewer's state — snapshot plus ordered replay. An editor's screen additionally contains its own unacknowledged edits, which is exactly why it needs the queues."},
+        {"t": "A merge of every collaborator's pending buffers", "correct": false,
+         "why": "Clients never see each other's pending edits — those are private until the server sequences them. Only acked, sequenced ops are broadcast."}
+      ]
+    },
+    {
+      "id": "p3c15-q06", "level": 1, "type": "mcq", "tag": "base-seq",
+      "q": "What does the base_seq field on an incoming op tell the server?",
+      "options": [
+        {"t": "Which ops the client hadn't seen — i.e., exactly what to transform this op against", "correct": true,
+         "why": "Yes. If the server is at seq 45 and the op says base_seq 41, then ops 42–45 are concurrent with it. Transform over those four, append as 46, ack, broadcast. That one field makes reconciliation a simple loop."},
+        {"t": "How many ops the client has sent so far", "correct": false,
+         "why": "That's a client-side counter, useful for op_ids maybe. base_seq points at the *server's* history — the last sequenced op reflected in the client's confirmed base."},
+        {"t": "The op's priority in the processing queue", "correct": false,
+         "why": "There's no priority; ops process in arrival order at one server. base_seq is about which document state the op was authored against."},
+        {"t": "The snapshot version to load before applying", "correct": false,
+         "why": "Snapshots are a storage optimization, invisible to the op pipeline. The live room holds current text in memory; base_seq references the op sequence, not snapshots."}
+      ]
+    },
+    {
+      "id": "p3c15-q07", "level": 1, "type": "mcq", "tag": "durability",
+      "q": "When must an op be durably appended to the log, relative to acking and broadcasting it?",
+      "options": [
+        {"t": "Before both — nothing any collaborator has seen may be lost to a crash", "correct": true,
+         "why": "The promise of the write path: seen implies saved. If the server broadcast first and died before the append, other screens would show text that recovery cannot reproduce — an acknowledged edit silently gone."},
+        {"t": "After broadcasting, so collaborators see edits with minimum latency", "correct": false,
+         "why": "Tempting latency win, catastrophic failure mode: a crash between broadcast and append loses an edit people already watched appear. The log write must sit on the latency path; make the log fast instead."},
+        {"t": "Only at snapshot time — the in-memory room is authoritative between snapshots", "correct": false,
+         "why": "Then a server crash loses up to N ops of everyone's work. Memory is never the durability story; the log is."},
+        {"t": "Ordering doesn't matter as long as all three eventually happen", "correct": false,
+         "why": "Ordering is the entire guarantee. 'Eventually durable' means 'lost if the crash comes first' — and crashes always come first eventually."}
+      ]
+    },
+    {
+      "id": "p3c15-q08", "level": 1, "type": "mcq", "tag": "history",
+      "q": "In this design, what is a named version like \"Final draft\"?",
+      "options": [
+        {"t": "A tag pointing at a sequence number in the op log", "correct": true,
+         "why": "That's all it is. The append-only op log IS the history feature; replay to seq 1500 and you have 'Final draft'. Restore appends new ops that rewrite forward — the log itself is never edited."},
+        {"t": "A full copy of the document stored separately", "correct": false,
+         "why": "No copying needed — the log can reconstruct any historical state. Snapshots exist, but as a replay-speed optimization, not as the versioning mechanism."},
+        {"t": "A frozen branch that future edits fork away from", "correct": false,
+         "why": "There's one linear history per doc, no branching. Even restore is forward motion: new ops that transform the current state back to the tagged one, visibly and attributably."},
+        {"t": "A diff between two snapshots", "correct": false,
+         "why": "Backwards — the ops themselves are the diffs, and they came for free from the write path. The tag just names a point in that stream."}
+      ]
+    },
+    {
+      "id": "p3c15-q09", "level": 1, "type": "mcq", "tag": "presence",
+      "q": "Why are cursor positions and presence never written to storage?",
+      "options": [
+        {"t": "They're ephemeral by nature — rebuilt in seconds on reconnect, worthless a minute later", "correct": true,
+         "why": "Right. Presence rides lightweight messages on the same socket, drops on disconnect, and rebroadcasts on a timer. Persisting where someone's cursor was on Tuesday buys nothing and costs write load on every twitch."},
+        {"t": "Privacy law forbids storing them", "correct": false,
+         "why": "No such rule drives this. It's an engineering judgment: durable storage is for things whose loss matters. Cursors fail that test instantly."},
+        {"t": "They change too fast for any database to keep up", "correct": false,
+         "why": "A few messages per second per user is trivial load — the op log absorbs similar volume. The reason is value, not feasibility: durable cursors help no one."},
+        {"t": "Storing them would break the append-only property of the log", "correct": false,
+         "why": "You could log presence events append-only just fine. The design skips it because ephemeral data deserves an ephemeral channel — matching guarantees to needs is the discipline."}
+      ]
+    },
+    {
+      "id": "p3c15-q10", "level": 2, "type": "mcq", "tag": "ot",
+      "q": "Doc: \"the cat\". Bob locally deleted 4 chars at position 0 (now sees \"cat\"). Alice's concurrent op insert(4, \"fat \") arrives at Bob's client. What does Bob's editor actually apply?",
+      "options": [
+        {"t": "insert(0, \"fat \") — the position shifts left by the 4 characters Bob deleted", "correct": true,
+         "why": "Correct. Alice's op is transformed over Bob's in-flight delete: her target position 4 sat after his deleted range, so it slides left by 4. Bob's screen: \"fat cat\" — identical to Alice's after her side transforms his delete (unchanged) over her insert."},
+        {"t": "insert(4, \"fat \") exactly as sent", "correct": false,
+         "why": "Position 4 of \"cat\" doesn't exist — 'cat fat' at best, a crash at worst, and guaranteed divergence from Alice's screen. This is precisely the naive application the transform step prevents."},
+        {"t": "Nothing — the op is rejected because Bob's document changed", "correct": false,
+         "why": "Reject-on-conflict would make collaborative typing impossible; someone's edit would bounce every time two people type. The design's whole point is that both edits survive, adjusted."},
+        {"t": "Bob's delete is undone first, then the insert applies, then the delete redoes", "correct": false,
+         "why": "Undo-apply-redo can be made to work in some editors, but it's not what happens here — and it gets combinatorially ugly with queued ops. Transforming the incoming op's positions is the direct, composable fix."}
+      ]
+    },
+    {
+      "id": "p3c15-q11", "level": 2, "type": "mcq", "tag": "permissions",
+      "q": "A team checks edit permission only when the WebSocket connects. A contractor's access is revoked Monday morning, but they've had the doc open since Friday. What happens?",
+      "options": [
+        {"t": "They keep editing successfully until they happen to disconnect — possibly days later", "correct": true,
+         "why": "Exactly the hole. The connection outlives the permission. That's why the design checks the ACL per-op in the session server's memory (invalidated on share changes) and closes the socket on revoke as a courtesy — the per-op check is the guarantee."},
+        {"t": "Nothing bad — the revocation propagates through the broadcast channel", "correct": false,
+         "why": "Broadcasts carry document ops to clients; they don't re-authorize inbound edits. Unless the server re-checks each op, the revoked user's edits keep sequencing normally."},
+        {"t": "Their edits apply but are marked untrusted for later review", "correct": false,
+         "why": "No such quarantine exists, and inventing one is worse than fixing the check: sequenced ops are already broadcast to every screen. Prevention at the door beats review after the fact."},
+        {"t": "The op log rejects their ops via the epoch fence", "correct": false,
+         "why": "Epoch fencing solves a different problem — two *servers* fighting over doc ownership. It knows nothing about user ACLs. Permission enforcement lives in the session server's per-op check."}
+      ]
+    },
+    {
+      "id": "p3c15-q12", "level": 2, "type": "mcq", "tag": "recovery",
+      "q": "A client's Wi-Fi blips for 20 seconds. It was at seq 2290 with one unacked op in flight. Reconnected, what's the correct resume sequence?",
+      "options": [
+        {"t": "Tell the server 'I'm at 2290', replay ops 2291+, transform the held op over them, resend it with its original op_id", "correct": true,
+         "why": "All three pieces matter: the gap replay restores the base, the transform rebases the held edit onto what it missed, and the reused op_id makes the resend idempotent — if the original send actually landed before the blip, the duplicate is dropped, not applied twice."},
+        {"t": "Discard the unacked op — it was never confirmed, so it's not safe to resend", "correct": false,
+         "why": "That throws away the user's typed words on every blip. Unacked means unconfirmed, not invalid — the two-queue model holds it precisely so reconnection can rebase and resend it."},
+        {"t": "Re-download the full document and diff it against the local copy", "correct": false,
+         "why": "Works, but it's the sledgehammer — a full snapshot fetch and a fuzzy diff where a 3-message replay protocol does it exactly. Diffing also can't tell the held op apart from remote changes reliably."},
+        {"t": "Resend the op immediately with a fresh op_id so it can't be confused with the old one", "correct": false,
+         "why": "The fresh op_id is exactly wrong: if the original send arrived just before the disconnect, the server now applies the edit twice. Reusing the id is what makes retry safe — Stripe-style idempotency from Part 2."}
+      ]
+    },
+    {
+      "id": "p3c15-q13", "level": 2, "type": "mcq", "tag": "snapshots",
+      "q": "An engineer sets snapshot cadence to every 50 ops \"so recovery is always instant.\" Docs average 2 MB. What's the observable symptom at scale?",
+      "options": [
+        {"t": "Massive write amplification — busy docs rewrite 2 MB every few seconds while the actual edits are a few KB", "correct": true,
+         "why": "At 5 ops/sec a busy doc snapshots every 10 seconds: 2 MB written to save ~3 KB of ops. Multiply by thousands of busy docs and storage bandwidth drowns. Replaying 1000 ops costs milliseconds — cadence ~1000 (or on idle) buys nearly-instant recovery at a fraction of the writes."},
+        {"t": "Convergence bugs, because snapshots taken mid-burst capture inconsistent state", "correct": false,
+         "why": "No — a snapshot at seq S is exact by construction: the deterministic result of ops 1..S. Snapshot timing can never affect correctness in this design, only cost and recovery speed."},
+        {"t": "Slower document opens, since more snapshots must be merged", "correct": false,
+         "why": "Opens load exactly one snapshot (the latest) plus the tail — more frequent snapshots make the tail *shorter*. The cost shows up on the write side, not the read side."},
+        {"t": "The op log grows faster", "correct": false,
+         "why": "The op log grows with edits, identically at any snapshot cadence. Snapshots are separate objects; the waste is their full-document rewrites, not log growth."}
+      ]
+    },
+    {
+      "id": "p3c15-q14", "level": 2, "type": "mcq", "tag": "viewer-tier",
+      "q": "An all-hands doc has 20 editors and 10,000 read-only viewers, and the session server is choking on broadcast fan-out. Best fix?",
+      "options": [
+        {"t": "Hang viewers off read-only relays that tail the doc's op stream; only editors talk to the session server", "correct": true,
+         "why": "Viewers hold no pending edits, so they need only ordered replay — no OT, no two-queue state. A relay tier (each fanning to ~10K sockets) absorbs the audience while the serialization point serves its 20 editors undisturbed. Same shape as chat fan-out from Part 2."},
+        {"t": "Split the doc's connections across several session servers", "correct": false,
+         "why": "This dismantles the serialization point — the one property making OT tractable. Multiple servers ordering one doc's edits is distributed OT, the hard problem this architecture exists to avoid. Never split a doc's *editors*."},
+        {"t": "Reduce broadcast frequency to one batched update per second", "correct": false,
+         "why": "This taxes the 20 editors' experience (a second of added lag is where collaboration dies emotionally) to serve viewers who'd happily tolerate it. Better: give viewers their own tier and leave the editors' path untouched."},
+        {"t": "Switch the doc to a CRDT so it no longer needs a central server", "correct": false,
+         "why": "The bottleneck is fan-out message count, which CRDTs don't reduce — 10,020 sockets still need every update. You'd take on a data-model migration and still need relays."}
+      ]
+    },
+    {
+      "id": "p3c15-q15", "level": 2, "type": "mcq", "tag": "rollout",
+      "q": "A refactor subtly changes how the transform function handles inserts at identical positions. It ships to 50% of clients. What's the failure mode?",
+      "options": [
+        {"t": "Divergence: old and new clients reconcile the same concurrent ops differently, and screens in one doc permanently disagree", "correct": true,
+         "why": "Transform code must be deterministic and identical everywhere it runs — client and server. Mixed versions in one room mean the same op pair yields different text on different screens: the unforgivable bug. Hence versioned ops, whole-room cohort canaries, and replay-verification against state hashes before ramping."},
+        {"t": "Higher latency while old clients upgrade", "correct": false,
+         "why": "Version skew here doesn't slow anything down — both transforms run at the same speed. The damage is silent correctness drift, which is far worse than latency: no alert fires when two screens quietly disagree."},
+        {"t": "The op log rejects ops from old clients", "correct": false,
+         "why": "The log stores opaque sequenced ops; it doesn't execute transforms and can't tell versions apart unless you make it. Nothing gets rejected — that's the problem. Both versions' results happily persist."},
+        {"t": "Nothing — the server's transform is authoritative, so client differences wash out", "correct": false,
+         "why": "Half-true and dangerous: the server's order is authoritative, but each client *also* transforms broadcasts over its own pending queue locally. If its transform disagrees with the server's, its screen drifts from the log's truth until the next full reload."}
+      ]
+    },
+    {
+      "id": "p3c15-q16", "level": 2, "type": "mcq", "tag": "ot",
+      "q": "The server is at seq 45. An op arrives with base_seq 41. Walk the server's exact steps.",
+      "options": [
+        {"t": "Transform the op over ops 42–45, append durably, assign seq 46, ack the sender, broadcast to the room", "correct": true,
+         "why": "That's the whole pipeline in order. The transform loop covers exactly the concurrent window base_seq exposes; durability precedes ack and broadcast so nothing seen can be lost; the new seq extends the total order everyone shares."},
+        {"t": "Reject it — the client is 4 ops stale and must refetch before writing", "correct": false,
+         "why": "Clients are *always* a few ops stale in live collaboration; that's the steady state, not an error. Reject-and-refetch would make typing bounce constantly. Transforming through the gap is the design."},
+        {"t": "Buffer it until the client confirms it has seen ops 42–45", "correct": false,
+         "why": "Waiting on the client adds a round trip per op and gains nothing — the server has everything needed (the op, the concurrent window) to reconcile right now. The client fixes up its own view when the broadcast arrives."},
+        {"t": "Apply it at its stated positions, since the server's order is authoritative anyway", "correct": false,
+         "why": "Authoritative order doesn't repair stale positions — applying insert-at-4 built against rev 41 to the rev-45 string corrupts the canonical copy itself. Order and transformation are separate jobs; the server does both."}
+      ]
+    },
+    {
+      "id": "p3c15-q17", "level": 2, "type": "mcq", "tag": "anchors",
+      "q": "A comment is anchored to characters 120–134. An op inserts 10 characters at position 50. What should happen to the anchor?",
+      "options": [
+        {"t": "It shifts to 130–144, moved by the same transform arithmetic that adjusts ops and cursors", "correct": true,
+         "why": "Anchors are positions, and positions transform. One transform function serves four customers — ops, client queues, cursors, comment anchors — which is why comments stay glued to their text as it moves. The server updates stored anchors as each op applies."},
+        {"t": "It stays at 120–134; comments reference fixed offsets from creation time", "correct": false,
+         "why": "Fixed offsets drift immediately — after a few edits your comment highlights someone else's sentence. This is the stale-position bug wearing a comment costume."},
+        {"t": "The comment is detached and flagged for manual re-anchoring", "correct": false,
+         "why": "Detachment is the last resort for anchors whose text was actually *deleted*. An insert 70 characters away is routine — the transform handles it exactly, no human needed."},
+        {"t": "Anchors use character IDs, so nothing needs to move", "correct": false,
+         "why": "Permanent character IDs are how the CRDT branch solves anchoring — elegant, but this design committed to OT with a plain string precisely to avoid per-character metadata. In the OT world, anchors move by transform."}
+      ]
+    },
+    {
+      "id": "p3c15-q18", "level": 2, "type": "multi", "tag": "crdt",
+      "q": "Which requirement changes would genuinely flip this design's commitment from server-ordered OT to a CRDT? (Select all that apply.)",
+      "options": [
+        {"t": "Full offline-first editing — weeks disconnected, then sync", "correct": true,
+         "why": "Long offline means transforming huge op sets against each other — OT's worst regime, both computationally and semantically. CRDTs merge arbitrary histories by construction; this is their home turf."},
+        {"t": "End-to-end encryption where the server cannot read document content", "correct": true,
+         "why": "A server that can't read ops can't transform them — server-side OT dies outright. Clients must merge independently in possibly different orders, which demands order-independent (commutative) merging: a CRDT."},
+        {"t": "Raising the cap to 100 simultaneous editors per doc", "correct": false,
+         "why": "Already in the requirements, and estimation showed 100 editors ≈ 500 ops/sec — comfortable for one server core. Editor count stresses neither OT nor the serialization point."},
+        {"t": "Guaranteeing sub-16 ms local echo on every keystroke", "correct": false,
+         "why": "Local echo comes from optimistic local apply, which both OT and CRDT clients do identically. It's a shared property, not a differentiator."}
+      ]
+    },
+    {
+      "id": "p3c15-q19", "level": 3, "type": "mcq", "tag": "commit",
+      "q": "Interviewer: \"OT or CRDT for this?\" Which answer performs at the senior bar?",
+      "options": [
+        {"t": "\"OT, server-ordered — we already need a central server for permissions and history, estimation shows every doc fits on one box so total order is free, and the doc stays a plain string. I'd switch to a CRDT if offline-first or E2E encryption entered the requirements.\"", "correct": true,
+         "why": "Commitment, reasons tied to THIS problem's requirements and numbers, an honest cost model, and named flip conditions. That last clause matters: it proves the choice is reasoned, not tribal."},
+        {"t": "\"CRDT — it's the modern approach and avoids OT's known complexity problems.\"", "correct": false,
+         "why": "A commitment justified by fashion. CRDTs buy per-character metadata and tombstone management this product doesn't need, to solve decentralization problems this product doesn't have. 'Modern' is not a mechanism."},
+        {"t": "\"Both converge and both are used in production — either would be defensible here.\"", "correct": false,
+         "why": "True, and a non-answer. This question IS the crux; hedging on the crux caps the interview at mid-level. The interviewer asked you to decide like an owner."},
+        {"t": "\"OT — it's what Google Docs itself uses, so it's clearly the proven choice for this exact product.\"", "correct": false,
+         "why": "Right answer, borrowed reasoning. 'Google does it' invites the obvious probe — 'why does it suit *your* stated requirements?' — and you've shown no mechanism of your own. Figma 'does it' the other way; appeals to authority cancel out."}
+      ]
+    },
+    {
+      "id": "p3c15-q20", "level": 3, "type": "mcq", "tag": "crux",
+      "q": "Forty minutes on the clock for \"Design Google Docs.\" Where does the senior candidate spend the deep-dive time?",
+      "options": [
+        {"t": "Convergence of concurrent edits — the merge machinery, the client queues, and what guarantees survive crashes", "correct": true,
+         "why": "That's the fire the question was invented around; everything else is Part 1–2 routine. Two users with slow typing can already trigger the hard problem — it isn't even a scale question. Announce it and go there."},
+        {"t": "Storing a billion documents durably and cheaply", "correct": false,
+         "why": "Big number, solved problem: sharded blob/log storage is standard machinery. The estimate (about 1 MB per busy doc-day) confirms storage is routine. Touring this room while the merge room burns reads mid-level."},
+        {"t": "Load-balancing millions of WebSocket connections", "correct": false,
+         "why": "Legitimate work, but it's the chat-app chapter's well-trodden ground. The one Docs-specific wrinkle — doc-affinity routing — takes a sentence to state, not fifteen minutes."},
+        {"t": "The rich-text data format: bold, lists, embedded images", "correct": false,
+         "why": "Span-based ops extend to formatting attributes without changing the architecture. Formats are a wide topic with low design risk — the opposite of a crux."}
+      ]
+    },
+    {
+      "id": "p3c15-q21", "level": 3, "type": "mcq", "tag": "fencing",
+      "q": "The directory reassigns doc 7 to server B while slow-but-alive server A still holds its sockets. Both accept edits. What's the correct design invariant?",
+      "options": [
+        {"t": "Appends carry a session epoch and the log rejects stale epochs — correctness never depends on the directory being right", "correct": true,
+         "why": "The fencing-token pattern, p2c03's medicine. A holds epoch 7, B was granted 8; the moment B writes, A's appends bounce and A learns it's dead. The directory is *allowed* to be wrong; the log's atomic epoch check is the single place that isn't."},
+        {"t": "Put the directory on a strongly consistent store so double-assignment can't occur", "correct": false,
+         "why": "A linearizable directory still can't fix the zombie: it correctly recorded the reassignment, but slow-A hasn't heard and keeps writing. The failure isn't directory inconsistency — it's an old owner acting on stale belief. Only a fence at the write path stops that."},
+        {"t": "Have clients detect duplicate sequence numbers and trigger a reload", "correct": false,
+         "why": "By detection time, two acked-and-broadcast histories exist — someone's acknowledged edit must now be un-acked. Client-side detection is a smoke alarm after the house burned; the invariant must prevent the second history from ever becoming durable."},
+        {"t": "Tune heartbeats so ownership only transfers after A is definitely dead", "correct": false,
+         "why": "'Definitely dead' doesn't exist in distributed systems — a GC pause or network partition makes A look dead while it computes on. Timing-based safety is the exact anti-pattern fencing tokens were invented to replace."}
+      ]
+    },
+    {
+      "id": "p3c15-q22", "level": 3, "type": "mcq", "tag": "durability",
+      "q": "To shave p99 latency, a teammate proposes acking ops before the log append completes, since \"the append virtually never fails.\" Your call?",
+      "options": [
+        {"t": "Refuse: the ack is the no-loss promise. Keep durable-before-ack and attack log latency itself — faster quorum path, batched appends within the latency budget", "correct": true,
+         "why": "'Virtually never' times millions of rooms is 'daily.' A crash in the ack-to-append window silently loses an edit the user was told is saved — a trust-destroying bug that no latency win repays. Optimize the promise's cost; never trade away the promise."},
+        {"t": "Accept — with retries on the append, the loss window is negligible in practice", "correct": false,
+         "why": "Retries assume the server survives to retry; the failure being defended against is precisely the server dying in the window. Reasoning 'the window is small' about a correctness invariant is happy-path thinking, and interviewers probe straight through it."},
+        {"t": "Compromise: ack optimistically but have clients keep ops until a second confirmation arrives", "correct": false,
+         "why": "This reinvents the pending queue that already exists — the client *already* holds unacked ops. Adding a two-phase ack buys nothing the current design lacks; it just makes the ack ambiguous, which is worse than slow."},
+        {"t": "Accept for solo-editor docs only, where no other screen displays the edit", "correct": false,
+         "why": "Cleverer, still wrong: the solo user's own screen shows 'saved,' and that promise is to them, not to their collaborators. Also: forked ack semantics per room type is operational complexity nobody will remember during an incident."}
+      ]
+    },
+    {
+      "id": "p3c15-q23", "level": 3, "type": "mcq", "tag": "estimation",
+      "q": "A candidate opens with: \"Each doc's edits flow through a Kafka partition, with a stream processor computing document state — this scales to any load.\" What did the estimation phase exist to prevent here?",
+      "options": [
+        {"t": "This over-build: per-doc load peaks at hundreds of ops/sec, so the problem is merge correctness and millions of small rooms — not per-doc throughput", "correct": true,
+         "why": "The numbers gate the design: 500 ops/sec worst case fits a fraction of a core, so heavy streaming machinery solves a problem the system doesn't have — while adding pipeline latency to a 200 ms budget and doing nothing for the actual crux, transformation. Scale-shaped answers to correctness-shaped problems read junior."},
+        {"t": "Nothing — durable partitioned logs per doc are essentially what the design builds anyway", "correct": false,
+         "why": "The op log is indeed append-only and durable — but the proposal's center of gravity is throughput machinery, and it's silent on transforms, base_seq, and client reconciliation. Same nouns, wrong problem."},
+        {"t": "The cost — Kafka at this scale would be too expensive", "correct": false,
+         "why": "Cost isn't the killer argument; mis-shaped architecture is. Even free, a stream processor doesn't transform concurrent ops or run the two-queue protocol. Critique the fit, not the invoice."},
+        {"t": "Vendor lock-in to one streaming platform", "correct": false,
+         "why": "A procurement concern, not a design concern, and swappable regardless. The interview-relevant failure is deploying big-data reflexes against a small-numbers, high-correctness problem."}
+      ]
+    },
+    {
+      "id": "p3c15-q24", "level": 3, "type": "mcq", "tag": "offline",
+      "q": "PM: \"Users want to edit on flights. We have OT — just merge automatically when they land, no scary conflict dialogs.\" The senior response?",
+      "options": [
+        {"t": "\"Short offline merges silently today. Past a threshold I'll surface a review UX instead — after 400 offline edits against a week of changes, the transforms converge but the merged text may say nothing anyone meant. If long offline becomes core, that reopens the CRDT decision.\"", "correct": true,
+         "why": "Bounded honesty: knowing where the machinery's guarantee (convergence) diverges from the user's need (meaning) is exactly senior judgment. Convergent nonsense is worse than an honest fork — and naming the requirement threshold that flips the architecture shows the OT commitment was conditional, as all good commitments are."},
+        {"t": "\"Sure — OT transforms compose, so any offline duration rebases cleanly.\"", "correct": false,
+         "why": "Mechanically true, and it answers the wrong question. Transforming 400 ops against 5,000 yields *a* convergent document — likely a semantically scrambled one, silently. Promising the PM 'clean' conflates byte-convergence with meaning-preservation."},
+        {"t": "\"Impossible without rebuilding everything on CRDTs — we'd need a quarter to migrate first.\"", "correct": false,
+         "why": "Over-corrects into a false binary. Flight-length offline is hours, well within transform-rebase territory with a decent conflict UX at the edges. Quoting a rewrite for a feature the current design mostly handles is the inverse over-engineering."},
+        {"t": "\"Yes, but require the doc be locked read-only for others while someone's offline.\"", "correct": false,
+         "why": "Solves the merge by canceling the collaboration — one passenger freezes a 30-person doc for a day. Locks are the pre-OT dark ages this entire product category exists to escape."}
+      ]
+    },
+    {
+      "id": "p3c15-q25", "level": 3, "type": "mcq", "tag": "monitoring",
+      "q": "You get one dashboard panel as the early-warning signal for the editing fleet's health. Which do you pick, and why?",
+      "options": [
+        {"t": "Per-room transform queue depth — the leading indicator that a room's intake is outrunning processing, before users feel it", "correct": true,
+         "why": "Queue depth is the classic leading indicator from the backpressure chapter: it rises *before* latency degrades and names the exact room in trouble, while p99 latency is trailing — by the time it fires, users are already lagging. Watch the cause, alert on the symptom."},
+        {"t": "Total ops per second across the fleet", "correct": false,
+         "why": "A business-health vanity metric here: fleet throughput can look perfectly steady while one hot room drowns, because per-doc load is tiny relative to the aggregate. Averages hide exactly the failures this architecture has."},
+        {"t": "WebSocket connection count", "correct": false,
+         "why": "Useful capacity telemetry, weak as a warning: connections stay up while a room silently backlogs. Churn spikes tell you about networks and deploys, not about the op pipeline."},
+        {"t": "Op-apply p99 latency — it's the product's heartbeat, so it must be the alert", "correct": false,
+         "why": "Half right: p99 is what you *page* on, because it measures user pain. But as an early warning it trails the failure. The queue-depth panel catches the same incident minutes earlier, while there's still time to migrate or shed the room."}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,345 @@
+<p>"Design a job scheduler — think cron, but distributed. Millions of jobs, a fleet of machines." The interviewer says it casually, like they're asking for a to-do list app. Don't be fooled. Hiding inside this cozy little prompt is one of the sharpest correctness questions in distributed systems, and the interviewer knows exactly where it's buried: <em>what happens when the machine that fires the job dies halfway through firing it?</em></p>
+
+<p>Feel the stakes first. A job scheduler is the thing that runs "charge every subscriber on the 1st," "send the daily digest at 9am," "rotate the TLS certificates before they expire." If it fires a job zero times, someone's certificate expires and half the internet gets a scary browser warning. If it fires the same job twice, a customer gets charged twice, and now you're trending on social media for the wrong reason. Zero and two are both catastrophic, and the entire problem is that a distributed system makes "exactly one" the single hardest number to hit.</p>
+
+<p>Mid-level candidates draw a cron box with an arrow to some workers and start talking about queues. Senior candidates walk straight at the fire: "the crux here is making sure each due job is fired by exactly one scheduler, and being honest that once it's fired, exactly-once <em>execution</em> is impossible — so I'll design for at-least-once plus idempotency." Say that in the first ten minutes and the interview changes temperature. Let's earn the right to say it.</p>
+
+<h2>Requirements: scope it out loud</h2>
+
+<p>"Here's what I'll build: users register <strong>jobs</strong> — either recurring on a cron schedule (<code>0 9 * * *</code> = 9am daily) or one-shot at a specific time. A job's payload says what to run: a queue topic plus arguments that some worker knows how to execute. I'll support retries with backoff, priorities, and a per-job <strong>misfire policy</strong> — what to do when we're late, because one day we will be. I'll sketch DAG dependencies — job B runs after job A succeeds, Airflow-style — as an extension, not the spine. Out of scope: the workers' business logic itself, and a UI. Fair?"</p>
+
+<p>Non-functional, with numbers I'm committing to rather than fishing for:</p>
+
+<ul>
+<li><strong>Scale:</strong> 10 million registered jobs, roughly 150 million firings per day.</li>
+<li><strong>Timeliness:</strong> a job due at 09:00:00 should be <em>running</em> within seconds — I'll commit to p99 under 5 seconds from scheduled time to worker pickup. Not milliseconds; this is a scheduler, not a trading engine, and saying so is a design decision.</li>
+<li><strong>Correctness:</strong> never silently drop a firing. Duplicates are permitted but must be rare and survivable — the system is honest about at-least-once, and we'll spend a whole deep dive making duplicates safe.</li>
+<li><strong>Availability:</strong> any single scheduler node, worker, or zone can die without missing fires.</li>
+</ul>
+
+<p>Notice the asymmetry I just committed to: a missed fire is a silent lie that pages nobody, so the design must make misses structurally impossible to hide. A duplicate fire is loud and survivable if — only if — job authors are given the tools to make their jobs idempotent. That asymmetry drives everything below.</p>
+
+<h2>Estimation: the thundering minute</h2>
+
+<p>150M firings/day is about 1,700 per second — on average. And the average is a lie, because humans don't schedule uniformly. Look at any real crontab collection: schedules cluster brutally on round numbers. <code>0 * * * *</code>, <code>*/5 * * * *</code>, and the king of them all, <code>0 0 * * *</code> — midnight. The load isn't a stream; it's a heartbeat. Second 0 of every minute carries a spike, minute 0 of every hour carries a bigger one, and midnight UTC is a tidal wave. With 10M jobs, it's realistic that <strong>hundreds of thousands of firings all come due in the same second at 00:00 UTC</strong>.</p>
+
+<p>Say the conclusion out loud, because this number just designed half the system: "I cannot build this with a timer per job — 10M in-memory timers that vanish on crash — and I cannot build it to dispatch the midnight wave instantaneously. So: due jobs live in a database indexed by next-fire-time, a scanner tier sweeps that index every second in batches, and a queue absorbs the wave so workers drain it over a few seconds. My 5-second p99 SLO is exactly the size of that drain." Numbers → architecture. Also storage: 10M job rows at ~1 KB is 10 GB — a rounding error, one Postgres. But 150M run-history rows a day at ~500 bytes is 75 GB <em>a day</em> — so run history gets a partitioned table with a 30-day retention and archival to object storage, and it never shares a disk budget with the job specs. The tiny table is the brain; the huge table is just a diary.</p>
+
+<div class="box story"><div class="box-tag">War story — Google's distributed cron and the midnight herd</div>
+<p>Google hit every part of this problem and wrote it up as a chapter of the Site Reliability Engineering book: "Distributed Periodic Scheduling with Cron." Their internal cron service replaced the single trusty cron daemon with a small group of replicas running Paxos — the leader replica is the only one allowed to launch jobs, and before it launches anything it announces "I am about to start this launch" through consensus, so a new leader after a crash knows exactly which launches were in flight. Even Google couldn't dodge the two-generals trap: for a launch caught mid-flight during failover, the system must explicitly choose between launching again (risking a duplicate) and skipping (risking a miss) — exactly-once wasn't on the menu, so they made the choice a deliberate, per-case decision instead of an accident. And the thundering herd was real enough that they extended crontab syntax itself: a <code>?</code> in a schedule field means "I don't care which value — you pick," letting the system deterministically smear the midnight mob across the whole hour. When a company with Paxos in its toolbox concludes "exactly-once is impossible, spread the herd, decide skip-vs-rerun on purpose," believe them.</p>
+</div>
+
+<h2>API and data model: quick, then move</h2>
+
+<ul>
+<li><code>POST /jobs</code> — <code>{name, schedule: "0 9 * * *" | run_at, payload: {queue, args}, priority, max_attempts, timeout_s, misfire_policy, jitter_s?}</code> → <code>201 {job_id}</code>. Accepts an idempotency key so a retried create doesn't register two jobs (chapter 2.2 habit).</li>
+<li><code>PATCH /jobs/{id}</code> — pause, resume, edit schedule. <code>DELETE</code> to remove.</li>
+<li><code>POST /jobs/{id}/run-now</code> — manual trigger; also the hook the DAG layer will use later.</li>
+<li><code>GET /jobs/{id}/runs</code> — execution history and current state.</li>
+</ul>
+
+<p>Two tables carry the system. <code>jobs</code>: <code>id, schedule, payload, priority, max_attempts, timeout_s, misfire_policy, enabled</code> — and the load-bearing column, <strong><code>next_run_at</code></strong>, materialized at write time. When you register <code>0 9 * * *</code>, we parse the cron expression once and store the concrete next timestamp. An index on <code>(next_run_at) WHERE enabled</code> turns "what's due?" into a cheap range scan off the front of the index — no cron parsing on the hot path, ever. <code>runs</code>: <code>run_id, job_id, scheduled_for, state (pending → running → succeeded | failed | dead), attempt, claimed_by, lease_expires_at</code>. Hold on to <code>runs</code> — it's about to do three different jobs at once.</p>
+
+<h2>The high-level machine</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 360" role="img" aria-label="Job scheduler architecture: API to job store, scanner tier claims due jobs, dispatch queues, worker pools, reaper">
+  <rect class="dg-node" x="10" y="150" width="92" height="48" rx="8"/>
+  <text class="dg-txt" x="26" y="178">Job API</text>
+  <rect class="dg-node-alt" x="150" y="126" width="152" height="96" rx="8"/>
+  <text class="dg-txt" x="166" y="150">Job store (PG)</text>
+  <text class="dg-txt-s" x="166" y="170">jobs · 10 GB</text>
+  <text class="dg-txt-s" x="166" y="186">runs · partitioned</text>
+  <text class="dg-txt-s" x="166" y="202">idx: next_run_at</text>
+  <rect class="dg-zone" x="350" y="28" width="144" height="126" rx="8"/>
+  <text class="dg-txt-s" x="362" y="46">scanner tier</text>
+  <rect class="dg-node" x="362" y="56" width="120" height="36" rx="6"/>
+  <text class="dg-txt" x="376" y="78">scanner</text>
+  <rect class="dg-node" x="362" y="102" width="120" height="36" rx="6"/>
+  <text class="dg-txt" x="376" y="124">scanner</text>
+  <rect class="dg-node" x="530" y="30" width="84" height="28" rx="6"/>
+  <text class="dg-txt-s" x="542" y="48">critical q</text>
+  <rect class="dg-node" x="530" y="66" width="84" height="28" rx="6"/>
+  <text class="dg-txt-s" x="542" y="84">default q</text>
+  <rect class="dg-node" x="530" y="102" width="84" height="28" rx="6"/>
+  <text class="dg-txt-s" x="542" y="120">bulk q</text>
+  <rect class="dg-node" x="636" y="44" width="76" height="72" rx="8"/>
+  <text class="dg-txt" x="648" y="74">worker</text>
+  <text class="dg-txt" x="648" y="92">pools</text>
+  <rect class="dg-node" x="350" y="252" width="144" height="44" rx="8"/>
+  <text class="dg-txt" x="366" y="272">reaper</text>
+  <text class="dg-txt-s" x="366" y="288">reclaims dead runs</text>
+  <line class="dg-edge" x1="102" y1="174" x2="150" y2="174" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="302" y1="150" x2="350" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="482" y1="74" x2="530" y2="48" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="482" y1="90" x2="530" y2="84" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="482" y1="120" x2="530" y2="116" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="614" y1="80" x2="636" y2="80" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="660" y1="116" x2="304" y2="212" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="350" y1="270" x2="240" y2="226" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="296" y="118">claim due batch</text>
+  <text class="dg-txt-s" x="296" y="134">(SKIP LOCKED)</text>
+  <text class="dg-txt-s" x="470" y="200">status + heartbeat</text>
+  <text class="dg-txt-s" x="216" y="252">expired leases</text>
+  <text class="dg-txt-s" x="106" y="164">create</text>
+</svg>
+<figcaption>The complete machine. The job store is the arbiter (highlighted): scanners claim due jobs from it, queues absorb the thundering minute, workers report status back into it, and the reaper resurrects runs whose workers died.</figcaption>
+</figure>
+
+<p><strong>Write path:</strong> client registers a job → API parses the cron expression, computes <code>next_run_at</code>, inserts the row. Done. Registering a job is boring, and that's a feature.</p>
+
+<p><strong>Fire path (the real read path):</strong> every second, each scanner asks the job store for a batch of due jobs and <em>claims</em> them (deep dive 1 is entirely about this word). For each claimed job, in the same transaction: insert a <code>runs</code> row in state <code>pending</code>, and advance the job's <code>next_run_at</code> to its next cron occurrence. Commit. Then enqueue each <code>run_id</code> onto the right priority queue. Workers pull a <code>run_id</code>, flip the run to <code>running</code> with a lease, execute the payload, report success or failure. The <code>runs</code> row inserted inside the claim transaction is doing outbox duty (the chapter 2.6 pattern): if a scanner commits its claim and then crashes before enqueueing, a sweeper finds <code>pending</code> runs older than a minute and re-enqueues them — the firing can be delayed by a crash, but never silently lost. And if the sweeper re-enqueues something the scanner actually did enqueue, no harm: the worker's claim on the run is conditional (<code>UPDATE runs SET state='running' … WHERE run_id=X AND state='pending'</code>), so the second delivery finds a non-pending run and drops dead. Queue-level duplicates: neutralized at the run level, for free.</p>
+
+<div class="box story"><div class="box-tag">War story — Slack and the cron box that couldn't stop growing</div>
+<p>For years, a meaningful slice of Slack ran on what their engineers frankly called the "cron box": one node holding a copy of every cron script and one giant crontab with all the schedules. As Slack grew, the scripts multiplied into the thousands and each one processed more data, so the fix was always the same — buy a bigger box. More CPU, more RAM, repeat. It worked until it didn't: a single misprovisioned or misconfigured node could take down chunks of user-visible Slack functionality, because a single machine was the company-wide scheduler. The replacement they described in 2023 looks strikingly like the whiteboard design in this chapter: a Go service called the Scheduled Job Conductor running on Bedrock (their Kubernetes wrapper) to decide what's due, execution handed off to their existing job queue system rather than run locally, and a Vitess-backed table used for deduplication and monitoring of runs — the same "database as arbiter of what actually fired" idea we're about to deep-dive. The lesson isn't that cron is bad; it's that "one box fires everything" has no next step except a bigger box, and the escape route is separating <em>deciding</em> to fire from <em>executing</em> the work.</p>
+</div>
+
+<p>Clock check: the loop is closed — register, fire, execute, report, recover. Now I'd tell the interviewer my agenda: "Three things deserve depth: who gets to fire a due job, what happens when a worker dies mid-job, and the time policies — misfires, priorities, DAGs. First one first, it's the crux."</p>
+
+<h2>Deep dive 1: exactly one scheduler fires the job</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>This is the question the problem was invented to probe. You need multiple scanners — one is a single point of failure, and the midnight wave needs parallel hands. But two scanners running <code>SELECT … WHERE next_run_at &lt;= now()</code> in the same second see <em>the same due jobs</em>, and both will happily fire them. Every duplicate-charge horror story starts here. You must make "claim this due job" an atomic, arbitrated act — and you must know what happens when a claimer dies holding claims. Interviewers who ask this problem are mostly grading this one answer: naive scan = fail, global lock = mediocre, row-level claim or leader+fencing, argued honestly = senior.</p>
+</div>
+
+<p>The committed answer: <strong>let the database arbitrate, with <code>SELECT … FOR UPDATE SKIP LOCKED</code></strong>. Every scanner runs the same loop, once per second:</p>
+
+<pre><code>BEGIN;
+SELECT id, payload, schedule FROM jobs
+WHERE enabled AND next_run_at &lt;= now()
+ORDER BY next_run_at
+LIMIT 500
+FOR UPDATE SKIP LOCKED;
+-- for each row: INSERT runs(run_id, job_id, scheduled_for, 'pending');
+--               UPDATE jobs SET next_run_at = next_occurrence(schedule);
+COMMIT;  -- then enqueue the run_ids</code></pre>
+
+<p>Unpack the two magic words. <code>FOR UPDATE</code> means: lock the rows I selected until my transaction ends — nobody else can touch them. <code>SKIP LOCKED</code> means: if a row is already locked by someone else, don't wait for it and don't error — <em>pretend it isn't there</em> and take the next one. Put together, ten scanners hitting the same due-list don't fight: the first grabs rows 1–500, the second silently skips those and grabs 501–1000, and so on. The scanners never talk to each other, hold no state, and don't even know how many siblings they have — the database's lock manager is doing the coordination, and it's had twenty years of production hardening at exactly this. Deploying more scanners is just more hands pulling from the same rail.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>It's the ticket rail in a restaurant kitchen. Orders (due jobs) hang on the rail; any free cook grabs the next ticket. The grab is the whole protocol — a ticket in one cook's hand physically cannot be in another's, no head chef assigns work, and adding a cook at rush hour needs zero reorganization. And when a cook faints holding three tickets? In our kitchen the tickets snap back onto the rail on their own: an uncommitted transaction's locks vanish when its connection dies, so the crashed scanner's claimed rows roll back to due-and-unlocked, and the next sweep picks them up. The analogy breaks in one place, and it's the honest part: a fainted cook's ticket comes back <em>even if the dish was already cooked</em> — which is why the next deep dive exists.</p>
+</div>
+
+<p>Walk the crash cases, because the interviewer will: scanner dies <em>mid-transaction</em> → rollback, rows unlock, nothing fired, next tick refires — a few seconds of delay, zero loss, zero duplicates. Scanner dies <em>after commit, before enqueue</em> → <code>next_run_at</code> already advanced so no refire, and the <code>pending</code> run row is the outbox that the sweeper turns into a (possibly duplicate, provably harmless) enqueue. There is no crash point that silently loses a firing — that's the property the requirements demanded, and I can point to the line of SQL that provides it in every case.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 302" role="img" aria-label="Two scanners claim disjoint due rows via SKIP LOCKED; a crashed scanner's rows unlock by rollback">
+  <text class="dg-txt-s" x="272" y="24">jobs due at 09:00:00</text>
+  <rect class="dg-node-alt" x="260" y="34" width="200" height="30" rx="5"/>
+  <text class="dg-txt-s" x="272" y="53">job 101 — locked by A</text>
+  <rect class="dg-node-alt" x="260" y="70" width="200" height="30" rx="5"/>
+  <text class="dg-txt-s" x="272" y="89">job 102 — locked by A</text>
+  <rect class="dg-node-alt" x="260" y="106" width="200" height="30" rx="5"/>
+  <text class="dg-txt-s" x="272" y="125">job 103 — locked by A</text>
+  <rect class="dg-node" x="260" y="142" width="200" height="30" rx="5"/>
+  <text class="dg-txt-s" x="272" y="161">job 104 — claimed by B</text>
+  <rect class="dg-node" x="260" y="178" width="200" height="30" rx="5"/>
+  <text class="dg-txt-s" x="272" y="197">job 105 — claimed by B</text>
+  <rect class="dg-node" x="40" y="52" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="56" y="74">Scanner A</text>
+  <text class="dg-txt-s" x="56" y="90">locks 101–103</text>
+  <rect class="dg-node" x="40" y="160" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="56" y="182">Scanner B</text>
+  <text class="dg-txt-s" x="56" y="198">skips, takes 104+</text>
+  <line class="dg-edge" x1="180" y1="76" x2="260" y2="76" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="180" y1="184" x2="260" y2="167" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="188" y="66">FOR UPDATE</text>
+  <text class="dg-txt-s" x="188" y="152">SKIP LOCKED</text>
+  <text class="dg-bad" x="500" y="70">A crashes mid-txn?</text>
+  <text class="dg-txt-s" x="500" y="90">rollback → 101–103</text>
+  <text class="dg-txt-s" x="500" y="106">unlock, still due,</text>
+  <text class="dg-txt-s" x="500" y="122">claimed next tick.</text>
+  <text class="dg-good" x="500" y="156">No coordination</text>
+  <text class="dg-txt-s" x="500" y="174">between A and B —</text>
+  <text class="dg-txt-s" x="500" y="190">the DB lock manager</text>
+  <text class="dg-txt-s" x="500" y="206">is the arbiter.</text>
+</svg>
+<figcaption>The claim race, resolved by the database. B never sees A's locked rows; a crashed claimer's locks evaporate with its transaction. No scanner knows the others exist.</figcaption>
+</figure>
+
+<p>The alternative I'm consciously rejecting: a <strong>leader-elected scheduler tier</strong> — an etcd lease (chapter 2.3) picks one scanner as the only firer; followers idle. Google's cron works this way with Paxos. It's the right call when the "database" is itself the thing you're building, or when firing decisions need complex in-memory state. But it buys me real problems: a failover gap where nothing fires, a single leader as throughput ceiling for the midnight wave, and the classic stale-leader trap — a leader stalls in a garbage-collection pause, its lease expires, a new leader takes over, then the old one wakes up and <em>fires everything it was about to fire</em>. Chapter 2.3 taught the fix — fencing tokens checked at the point of write — but notice that the fence has to live <em>in the job store anyway</em>. If the store must arbitrate regardless, let it arbitrate with row locks and skip the election entirely. At 1,700 claims/sec average, a single Postgres does this without noticing; I'll name the ceiling honestly in the ops section.</p>
+
+<div class="box story"><div class="box-tag">War story — Airflow 2.0 ends its most famous SPOF</div>
+<p>For its first six years, Apache Airflow — the most widely deployed job orchestrator in data engineering — had exactly one scheduler process. It was the project's most notorious weakness: if the scheduler crashed, every DAG in the company stopped firing until someone restarted it, and its scan loop was a throughput ceiling teams hit constantly. When Airflow 2.0 shipped in December 2020, the headline feature was the HA scheduler, and the mechanism is precisely this deep dive's committed answer: run as many scheduler replicas as you like, all active, no leader election at all — each one claims work through database row-level locks using <code>SELECT … FOR UPDATE SKIP LOCKED</code>, so the metadata database arbitrates and locked rows are invisibly skipped by peer schedulers. The dependency is real enough that databases lacking <code>SKIP LOCKED</code> made the feature unusable — MariaDB didn't implement it until 10.6, and Airflow users running multiple schedulers on older MariaDB hit deadlocks and duplicate scheduling. A decade of orchestrator experience distilled into a design: don't elect a chief, let the database referee.</p>
+</div>
+
+<h2>Deep dive 2: your job WILL run twice</h2>
+
+<p>Now the honesty section. A worker pulls run #881: "charge customer 4412 their $9.99." It charges the card. Then, before it can report success, the machine dies. The run row still says <code>running</code>, the lease expires, and the system now faces a question it <em>cannot answer</em>: did the charge happen? This is the Two Generals problem from chapter 2.2, wearing work clothes: when a machine goes silent, the rest of the system cannot distinguish "did the work, died before telling us" from "died before doing the work." No protocol fixes this. No amount of acks fixes this — the last ack can always be the one that's lost.</p>
+
+<p>So you choose which failure you'd rather have. Re-run on silence and you get <strong>at-least-once</strong> — duplicates possible. Never re-run and you get <strong>at-most-once</strong> — losses possible. For a scheduler, I commit to at-least-once: a missed payroll run is a silent disaster, a duplicated <em>attempt</em> is survivable if jobs are idempotent. And then — this is the part that separates senior answers — I make idempotency a first-class, documented obligation of every job author, not a footnote. The scheduler's contract reads: "your job will occasionally be started twice for the same scheduled firing. Build accordingly."</p>
+
+<p>The mechanics that keep duplicates <em>rare</em> (never zero — rare):</p>
+
+<ul>
+<li><strong>Lease + heartbeat.</strong> A worker's conditional claim sets <code>lease_expires_at = now() + 90s</code>. Long jobs heartbeat every 30 seconds, each beat extending the lease — a 6-hour job holds its claim through 720 renewals. A worker that stops heartbeating is presumed dead; that's the same visibility-timeout idea SQS uses, done in our own table.</li>
+<li><strong>The reaper.</strong> A background loop finds runs where <code>state='running' AND lease_expires_at &lt; now()</code>, flips them back to <code>pending</code> with <code>attempt+1</code>, and re-enqueues. Retries use exponential backoff with jitter (chapter 2.5's retry hygiene: a failing dependency doesn't need 10,000 synchronized retries).</li>
+<li><strong>Max attempts → dead-letter.</strong> After <code>max_attempts</code>, the run goes to state <code>dead</code> — our dead-letter queue — and <em>alerts a human</em>. A DLQ nobody watches is a landfill; the DLQ arrival rate is a first-class alarm, not a dashboard curiosity.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 270" role="img" aria-label="Timeline: worker claims run, heartbeats, executes, crashes before ack; lease expires; reaper re-enqueues; second worker's idempotent run no-ops">
+  <line class="dg-edge" x1="40" y1="200" x2="690" y2="200"/>
+  <line class="dg-edge" x1="40" y1="195" x2="40" y2="205"/>
+  <line class="dg-edge" x1="166" y1="195" x2="166" y2="205"/>
+  <line class="dg-edge" x1="292" y1="195" x2="292" y2="205"/>
+  <line class="dg-edge" x1="418" y1="195" x2="418" y2="205"/>
+  <line class="dg-edge" x1="544" y1="195" x2="544" y2="205"/>
+  <line class="dg-edge" x1="670" y1="195" x2="670" y2="205"/>
+  <text class="dg-txt-s" x="32" y="222">t=0</text>
+  <text class="dg-txt-s" x="154" y="222">t=30</text>
+  <text class="dg-txt-s" x="280" y="222">t=60</text>
+  <text class="dg-txt-s" x="406" y="222">t=90</text>
+  <text class="dg-txt-s" x="524" y="222">t=120</text>
+  <text class="dg-txt-s" x="650" y="222">t=150</text>
+  <rect class="dg-node" x="14" y="40" width="120" height="40" rx="6"/>
+  <text class="dg-txt-s" x="24" y="58">worker A claims</text>
+  <text class="dg-txt-s" x="24" y="73">run #881</text>
+  <line class="dg-edge" x1="52" y1="80" x2="42" y2="196" marker-end="url(#arrow)"/>
+  <text class="dg-good" x="150" y="120">beat t=30</text>
+  <text class="dg-good" x="276" y="120">beat t=60</text>
+  <text class="dg-txt-s" x="316" y="150">t=70: charges card</text>
+  <text class="dg-bad" x="316" y="170">t=72: crash — no ack</text>
+  <rect class="dg-node" x="470" y="40" width="140" height="40" rx="6"/>
+  <text class="dg-txt-s" x="480" y="58">t=120: lease expired</text>
+  <text class="dg-txt-s" x="480" y="73">reaper re-enqueues</text>
+  <line class="dg-edge" x1="540" y1="80" x2="546" y2="196" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="576" y="110" width="136" height="56" rx="6"/>
+  <text class="dg-txt-s" x="586" y="128">t=150: worker B runs</text>
+  <text class="dg-txt-s" x="586" y="143">again — sees 'paid',</text>
+  <text class="dg-good" x="586" y="160">no-ops. Safe dup.</text>
+  <line class="dg-edge" x1="644" y1="166" x2="668" y2="196" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>The unavoidable duplicate. Between t=70 and t=72 the work happened but the ack didn't. The system cannot know, so it re-runs — and the job's own idempotency guard turns the re-run into a no-op.</figcaption>
+</figure>
+
+<p><strong>The idempotency cookbook</strong> — what "build accordingly" concretely means, straight from chapter 2.2's toolbox, published as the scheduler team's most-read doc:</p>
+
+<ul>
+<li><strong>Key every side effect by <code>(job_id, scheduled_for)</code></strong> — not by attempt, not by run_id. All retries and duplicates of one scheduled firing share this key; two <em>legitimate</em> firings (today's 9am vs tomorrow's) don't.</li>
+<li><strong>Make the write conditional.</strong> <code>INSERT … ON CONFLICT DO NOTHING</code> keyed on the firing; <code>UPDATE invoices SET state='paid' WHERE id=? AND state='due'</code> — the second execution matches zero rows and dies quietly.</li>
+<li><strong>Push keys through external calls.</strong> Paying via Stripe? Pass the firing key as the idempotency key; their side dedupes what your side can't see.</li>
+<li><strong>For file outputs, write-then-rename.</strong> Build <code>report.tmp.{run_id}</code>, atomically rename to <code>report_2026-08-14</code>. Duplicate runs overwrite with identical bytes instead of appending garbage.</li>
+</ul>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The lease-and-heartbeat dance is a library loan with renewals. You check out a book (claim the run), and as long as you keep renewing (heartbeating), the library knows you're still reading and leaves you alone — for months, if needed. Stop renewing and the library doesn't know if you lost the book or just lost interest; after the grace period it declares the copy gone and orders a replacement (re-enqueues the run). And here's the honest edge of the analogy: if you then stroll in and return the original, the library owns two copies. That's the duplicate. The library can't prevent it — it could only have waited longer, which just delays every replacement for every genuinely lost book. Idempotency is the shelf accepting the second copy without creating a second catalog entry.</p>
+</div>
+
+<h2>Deep dive 3: time policies — misfires, priorities, DAGs</h2>
+
+<p><strong>Misfire policy.</strong> The scheduler tier was down for 10 minutes — deploy gone wrong, database failover, whatever. It's 09:10 and the index holds thousands of jobs stamped 09:00. What now? There is no universal answer, which is exactly why it's per-job config with three values. <code>RUN_NOW</code>: fire late, once — right for "send the digest"; 9:10 is fine. <code>SKIP</code>: recompute <code>next_run_at</code>, catch the next occurrence — right for high-frequency work like a <code>*/5</code> cache refresh, where a late run is worthless because a fresh one is 3 minutes away. <code>CATCH_UP</code>: fire once per <em>missed occurrence</em> — right only for jobs whose payload is parameterized by the period, like "generate the statement for hour X"; skipping leaves a hole in the ledger. My committed defaults: <code>RUN_NOW</code> if we're within one schedule interval of the miss, <code>SKIP</code> beyond that, <code>CATCH_UP</code> strictly opt-in — because an accidental catch-up after a long outage is a self-inflicted thundering herd of stale work. (Quartz calls this the misfire threshold; every mature scheduler grows this knob, so put it in the API on day one.)</p>
+
+<p><strong>Priorities.</strong> The certificate-rotation job must not queue behind 200,000 bulk thumbnail re-encodes. Committed design: three queues — <code>critical</code>, <code>default</code>, <code>bulk</code> — with <em>dedicated worker pools</em>, not one pool doing strict priority-order polling. Strict priority starves: a busy critical queue means bulk work waits forever, and "forever" always eventually includes something that mattered. Dedicated pools guarantee every tier a floor of capacity; critical's pool is simply provisioned so its queue depth stays near zero.</p>
+
+<p><strong>DAG dependencies</strong> — one section, deliberately not the spine. "Run <code>build_ledger</code> after <code>pull_orders</code>, <code>pull_refunds</code>, and <code>pull_fx_rates</code> all succeed" — the Airflow shape. Layer it <em>above</em> the core: a <code>dependencies</code> table, and a completion event for every finished run. When a parent succeeds, atomically decrement the child's unmet-dependency counter; the decrement that hits zero triggers the child through the same <code>run-now</code> path a human would use. Fan-in is just "counter reaches zero exactly once" — the decrement must be a conditional DB update, not a read-then-write, or two parents finishing simultaneously both see 1 and neither fires the child. Validate at submission time with a depth-first search and reject cycles outright — <code>A→B→A</code> is a deadlock you detect at write time for free or debug in production at great expense. The senior note: the core scheduler stays completely unaware of DAGs; it fires jobs, and one of its consumers happens to be a dependency engine. That layering is why the core stays testable.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="DAG fan-in: three extract jobs feed build_ledger which fires only when its dependency counter reaches zero, then post_totals">
+  <rect class="dg-node" x="30" y="20" width="130" height="42" rx="7"/>
+  <text class="dg-txt" x="44" y="46">pull_orders</text>
+  <rect class="dg-node" x="30" y="98" width="130" height="42" rx="7"/>
+  <text class="dg-txt" x="44" y="124">pull_refunds</text>
+  <rect class="dg-node" x="30" y="176" width="130" height="42" rx="7"/>
+  <text class="dg-txt" x="44" y="202">pull_fx_rates</text>
+  <rect class="dg-node-alt" x="290" y="92" width="160" height="56" rx="7"/>
+  <text class="dg-txt" x="306" y="114">build_ledger</text>
+  <text class="dg-txt-s" x="306" y="132">deps left: 3 → 0</text>
+  <rect class="dg-node" x="540" y="94" width="130" height="50" rx="7"/>
+  <text class="dg-txt" x="556" y="118">post_totals</text>
+  <text class="dg-txt-s" x="556" y="134">runs after ledger</text>
+  <line class="dg-edge" x1="160" y1="46" x2="290" y2="104" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="160" y1="119" x2="290" y2="119" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="160" y1="194" x2="290" y2="136" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="450" y1="119" x2="540" y2="119" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="176" y="96">success events</text>
+  <text class="dg-txt-s" x="182" y="112">decrement counter</text>
+  <text class="dg-txt-s" x="460" y="106">fires once,</text>
+  <text class="dg-txt-s" x="460" y="164">on the 0</text>
+  <text class="dg-txt-s" x="290" y="196">atomic decrement — the update that reaches 0 triggers the child</text>
+  <text class="dg-txt-s" x="290" y="216">cycles rejected at submission (DFS), not discovered in production</text>
+</svg>
+<figcaption>Fan-in as a counter. Three parents, one atomic decrement each; whichever decrement lands on zero fires <code>build_ledger</code> — exactly one trigger even when parents finish in the same millisecond.</figcaption>
+</figure>
+
+<h2>Failure modes and operations</h2>
+
+<p><strong>What I monitor</strong> — the four numbers that describe this system's health: (1) <strong>fire-time skew p99</strong>: <code>scheduled_for</code> versus worker pickup — my 5-second SLO, measured, graphed per priority tier. (2) <strong>Queue depth per tier</strong> — critical's depth should hug zero; a rising default-queue depth is the earliest backpressure signal (chapter 2.7). (3) <strong>DLQ arrival rate</strong> — a step change means some job's dependency broke. (4) <strong>Oldest unclaimed due job</strong> — <code>now() - min(next_run_at)</code> over enabled jobs. This one deserves a sentence: if the whole scanner tier silently wedges, there are no errors, no failed runs, no bad metrics — <em>nothing happens</em>, which is the one failure a normal error-rate alarm can't see. The oldest-due-job gauge climbing is how silence becomes visible. Belt-and-suspenders: a dead-man's-switch canary job fires every minute and pings an external monitor; the monitor alarms on <em>absence</em>. The scheduler must never be the only witness to its own death.</p>
+
+<p><strong>Clock skew, honestly.</strong> Here's an underrated virtue of the SKIP LOCKED design: correctness doesn't depend on scanner clocks at all. The claim query's <code>now()</code> evaluates on the <em>database's</em> clock — one authoritative clock, however wrong, applied consistently. Scanner clock skew affects nothing; NTP keeps worker clocks within tens of milliseconds for lease arithmetic, and our tolerances are in seconds. Contrast Quartz, the JVM world's veteran scheduler: its clustering mode coordinates through database row locks too, but nodes use their own clocks, and its documentation is blunt — cluster only if node clocks are NTP-synced within a second, or drift produces missed and duplicated firings. When a twenty-year-old scheduler shouts about clocks in its config docs, put the sentence in your design: "one authoritative clock for due-ness; everything else tolerates seconds of skew."</p>
+
+<p><strong>Rollouts.</strong> Scanners and workers are stateless — rolling deploys, no drama. The scary change is the cron <em>parser</em>: a subtle parsing bug rewrites <code>next_run_at</code> wrong for millions of jobs on their next fire. So parser changes ship in shadow mode first: new code computes next occurrences alongside old, we diff a day of results, deploy only on zero diffs. Cheap, and it converts the worst silent-corruption risk into a boring report.</p>
+
+<p><strong>What breaks at 10x?</strong> 100M jobs, 17K firings/sec, and the answer is: the claim path, first and specifically. One Postgres doing tens of thousands of row locks per second with every scanner contending on the same index range stops being comfortable. The fix is the one we learned in chapter 1.9: partition. Hash <code>job_id</code> into 16 logical shards (a <code>shard</code> column, or 16 physical DBs later); each scanner sweeps its assigned shards; claims never contend across shards, and the midnight wave splits 16 ways. Second-order casualty: the <code>runs</code> firehose — 100M+ inserts/day — which is why it was born partitioned-by-day with an archival policy. Name the ceiling before the interviewer does: "single-store claiming carries us to a few thousand claims/sec; past that I shard the claim, and the design doesn't change shape — it multiplies."</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This problem is a correctness interview wearing an infrastructure costume. The interviewer is listening for one sentence above all: "exactly-once firing needs an arbiter; exactly-once execution is impossible, so at-least-once plus idempotency." Expect these probes, near-verbatim:</p>
+<ul>
+<li>"Two scheduler instances see the same due job. Walk me through why only one fires it — line by line." (They want the transaction: lock, insert run, advance next_run_at, commit — and rollback semantics on crash.)</li>
+<li>"Can you guarantee a job never runs twice?" (A trap. "Yes" fails the interview. The senior answer names Two Generals and pivots to the idempotency contract.)</li>
+<li>"What happens at midnight UTC?" (They're checking you know load is spiky by human habit, and that your SLO and batch-scan design absorb the wave.)</li>
+<li>"Your scheduler was down for ten minutes. What happens to the jobs that were due?" (Misfire policy — they want per-job config with committed defaults, not one hardcoded behavior.)</li>
+<li>"A job runs for six hours. How does your lease not kill it?" (Heartbeat-extended leases; and they may follow with "and if the worker GC-pauses for two minutes?" — lease expiry, reclaim, duplicate, idempotency again. Everything routes back to the crux.)</li>
+</ul>
+</div>
+
+<h2>The trade-offs I committed to</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Chosen</th><th>Cost accepted</th><th>Rejected alternative — and when it wins</th></tr></thead>
+<tbody>
+<tr><td>Fire arbitration</td><td>DB row claims, <code>FOR UPDATE SKIP LOCKED</code></td><td>All coordination funnels through one store; ~few-K claims/sec ceiling before sharding</td><td>Leader-elected tier (etcd lease + fencing) — wins when firing needs rich in-memory state, or there's no shared SQL store</td></tr>
+<tr><td>Execution guarantee</td><td>At-least-once + mandatory idempotency contract</td><td>Duplicate runs happen; every job author carries an idempotency obligation</td><td>At-most-once — wins for cheap, loss-tolerant, non-idempotent-able work (some notifications)</td></tr>
+<tr><td>Due-job detection</td><td>1-second batch scan on <code>next_run_at</code> index</td><td>Up to ~1s inherent firing latency + queue drain time</td><td>Per-job in-memory timers — wins only for a small hot set needing sub-second precision (see exercise 1)</td></tr>
+<tr><td>Priorities</td><td>Per-tier queues + dedicated worker pools</td><td>Some idle capacity reserved in quiet tiers</td><td>Single queue, strict priority — wins at tiny scale; starves bulk work at ours</td></tr>
+<tr><td>Misfire default</td><td>RUN_NOW within one interval, else SKIP; CATCH_UP opt-in</td><td>Occasional late runs; missed occurrences for frequent jobs</td><td>Universal CATCH_UP — wins never as a default; it turns every outage into a replay storm</td></tr>
+<tr><td>Job store</td><td>Single Postgres, runs partitioned by day</td><td>Vertical ceiling; deliberate re-shard milestone at ~10x</td><td>Sharded from day one — wins if you're Google-sized on day one, which the numbers say we aren't</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c11-f1">
+<p class="fey-prompt">A junior teammate asks: "Why can't our scheduler just guarantee my job runs exactly once? Kafka has exactly-once, right?" Answer in five or six plain sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Imagine your job charges a credit card, and the worker dies right after the charge but right before it tells anyone. From the outside, "did the work, died before reporting" and "died before doing anything" look identical — silence. Whatever the scheduler does next is a guess: re-run and it might duplicate the charge; don't re-run and it might have never happened. That's the Two Generals problem, and no protocol escapes it — even Kafka's "exactly-once" only covers effects inside Kafka's own transactional world, not your call to a bank's API. So we promise at-least-once — we will never silently lose your firing — and in exchange you make your job safe to repeat: key your side effects by (job, scheduled time) and write conditionally, so a second run finds the work done and does nothing. Duplicate <em>attempts</em> are our problem; duplicate <em>effects</em> are yours, and the cookbook makes them cheap to prevent.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Now add a requirement:</strong> a premium tier needs firing precision of ±100 ms (e.g., market-open triggers at 09:30:00.000). Your 1-second scan plus queue drain can't deliver that. What do you add, and what stays the same?</p></div>
+<details><summary>Answer</summary><p>Don't rebuild the spine — add a small express lane. A pre-fetcher pulls the next 2 minutes of premium jobs into scheduler memory ahead of time (they're a tiny fraction of 10M), and a dedicated firer arms real in-memory timers and dispatches directly to a reserved worker pool, skipping the general queue. The claim still happens through the same DB transaction — arbitration and crash-recovery rules don't change, and it's still at-least-once (the pre-fetcher can crash and refire; premium jobs still need idempotency). You've traded generality for precision on a small hot set. This is also the honest answer to "why not timers for everything": 10M armed timers that evaporate on every crash and need re-arming from the DB anyway is the scan loop with extra steps — timers earn their complexity only when a small set needs precision the scan can't give.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>10x it:</strong> 100M jobs, 17K firings/sec sustained, and a midnight wave of 3M due firings. Walk the failure order: what saturates first, second, third — and the fix for each.</p></div>
+<details><summary>Answer</summary><p>First: the claim path — tens of thousands of contended row locks/sec on one index range in one Postgres. Fix: hash-partition jobs into 16+ shards, scanners sweep disjoint shards, claims stop contending; midnight splits 16 ways. Second: the <code>runs</code> table — 100M+ inserts/day plus status updates plus reaper scans. Fix: it's already partitioned by day; move status-history reads to replicas, batch status writes, archive aggressively. Third: worker capacity at midnight — 3M firings against a fixed fleet means the drain time, and thus fire-time skew, blows the SLO once a day. Fix: schedule-smearing (jitter for jobs that opt in, Google's <code>?</code> trick as a nudge in the API), plus autoscaling the bulk pool ahead of known waves. Note what never changed: the claim transaction's shape, the lease protocol, the idempotency contract. Scale multiplied the design; it didn't reshape it — that's the sign the original commit was right.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Flip a requirement:</strong> a new job class — promotional push notifications — where a duplicate is worse than a miss (double-ping users and they uninstall). The PM asks for "at-most-once" jobs. What changes in the run lifecycle?</p></div>
+<details><summary>Answer</summary><p>Invert the order of record-and-execute. Today: execute, then mark done — silence triggers re-run. For at-most-once: the worker marks the run <code>completed</code> (or "burned") <em>before</em> executing, and the reaper never re-enqueues this class — a lease expiry moves it to a <code>unknown</code> state for human review instead of retry. Now a crash between the mark and the send means a notification that never went out and never will: that's the miss you signed up for. Be the senior in the room about the boundary: this is at-most-once <em>attempted delivery</em>, not a duplicate-proof system end to end — if the push provider itself retries internally, users can still see doubles; true suppression needs an idempotency key at the provider. Misses are silent by design, so pair the class with delivery-rate monitoring, or you'll discover a month of missed promos from a revenue chart.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>What breaks if…</strong> the whole scanner tier deadlocks on a bad deploy at 02:00 — processes alive, health checks green, zero jobs firing. Your error-rate alarms stay silent (nothing is running, so nothing fails). Design the detection.</p></div>
+<details><summary>Answer</summary><p>Two independent tripwires. Inside: an "oldest unclaimed due job" gauge — <code>now() - min(next_run_at)</code> over enabled jobs — exported by a monitor that isn't the scanner; it climbs monotonically the moment firing stops, alert at 60s. Outside: a dead-man's switch — a canary job fires every minute and hits an external monitoring service, which alarms on <em>absence</em> of the ping; this catches the case where the database, the metrics pipeline, or the whole region went with the scanners. The principle worth saying in an interview: for a system whose job is to <em>act</em>, the deadly failure mode is silence, and silence never trips an error-rate alarm — you must alert on the absence of expected events, with at least one watcher outside the system's own blast radius.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A user submits DAG edges: ledger→report, report→cleanup, cleanup→ledger. When and how does your system reject this, and what exactly goes wrong if you accept it?</p></div>
+<details><summary>Answer</summary><p>Reject at submission, inside the write transaction: load the affected component of the graph, run DFS from the new edge; finding a back edge (cleanup→ledger closes the loop) returns <code>400 cycle detected: ledger→report→cleanup→ledger</code> — naming the path, because a bare "invalid" for a 200-node graph is user-hostile. Accept it and nothing crashes — that's the trap: each node's unmet-dependency counter (1) never reaches zero, so the cycle sits eternally pending. No errors, no retries, no DLQ entries — just three jobs that never run and a "why didn't cleanup fire?" ticket weeks later. It's the missed-fire problem in a new costume, invisible to error-based alerting; a "pending &gt; 24h" watchdog is the backstop, but write-time DFS costing milliseconds is the actual fix.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>A scheduler has two catastrophic failure numbers — zero fires and two fires — and the design must treat missed firings as structurally impossible while making duplicates rare and survivable.</li>
+<li>Never build per-job timers: materialize <code>next_run_at</code> in the job store, index it, and batch-scan every second — the index range scan is the entire "what's due" algorithm.</li>
+<li>Scheduler load is a heartbeat, not a stream: schedules cluster at round times, so the top-of-minute and midnight waves size your queues, your SLO, and your jitter policy.</li>
+<li><code>SELECT … FOR UPDATE SKIP LOCKED</code> makes the database the fire arbiter: concurrent scanners claim disjoint rows, and a crashed claimer's locks vanish with its transaction — Airflow 2.0 ships exactly this instead of leader election.</li>
+<li>Exactly-once execution is impossible (Two Generals: silence hides whether the work happened), so commit to at-least-once and make idempotency a documented contract — side effects keyed by <code>(job_id, scheduled_for)</code>, conditional writes.</li>
+<li>Leases with heartbeats let 6-hour jobs coexist with 90-second failure detection; the reaper plus retry backoff plus a monitored DLQ complete the run lifecycle.</li>
+<li>Misfire policy is per-job config (run-now / skip / catch-up) with conservative defaults — universal catch-up turns every outage into a replay storm.</li>
+<li>A scheduler's deadliest failure is silence: alert on the absence of expected firings (oldest-due gauge, dead-man's-switch canary), because error-rate alarms can't see "nothing happened."</li>
+</ul>
+</div>

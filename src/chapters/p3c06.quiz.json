@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c06",
+  "items": [
+    {
+      "id": "p3c06-q01", "level": 1, "type": "mcq", "tag": "estimation",
+      "q": "1M online drivers ping their location every 4 seconds. Why does this rule out a durable database write per ping?",
+      "options": [
+        {"t": "250K writes/sec of data that's obsolete in 4 seconds — you'd buy a serious cluster to durably store values whose useful life is one ping interval", "correct": true,
+         "why": "Right. The number does the arguing: sustained 250K writes/sec is major-cluster territory, and every row is replaced 4 seconds later. Meanwhile the data that matters — latest position per driver — fits in ~100 MB of memory."},
+        {"t": "Databases can't store GPS coordinates efficiently", "correct": false,
+         "why": "They can — lat/lon is just two floats, and PostGIS exists. The problem is the write rate against the data's lifetime, not the data type."},
+        {"t": "Location data is too sensitive to persist", "correct": false,
+         "why": "Privacy shapes retention policy, but Uber does persist location history (via Kafka to batch storage). The hot-path decision is driven by write economics, not sensitivity."},
+        {"t": "The database would be a single point of failure for matching", "correct": false,
+         "why": "You'd shard it, so no. The real objection is cost and pointlessness: durable writes for 4-second-lifetime data buys nothing that an in-memory store doesn't already give you."}
+      ]
+    },
+    {
+      "id": "p3c06-q02", "level": 1, "type": "mcq", "tag": "geo-index",
+      "q": "Why does a B-tree index on (lat, lon) perform badly for 'drivers near this point' queries?",
+      "options": [
+        {"t": "B-trees only work on integer keys", "correct": false,
+         "why": "B-trees handle floats and strings fine. The problem is dimensionality, not data types."},
+        {"t": "A B-tree is one-dimensional: it can use the index for latitude only, then must scan every driver in that latitude band around the entire planet", "correct": true,
+         "why": "Exactly. Sorting by (lat, lon) puts Mumbai next to Jeddah if their latitudes match. The bounding box becomes 'index seek on lat, filter scan on lon' — a 4 km ribbon wrapped around the Earth. Two dimensions folded into one lose neighborliness."},
+        {"t": "B-trees are too slow for reads at this scale", "correct": false,
+         "why": "B-tree reads are fast — that's their whole job. The failure is that this particular query shape can't use the second dimension of the key, so 'fast reads' of an enormous candidate set."},
+        {"t": "The index would be too large to fit in memory", "correct": false,
+         "why": "A million entries is a small index. Size isn't the issue; the query-shape mismatch (and the 250K/sec update churn on a durable structure) is."}
+      ]
+    },
+    {
+      "id": "p3c06-q03", "level": 1, "type": "mcq", "tag": "h3",
+      "q": "What property made Uber choose hexagons over a square grid for H3?",
+      "options": [
+        {"t": "Hexagons compress better in memory", "correct": false,
+         "why": "Cell IDs are 64-bit integers either way. Memory layout is identical; the win is geometric, not representational."},
+        {"t": "Hexagons nest perfectly into parent cells, squares don't", "correct": false,
+         "why": "Backwards — this is the property hexagons gave UP. Squares (quadtrees) nest exactly; H3's parent/child containment is approximate. Uber accepted a worse hierarchy to get better neighbors."},
+        {"t": "All six neighbors of a hexagon are equidistant, so neighbor-based math (smoothing surge, k-ring queries) is unbiased in every direction", "correct": true,
+         "why": "Yes — and this is documented in Uber's H3 blog. Squares have 4 near edge-neighbors and 4 farther corner-neighbors, which biases any 'blend with neighbors' computation. Hexagons are the only regular tiling with equidistant neighbors."},
+        {"t": "Hexagons cover the sphere without any irregular cells", "correct": false,
+         "why": "Actually H3 needs exactly 12 pentagons to close the sphere (placed over oceans). The win isn't perfection of tiling — it's neighbor uniformity."}
+      ]
+    },
+    {
+      "id": "p3c06-q04", "level": 1, "type": "mcq", "tag": "k-ring",
+      "q": "When finding drivers near a rider, why must you query the rider's cell PLUS its ring of neighbor cells?",
+      "options": [
+        {"t": "To have backup cells in case the rider's cell is on a failed shard", "correct": false,
+         "why": "Shard failure is handled by re-ingestion from pings, not by querying extra cells. The k-ring is about geometry, not availability."},
+        {"t": "A rider near a cell edge may have their closest driver just across the boundary — cell membership doesn't equal proximity", "correct": true,
+         "why": "Right. Cells are arbitrary lines on the map. A driver 80 m away in the next cell beats a driver 400 m away in yours — query only your own cell and you dispatch the wrong car."},
+        {"t": "More cells always produce better ETAs", "correct": false,
+         "why": "Past the radius that covers a sensible pickup distance, more cells just bloat the candidate set you pay to rank. The ring exists for boundary correctness, then you stop."},
+        {"t": "H3 requires reads in groups of seven", "correct": false,
+         "why": "No such constraint — you can read any single cell. k-ring(1) happens to be 7 cells, but that's output of the geometry, not an API rule."}
+      ]
+    },
+    {
+      "id": "p3c06-q05", "level": 1, "type": "mcq", "tag": "eta",
+      "q": "Why are the candidate drivers re-ranked by road-network ETA instead of straight-line distance?",
+      "options": [
+        {"t": "Straight-line distance lies in cities: a driver 200 m away across a river can be 12 driving minutes away", "correct": true,
+         "why": "Right. Rivers, railways, divided highways, and one-way systems make crow-flies distance a bad proxy for arrival time — which is the thing the rider actually cares about."},
+        {"t": "Straight-line distance is expensive to compute", "correct": false,
+         "why": "Opposite — haversine is nearly free, which is why it's tempting. It's cheap and wrong; road ETA is expensive and right, which is why we spend it only on the small filtered candidate set."},
+        {"t": "GPS coordinates aren't accurate enough for distance math", "correct": false,
+         "why": "GPS is accurate to a few metres — plenty. The error isn't in the coordinates; it's in pretending cars travel in straight lines."},
+        {"t": "Regulations require ETA-based dispatch", "correct": false,
+         "why": "No such regulation drives this. It's a product-quality decision: matching on drive time gets riders picked up faster."}
+      ]
+    },
+    {
+      "id": "p3c06-q06", "level": 1, "type": "mcq", "tag": "reservation",
+      "q": "What is the TTL on a driver reservation actually for?",
+      "options": [
+        {"t": "Limiting how long the rider waits for a match", "correct": false,
+         "why": "Rider-side patience is handled by the matching flow and offer windows. The TTL protects the driver's availability, not the rider's clock."},
+        {"t": "Crash insurance: if the matching server dies mid-flow, the reservation expires and the driver becomes matchable again instead of being stuck", "correct": true,
+         "why": "Yes. A lock without an expiry plus a dead lock-holder equals a driver frozen forever. The TTL guarantees the system heals in seconds with no human intervention — never take a lock without one."},
+        {"t": "Freeing memory in Redis", "correct": false,
+         "why": "The reservation is a few bytes; memory is irrelevant. The expiry exists for liveness — releasing a claim whose owner may have died."},
+        {"t": "Rate-limiting how often one driver can be offered trips", "correct": false,
+         "why": "Offer pacing is a separate product concern. The TTL bounds how long a single claim can outlive its (possibly crashed) claimant."}
+      ]
+    },
+    {
+      "id": "p3c06-q07", "level": 1, "type": "mcq", "tag": "durability",
+      "q": "In this design, where does the 'ephemerality budget' end — the point after which state must be durable?",
+      "options": [
+        {"t": "Everything is ephemeral until payment", "correct": false,
+         "why": "Far too late. The moment a driver accepts, a real-world commitment exists — who's driving whom, what's charged, what insurance covers. Losing that in a restart is losing the business record itself."},
+        {"t": "At the money: the ride request creates a durable trip row, and every transition from REQUESTED onward is a durable state machine — while matching scratch stays in memory", "correct": true,
+         "why": "Right. Locations and reservations are disposable — regenerable or TTL-bounded. But a rider's request is intent to spend, and the accepted trip is a contract. Durable from there, memory before there."},
+        {"t": "Everything must be durable in a serious system", "correct": false,
+         "why": "That instinct costs you the design: making 250K pings/sec durable buys nothing. Senior judgment is drawing the line — disposable data in memory, precious data in Postgres — and defending it."},
+        {"t": "Once the driver's location is recorded", "correct": false,
+         "why": "Locations are the most disposable data in the system — each is replaced 4 seconds later and the whole map self-rebuilds from pings. Durability starts where money and commitments start."}
+      ]
+    },
+    {
+      "id": "p3c06-q08", "level": 1, "type": "mcq", "tag": "self-healing",
+      "q": "A shard of the in-memory geo index dies, losing its slice of driver positions. What's the recovery plan?",
+      "options": [
+        {"t": "Restore from the last snapshot backup", "correct": false,
+         "why": "A snapshot is stale the moment it's taken — positions age out in seconds. Restoring old positions can be worse than having none."},
+        {"t": "Replay the Kafka history to rebuild positions", "correct": false,
+         "why": "Workable but needlessly heavy — you'd replay a firehose to reconstruct what the next 4 seconds deliver for free. Kafka's history serves analytics, not hot-path recovery."},
+        {"t": "Nothing special: drivers re-announce themselves every 4 seconds, so the map self-heals within about one ping interval", "correct": true,
+         "why": "This is the elegant property worth saying out loud: the geo index is derived state and its source — the fleet — keeps talking. Affected drivers are invisible for a few seconds, then reappear."},
+        {"t": "Fail the whole region over to a standby", "correct": false,
+         "why": "A region failover for one cache shard is using a crane to pick up a coin. Re-ingestion fixes it in seconds with zero operator action."}
+      ]
+    },
+    {
+      "id": "p3c06-q09", "level": 1, "type": "mcq", "tag": "streams",
+      "q": "Every location ping is also appended to Kafka. What is that stream for?",
+      "options": [
+        {"t": "It's the matcher's read path when Redis is slow", "correct": false,
+         "why": "The matcher never reads Kafka — a log is the wrong shape for 'who's near this point right now'. Hot path stays in the memory index."},
+        {"t": "The cold world: batch storage for analytics, ETA-model training, support and safety replays — consumed off the hot path", "correct": true,
+         "why": "Right. The stream decouples the fast world from the thorough one: matching never waits for analytics, and analytics gets every ping ever, cheaply stored."},
+        {"t": "Synchronous backup of the geo index", "correct": false,
+         "why": "It's asynchronous by design — the hot path never waits on the append. And recovery uses re-ingestion from live pings, not stream replay."},
+        {"t": "Delivering location updates to rider apps", "correct": false,
+         "why": "Riders see their matched driver's position via the trip-tracking read path, not by consuming a firehose topic of a million drivers."}
+      ]
+    },
+    {
+      "id": "p3c06-q10", "level": 2, "type": "mcq", "tag": "race",
+      "q": "Two matching servers, handling two riders, both compute that driver Dev is the best candidate at the same instant. What actually prevents double-dispatch?",
+      "options": [
+        {"t": "Both matchers re-check Dev's status right before sending the offer", "correct": false,
+         "why": "Check-then-act with a smaller gap is still check-then-act. Both re-checks can pass, then both offers go out. Shrinking a race window is not closing it."},
+        {"t": "An atomic compare-and-set on the one shard that owns Dev's record: available→reserved succeeds exactly once; the loser cascades to its next candidate", "correct": true,
+         "why": "Right. The shard serializes the two operations; one returns success, one returns failure, and no gap exists between check and claim because they're one operation. The loser doesn't retry Dev — it moves down its own ranked list."},
+        {"t": "A global lock over the matching service so only one match runs at a time", "correct": false,
+         "why": "Correct but catastrophic: you've serialized every match on Earth to protect one driver's status. Contention is per-driver, so the atomicity should be per-driver."},
+        {"t": "Riders are queued so two requests never process simultaneously", "correct": false,
+         "why": "Queued where? Globally, that's the same throughput disaster as a global lock; per-city it still allows two matchers in one city to race. Serialize at the contended resource — the driver."}
+      ]
+    },
+    {
+      "id": "p3c06-q11", "level": 2, "type": "mcq", "tag": "fencing",
+      "q": "Dev's accept for Asha's trip arrives 25 seconds late — after his 20s reservation expired and another matcher reserved him for Ben. What stops him from being booked on both trips?",
+      "options": [
+        {"t": "The accept carries the original match token; it no longer matches the current reservation, so it's rejected", "correct": true,
+         "why": "The fencing token. Each reservation stores a match id, the offer carries it, and an accept must present it. A stale accept bears a stale token and bounces off cleanly — the same pattern as fenced locks in Part 2."},
+        {"t": "The 20-second TTL prevents this scenario entirely", "correct": false,
+         "why": "The TTL is what CREATES the scenario — it released Dev while his accept was still in flight. Expiry gives liveness; it can't stop a stale message from arriving later. The token handles that."},
+        {"t": "Accepts are processed in timestamp order", "correct": false,
+         "why": "You can't trust or wait for timestamp ordering across phones on cell networks. Ordering by arrival with validity checks (the token) is the robust design."},
+        {"t": "The driver app blocks accepting a second offer", "correct": false,
+         "why": "Client-side checks are UX, not correctness — apps get killed, retried, and replayed. The server-side token check is the actual guarantee."}
+      ]
+    },
+    {
+      "id": "p3c06-q12", "level": 2, "type": "mcq", "tag": "reservation",
+      "q": "The driver's offer window is 15 seconds. You're choosing the reservation TTL. Which is right, and why?",
+      "options": [
+        {"t": "10 seconds — release him early so riders aren't kept waiting", "correct": false,
+         "why": "Now the reservation dies while the driver is still deciding: at second 11 another matcher can reserve him mid-offer, and the race you built all this to prevent reopens through the back door."},
+        {"t": "About 20 seconds — slightly longer than the decision it protects", "correct": true,
+         "why": "The reservation must outlive the offer window plus delivery slack, and not much more. Long enough that no gap opens under it; short enough that a crashed matcher only sidelines the driver briefly."},
+        {"t": "Exactly 15 seconds, matching the window", "correct": false,
+         "why": "Push latency and clock skew mean the accept can legitimately arrive at second 15-and-a-bit — with the reservation already gone. Protect the window plus slack."},
+        {"t": "5 minutes, to be safe", "correct": false,
+         "why": "'Safe' for whom? A matcher that crashes now freezes a driver out of the marketplace for 5 minutes. TTLs trade stuck-time against protection; 20x the protected window is all cost."}
+      ]
+    },
+    {
+      "id": "p3c06-q13", "level": 2, "type": "mcq", "tag": "k-ring",
+      "q": "Users report occasionally being matched with a farther driver when a closer car was visibly right there. Logs show it happens to riders standing near certain streets. Most likely bug?",
+      "options": [
+        {"t": "The ETA service is returning stale traffic data", "correct": false,
+         "why": "Stale traffic skews rankings broadly and noisily — it wouldn't correlate with riders standing at specific street locations. The location-pattern is the clue."},
+        {"t": "The nearby query reads only the rider's own cell — riders near cell boundaries miss closer drivers across the line", "correct": true,
+         "why": "Classic boundary bug. 'Certain streets' are the hex edges. The fix is querying the k-ring of neighbor cells, which is why the ring is correctness, not optimization."},
+        {"t": "Driver pings are being dropped under load", "correct": false,
+         "why": "Dropped pings would distribute across all geographies, not cluster at particular streets. Geographic clustering points at grid geometry."},
+        {"t": "The geohash cells are too large", "correct": false,
+         "why": "Oversized cells cause bloated candidate sets and hot shards — not systematically missing the nearest driver at boundary locations. Wrong failure signature."}
+      ]
+    },
+    {
+      "id": "p3c06-q14", "level": 2, "type": "mcq", "tag": "sparse",
+      "q": "3am, outer suburb: the rider's cell plus k-ring(1) contains one driver, 9 minutes away. What should the matcher do?",
+      "options": [
+        {"t": "Match that driver immediately — one candidate is enough", "correct": false,
+         "why": "Maybe, but it's premature: k-ring(2) costs one more cheap lookup and might find a driver 3 minutes away just beyond the ring. Widen before you settle."},
+        {"t": "Progressively widen the ring (k=2, 3…) until enough candidates are found or a radius cap is hit, then rank what you have", "correct": true,
+         "why": "Right — the ring size is a starting point tuned for density, not a constant. Sparse areas widen; the radius cap keeps you from offering a driver 40 minutes away and calling it a match."},
+        {"t": "Fail the request and ask the rider to retry later", "correct": false,
+         "why": "Giving up while a viable driver exists inside a reasonable radius is a product failure, not a design constraint. Exhaust the widening search first."},
+        {"t": "Fall back to scanning all drivers in the city", "correct": false,
+         "why": "A full scan abandons the index precisely when queries should stay cheap. Ring-widening reaches the same drivers in expanding, bounded steps."}
+      ]
+    },
+    {
+      "id": "p3c06-q15", "level": 2, "type": "mcq", "tag": "surge",
+      "q": "One hex cell briefly shows 10 open requests and 1 driver — a 10x demand spike lasting 90 seconds. What stops prices from whiplashing?",
+      "options": [
+        {"t": "Surge is disabled for short spikes by an on-call operator", "correct": false,
+         "why": "Humans in a 90-second loop is not a design. The dampening must be structural — in the math, not the pager."},
+        {"t": "Smoothing, twice: a time-window average so a spiky minute doesn't set the price, and spatial blending with the six neighbor cells so surge is a gradient, not a cliff", "correct": true,
+         "why": "Right — and spatial blending with equidistant neighbors is literally why H3's hexagons exist. Temporal smoothing kills whiplash; spatial smoothing kills the crossing-the-street-halves-your-fare cliff."},
+        {"t": "Prices only update once per hour", "correct": false,
+         "why": "That trades whiplash for uselessness — surge exists to respond to demand within minutes. Smooth the signal; don't freeze it."},
+        {"t": "The multiplier is capped at 1.2x", "correct": false,
+         "why": "A cap bounds the range but not the oscillation, and a tight cap defeats surge's purpose of pulling supply toward demand. Caps complement smoothing; they don't replace it."}
+      ]
+    },
+    {
+      "id": "p3c06-q16", "level": 2, "type": "mcq", "tag": "geo-index",
+      "q": "A driver's ping arrives and their H3 cell hasn't changed since the last ping (the common case). What should the index update do?",
+      "options": [
+        {"t": "Remove and re-add the driver to the cell set anyway, for consistency", "correct": false,
+         "why": "Pointless churn on the structure 250K times a second. The set membership is unchanged; touching it buys nothing and costs everywhere."},
+        {"t": "Overwrite lat/lon/timestamp in the driver's own record in place — the cell set isn't touched", "correct": true,
+         "why": "Right. Same cell means same set membership, so the update is a cheap in-place write. Only boundary crossings (roughly one ping in ten at res 9) pay for the atomic remove-from-old, add-to-new."},
+        {"t": "Buffer pings and apply them in 30-second batches", "correct": false,
+         "why": "That trades your 8-second freshness requirement away to optimize an operation that's already nearly free. Batching belongs at the gateway (network amortization), not in staleness."},
+        {"t": "Skip the update entirely if the driver moved less than 50 m", "correct": false,
+         "why": "Tempting, but now position age becomes unbounded for slow-moving drivers and 'last seen' stops meaning anything. The write is too cheap to be worth corrupting freshness semantics. Adaptive ping RATES at the client are the honest version of this optimization."}
+      ]
+    },
+    {
+      "id": "p3c06-q17", "level": 2, "type": "mcq", "tag": "failure",
+      "q": "A matching server reserves a driver, then crashes before sending the offer. Trace what the system does.",
+      "options": [
+        {"t": "The reservation TTL expires in ~20s freeing the driver; the trip row still sits in a pre-accept state, so a timeout sweep re-runs matching for that rider", "correct": true,
+         "why": "Both halves matter: the TTL heals the driver's side (no stuck driver), and the durable trip row heals the rider's side (the request can't be forgotten because it was written before matching began)."},
+        {"t": "The rider must cancel and request again", "correct": false,
+         "why": "That's what happens if you DIDN'T write the durable trip row first. Because the request is durable state, the system owes the rider a car and can retry without their involvement."},
+        {"t": "Another matcher detects the crash via heartbeat and adopts the in-flight match", "correct": false,
+         "why": "Adopting in-flight ephemeral state from a dead process is complex and racy. The design deliberately makes it unnecessary: let the TTL discard the scratch work and redo it — matching is cheap."},
+        {"t": "The driver stays reserved until they go offline and back online", "correct": false,
+         "why": "Only if you forgot the TTL. This answer describes the bug the TTL exists to prevent."}
+      ]
+    },
+    {
+      "id": "p3c06-q18", "level": 2, "type": "mcq", "tag": "resolution",
+      "q": "A teammate proposes indexing drivers at H3 resolution 6 (~3.2 km edges) to 'reduce the number of cells we manage.' What's the strongest objection?",
+      "options": [
+        {"t": "Coarse cells hold thousands of downtown drivers: the cheap-filter step stops filtering, every query drags a huge set into expensive ETA ranking, and busy cells become hot keys on their shards", "correct": true,
+         "why": "Right on both counts. Cell size trades candidate-set size against query fan-out; res 6 collapses the trade in the wrong direction and concentrates a city's traffic onto single keys — a hot-partition problem you created yourself."},
+        {"t": "Resolution 6 cells are too big for GPS accuracy", "correct": false,
+         "why": "Backwards — GPS error (metres) is irrelevant at any of these cell sizes. Accuracy isn't the axis this decision moves on."},
+        {"t": "Fewer cells means fewer shards, reducing availability", "correct": false,
+         "why": "Shard count is set by the cluster, not the cell count — millions of cells or thousands both hash across the same nodes. The issue is per-key load concentration, not shard arithmetic."},
+        {"t": "H3 doesn't support resolution 6", "correct": false,
+         "why": "It does — resolutions 0 through 15 all exist. The objection is about workload fit, not library capability."}
+      ]
+    },
+    {
+      "id": "p3c06-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Why not implement driver reservations as row locks in your trips database instead of Redis CAS?' The senior answer:",
+      "options": [
+        {"t": "\"Database locks are slower but safer — I'd switch to them if correctness matters\"", "correct": false,
+         "why": "This concedes a false premise. The Redis design IS correct for its job (with TTL and fencing); the durable transition already goes through Postgres. Trading the whole matching flow's latency for redundant 'safety' isn't rigor, it's not understanding your own design."},
+        {"t": "\"The reservation spans human decision time — up to 15 seconds of a driver deciding. Pinning DB row locks across that turns the database into a queue at every city hot spot. Memory arbitrates the contention; the database records the outcome. And I accept the cost: a Redis failover can rarely drop a reservation, whose worst case is a duplicate offer, never a duplicate trip — the durable accept is fenced.\"", "correct": true,
+         "why": "Commitment, the mechanism (lock duration × contention = queue), the division of labor, and the honestly-named residual risk with its bounded blast radius. That's a complete senior answer to a 'defend your choice' probe."},
+        {"t": "\"Redis is faster than Postgres\"", "correct": false,
+         "why": "True and insufficient. Speed alone doesn't answer WHY the lock can't live in the database — the load-bearing argument is lock duration across human decisions, plus where durability actually gets enforced."},
+        {"t": "\"Either works; it's mostly a style preference\"", "correct": false,
+         "why": "It's not. One design holds row locks for 15 seconds under contention; the other holds nothing durable at all until the fenced accept. Shrugging at a direct trade-off probe is the option-listing anti-pattern."}
+      ]
+    },
+    {
+      "id": "p3c06-q20", "level": 3, "type": "mcq", "tag": "crux",
+      "q": "You've got 20 minutes of deep-dive time left in the Uber interview. Where do you spend it?",
+      "options": [
+        {"t": "The atomic reservation and offer flow — walking the double-dispatch race concretely, then the geo index second if time remains", "correct": true,
+         "why": "That's the crux. The geo index is well-trodden material an interviewer expects competence on; the reservation race — walked message by message, with the TTL and fencing edge cases — is where senior judgment becomes visible. Spend where the fire is."},
+        {"t": "A thorough comparison of geohash vs H3 vs S2 vs quadtrees", "correct": false,
+         "why": "A taxonomy tour is breadth cosplaying as depth. Pick one, justify it in three sentences, and move to the problem that can actually go wrong in production at 2am."},
+        {"t": "The ETA service's routing algorithms", "correct": false,
+         "why": "You declared that a black box with a latency budget — correctly. Un-declaring it to show off graph algorithms unravels your own scoping and spends time where this question keeps no points."},
+        {"t": "Sharding strategy for the trips database", "correct": false,
+         "why": "At ~230 writes/sec globally, trips don't need interesting sharding for years. The numbers you computed earlier told you this — spending deep-dive time there means ignoring your own estimation."}
+      ]
+    },
+    {
+      "id": "p3c06-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your Redis reservation layer can, in a rare failover, lose a reservation. An engineer proposes moving reservations into a strongly consistent consensus store (Raft-based) to eliminate this. Your call?",
+      "options": [
+        {"t": "Accept — never build correctness on best-effort infrastructure", "correct": false,
+         "why": "The correctness-critical step doesn't live in Redis: the durable, fenced accept in Postgres is what prevents double trips. Paying consensus-round latency on every reservation to protect against a rare duplicate OFFER is buying insurance you already have."},
+        {"t": "Decline: the blast radius of a lost reservation is a duplicate offer, not a duplicate trip — the fenced durable accept already guards the money. Consensus latency on every reservation buys almost nothing. I'd document the failure mode and monitor conflict rates instead", "correct": true,
+         "why": "This is the draw-the-line judgment the design rests on: know exactly what each layer guarantees, size the residual risk (annoyance, not corruption), and decline to pay a per-operation tax to eliminate it. Documented and monitored beats gold-plated."},
+        {"t": "Compromise: consensus store for reservations in the top 10 cities only", "correct": false,
+         "why": "Now there are two reservation code paths with different semantics and the same unhelped failure mode elsewhere. Splitting infrastructure by market size adds complexity without resolving the actual question: is the residual risk acceptable? (It is.)"},
+        {"t": "Accept, but only if the consensus store adds under 5 ms", "correct": false,
+         "why": "Negotiating the price before questioning the purchase. Even at 0 ms added, the migration buys protection against a failure whose consequence — an occasional duplicate offer — is already acceptable and already fenced at the layer that matters."}
+      ]
+    },
+    {
+      "id": "p3c06-q22", "level": 3, "type": "mcq", "tag": "failover",
+      "q": "Design review: how should the driver-location map survive a full region failure?",
+      "options": [
+        {"t": "Synchronously replicate every location write to a standby region", "correct": false,
+         "why": "Cross-region sync replication on a 250K/sec stream of 4-second-lifetime data is the most expensive possible way to protect the most disposable data in the system. The pings themselves are the replication stream — free."},
+        {"t": "Don't protect it: redirect driver connections to the surviving region and let the map rebuild from pings within seconds — derived state with a live source doesn't need a backup", "correct": true,
+         "why": "The self-healing insight, stated as policy. Uber's 2015 dispatch talk pushed the same principle further — driver phones re-uploading trip state after failover. When the edge holds the truth and keeps repeating it, the middle can afford to forget."},
+        {"t": "Snapshot the index to S3 every minute and restore on failover", "correct": false,
+         "why": "A one-minute-old driver map is 15 pings stale — worse than empty, because matching would confidently dispatch to positions that are wrong. Freshness is the only property this data has; snapshots destroy it."},
+        {"t": "Async-replicate the geo index and accept some staleness", "correct": false,
+         "why": "Less absurd than sync, but still machinery competing with a rebuild that costs nothing and completes in one ping interval. When re-derivation is faster than restoration, replication of derived state is pure waste."}
+      ]
+    },
+    {
+      "id": "p3c06-q23", "level": 3, "type": "mcq", "tag": "10x",
+      "q": "Fleet grows 10x to 2.5M pings/sec; infrastructure budget grows 2x. Which lever do you pull FIRST, and why?",
+      "options": [
+        {"t": "Move the geo index to disk-based storage — memory won't scale", "correct": false,
+         "why": "Memory scales fine: 10M drivers ≈ 1 GB, a rounding error per shard. Moving the hottest write path in the system to disk to solve a non-existent memory problem inverts the original design insight."},
+        {"t": "Shard the memory cluster 10x wider", "correct": false,
+         "why": "It works, but it's the expensive lever — and the budget said 2x, not 10x. Spend engineering before spending hardware: demand-side reduction first, then amortization, then shards."},
+        {"t": "Adaptive ping rates: parked drivers ping every 30s, highway cruisers every 8-10s, dense-city drivers every 2-4s — cutting ingest several-fold with almost no matching impact", "correct": true,
+         "why": "The demand-side lever. Most of the firehose is drivers whose position barely changes; freshness where it matters, silence where it doesn't. Reducing the work is cheaper than scaling to do the work — the first question at any 10x is 'is the load even necessary?'"},
+        {"t": "Sample: drop every second ping at the gateway", "correct": false,
+         "why": "Indiscriminate sampling doubles staleness for exactly the drivers who need freshness — the fast-moving downtown ones. Adaptive rates are sampling with judgment; this is sampling without it."}
+      ]
+    },
+    {
+      "id": "p3c06-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Product wants broadcast offers: show each request to the 5 nearest drivers, first accept wins. As the engineer in the room, your response:",
+      "options": [
+        {"t": "\"Can't be done — it breaks the reservation model\"", "correct": false,
+         "why": "It doesn't break it; it relocates it (the atomic CAS moves from pre-offer to the accept). 'Impossible' claims about possible things burn credibility — the real conversation is about costs."},
+        {"t": "\"Sure, we'll just remove the reservation step\"", "correct": false,
+         "why": "Removing arbitration entirely means five accepts can race into the trip transition with nothing deciding the winner atomically. The primitive must move, not vanish."},
+        {"t": "\"Mechanically fine: the atomic claim moves to the accept, first valid token wins, other four get 'already taken.' But I'd flag the marketplace cost — drivers who repeatedly lose races learn to insta-accept without judging trips or to ignore offers — and I'd want an experiment measuring both match latency and driver-side effects before rollout\"", "correct": true,
+         "why": "Engineering feasibility honestly separated from product consequences, the primitive correctly relocated, and a measurement plan instead of an opinion war. This is what 'senior in a product discussion' sounds like."},
+        {"t": "\"Lyft does broadcast, so we should too\"", "correct": false,
+         "why": "Competitor-copying is not analysis — their marketplace dynamics, driver density, and incentive structures differ. Borrowed conclusions without the reasoning is the same flaw as buzzword architecture."}
+      ]
+    },
+    {
+      "id": "p3c06-q25", "level": 3, "type": "mcq", "tag": "monitoring",
+      "q": "Match latency is green. Rides completed is green. Yet city ops reports drivers grumbling and slowly going offline more. Which dashboard line most likely holds the early warning you missed?",
+      "options": [
+        {"t": "Offer-acceptance rate", "correct": true,
+         "why": "The marketplace's leading indicator. Declines rising means drivers are being offered trips they don't want — bad ETAs, bad pricing, bad ranking — long before riders feel anything. Latency stays green because cascading to candidate #3 is fast; the rot shows up in who said no along the way."},
+        {"t": "Ping ingestion lag", "correct": false,
+         "why": "Lag degrades match quality visibly and quickly — riders would see it as weird matches and worse ETAs. It doesn't match the shape here: rider metrics green, driver sentiment eroding."},
+        {"t": "p99 of the nearby-drivers query", "correct": false,
+         "why": "A hot-path latency metric — if it regressed, your green match latency would have caught it upstream. The symptom described is behavioral, not performance."},
+        {"t": "Redis memory utilization", "correct": false,
+         "why": "Capacity metrics warn about future outages, not present marketplace health. Nothing about driver dissatisfaction routes through memory pressure."}
+      ]
+    }
+  ]
+}

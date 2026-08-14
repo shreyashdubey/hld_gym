@@ -1,0 +1,378 @@
+<p>"You've drawn this box in every design you've done today," the interviewer says, tapping the rectangle labeled <em>Kafka</em> on your whiteboard. "This round, you don't get to draw it. Build it. Design a distributed, durable, replayable message log for a company that pushes a million messages a second. N brokers, real disks, brokers die."</p>
+
+<p>This is the infra-team version of the queue question, and it's popular for a reason: it packs three hard subjects into one machine. A storage engine (how do bytes hit disk fast and get found again), a replication protocol (how do copies stay honest when machines die mid-write), and a delivery contract (what exactly did we promise the producer and the consumer). You've configured <code>acks=all</code> a hundred times. Today the interviewer finds out whether you know what it <em>does</em> — specifically, in the four milliseconds between a leader acknowledging a write and a follower copying it.</p>
+
+<p>Chapter 1.11 taught you to use the log. This chapter is the payoff at build depth: you're the one holding the pager for it now.</p>
+
+<div class="box story"><div class="box-tag">War story — LinkedIn invents the log</div>
+<p>Around 2010, LinkedIn's data infrastructure was a spaghetti of point-to-point pipes: page-view events batch-shipped to Hadoop one way, metrics scraped into monitoring another way, search indexes fed a third way. Every new system needed a custom pipeline to every producer of data — an O(N×M) mess of fragile connectors, each with its own format and its own failure modes. Jay Kreps' team made a bet that sounds obvious only in hindsight: put one durable, replayable, ordered log in the middle, have everything write to it once, and let every downstream system consume at its own pace from its own position. That became Kafka — Kreps named it after Franz Kafka because, he joked, it's "a system optimized for writing." They open-sourced it in 2011; by the late 2010s LinkedIn was running it at trillions of messages per day, and Kreps, Neha Narkhede, and Jun Rao had left to build Confluent on top of it. Kreps' 2013 essay "The Log: What every software engineer should know about real-time data's unifying abstraction" is the design's manifesto — and in 2014 he published a benchmark whose title is the whole storage argument: two million writes per second, on three cheap machines with spinning disks.</p>
+</div>
+
+<h2>Requirements: pin down the promises</h2>
+
+<p>Scope out loud: "I'm building the broker cluster and its client protocol. Out of scope: stream processing on top (that's chapter 2.9's layer), schema registries, multi-datacenter mirroring — I'll touch the last one in an exercise. Fair?"</p>
+
+<p><strong>Functional:</strong></p>
+<ul>
+<li>Named <strong>topics</strong>; producers publish records (key, value, timestamp) to a topic.</li>
+<li><strong>Pub/sub with independent readers:</strong> multiple consumer groups each receive the full stream; one group's reading never affects another's.</li>
+<li><strong>Ordering per key:</strong> all events for the same key arrive in the order they were sent.</li>
+<li><strong>Replay:</strong> a consumer can rewind to any point still on disk. Retention: 7 days by default, configurable per topic.</li>
+<li><strong>Consumer groups:</strong> a group of workers splits a topic's traffic, and the split heals itself when workers join or die.</li>
+<li>Producers choose their durability level per write (the <code>acks</code> knob — we'll build what's behind it).</li>
+</ul>
+
+<p><strong>Non-functional, with numbers I'll defend:</strong></p>
+<ul>
+<li><strong>Throughput:</strong> 400K messages/sec average, 1M/sec peak, average record 1 KB.</li>
+<li><strong>Durability:</strong> an acknowledged write on a critical topic survives any single broker death — and I'll price up to two.</li>
+<li><strong>Latency:</strong> acked produce p99 under 25 ms; a caught-up consumer sees a record well under a second after produce.</li>
+<li><strong>Availability:</strong> a broker dying pauses its partitions for seconds, not minutes, and loses nothing acknowledged.</li>
+</ul>
+
+<h2>Estimation: the numbers pick the storage engine</h2>
+
+<p>Run the math before drawing anything, because it kills the design most candidates start with.</p>
+
+<ul>
+<li><strong>Ingest:</strong> 400K/sec × 1 KB = 400 MB/s average, 1 GB/s peak — before replication. With 3 copies of everything, the cluster writes 1.2 GB/s average, 3 GB/s peak.</li>
+<li><strong>Storage:</strong> 400 MB/s × 604,800 seconds (7 days) ≈ 240 TB of retained data, × 3 replicas ≈ <strong>720 TB</strong> on disk. This is not a RAM-sized problem. It is not close to a RAM-sized problem.</li>
+<li><strong>Cluster shape:</strong> 30 brokers with ~36 TB of usable disk each gives ~1 PB — comfortable headroom. Per broker that's 40 MB/s of writes on average, ~100 MB/s at peak. Trivial for a disk — <em>if and only if</em> the writes are sequential.</li>
+</ul>
+
+<p>That last clause is the famous insight, and it's worth teaching because it inverts an intuition most engineers carry. "Disk is slow" is a half-truth. <em>Seeking</em> is slow. Kafka's own design doc makes the comparison brutally: a set of six cheap 7,200 rpm disks can do on the order of 600 MB/s of linear writes but only on the order of 100 KB/s of random writes — a gap of thousands of times. Sequential disk is faster than random disk by a bigger factor than disk is slower than RAM. So the design commitment: <strong>every write is an append to the end of a file, and every read is a forward scan.</strong> No B-trees, no per-message random I/O, ever.</p>
+
+<p>Then a second trick stacks on top: <strong>don't build a cache — the operating system already runs one.</strong> Every write goes through the OS page cache (the kernel's memory cache of recently touched file blocks), so the newest data — exactly what caught-up consumers want — is already sitting in RAM. Serving it uses <code>sendfile</code>, the kernel's zero-copy call that ships bytes from page cache to network card without ever copying them into our process. No application heap holding gigabytes, no garbage-collection pauses, no cache to keep coherent. The arithmetic: 30 brokers × ~50 GB of page cache ≈ 1.5 TB of RAM cache, which at 400 MB/s holds roughly the last <em>hour</em> of the firehose. Tail consumers — the overwhelming majority — never touch a disk head at all. Disk reads are for replays and laggards, and we'll monitor them as their own class of traffic.</p>
+
+<p>Say the conclusion like a decision, because it is one: "Storage engine: append-only files served from page cache — that's settled by arithmetic. Which means throughput is <em>not</em> the hard part of this problem. The hard part is the replication contract: what an ack means when brokers die. I'll spend my deep-dive time there."</p>
+
+<h2>API and data model: the log, quickly</h2>
+
+<p>Four operations run the whole system:</p>
+<ul>
+<li><code>produce(topic, key, value)</code> → <code>(partition, offset)</code>. Records with the same key always land in the same partition: <code>partition = hash(key) % N</code>.</li>
+<li><code>fetch(topic, partition, offset, max_bytes)</code> → a batch of records. Note the shape: the <em>consumer</em> says where to read from. That one parameter is the replay feature, the pub/sub feature, and the backpressure story all at once.</li>
+<li><code>commit(group, partition, offset)</code> → durably stores a group's read position.</li>
+<li><code>metadata(topics)</code> → which broker leads each partition. Clients route themselves straight to the right broker — there is no proxy tier and no load balancer in the data path. The metadata <em>is</em> the load balancer.</li>
+</ul>
+
+<p>The data model is three nested ideas. A <strong>record</strong>: key, value, timestamp, and an <strong>offset</strong> — its permanent position number in its partition. A <strong>partition</strong>: an ordered, immutable, append-only sequence of records — the log itself. A <strong>topic</strong>: a named set of partitions. That's the entire schema. Everything else in this chapter is machinery to keep copies of partitions honest.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A classic queue is a mailbox: a message arrives, someone takes it, it's gone. Kafka is a newspaper archive. Every issue is printed once, numbered, and filed forever (well, for the retention window). Readers don't consume issues — each reader keeps a private bookmark saying "I've read up to issue #368,772." A new team can start reading from last Tuesday; a team that was on holiday catches up at its own pace; nobody's bookmark moves anyone else's. The archive doesn't know or care who has read what — which is exactly why it scales. Where the analogy breaks: a newspaper has one global issue number. Our archive is split into partitions, and only issues <em>within one partition</em> are numbered in a single sequence. Hold that thought.</p>
+</div>
+
+<h2>The high-level machine</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 360" role="img" aria-label="Kafka cluster: producers write to partition leaders on brokers, followers fetch, consumers pull, KRaft controllers assign leaders">
+  <rect class="dg-node" x="10" y="90" width="118" height="52" rx="8"/>
+  <text class="dg-txt" x="24" y="112">Producers</text>
+  <text class="dg-txt-s" x="24" y="129">write to leaders</text>
+  <rect class="dg-zone" x="170" y="24" width="160" height="150" rx="8"/>
+  <text class="dg-txt" x="184" y="48">Broker 1</text>
+  <rect class="dg-node-alt" x="184" y="60" width="130" height="40" rx="6"/>
+  <text class="dg-txt-s" x="196" y="84">P0 — leader</text>
+  <rect class="dg-node" x="184" y="112" width="130" height="40" rx="6"/>
+  <text class="dg-txt-s" x="196" y="136">P2 — follower</text>
+  <rect class="dg-zone" x="366" y="24" width="160" height="150" rx="8"/>
+  <text class="dg-txt" x="380" y="48">Broker 2</text>
+  <rect class="dg-node-alt" x="380" y="60" width="130" height="40" rx="6"/>
+  <text class="dg-txt-s" x="392" y="84">P1 — leader</text>
+  <rect class="dg-node" x="380" y="112" width="130" height="40" rx="6"/>
+  <text class="dg-txt-s" x="392" y="136">P0 — follower</text>
+  <rect class="dg-zone" x="550" y="24" width="160" height="150" rx="8"/>
+  <text class="dg-txt" x="564" y="48">Broker 3</text>
+  <rect class="dg-node-alt" x="564" y="60" width="130" height="40" rx="6"/>
+  <text class="dg-txt-s" x="576" y="84">P2 — leader</text>
+  <rect class="dg-node" x="564" y="112" width="130" height="40" rx="6"/>
+  <text class="dg-txt-s" x="576" y="136">P1 — follower</text>
+  <line class="dg-edge" x1="128" y1="106" x2="184" y2="84" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="380" y1="126" x2="314" y2="86" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="322" y="118">followers fetch</text>
+  <rect class="dg-node" x="170" y="264" width="230" height="60" rx="8"/>
+  <text class="dg-txt" x="184" y="288">KRaft controllers ×3</text>
+  <text class="dg-txt-s" x="184" y="306">membership, leader assignment</text>
+  <line class="dg-edge" x1="285" y1="264" x2="250" y2="174" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="292" y="230">"P0 leader = broker 1, epoch 8"</text>
+  <rect class="dg-node" x="470" y="264" width="240" height="60" rx="8"/>
+  <text class="dg-txt" x="484" y="288">Consumer group "billing"</text>
+  <text class="dg-txt-s" x="484" y="306">pulls by offset, commits position</text>
+  <line class="dg-edge" x1="590" y1="264" x2="629" y2="174" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="614" y="230">fetch(P2, 371900)</text>
+</svg>
+<figcaption>The complete machine. Every partition has one leader and followers on other brokers. Producers and consumers talk directly to leaders; followers replicate by fetching, exactly like consumers do; the controller quorum decides who leads.</figcaption>
+</figure>
+
+<p><strong>Write path:</strong> the producer batches records per partition, asks metadata who leads partition 0, and sends the batch straight to broker 1. The leader appends the batch to its log file. Followers on brokers 2 and 3 are continuously fetching from the leader — replication reuses the consumer protocol, one mechanism instead of two — and append the same bytes in the same order. Depending on <code>acks</code>, the leader replies immediately or after followers have copied. Ack flows back; producer moves on.</p>
+
+<p><strong>Read path:</strong> a consumer in group "billing" is assigned partition 2, asks metadata who leads it, and sends <code>fetch(P2, offset 371,900)</code> to broker 3. The broker locates the bytes (next section), responds — page cache to network card, zero-copy — and the consumer processes, then commits its new offset. If there's nothing new, the fetch parks server-side for a few hundred milliseconds (a long poll) so caught-up consumers aren't busy-waiting.</p>
+
+<h3>Partitions: one unit doing two jobs</h3>
+
+<p>A partition is simultaneously the <strong>unit of ordering</strong> (one appender, one sequence, no ambiguity) and the <strong>unit of parallelism</strong> (partitions spread across brokers and across consumers in a group). That dual role is the design's central tension. Too few partitions: your consumer group can never have more active workers than partitions, and one hot key family can pin a whole broker — chapter 2.6's hot-partition problem, alive and well here. Too many: every partition costs open file handles, index memory, and controller metadata; when a broker dies, <em>every</em> partition it led needs a leader election, so a broker carrying 8,000 leaderships turns one machine failure into 8,000 tiny failovers. Recovery time scales with partition count, not data size.</p>
+
+<p>Commit to a sizing rule rather than hand-waving: <strong>partitions per topic = peak MB/s ÷ 10 MB/s per partition, doubled for headroom — and never less than the consumer parallelism you'll realistically want.</strong> Our hottest topic at 100 MB/s peak gets ~20 partitions. Why decide carefully up front: adding partitions later changes <code>hash(key) % N</code>, so keys re-map and per-key ordering breaks across the boundary. Cheap insurance now beats a re-keying migration later. Cluster-wide, keep per-broker partition counts in the low thousands.</p>
+
+<p>And say the ordering truth plainly before the interviewer extracts it: <strong>ordering is per partition, full stop.</strong> Two records with different keys land in different partitions and can be observed in either order. Global, total order across a topic means one partition, which means one leader's disk and one consumer — no parallelism at all. Kafka's honest contract is "per-key order, massive parallelism," and almost every real system discovers that per-key order was what it actually needed.</p>
+
+<h2>Deep dive 1: the storage engine — segments and a sparse index</h2>
+
+<p>A partition on disk is not one giant file; it's a directory of <strong>segments</strong> — fixed-size chunks (1 GB is the usual default), each named for the offset of its first record: <code>00000000000000368769.log</code> holds offsets 368,769 onward. Only the newest segment (the <em>active</em> one) is ever written; older segments are immutable, closed history.</p>
+
+<p>Immutable segments make retention embarrassingly cheap. Time-based or size-based retention never deletes records — it deletes <em>whole segment files</em> whose newest record has aged out. One <code>unlink</code> per gigabyte, no compaction of live data, no tombstone garbage-collection saga. This is the payoff of append-only: deletes are file drops.</p>
+
+<p>Finding an offset needs an index, but a full index (every offset → file position) would be gigabytes of pointer per broker for no benefit. Instead each segment carries a <strong>sparse index</strong>: one entry per ~4 KB of log — "relative offset 3,000 lives at byte 38,000,000" — kept small enough to sit in memory. Walk the read like you're tracing code, because the interviewer will ask:</p>
+
+<ol>
+<li><code>fetch(P2, offset 371,900)</code> arrives. Binary-search the segment file names: 371,900 ≥ 368,769 and less than the next segment's base, so it's in <code>...368769.log</code>.</li>
+<li>Relative offset = 371,900 − 368,769 = 3,131. Binary-search the sparse index: the largest entry ≤ 3,131 is (3,000 → byte 38 MB).</li>
+<li>Seek once to byte 38 MB, then scan forward sequentially — at most ~4 KB — until offset 371,900. Stream from there, zero-copy.</li>
+</ol>
+
+<p>One seek plus a tiny scan, for any offset in a 240 TB firehose. That's the whole storage engine, and its limitation is worth volunteering: <strong>you can look up by offset, never by key.</strong> This is a log, not a database. If you want "current value of key K," you read the log and build a table — or you use the second log type.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 210" role="img" aria-label="Read path: fetch by offset, choose segment by filename, binary search sparse index, short sequential scan">
+  <rect class="dg-node" x="10" y="60" width="140" height="56" rx="8"/>
+  <text class="dg-txt" x="24" y="82">fetch P2,</text>
+  <text class="dg-txt" x="24" y="100">offset 371,900</text>
+  <rect class="dg-node" x="192" y="60" width="160" height="56" rx="8"/>
+  <text class="dg-txt" x="206" y="82">segment files</text>
+  <text class="dg-txt-s" x="206" y="100">pick base ≤ 371,900</text>
+  <rect class="dg-node" x="394" y="60" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="408" y="82">sparse .index</text>
+  <text class="dg-txt-s" x="408" y="100">3,000 → 38 MB</text>
+  <rect class="dg-node-alt" x="586" y="60" width="124" height="56" rx="8"/>
+  <text class="dg-txt" x="600" y="82">.log file</text>
+  <text class="dg-txt-s" x="600" y="100">seek + scan</text>
+  <line class="dg-edge" x1="150" y1="88" x2="192" y2="88" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="352" y1="88" x2="394" y2="88" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="544" y1="88" x2="586" y2="88" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="192" y="148">00000000000000368769.log</text>
+  <text class="dg-txt-s" x="394" y="148">one entry per ~4 KB</text>
+  <text class="dg-txt-s" x="586" y="148">≤ 4 KB scan, then</text>
+  <text class="dg-txt-s" x="586" y="164">zero-copy stream</text>
+</svg>
+<figcaption>Locating any of billions of records: filename binary search, sparse-index binary search, one seek, a scan of at most a few kilobytes. Sequential forever after.</figcaption>
+</figure>
+
+<p><strong>The second log type: compacted topics.</strong> For event streams ("user clicked X"), time-based retention is right — old events age out. But for <em>changelog</em> streams ("user 42's cart is now {…}"), you never want to lose the newest value per key; you just don't need the older ones. A compacted topic runs a background thread that rewrites old segments keeping only the latest record for each key (a null value is a tombstone: "delete this key"). Result: a topic that is simultaneously a stream and the full current state of a table — bounded by key count, not by time. Rule of thumb to say out loud: <strong>events get retention; state gets compaction.</strong> Kafka trusts this mechanism with its own survival: consumer group offsets live in an internal compacted topic, <code>__consumer_offsets</code> — latest committed offset per (group, partition) key. The system stores its own bookkeeping in itself.</p>
+
+<p>One honest sentence about crash safety before moving on, because it surprises people: the broker does <em>not</em> fsync every record to the platter by default — that would murder latency for nothing. Durability comes from the next section: an acked record exists on multiple machines, which protects against more failure modes than one machine's disk flush ever could.</p>
+
+<h2>Deep dive 2: replication — what an ack actually buys</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>This is the part the question exists to probe. Anyone can append to a file. The hard problem is making N copies of an append-only log agree when the leader can die between accepting a write and replicating it, when followers lag, when a dead leader comes back convinced it's still in charge — and doing all of it at a million messages a second without a consensus round per record. Kafka's answer — the ISR, the acks contract, and leader epochs — is a masterclass in buying exactly as much safety as each topic needs and not a byte more. If you nail one deep dive today, nail this one.</p>
+</div>
+
+<p>Every partition has one <strong>leader</strong> and (for replication factor 3) two <strong>followers</strong> on other brokers. All produces and fetches go through the leader; followers replicate by issuing fetch requests, pulling batches in order — the same protocol consumers use. No second replication code path to get wrong.</p>
+
+<p><strong>The ISR.</strong> The leader tracks its <strong>in-sync replica set</strong>: itself plus every follower that has kept up — meaning it has fetched to the leader's log end within the last 30 seconds (<code>replica.lag.time.max.ms</code>). Note carefully: in-sync is a <em>time</em> promise, not a byte promise. A follower ten records behind for two seconds is in-sync. That subtlety is where an entire loss window lives, and we're about to walk into it. A follower that stalls — GC pause, slow disk, network wobble — gets evicted from the ISR; when it catches back up, it's readmitted. The ISR is the leader's live answer to "who could safely replace me right now?"</p>
+
+<p>Consumers, meanwhile, are only allowed to read up to the <strong>high watermark</strong> — the newest offset that every ISR member has replicated. Records past it exist on the leader but are invisible: if the leader died, they might not survive, and Kafka refuses to show consumers data it might have to un-happen.</p>
+
+<p><strong>The acks contract</strong> — three settings, three loss windows, and you should be able to state each window in one sentence:</p>
+
+<ul>
+<li><code>acks=0</code>: producer doesn't wait at all. Loss window: anything in flight — a dropped packet, a dying leader, and the record was never anywhere. Fire-and-forget telemetry only.</li>
+<li><code>acks=1</code>: leader appends to its own log, acks immediately. Loss window: <strong>the gap between the leader's append and the followers' next fetch.</strong> Small — milliseconds — but real, and it's where this question is won or lost. Walk it concretely: the leader of P2 holds offsets up to 4,370; followers have fetched through 4,370 and are still comfortably in-sync. A batch arrives; the leader appends 4,371–4,390 and acks the producer. Four milliseconds later — before either follower's next fetch — the broker's power supply dies. The controller elects a follower as the new leader. Its log ends at 4,370. Offsets 4,371–4,390 were acknowledged to the producer and exist only on a dead machine. When the old leader eventually returns, it must discard them to match the new leader's history. Twenty acked records, silently gone. No consumer ever saw them (the high watermark never advanced past 4,370 — the watermark did its job), so nothing is inconsistent. Just… lost.</li>
+<li><code>acks=all</code>: the leader acks only after <em>every current ISR member</em> has the record. Now the leader dying loses nothing: whoever gets elected from the ISR has everything acknowledged. Loss window: only if every ISR member is destroyed simultaneously and permanently. Cost: produce latency now includes the slowest in-sync follower's fetch — that's the ~10–20 ms you're paying for in the p99 budget.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="ISR ack flow: leader appends, acks=1 window before followers fetch, acks=all after ISR replicates">
+  <rect class="dg-node" x="10" y="20" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="24" y="48">Producer</text>
+  <rect class="dg-node-alt" x="290" y="20" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="304" y="40">P2 leader</text>
+  <text class="dg-txt-s" x="304" y="57">appends 4371–4390</text>
+  <rect class="dg-node" x="560" y="20" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="574" y="40">Followers ×2</text>
+  <text class="dg-txt-s" x="574" y="57">in-sync, at 4370</text>
+  <line class="dg-edge" x1="130" y1="43" x2="290" y2="43" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="164" y="34">1. produce batch</text>
+  <line class="dg-edge dg-bad" x1="290" y1="90" x2="130" y2="90" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="146" y="110">2. acks=1 replies HERE — leader alone has 4371–4390</text>
+  <rect class="dg-zone" x="290" y="126" width="420" height="52" rx="8"/>
+  <text class="dg-txt-s" x="304" y="148">LOSS WINDOW: leader dies now ⇒ acked records</text>
+  <text class="dg-txt-s" x="304" y="165">4371–4390 exist nowhere else. Gone.</text>
+  <line class="dg-edge" x1="635" y1="200" x2="440" y2="200" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="448" y="192">3. followers fetch 4371–4390</text>
+  <line class="dg-edge dg-good" x1="290" y1="248" x2="130" y2="248" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="146" y="268">4. acks=all replies HERE — every ISR copy has the batch</text>
+</svg>
+<figcaption>The same write, two ack points. acks=1 answers inside the loss window; acks=all answers after it closes. The distance between arrows 2 and 4 is milliseconds of latency — and the entire difference between "probably durable" and "durable."</figcaption>
+</figure>
+
+<p><strong>The trap inside acks=all — and <code>min.insync.replicas</code>.</strong> Here's the question that separates users from builders: the ISR is <em>dynamic</em>. Suppose both followers stall and get evicted; the ISR is now just the leader. <code>acks=all</code> means "all of the ISR" — which is one machine. Your producer is getting "fully replicated!" acks from a partition with zero redundancy. The fix is <code>min.insync.replicas=2</code>: if the ISR shrinks below two, the leader <em>refuses writes</em> with a retriable error instead of accepting them unsafely. Read that trade again, because it's chapter 1.10's CAP made concrete in one config line: we choose to go unavailable-for-writes rather than accept writes only one machine holds. For a payments topic, that's correct. For a metrics topic, it's absurd. Which is why these settings are <em>per topic</em> — and committing per topic class is the senior move: payments-class topics get RF=3, <code>acks=all</code>, <code>min.insync.replicas=2</code>; telemetry-class gets RF=2 or 3 with <code>acks=1</code> and we say the loss window out loud and accept it.</p>
+
+<p><strong>Unclean elections: the last dial.</strong> Worst case: every ISR member is gone — leader dead, followers dead or evicted-as-laggy. Two options, both bad. Wait for an ISR member to come back: the partition is unavailable, maybe for hours. Or elect a <em>non</em>-in-sync replica — one that might be minutes behind: the partition is instantly available again, and every acknowledged record past that replica's log end is erased from history. That second option is an <strong>unclean leader election</strong>, and whether it's ever acceptable is a per-topic business decision, not an engineering one. My commitment: unclean elections disabled everywhere; for telemetry topics where an hour-long outage costs more than a minute of lost metrics, I'd document the exception and enable it deliberately.</p>
+
+<div class="box story"><div class="box-tag">War story — Jepsen catches Kafka losing acked writes</div>
+<p>In 2013, Kyle Kingsbury's Jepsen project — his "Call me maybe" series, which tortures distributed systems with real network partitions and publishes the wreckage — put Kafka's then-new replication design on the bench. The failure sequence he demonstrated is exactly the machinery above, worst-cased: partition the network so the followers are cut off from a leader; the leader evicts them from the ISR and — since "all of the ISR" is now just itself — keeps cheerfully acknowledging writes. Then crash the leader and heal the network. The only live replicas are the stale followers, and Kafka's defaults at the time permitted unclean election: a follower missing everything since the ISR shrank became leader, and a large fraction of fully acknowledged writes simply vanished from history. Nothing was buggy in the code — the design was doing what it was configured to do; the configuration just defaulted to availability over durability without most users realizing they'd made that bet. The fixes rolled out over the following years: <code>min.insync.replicas</code> to make "acks=all" mean something when the ISR shrinks, and in 2017 Kafka 0.11 flipped the default of <code>unclean.leader.election.enable</code> to <code>false</code> — the project formally deciding that, out of the box, a partition should go dark rather than rewrite history. When you set those two configs on a critical topic today, you are applying the lesson of that postmortem.</p>
+</div>
+
+<h3>Leader epochs: fencing the zombie</h3>
+
+<p>One failure mode remains, and chapter 2.3 taught you its name. The old P2 leader didn't die — it was <em>partitioned away</em>, and it comes back still believing it leads. If followers accepted its replication instructions, two brokers would both be extending P2's history in different directions: a forked log, the worst corruption a replicated log can suffer.</p>
+
+<p>The guard is the fencing token from chapter 2.3, here called the <strong>leader epoch</strong>: a counter the controller increments on every leadership change, attached to everything a leader does. Walk it: broker A leads P2 at epoch 7. Network hiccup; the controller elects broker B at <strong>epoch 8</strong> and tells the replicas. A comes back and acts like a leader — but every message it sends carries epoch 7, and every replica that has heard of epoch 8 rejects it as stale on sight. A can't get a single byte accepted. It asks the controller, learns about epoch 8, demotes itself to follower — and here the epoch does double duty: A asks B "where did epoch 7 end in <em>your</em> history?", truncates its own log back to that point (discarding its unreplicated tail, including our poor offsets 4,371–4,390), and re-syncs from B. Epochs both fence the zombie's writes and tell the returning replica exactly where its history diverged. One counter, two rescues.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Epoch fencing: stale leader at epoch 7 rejected by replicas that know epoch 8, then truncates and follows">
+  <rect class="dg-node" x="10" y="30" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="24" y="52">Broker A</text>
+  <text class="dg-txt-s" x="24" y="70">"P2 leader, epoch 7"</text>
+  <rect class="dg-node" x="285" y="30" width="160" height="56" rx="8"/>
+  <text class="dg-txt" x="299" y="52">Controller</text>
+  <text class="dg-txt-s" x="299" y="70">elects B, epoch 8</text>
+  <rect class="dg-node-alt" x="550" y="30" width="160" height="56" rx="8"/>
+  <text class="dg-txt" x="564" y="52">Broker B</text>
+  <text class="dg-txt-s" x="564" y="70">P2 leader, epoch 8</text>
+  <line class="dg-edge dg-bad" x1="160" y1="120" x2="550" y2="120" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="200" y="112">"append this, I'm leader (epoch 7)" — REJECTED: stale epoch</text>
+  <line class="dg-edge" x1="160" y1="170" x2="285" y2="110" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="192">"who leads P2?" → learns epoch 8</text>
+  <line class="dg-edge dg-good" x1="200" y1="220" x2="550" y2="220" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="230" y="212">truncates diverged tail, fetches from B as follower</text>
+</svg>
+<figcaption>The zombie leader is fenced by arithmetic: any replica that has seen epoch 8 rejects epoch-7 authority on sight. The epoch also marks the exact point where the returner's history diverged, so truncation is precise.</figcaption>
+</figure>
+
+<p><strong>Who hands out epochs? The controller</strong> — the cluster's brain: it tracks broker liveness via heartbeats, and on a death picks new leaders (from the ISR!) for every partition the dead broker led. For most of Kafka's life this brain lived in ZooKeeper, an external consensus system that was operationally the least-loved part of every deployment. Modern Kafka replaced it with <strong>KRaft</strong>: three or five controller nodes running the Raft consensus you met in chapter 2.3, storing all cluster metadata as — enjoy this — <em>an append-only replicated log</em> that brokers replay to learn cluster state. The system's control plane is now a copy of the system's own data structure. Kafka 4.0 removed ZooKeeper entirely. In the interview, one honest paragraph like this one is exactly the right depth: name the job (membership + leader assignment), name the mechanism (Raft quorum), move on.</p>
+
+<h2>Deep dive 3: the two ends of the pipe</h2>
+
+<p><strong>Producers: batching is the throughput lever.</strong> A million messages a second cannot be a million network round-trips or a million tiny writes. The producer accumulates records per partition and ships batches (bounded by size and by a few milliseconds of <code>linger</code>), and compresses each batch — similar JSON records compress 4–5x, which multiplies effective network and disk throughput by the same factor. The broker never decompresses; the batch travels compressed from producer memory to disk to consumer. Nearly all of Kafka's "two million writes on three cheap machines" magic is this: big sequential compressed batches, end to end.</p>
+
+<p><strong>The idempotent producer: closing the retry hole.</strong> Chapter 2.2's classic bug appears here in its purest form. Producer sends a batch; the leader appends it; the <em>ack is lost</em> in a network blip. The producer, correctly, retries — and without protection, the batch is appended twice. Kafka closes this broker-side: each producer gets a producer ID, and every batch carries a per-partition sequence number. The retried batch arrives bearing sequence 41; the leader's ledger says partition P2 has already committed 41 from this producer; the broker acks success <em>without appending</em>. Retry-safe by bookkeeping — chapter 2.2's idempotency key, built into the protocol, and cheap enough that it's simply on by default in modern Kafka. Beyond that sit <strong>transactions</strong>: a producer can write to several partitions and commit or abort them atomically, with consumers in <code>read_committed</code> mode skipping aborted data — the machinery under "exactly-once" stream processing. Know it exists, know it costs a coordinator round-trip and latency, and know its boundary: it makes <em>Kafka-to-Kafka</em> pipelines exactly-once. The moment a consumer touches an external database or sends an email, you're back to chapter 2.2's rules — idempotency at the boundary, no exceptions.</p>
+
+<p><strong>Consumers pull, and that's a philosophy.</strong> A push broker must guess every consumer's capacity and buffer or drop when it guesses wrong — chapter 2.7's backpressure problem, forced onto the server. A pull consumer <em>is</em> its own backpressure: it fetches exactly when ready, a slow consumer simply falls behind, and its lag is a clean, visible number on a dashboard rather than an overflowing buffer inside the broker. Pull also makes replay trivial (the consumer owns its offset, so rewinding is just… asking for an older one) and batches naturally (a lagging consumer's next fetch scoops up a big sequential chunk). The cost — polling — is erased by long-polling.</p>
+
+<p><strong>Consumer groups and the rebalance.</strong> A group's partitions are split across its members by a group coordinator (a broker). Members heartbeat; when one joins or dies, the coordinator triggers a <strong>rebalance</strong> to redistribute. The classic protocol was stop-the-world: every member revoked every partition, everyone re-joined, everything got reassigned — meaning one flaky pod restarting paused the <em>entire group</em>, and a rolling deploy of 50 consumers triggered a rebalance storm. Modern Kafka does <strong>cooperative rebalancing</strong>: only the partitions that actually move change hands, everyone else keeps processing; paired with static membership (a restarting consumer reclaims its old identity instead of triggering a rebalance), deploys stop being outages. Mention both in the interview — rebalance pain is the most production-real thing you can say about Kafka consumers.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 240" role="img" aria-label="Cooperative rebalance: consumer 2 dies, only its partitions move, others keep processing">
+  <rect class="dg-zone" x="10" y="20" width="340" height="200" rx="8"/>
+  <text class="dg-txt" x="26" y="46">Before: 3 consumers, 6 partitions</text>
+  <rect class="dg-node" x="26" y="62" width="90" height="44" rx="6"/>
+  <text class="dg-txt-s" x="38" y="82">C1</text>
+  <text class="dg-txt-s" x="38" y="97">p0, p1</text>
+  <rect class="dg-node dg-bad" x="132" y="62" width="90" height="44" rx="6"/>
+  <text class="dg-txt-s" x="144" y="82">C2 dies</text>
+  <text class="dg-txt-s" x="144" y="97">p2, p3</text>
+  <rect class="dg-node" x="238" y="62" width="90" height="44" rx="6"/>
+  <text class="dg-txt-s" x="250" y="82">C3</text>
+  <text class="dg-txt-s" x="250" y="97">p4, p5</text>
+  <text class="dg-txt-s" x="26" y="140">coordinator notices missed</text>
+  <text class="dg-txt-s" x="26" y="156">heartbeats → rebalance</text>
+  <rect class="dg-zone" x="370" y="20" width="340" height="200" rx="8"/>
+  <text class="dg-txt" x="386" y="46">After: only p2, p3 moved</text>
+  <rect class="dg-node-alt" x="386" y="62" width="130" height="44" rx="6"/>
+  <text class="dg-txt-s" x="398" y="82">C1</text>
+  <text class="dg-txt-s" x="398" y="97">p0, p1 + p2</text>
+  <rect class="dg-node-alt" x="540" y="62" width="130" height="44" rx="6"/>
+  <text class="dg-txt-s" x="552" y="82">C3</text>
+  <text class="dg-txt-s" x="552" y="97">p4, p5 + p3</text>
+  <text class="dg-txt-s" x="386" y="140">p0, p1, p4, p5 never paused —</text>
+  <text class="dg-txt-s" x="386" y="156">cooperative, not stop-the-world</text>
+  <line class="dg-edge" x1="350" y1="120" x2="370" y2="120" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Cooperative rebalancing: the group heals around a dead member by moving only the orphaned partitions. The eager protocol would have paused all six.</figcaption>
+</figure>
+
+<p><strong>Offsets, and the duplicate window you must be able to walk.</strong> Consumers commit progress to <code>__consumer_offsets</code>. The order of operations defines your delivery guarantee. Kafka's default posture is <strong>at-least-once: process the batch first, commit second.</strong> Walk the crash: your consumer fetches offsets 100–149, writes all fifty results to the database, and dies before committing. The coordinator reassigns the partition; the new consumer reads the last committed offset — still 100 — and reprocesses all fifty. Nothing was lost; fifty things happened twice. Flip the order — commit first, process second — and a crash after the commit means offsets 100–149 are marked done but never processed: at-most-once, silent loss. There is no third order. The log gives you at-least-once and hands the duplicate problem to you, which is precisely why chapter 2.2 exists — and here the fix is unusually elegant: <code>(topic, partition, offset)</code> is a perfect, free idempotency key for every record, because it's unique and stable across redeliveries.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The acks levels are how you send a wedding album to a printer. <code>acks=0</code>: drop the USB stick in a postbox and walk away — probably fine, and you'll never know if it wasn't. <code>acks=1</code>: the courier confirms the shop <em>received</em> it — but the one shop assistant who took it hasn't copied it to the office server yet, and if the shop burns down tonight, "received" helped nobody. <code>acks=all</code> with <code>min.insync.replicas=2</code>: you wait for a text saying "copied onto two machines in two rooms" — slower, and if the second machine is down the shop honestly refuses the job rather than pretend. Where the analogy breaks, instructively: Kafka's "shop" re-checks who counts as a copy machine every 30 seconds (the ISR), and the whole Jepsen disaster was the shop quietly deciding that one machine was enough while still sending the reassuring text.</p>
+</div>
+
+<h2>Failure modes and operations</h2>
+
+<p>Run the deaths unprompted — this system's failure choreography is most of its design.</p>
+
+<ul>
+<li><strong>A broker dies.</strong> The controller misses heartbeats, and for every partition the corpse led, promotes an ISR follower — epoch bumped, clients refresh metadata and reroute; seconds of pause per partition, nothing acked lost (on <code>acks=all</code> topics). The cluster now runs with 2 copies of those partitions: the <strong>under-replicated partitions</strong> counter goes positive, which is the single most important alarm in Kafka operations. Nothing is down — but the next failure is no longer survivable, so the alarm means "restore redundancy now," and a replacement broker re-fetches those partitions from their leaders.</li>
+<li><strong>Disk fills.</strong> Ugly: a broker that can't append kills the affected log directories and drops their leaderships — failing partitions over to brokers that, in a correlated-growth incident, are filling too. Retention is the pressure valve; producer quotas (per-client throughput caps) are the guard against one runaway team flooding the cluster; the alert belongs at 70% disk, not 95%, because the fix — deleting or moving whole partitions — takes time.</li>
+<li><strong>ISR flapping.</strong> Followers bouncing in and out of the ISR every few minutes means GC pauses, saturated NICs, or a sick disk — and every eviction on a <code>min.insync=2</code> topic is a near-miss with unavailability. Watch the shrink/expand <em>rate</em>, not just the size.</li>
+<li><strong>Consumer lag — THE metric.</strong> Lag (leader's newest offset minus the group's committed offset) is your end-to-end health in one number: rising lag is a slow consumer, a stuck rebalance, or a poison-pill record retried forever. Alert on lag growth per group; it fires before any user notices, and it's the number the interviewer expects you to name without being asked.</li>
+<li><strong>Controller failover.</strong> The KRaft quorum elects a new active controller in seconds; frequent failovers point at controller node health. Watch for exactly one active controller — zero or two is a page.</li>
+<li><strong>Rollout.</strong> Rolling restarts, one broker at a time, and the gate between brokers is under-replicated partitions returning to zero — restart the next broker before the last one's replicas catch up, and a two-broker "rolling" restart quietly puts <code>min.insync=2</code> topics one failure from refusing writes. Protocol changes ride Kafka's versioned wire format: brokers speak old and new until the fleet converges.</li>
+<li><strong>What breaks at 10x?</strong> 10M msgs/sec ≈ 10 GB/s. The data plane scales by addition — partitions are shared-nothing, so 300 brokers instead of 30 (the design's best property: say it plainly). What actually strains is everything <em>per-partition</em>: hundreds of thousands of partitions of controller metadata and election work per broker death, rebalances across giant consumer groups, and 7-day retention now costing ~7 PB × 3 — at which point <strong>tiered storage</strong> (recent Kafka: closed segments offload to object storage, brokers keep the hot tail local) turns retention from a broker-disk problem into an S3 bill, and long replays stop evicting the page cache that tail consumers live on. That page-cache poisoning, by the way, is the sneakiest live incident in Kafka ops at any scale: one team replaying three days of history can drag every tail consumer's latency up, because the replay floods the cache with cold segments.</li>
+</ul>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This question is probed almost entirely on guarantees. Near-verbatim follow-ups:</p>
+<ul>
+<li>"Producer got an ack with <code>acks=all</code>. Give me every remaining way that record dies." — the checklist: <code>min.insync.replicas</code> left at 1 while the ISR shrank; unclean election enabled; RF=1; every ISR replica destroyed at once. If you can list these, you built it.</li>
+<li>"Walk me through <code>acks=1</code>, leader dies right after the ack. Millisecond by millisecond." — the 4,371–4,390 walk above, including why consumers never noticed (high watermark).</li>
+<li>"The old leader comes back and still thinks it's leader. Show me no forked log." — epochs: stale epoch rejected on sight, truncate to divergence point, re-follow.</li>
+<li>"Why doesn't the broker fsync each write? Isn't that risky?" — durability from replication across machines, not one machine's platter; fsync-per-write buys little and costs everything.</li>
+<li>"Why pull consumers? Push would be lower latency." — consumer-paced backpressure, lag as a visible metric, free replay; long-poll erases the latency gap.</li>
+<li>"Why not 10,000 partitions per topic, to be safe?" — leader elections and metadata scale with partition count; recovery time, not throughput, is what too-many costs.</li>
+</ul>
+</div>
+
+<h2>The committed choices, priced</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Chose</th><th>Over</th><th>The cost I accepted</th></tr></thead>
+<tbody>
+<tr><td>Storage</td><td>Append-only segments + sparse offset index</td><td>B-tree / per-message store</td><td>Lookup by offset only — key lookups mean reading the log or a compacted topic; it's a log, not a database</td></tr>
+<tr><td>Serving</td><td>OS page cache + zero-copy sendfile</td><td>App-managed RAM cache</td><td>No control over eviction: one big replay can poison the cache for tail consumers</td></tr>
+<tr><td>Delivery</td><td>Consumer pull + long poll</td><td>Broker push</td><td>Slightly more client complexity; latency parity requires the long-poll machinery</td></tr>
+<tr><td>Replication</td><td>Leader + ISR, <code>acks=all</code>, <code>min.insync=2</code> on critical topics</td><td>Majority quorum per write (Raft-style)</td><td>Availability coupled to ISR health — when replicas stall, we refuse writes on purpose; empty-ISR forces the unclean-election dilemma</td></tr>
+<tr><td>Ordering</td><td>Per-partition only, keys route to partitions</td><td>Global topic order</td><td>Cross-partition ordering is the application's problem; global order = one partition = no parallelism</td></tr>
+<tr><td>Duplicates</td><td>At-least-once + idempotent producer; consumers dedupe by (partition, offset)</td><td>Broker-enforced exactly-once to external systems</td><td>Every consumer touching the outside world must be idempotent — the broker cannot save you there</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c17-f1">
+<p class="fey-prompt">A junior asks: "Kafka writes everything to disk, so how is it fast? And we set acks=all, so we can't lose data… right?" Answer both in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Disk is only slow when you make it jump around; writing to the end of a file, disks are enormously fast, and Kafka only ever appends. Reads are served from the operating system's page cache — recently written data is already in RAM — and get copied straight from that cache to the network card, so a caught-up consumer never touches the physical disk at all. On acks=all: it means "every replica currently in the in-sync list has the record" — but that list shrinks when replicas lag, and it can legally shrink to just the leader, at which point acks=all means one copy. That's why we also set min.insync.replicas=2: now the broker refuses writes rather than accept them under-replicated, trading a bit of availability for real durability. And even then, an acknowledged record can be erased if an out-of-date replica is allowed to become leader — so unclean elections stay off on any topic we care about. The ack is a contract with fine print; the configs are how you read it.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: the payments team demands that an acknowledged write survive <strong>two</strong> simultaneous broker deaths. What settings change, and what does it cost?</p></div>
+<details><summary>Answer</summary><p>Surviving N deaths needs N+1 guaranteed copies at ack time: replication factor 4 with <code>min.insync.replicas=3</code> (RF=3 with min.insync=3 technically works but any single broker restart — including your own deploys — makes the partition refuse writes, so it fails ops review). Costs: 33% more disk and replication traffic on those topics, produce p99 now waits for the second-slowest of three followers, and the write-availability bar rises — two stalled replicas stop writes. Also spread replicas across racks/AZs, or "two broker deaths" is really "one rack switch." Scope it to the payments topics only; pricing the whole cluster for one team's requirement is the junior mistake.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Global ordering flip: compliance requires a strict total order across ALL events in the audit topic. What does that force, what's the ceiling, and what would you propose instead?</p></div>
+<details><summary>Answer</summary><p>Total order = one partition = one leader appending single-file and (for strict ordered processing) one consumer: throughput ceiling of roughly one machine's sequential pipeline — call it tens of MB/s — and zero consumer parallelism, forever. Say that plainly, then negotiate the requirement: usually "total order" really means "a court can reconstruct one authoritative sequence," which per-partition order plus a monotonic sequence number stamped by a single writer (or offsets themselves, per partition) satisfies. If they truly need one sequence, accept the single partition, keep records tiny, and isolate it on dedicated brokers so the audit log's ceiling never throttles anything else.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your consumer charges credit cards from a payments topic. Walk the crash that double-charges a customer, then design the fix using only what this chapter and chapter 2.2 gave you.</p></div>
+<details><summary>Answer</summary><p>The crash: consumer fetches offsets 100–149, charges all fifty cards, dies before committing; the rebalanced successor resumes from committed offset 100 and charges them again — at-least-once doing exactly what it promised. The fix is idempotency at the boundary: use <code>(topic, partition, offset)</code> as the idempotency key — unique per record and identical on redelivery — and make charge-then-record atomic: insert the key into a processed-ledger table and write the charge in one database transaction (or pass the key to the payment provider, chapter 2.2 style). Replayed record → key conflict → skip, commit offset, move on. Smaller commit intervals shrink the replay batch but nothing removes it: the window is structural, so the dedupe is mandatory.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>10x drill: traffic goes to 10M messages/sec and the CTO asks "do we need to redesign?" Give the honest answer: what scales by addition, and what actually needs new thinking?</p></div>
+<details><summary>Answer</summary><p>Scales by addition: ingest and serving — partitions are shared-nothing, so ~300 brokers, more partitions per topic, done; the data plane was built for this. Needs thinking: (1) retention — 7 days at 10 GB/s is ~18 PB with replication, so adopt tiered storage: hot tail on broker disks, closed segments in object storage; (2) partition population — hundreds of thousands of partitions stress controller metadata and make each broker death a mass-election event; KRaft handles far more than ZooKeeper did, but partition budgets and per-broker caps become real policies; (3) consumer groups with hundreds of members — cooperative rebalancing and static membership stop being nice-to-haves; (4) replays at this scale shred page cache — quota replay traffic and serve deep history from the tiered layer. Shape survives; the per-partition overheads and the retention bill are what change.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimation drill, 90 seconds: a caught-up consumer group reads the full 400 MB/s firehose. Roughly what disk read load does it add to the cluster? What about a group replaying the last 3 days as fast as it can?</p></div>
+<details><summary>Answer</summary><p>Caught-up group: ~zero disk reads. It's consuming data written seconds ago, which is still in page cache — the reads are RAM-to-NIC, costing network (400 MB/s cluster-wide, ~13 MB/s per broker) but no disk I/O. The replay group: 3 days × 400 MB/s ≈ 100 TB of cold data that is NOT in cache — all of it real disk reads, and if it runs at, say, 2 GB/s across the cluster it also evicts the hot tail from page cache, degrading every other consumer. That asymmetry — tail reads are free, history reads are expensive and contagious — is the operational heart of the page-cache design, and why replays get quotas and off-peak windows.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Kafka's speed is a storage decision, not magic: append-only sequential writes, reads from the OS page cache, and zero-copy to the network — sequential disk beats random access by a factor of thousands, so "it's on disk" and "it's fast" stop being opposites.</li>
+<li>A partition is both the ordering unit and the parallelism unit; size counts from peak throughput and consumer parallelism with headroom, because re-partitioning later breaks key ordering — and ordering is per-partition only, full stop.</li>
+<li>Segments plus a sparse index find any offset with one seek and a tiny scan, retention deletes whole files, and compacted topics keep latest-per-key: events get retention, state gets compaction.</li>
+<li>The ISR is a time-based "who could replace the leader right now" set; acks=0/1/all correspond to exact loss windows, and the acks=1 window — leader acks, dies before followers fetch — is the walk you must own.</li>
+<li>acks=all means "all of the ISR," and the ISR can shrink to one — min.insync.replicas is what makes the guarantee real, at the price of refusing writes when redundancy drops: CAP as a config line, chosen per topic class.</li>
+<li>Unclean elections trade acknowledged data for availability; Jepsen proved the default was a footgun, and since Kafka 0.11 the default is to stay down rather than rewrite history — keep it that way on anything that matters.</li>
+<li>Leader epochs are chapter 2.3's fencing tokens: stale leaders are rejected by counter arithmetic, and the epoch also pinpoints where a returning replica's log diverged so it can truncate precisely.</li>
+<li>The broker gives at-least-once; the idempotent producer closes the retry-duplicate hole broker-side, and consumers must close theirs with (partition, offset) as a free idempotency key — exactly-once to external systems is always the consumer's job.</li>
+<li>Operate it by three numbers: under-replicated partitions (redundancy), consumer lag (end-to-end health, THE metric), and ISR shrink/expand rate (near-misses) — plus disk headroom, because a full disk fails ugly.</li>
+</ul>
+</div>

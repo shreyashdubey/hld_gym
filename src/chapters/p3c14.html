@@ -1,0 +1,356 @@
+<p>"Design a payment system." The interviewer says it flatly, like it's just another question in the gauntlet. It isn't. This is THE senior filter — the problem where candidates who've been coasting on scale vocabulary finally run out of road. There's no celebrity fanout here, no petabytes, no clever cache. There is only money, and one unforgiving rule: <strong>you may never charge someone twice, and you may never lose track of a cent.</strong></p>
+
+<p>Here's the moment the whole interview orbits. A user taps <em>Pay</em>. The spinner spins. Ten seconds pass. The request times out. The user taps <em>Pay</em> again. Question: did you just charge them once, twice, or zero times? If your design can't answer that question with certainty — not "probably once," <em>certainty</em> — nothing else you draw matters. Mid-level candidates hear "payment system" and start talking about throughput. Senior candidates hear it and start talking about retries, ledgers, and reconciliation, because they know the dirty secret: payments is a correctness interview wearing a scale interview's clothes.</p>
+
+<p>This walkthrough plays it at the E5 bar: committed choices, numbers that gate decisions, and most of the time spent exactly where the fire is.</p>
+
+<h2>Requirements: scope the boundary out loud (minutes 0–5)</h2>
+
+<p>First sentence at the whiteboard: <strong>"I am not building card rails."</strong> Talking to Visa, vaulting card numbers, fighting fraud rings — that's what payment service providers (PSPs) like Stripe and Adyen exist for, with thousands of engineers and a decade of compliance behind them. I'm building the payments layer of a commerce platform — think a marketplace or food-delivery app — that sits on top of a PSP. Saying this out loud is itself a senior signal: knowing where your system ends is as important as knowing what's inside it.</p>
+
+<p><strong>Functional scope:</strong> charge a customer's card at checkout through the PSP; full and partial refunds; an internal ledger tracking every movement of money and each merchant's balance; receiving the PSP's webhook notifications; and lightweight merchant payouts (we compute what we owe; the PSP moves the money). Out of scope: fraud scoring, FX, subscriptions, and building our own card vault.</p>
+
+<p><strong>Non-functional, in priority order — and the order is the design:</strong></p>
+<ul>
+<li><strong>Correctness first, absolutely.</strong> Zero double charges — not "rare," <em>structurally impossible</em>. No money movement ever unrecorded. Every cent auditable years later.</li>
+<li><strong>Durability.</strong> Once we tell a user "payment accepted," that fact survives any crash.</li>
+<li><strong>Availability of checkout</strong> — degraded gracefully when the PSP is down, never dishonestly.</li>
+<li><strong>Latency last.</strong> A payment taking three seconds is fine. Users wait for money; they do not forgive being charged twice.</li>
+</ul>
+
+<p>Scale commitment: a big platform — 10 million payments a day, Black Friday peaks 10x normal hour. Watch what those numbers do next, because it's the opposite of what most candidates expect.</p>
+
+<h2>Estimation: say the unfashionable thing (minutes 5–8)</h2>
+
+<p>10 million payments a day is about <strong>115 per second</strong> average. Peak, call it 10x: ~1,200/sec. For storage: a payment with all its audit events is a few KB — 10M/day × 5 KB ≈ 50 GB/day, under 20 TB a year, and it's append-mostly, partitioned by month. Now say the conclusion that filters seniors from mid-levels:</p>
+
+<p><strong>"This is small. Even a huge commerce platform does hundreds to low thousands of payments per second — one well-run Postgres handles the write load with room to spare. So I will spend zero minutes on sharding and all my deep-dive time on correctness: idempotency, the ledger, and reconciliation. This is a correctness interview, not a scale interview."</strong></p>
+
+<p>That paragraph does real work. It's honest (Stripe processes over a trillion dollars a year and that's still only thousands of payments per second globally). It commits the architecture (one CP relational database at the core). And it announces the deep-dive agenda instead of waiting to be led. The estimate drove three decisions in thirty seconds — that's estimation doing its job.</p>
+
+<h2>API and data model: quick (minutes 8–12)</h2>
+
+<ul>
+<li><code>POST /payment-intents</code> with header <code>Idempotency-Key: &lt;client-generated-uuid&gt;</code> and body <code>{order_id, amount_minor, currency, payment_method_token}</code> → <code>201 {intent_id, state}</code>.</li>
+<li><code>GET /payment-intents/{id}</code> → current state. The order page polls this.</li>
+<li><code>POST /refunds</code> (also idempotency-keyed) with <code>{payment_intent_id, amount_minor}</code>.</li>
+<li><code>POST /webhooks/psp</code> — the PSP calls us: <code>payment.succeeded</code>, <code>payment.failed</code>, <code>refund.succeeded</code>, <code>chargeback.opened</code>…</li>
+</ul>
+
+<p>Notice <code>amount_minor</code>: money is an <strong>integer count of the smallest currency unit</strong> — 4999 cents, never 49.99 dollars. Floating point cannot represent 0.1 exactly; sum a few million float payments and cents evaporate. Integers plus a currency code (whose exponent tells you yen have no decimals) is the only acceptable answer, and interviewers do check.</p>
+
+<p>Core tables: <code>payment_intents</code> (id, order_id, amount_minor, currency, state, psp_ref, attempt, version, timestamps), <code>idempotency_keys</code> (key, request_hash, response_code, response_body, intent_id), <code>payment_events</code> (append-only audit: every state transition, who/what/when), <code>ledger_entries</code> (append-only, the money truth — deep dive two), <code>webhook_events</code> (psp_event_id unique — dedupe), <code>refunds</code>, <code>payouts</code>. The token in <code>payment_method_token</code> matters for compliance, and we'll return to it — but first, the machine.</p>
+
+<h2>The high-level machine (minutes 12–20)</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Payment flow spine from checkout through Postgres and worker to PSP and back via webhooks">
+  <rect class="dg-node" x="10" y="130" width="96" height="52" rx="8"/>
+  <text class="dg-txt" x="24" y="152">Checkout</text>
+  <text class="dg-txt-s" x="24" y="169">client</text>
+  <rect class="dg-node" x="146" y="130" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="160" y="152">Payments</text>
+  <text class="dg-txt-s" x="160" y="169">API</text>
+  <rect class="dg-node-alt" x="310" y="118" width="170" height="76" rx="8"/>
+  <text class="dg-txt" x="324" y="140">Postgres (CP)</text>
+  <text class="dg-txt-s" x="324" y="158">intent + idem key</text>
+  <text class="dg-txt-s" x="324" y="174">+ event: ONE txn</text>
+  <rect class="dg-node" x="310" y="248" width="150" height="52" rx="8"/>
+  <text class="dg-txt" x="324" y="270">Worker</text>
+  <text class="dg-txt-s" x="324" y="287">poller + sweeper</text>
+  <rect class="dg-zone" x="540" y="100" width="170" height="210" rx="10"/>
+  <text class="dg-txt-s" x="556" y="122">external — PSP</text>
+  <rect class="dg-node" x="556" y="140" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="570" y="162">Webhooks out</text>
+  <text class="dg-txt-s" x="570" y="178">retried, dup'd</text>
+  <rect class="dg-node" x="556" y="240" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="570" y="262">Charge API</text>
+  <text class="dg-txt-s" x="570" y="278">idem key too</text>
+  <line class="dg-edge" x1="106" y1="156" x2="146" y2="156" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="266" y1="156" x2="310" y2="156" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="194" x2="385" y2="248" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="460" y1="270" x2="556" y2="266" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="556" y1="160" x2="480" y2="150" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="120" y="146">pay</text>
+  <text class="dg-txt-s" x="272" y="146">1</text>
+  <text class="dg-txt-s" x="398" y="226">2 claim created</text>
+  <text class="dg-txt-s" x="472" y="258">3 charge</text>
+  <text class="dg-txt-s" x="488" y="140">4 confirm</text>
+  <text class="dg-txt-s" x="10" y="40">1: intent row + idempotency key + audit event committed atomically, BEFORE any PSP call</text>
+  <text class="dg-txt-s" x="10" y="60">2: worker claims created rows (FOR UPDATE SKIP LOCKED), drives the PSP call</text>
+  <text class="dg-txt-s" x="10" y="80">4: webhook applied with version check; ledger entries written on settle</text>
+</svg>
+<figcaption>The flow spine. The database row is the source of truth at every step; the PSP call is driven <em>from</em> committed state, never the other way around. Crash anywhere and a sweeper can resume, because intent always precedes action.</figcaption>
+</figure>
+
+<p><strong>Write path:</strong> checkout posts an intent → in <strong>one database transaction</strong> we insert the intent row (state <code>created</code>), the idempotency-key record, and an audit event → a worker claims the row, transitions it to <code>processing</code>, and calls the PSP's charge API with its own idempotency key → the PSP's answer (and later its webhook) drives the state to <code>succeeded</code> or <code>failed</code>, writing ledger entries on success. In practice the API kicks the worker immediately after commit so the happy path feels synchronous — the poller is the same code path running as a safety net, sweeping up anything a crash left behind.</p>
+
+<p><strong>Read path:</strong> the order status page polls <code>GET /payment-intents/{id}</code> against a read replica. Consistency stance, committed: <strong>the ledger and intent store are CP</strong> — one writer, synchronous replica, and if we must fail over, we accept a short write pause rather than ever accepting two versions of the money truth. Product surfaces — order page, merchant dashboard — are <strong>eventually consistent</strong> read replicas; a status arriving two seconds late is invisible, a forked ledger is unforgivable.</p>
+
+<p>Every intent lives on a strict state machine, and this is where auditability starts:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 240" role="img" aria-label="Payment intent state machine from created to refunded">
+  <rect class="dg-node" x="14" y="90" width="110" height="48" rx="8"/>
+  <text class="dg-txt" x="34" y="118">created</text>
+  <rect class="dg-node" x="180" y="90" width="120" height="48" rx="8"/>
+  <text class="dg-txt" x="196" y="118">processing</text>
+  <rect class="dg-good" x="356" y="40" width="120" height="48" rx="8"/>
+  <text class="dg-txt" x="372" y="68">succeeded</text>
+  <rect class="dg-bad" x="356" y="150" width="120" height="48" rx="8"/>
+  <text class="dg-txt" x="386" y="178">failed</text>
+  <rect class="dg-node" x="536" y="20" width="170" height="44" rx="8"/>
+  <text class="dg-txt-s" x="550" y="46">partially_refunded</text>
+  <rect class="dg-node" x="536" y="96" width="130" height="44" rx="8"/>
+  <text class="dg-txt" x="552" y="122">refunded</text>
+  <line class="dg-edge" x1="124" y1="114" x2="180" y2="114" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="300" y1="102" x2="356" y2="72" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="300" y1="126" x2="356" y2="166" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="476" y1="52" x2="536" y2="44" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="476" y1="76" x2="536" y2="108" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="612" y1="64" x2="600" y2="96" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="10" y="220">Every arrow = one row in payment_events (who, what, when, why). No skips: created can never jump to succeeded.</text>
+</svg>
+<figcaption>The intent state machine. Transitions are the only way state changes, each one writes an audit event, and illegal jumps are rejected at the database level. Auditors — and 3 a.m. debuggers — read this table like a flight recorder.</figcaption>
+</figure>
+
+<p>Minute twenty. The loop is closed. "Three deep dives, hardest first: surviving retries at the PSP boundary, then the ledger, then reconciliation."</p>
+
+<h2>Deep dive 1: exactly-once charging on a network that promises nothing (minutes 20–30)</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Your database and the PSP are two computers that cannot share a transaction. Every payment is therefore a dual-write: a row in your Postgres and a charge on Stripe's side, with a network in between that can fail <em>after</em> the money moved but <em>before</em> you heard about it. Retries — from users double-tapping, from mobile networks, from your own timeouts, from the PSP's webhook redelivery — hammer this seam constantly. Everything distinctive about payment architecture — idempotency keys, intent-first writes, the poller, reconciliation — exists because of this one seam. The candidate who treats "PSP call + local write" as one atomic step has already failed; the interviewer is watching for whether you see the gap and build for it.</p>
+</div>
+
+<p>Walk the horror scenario first, because it justifies everything after. You call the PSP to charge $49.99. Ten seconds, no response, timeout. You are now in one of three worlds and <em>cannot tell which</em>: (1) the request never arrived — no charge; (2) the request arrived, the card was charged, and the response died on the way back; (3) the PSP is still processing. Now the fatal move: a "helpful" blind retry. In world 2, that's a second $49.99 charge. Customer support tickets, chargebacks, a Reddit thread with your app's name in it. The rule, tattooed: <strong>on timeout, never blindly retry a payment — query.</strong> Ask the PSP "what happened to the charge with this key?" and act on the answer. Ambiguity is resolved by asking, never by re-doing.</p>
+
+<p>Now build the machinery that makes retries safe end to end — the full mechanics from chapter 2.2, deployed for real:</p>
+
+<ul>
+<li><strong>The client mints an idempotency key</strong> — a UUID generated when the pay button is rendered, resent unchanged on every retry of that purchase. The double-tap and the timeout-retry now carry the same key.</li>
+<li><strong>Key, request hash, and response are stored in the same transaction as the intent.</strong> On first arrival we insert <code>(key, hash(request_body))</code> and the intent row atomically. On a retry: same key, same hash → <strong>replay the stored response</strong>, byte for byte, without re-executing anything. Same key, <em>different</em> hash → <code>409</code>, because the client is confused and guessing is how money gets lost. The atomicity matters: if the key record and the intent could commit separately, a crash between them would leave a key with no intent (retry does nothing forever) or an intent with no key (retry creates a sibling charge).</li>
+<li><strong>Concurrent duplicates hit a lock, not a race.</strong> Two identical requests in the same millisecond: both try to insert the key; the unique constraint makes one insert win and the other block on the row lock. The winner proceeds; the loser wakes, sees the key exists, and either replays the finished response or returns <code>202 — in flight, poll here</code>. At no point do two executions run.</li>
+<li><strong>Map your key to the PSP's key.</strong> The PSP has its own idempotency-key header, and you must use it — deterministically: <code>psp_key = intent_id + ":" + attempt</code>. Every retry of attempt 1 sends the same PSP key, so even if your process crashes mid-call and a sweeper re-sends, the PSP deduplicates on its side. A genuinely new attempt (card declined, user typed a new card) increments <code>attempt</code> — a new charge on purpose, not by accident. Two layers of idempotency, yours and theirs, seam covered from both sides.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="Sequence of a timed-out charge safely resolved by query and replay">
+  <rect class="dg-node" x="30" y="16" width="100" height="40" rx="8"/>
+  <text class="dg-txt" x="52" y="41">Client</text>
+  <rect class="dg-node" x="300" y="16" width="130" height="40" rx="8"/>
+  <text class="dg-txt" x="314" y="41">Payments svc</text>
+  <rect class="dg-node" x="590" y="16" width="90" height="40" rx="8"/>
+  <text class="dg-txt" x="618" y="41">PSP</text>
+  <line class="dg-edge" x1="80" y1="56" x2="80" y2="300"/>
+  <line class="dg-edge" x1="365" y1="56" x2="365" y2="300"/>
+  <line class="dg-edge" x1="635" y1="56" x2="635" y2="300"/>
+  <line class="dg-edge" x1="80" y1="80" x2="365" y2="80" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="120" y="72">POST intent, key=K</text>
+  <text class="dg-txt-s" x="378" y="106">txn: intent + K + hash committed</text>
+  <line class="dg-edge" x1="365" y1="126" x2="635" y2="126" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="420" y="118">charge, psp_key=K:1</text>
+  <text class="dg-bad" x="470" y="152">✕ timeout — charged or not?</text>
+  <line class="dg-edge" x1="80" y1="180" x2="365" y2="180" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="120" y="172">user taps Pay again, key=K</text>
+  <text class="dg-txt-s" x="378" y="206">K exists → lock row, do NOT re-execute</text>
+  <line class="dg-edge" x1="365" y1="228" x2="635" y2="228" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="420" y="220">query by K:1 — what happened?</text>
+  <line class="dg-edge" x1="635" y1="254" x2="365" y2="254" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="430" y="248">"charged once"</text>
+  <line class="dg-edge" x1="365" y1="284" x2="80" y2="284" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="120" y="277">200 — stored response, one charge</text>
+</svg>
+<figcaption>The retry storm, survived. The second tap finds the key, locks the row, and resolves ambiguity by <em>asking</em> the PSP — the deterministic PSP-side key makes the question answerable. One charge, provably.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Paying through a PSP is sending rent via a courier. You seal cash in an envelope with a serial number, log the number in your diary, and send the courier. The courier doesn't return. Did the landlord get paid? The catastrophic move is sealing <em>more cash</em> in a fresh envelope. The correct move: send a courier to <em>ask</em> — "did envelope #4471 arrive?" And because the landlord also logs envelope numbers and refuses to accept the same number twice, even a duplicate courier can't double-pay. Your diary is the intent row; the serial number is the idempotency key; the landlord's log is the PSP's dedupe. The analogy breaks in one place: real couriers eventually show up or don't — networks can stay ambiguous for minutes, which is why the diary entry must be written <em>before</em> the courier leaves.</p>
+</div>
+
+<p>Which brings us to the dual-write trap itself. Why not wrap the PSP call inside the database transaction? Because an HTTP call is not rollback-able — if the transaction aborts after the PSP said yes, the money moved and your database remembers nothing. (Holding a transaction open across a ten-second network call is also how you starve your connection pool.) The fix is the outbox pattern from chapter 2.1, in its payments costume: <strong>the intent row is the outbox message.</strong> State <code>created</code> means "a PSP call is owed." The worker claims it, marks <code>processing</code>, calls out with the deterministic key, records the outcome. Crash before the call: the row still says <code>created</code>; the poller re-claims it. Crash <em>after</em> the call but before recording: the row sits in <code>processing</code> past its deadline; the sweeper queries the PSP by <code>K:1</code> and writes what actually happened. Every crash window has a recovery story, and every recovery is a query or an idempotent re-send — never a blind re-charge.</p>
+
+<p>Last piece of this dive: <strong>webhooks in.</strong> The PSP confirms outcomes by calling you — and their delivery contract is "at least once, in any order." You will receive duplicates; you will receive a <code>refund.succeeded</code> before the <code>payment.succeeded</code> it depends on. So: verify the signature, insert the PSP's event id into <code>webhook_events</code> with a unique constraint (duplicate → ack and drop), then apply the event <em>through the state machine with a version check</em> — compare-and-set on the intent's version column. If the transition is illegal from the current state, don't force it: park the event and retry shortly, or refetch the object's current truth from the PSP's API. The state machine is the bouncer; events don't get to skip the line.</p>
+
+<div class="box story"><div class="box-tag">War story — Stripe's idempotency keys</div>
+<p>The definitive public treatment of this design is Stripe's own. In 2017, Brandur Leach of Stripe's API team published "Designing robust and predictable APIs with idempotency," documenting how Stripe handles exactly the ambiguity above at planetary scale: every mutating request accepts an <code>Idempotency-Key</code> header; the server saves the result of the first execution — status code and body — and any retry with the same key gets that stored response replayed instead of a re-execution, whether the first attempt succeeded or failed. Keys are kept for 24 hours, long enough to outlive any realistic retry storm, then recycled. Stripe's client libraries even generate keys and retry automatically with exponential backoff, because Stripe would rather design for the network's failure than hope around it. The detail worth quoting in an interview: Stripe replays the response <em>even for errors</em>, because a retried request must be indistinguishable from its original — that's what makes "just retry it" a safe instruction instead of a dangerous one. When one of the world's largest payment companies documents its survival kit, and item one is idempotency keys, that tells you where the fire is.</p>
+</div>
+
+<h2>Deep dive 2: the ledger — money's flight recorder (minutes 30–36)</h2>
+
+<p>Where does the money truth live? Not in a <code>balance</code> column that gets <code>UPDATE</code>-ed. In a <strong>double-entry, append-only ledger</strong> — the design accountants have stress-tested for five hundred years, for the same reason we want it: fraud and error detection by construction.</p>
+
+<p><strong>Double-entry:</strong> every movement of money is recorded twice — it leaves one account and enters another, a debit and a credit, and the amounts of every transaction sum to zero. Money is never created or destroyed in the ledger; it only moves between named accounts: <code>psp_receivable</code> (the PSP holds money it owes us), <code>merchant_payable</code> (we owe the merchant), <code>platform_revenue</code> (our cut), <code>refunds_clearing</code>. A $50.00 sale with a $5.00 platform fee:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 280" role="img" aria-label="Ledger entries for a payment and a partial refund, each summing to zero">
+  <rect class="dg-node" x="14" y="20" width="336" height="150" rx="10"/>
+  <text class="dg-txt" x="30" y="46">txn T1 — payment p_123 succeeds</text>
+  <text class="dg-txt-s" x="30" y="76">psp_receivable        +5000</text>
+  <text class="dg-txt-s" x="30" y="100">merchant_payable   −4500</text>
+  <text class="dg-txt-s" x="30" y="124">platform_revenue    −500</text>
+  <text class="dg-good" x="30" y="154">sum = 0 ✓</text>
+  <rect class="dg-node" x="376" y="20" width="330" height="126" rx="10"/>
+  <text class="dg-txt" x="392" y="46">txn T2 — refund $20 of p_123</text>
+  <text class="dg-txt-s" x="392" y="76">merchant_payable   +2000</text>
+  <text class="dg-txt-s" x="392" y="100">psp_receivable        −2000</text>
+  <text class="dg-good" x="392" y="130">sum = 0 ✓</text>
+  <text class="dg-txt-s" x="14" y="200">Amounts are integer minor units. + and − are the debit/credit pair: every cent that leaves one</text>
+  <text class="dg-txt-s" x="14" y="220">account lands in another. Wrote the wrong amount? APPEND a reversing transaction — never edit T1.</text>
+  <text class="dg-txt-s" x="14" y="248">Invariant checks: each txn sums to 0; the whole table sums to 0; balance(account) = SUM(its entries).</text>
+</svg>
+<figcaption>Ledger entries as they land. The zero-sum rule per transaction is checked at write time; the whole-table zero-sum is re-verified continuously. Any nonzero sum means a bug wrote unbalanced money — caught in hours, not at year-end audit.</figcaption>
+</figure>
+
+<p><strong>Append-only</strong> is non-negotiable: rows are inserted, never updated, never deleted. A mistake is corrected by appending a reversing transaction that visibly undoes it — the error and its correction both stay in the record forever. This is what makes the ledger auditable: an <code>UPDATE</code> can silently rewrite history; an append-only log cannot lie about the past, only add to it. Database permissions enforce it — the application role literally has no <code>UPDATE</code> grant on <code>ledger_entries</code>.</p>
+
+<p><strong>Balances are derived, never authoritative.</strong> A merchant's balance is <code>SUM(entries)</code> over their account. Summing millions of rows per dashboard load is silly, so we keep a cached balance row, updated in the same transaction as each entry — but the cache is a <em>view</em>, and a nightly job recomputes every balance from raw entries and compares. A mismatch pages someone, because it means a code path moved money outside the ledger discipline. Cache for speed, recompute for truth, alert on divergence — the invariant check IS the design.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The ledger is a row of labeled jars and a rule: you may only <em>move</em> beads between jars, never pocket one or conjure one, and every move gets a line in a notebook — "3 beads, jar A → jar B." Count all the beads any night and the total must match the notebook exactly; if it doesn't, someone reached into a jar without writing it down, and the notebook tells you exactly when the count last held. A single "balance" column is just a sticky note on one jar saying "about 40 beads" — when it's wrong, there is nothing to check it against. The notebook is why double-entry survived five centuries: it isn't a record of balances, it's a record of <em>movements</em>, and movements can be replayed and audited. Where the analogy breaks: our beads also sit in other people's jars (the PSP's), which is why the next section exists.</p>
+</div>
+
+<h2>Deep dive 3: reconciliation — trust, then verify everything (minutes 36–42)</h2>
+
+<p>Everything so far assumes our view and the PSP's view agree. They will drift. Webhooks get lost past their retry horizon; a sweeper hits an edge case; someone refunds a charge in the PSP's web dashboard, bypassing our API entirely; and — as the war story below proves — sometimes the card rails themselves misfire. <strong>Reconciliation catches what webhooks miss.</strong> It is not an afterthought; for a payments team it's a core product.</p>
+
+<p>Every day the PSP publishes a <strong>settlement file</strong>: every charge, refund, fee, and chargeback they processed for us, with references and amounts. A batch job matches it line by line against our ledger on <code>psp_ref</code>, producing three buckets:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Reconciliation matching between PSP settlement file and internal ledger">
+  <rect class="dg-node" x="14" y="30" width="200" height="140" rx="10"/>
+  <text class="dg-txt" x="30" y="56">Settlement file</text>
+  <text class="dg-txt-s" x="30" y="76">(PSP, T+1)</text>
+  <text class="dg-txt-s" x="30" y="102">ch_101   5000</text>
+  <text class="dg-txt-s" x="30" y="124">ch_102   3000</text>
+  <text class="dg-txt-s" x="30" y="146">ch_109     700</text>
+  <rect class="dg-node" x="506" y="30" width="200" height="140" rx="10"/>
+  <text class="dg-txt" x="522" y="56">Our ledger</text>
+  <text class="dg-txt-s" x="522" y="76">(psp_ref entries)</text>
+  <text class="dg-txt-s" x="522" y="102">ch_101   5000</text>
+  <text class="dg-txt-s" x="522" y="124">ch_102   3000</text>
+  <text class="dg-txt-s" x="522" y="146">ch_107   1200</text>
+  <rect class="dg-node-alt" x="290" y="70" width="130" height="60" rx="10"/>
+  <text class="dg-txt" x="310" y="106">Matcher</text>
+  <line class="dg-edge" x1="214" y1="100" x2="290" y2="100" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="506" y1="100" x2="420" y2="100" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="330" y1="130" x2="240" y2="210" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="355" y1="130" x2="355" y2="210" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="380" y1="130" x2="480" y2="210" marker-end="url(#arrow)"/>
+  <rect class="dg-good" x="120" y="214" width="180" height="66" rx="10"/>
+  <text class="dg-txt" x="136" y="240">matched ✓</text>
+  <text class="dg-txt-s" x="136" y="260">ch_101, ch_102 — done</text>
+  <rect class="dg-bad" x="316" y="214" width="180" height="66" rx="10"/>
+  <text class="dg-txt-s" x="330" y="238">ch_109: in file only</text>
+  <text class="dg-txt-s" x="330" y="258">money we can't explain</text>
+  <rect class="dg-bad" x="512" y="214" width="196" height="66" rx="10"/>
+  <text class="dg-txt-s" x="526" y="238">ch_107: in ledger only</text>
+  <text class="dg-txt-s" x="526" y="258">charge PSP never settled</text>
+</svg>
+<figcaption>Daily matching. Green is the boring 99.99%. Both red buckets are money in an unexplained state — and both directions happen in real life.</figcaption>
+</figure>
+
+<ul>
+<li><strong>Matched, amounts equal</strong> — the overwhelming majority. Mark and move on. (Matched but amounts differ is its own break — often a fee change or partial capture.)</li>
+<li><strong>In the file, not in our ledger</strong> — an orphan: real money moved and our system doesn't know why. A lost webhook after a poller gap, or a dashboard-made charge. Auto-heal first: fetch the object from the PSP's API and drive it through the normal state machine. If that can't explain it, it goes to a human queue.</li>
+<li><strong>In our ledger as succeeded, not in the file</strong> — a phantom: we told a customer "paid" for money that never settled. Wait out the settlement lag window (files run a day or two behind), then investigate hard, because either our state machine lied or the PSP lost a charge.</li>
+</ul>
+
+<p>The unmatched-transaction workflow is part of the design, not an ops afterthought: breaks auto-retry matching for the lag window, then land in a review queue with the full audit trail attached (this is where <code>payment_events</code> pays for itself), and the <strong>reconciliation break count is a paging metric — nonzero after the lag window means an engineer looks today.</strong> A payments system that reconciles daily discovers its bugs in 24 hours. One that doesn't discovers them at tax time, or on Reddit.</p>
+
+<div class="box story"><div class="box-tag">War story — Coinbase and the charges nobody sent</div>
+<p>In February 2018, Coinbase customers started reporting something terrifying: old crypto purchases from weeks earlier were reappearing on their card statements as fresh charges — some users reported being charged 17, even 50 times, with bank accounts drained and overdraft fees stacking up. The internet's instant verdict was "Coinbase double-charged us." The truth was stranger: the card networks had reclassified crypto purchases under a new merchant category code (to treat them like cash advances), and in the reprocessing, transactions dating back to January 22 were <em>reversed and re-charged</em> on the rails — over a million Coinbase transactions were reprocessed through Visa's network via the acquirer Worldpay. It took days of joint investigation before Visa and Worldpay issued a joint statement taking responsibility and confirming the duplicates would be reversed — explicitly stating the issue was not caused by Coinbase. Two lessons for your whiteboard. First: your code can be perfect and duplicates can still appear, because the rails beneath your PSP are themselves distributed systems that retry — which is exactly why reconciliation against settlement data is mandatory, not paranoid. Second: when money looks wrong, the company that can produce a complete, timestamped ledger of what it actually did clears its name in days instead of months.</p>
+</div>
+
+<h2>Refunds, payouts, and the card-data question (minutes 42–44)</h2>
+
+<p><strong>Refunds</strong> reuse the whole machine: idempotency-keyed <code>POST /refunds</code>, a refund row linked to the original intent, its own small state machine, the PSP call driven by the worker, confirmation by webhook, reversing-direction ledger entries. Two rules with teeth: partial refunds are fine, but the running total of refunds must never exceed the original amount — enforced by taking a row lock on the payment while inserting the refund, so two concurrent $30 refunds on a $50 charge can't both pass the check. And refund-after-settlement is the <em>normal</em> case, not an edge case — the money already settled days ago, so the refund is a new movement in the next settlement file, matched by reconciliation like everything else.</p>
+
+<p><strong>Payouts (lite):</strong> a merchant's payable balance is already in the ledger; on a schedule we create a payout intent — same state machine, same idempotency, same outbox — ask the PSP to transfer, and append entries moving <code>merchant_payable</code> to <code>payouts_in_transit</code> and onward on confirmation. No new machinery; that's the payoff of building the spine well once.</p>
+
+<p><strong>PCI, one honest paragraph:</strong> raw card numbers never touch our servers, by construction. The checkout page embeds the PSP's hosted fields — an iframe the PSP serves — so the card number travels browser → PSP directly, the same shape as presigned-URL uploads from chapter 1.7 where clients ship blobs straight to storage and your servers only handle references. We receive a token, store the token, charge with the token. This collapses our PCI compliance scope from "fortress with quarterly audits" to a self-assessment questionnaire, and it means a breach of our database leaks no card numbers. Any design that routes PANs through its own API servers is volunteering for the hardest compliance regime in commercial software to save one iframe.</p>
+
+<h2>Failure modes and operations (minutes 44–45, and the seniority test)</h2>
+
+<p><strong>PSP down for 30 minutes.</strong> Here's where intent-first architecture quietly pays off: checkouts keep committing intent rows; the worker's circuit breaker (chapter 2.7) opens and stops hammering; the queue of <code>created</code> rows just deepens. The product decision is honesty: for physical goods, tell the user "order placed — payment is processing, we'll confirm by email," then drain the queue when the PSP recovers. For instant digital delivery, fail fast and say so — pretending success you can't verify is how trust dies. <strong>What about failover to a second PSP?</strong> I'll commit: not in v1. Cards are tokenized <em>per PSP</em>, so failover means dual-vaulting or network tokens, plus a second webhook dialect, a second settlement format, doubled reconciliation, and routing logic — a quarter's work and a permanent ops tax, purchased against the few hours a year a top-tier PSP is down. Queue-and-drain covers those hours. The trigger that flips this decision: PSP downtime materially breaching our checkout SLO more than once or twice a year, or cross-border fee arbitrage making multi-PSP routing pay for itself. Name the trigger, defer the complexity.</p>
+
+<p><strong>What we watch:</strong> auth success rate (a sudden drop is a PSP incident, an issuer outage, or our own bad deploy — it's the single most information-dense payments metric), webhook lag (PSP event timestamp vs our receipt), oldest intent stuck in <code>processing</code> (sweeper health), poller queue depth, reconciliation break count (page on nonzero past the lag window), and the ledger zero-sum check. And one alarm with a special status: <strong>the duplicate-charge detector</strong> — a continuous query for two succeeded PSP charges against one order. By construction it should never fire: the client key dedupes taps, the unique constraint dedupes concurrent requests, the deterministic PSP key dedupes crashed re-sends, and the PSP dedupes on its side. Four independent layers must all fail. We run the alarm anyway, over PSP-side data, precisely <em>because</em> it's built to be impossible — an alarm on an invariant is how you find out the day your invariant stops being true, and Coinbase's users can tell you the rails have their own opinions. If it ever fires, it pages like an outage and auto-opens a refund workflow.</p>
+
+<p><strong>10x growth?</strong> The unfashionable answer, again: 12K payments/sec is still Postgres territory with partitioning and a beefier box; the intent table is append-mostly and archives cleanly. What actually strains at 10x is the humans — a review queue growing linearly with volume is a slow-motion outage, so the metric that matters is the auto-heal rate: the fraction of reconciliation breaks resolved by machine. That's where the next engineer-year goes. Rollouts: state-machine code ships behind flags, canaried on a slice of traffic, with the old and new code required to agree on replayed historical events before the flag widens — you migrate a payments state machine the chapter 2.11 way, never big-bang.</p>
+
+<div class="box story"><div class="box-tag">War story — Knight Capital: 45 minutes, $440 million</div>
+<p>The cautionary tale every payments engineer keeps in a drawer. In August 2012, market-maker Knight Capital deployed new trading code to seven of its eight production servers. The eighth kept the old build — and the deploy reused an old feature flag that, on that stale server, activated a dead code path called Power Peg, a long-retired test routine that bought high and sold low as fast as possible. At market open the eighth server started firing millions of unintended orders. There was no kill switch; while engineers debugged — at one point <em>rolling back</em> the good servers, making it worse — the system executed over 4 million trades in roughly 45 minutes, losing about $440 million, nearly four times the company's annual profit. Knight was effectively dead within the week, surviving only via emergency rescue financing, and the SEC's postmortem became required reading. It isn't a double-charge story — it's the deeper lesson under this whole chapter: systems that move money need staged rollouts that verify every node, kill switches that work in seconds, and independent controls that watch what the system is <em>actually doing</em> rather than what it's supposed to do. Reconciliation and invariant alarms are exactly that class of control, run daily instead of discovered during the fire.</p>
+</div>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Payment questions are probed almost entirely on the failure seams. Expect these, near-verbatim:</p>
+<ul>
+<li>"Your PSP call times out. Walk me through <em>exactly</em> what happens next — every table, every state." (They want: intent already committed, sweeper, query-by-key, never blind retry.)</li>
+<li>"Two identical pay requests hit two different app servers in the same millisecond. Trace both to the end." (Unique key constraint, row lock, one executes, one replays.)</li>
+<li>"Why can't you just wrap the PSP call and your DB write in one transaction?" (External side effects don't roll back; this is the dual-write trap, and the outbox is the answer.)</li>
+<li>"The webhook for a successful payment never arrives. When and how do you find out?" (Sweeper on stuck intents within minutes; reconciliation as the backstop within a day.)</li>
+<li>"Show me the ledger rows for a $20 partial refund of a $50 payment." (If you can't write four signed entries summing to zero, the ledger section was memorized, not understood.)</li>
+<li>"Where would you use a second PSP?" (A trap for over-engineers — they want the cost named and a trigger committed, not instant multi-PSP.)</li>
+</ul>
+</div>
+
+<h2>The committed choices</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Why</th><th>Cost accepted</th></tr></thead>
+<tbody>
+<tr><td>Buy the rails: one PSP (Stripe/Adyen)</td><td>Card networks, vaulting, and fraud are a decade of someone else's scar tissue; our value is the layer above</td><td>Per-transaction fees; tokens locked to their vault; their outage is our degraded checkout</td></tr>
+<tr><td>Single CP Postgres for intents + ledger</td><td>~1.2K peak QPS needs no sharding; transactions give atomic intent+key+event writes</td><td>Vertical scaling ceiling; brief write pause on failover — accepted for one money truth</td></tr>
+<tr><td>Client idempotency key; key+hash+response in one txn</td><td>Makes every retry — tap, timeout, crash — replay-safe end to end</td><td>Extra table and lock on hot path; clients must be taught to reuse keys on retry</td></tr>
+<tr><td>Worker/outbox drives PSP calls from committed state</td><td>Every crash window resumable; no charge can exist that no row predicted</td><td>More moving parts than call-in-request; worker and sweeper to operate and monitor</td></tr>
+<tr><td>Append-only double-entry ledger, derived balances</td><td>Zero-sum invariant catches bugs structurally; audit trail is the table itself</td><td>More rows, more storage; balance reads need caching plus a recompute-verify job</td></tr>
+<tr><td>Daily reconciliation with paging on breaks</td><td>Catches what webhooks miss — including duplicates born on the rails themselves</td><td>Batch pipeline + human review queue to staff and continuously shrink</td></tr>
+<tr><td>Queue-and-drain on PSP outage, no second PSP in v1</td><td>Covers realistic downtime at near-zero complexity; honest UX</td><td>During outage: delayed confirmation, lost sales on instant-delivery goods — trigger named for revisit</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c14-f1">
+<p class="fey-prompt">A junior asks: "Why can't we just call Stripe, and if it succeeds, save the payment to our database? One if-statement." Explain in five or six sentences why that's the most dangerous design in the codebase, and what we do instead.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Because the crash you didn't plan for lands exactly between those two steps: Stripe charges the card, then our process dies before saving — now a customer paid us and our database has no idea, which means no order, no refund path, and no way to even know it happened. The network makes it worse: if the Stripe call times out, we can't tell whether it charged or not, and retrying "to be safe" might charge twice. So we flip the order: first we save an intent row that says "we're about to charge $50 for order X," along with the client's idempotency key, in one transaction. Only then does a worker call Stripe, using a key derived from that intent, so even if we crash and call again, Stripe knows it's the same charge and won't run it twice. If anything dies mid-flight, a sweeper finds the unfinished row and <em>asks</em> Stripe what happened instead of guessing. The rule underneath: write down what you intend before you act, act idempotently, and resolve doubt by querying — never by re-doing.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Now add a stored-value wallet, with split tender: a $50 order paid $20 from wallet balance + $30 on card. Sketch what changes in the ledger and — the real question — what happens when the card portion fails after the wallet portion was taken.</p></div>
+<details><summary>Answer</summary><p>The wallet is just another ledger account per user, so the happy path is two movements: wallet → merchant_payable ($20) and psp_receivable → merchant_payable ($30), each its own zero-sum transaction. The failure case makes this a saga (chapter 2.1): take the wallet money first as a <em>hold</em> (move to a <code>wallet_holds</code> account, not to the merchant), then attempt the card; on card success, commit the hold; on card failure, append a reversing entry releasing the hold. Never take wallet funds irrevocably before the card resolves, and never attempt the card first (you can't "hold" money on the customer's card and then discover their wallet balance changed — the wallet is the resource you control, so you reserve it first and make the external call the last risky step). Both the hold and the release are idempotency-keyed, because timeouts happen here too.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Black Friday: 10x traffic, and your PSP rate-limits you to 500 charges/sec while checkouts arrive at 1,200/sec. Design the behavior. What do users see, what do you monitor, and what breaks first if the surge lasts four hours?</p></div>
+<details><summary>Answer</summary><p>The architecture already contains the answer: intents commit at 1,200/sec (Postgres doesn't blink), and the worker drains at the permitted 500/sec — the intent table becomes a durable queue, oldest first, with the circuit breaker respecting 429s. Users get the honest state: "order placed, payment processing," with confirmation following in minutes. Monitor queue depth and, more importantly, its <em>derivative</em> — at +700/sec net inflow, a four-hour surge queues ~10M intents, so the real risks are: authorization windows (a card auth attempted hours late fails more often — track success rate by queue age), inventory promised against payments that later fail, and email/notification storms on drain. First structural break: the product promise, not the database — which is why the senior answer includes pre-negotiating a higher rate limit with the PSP before the sale, the boring fix that beats any architecture.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>The requirement flips: you now sell instant digital goods (game credits, delivered in-app within seconds). Which committed choices from the trade-off table does this overturn, and what replaces them?</p></div>
+<details><summary>Answer</summary><p>Two flips. Queue-and-drain dies: you can't tell a user "credits processing, check back in an hour," so a PSP outage now means lost revenue per minute, and the multi-PSP trigger we named has effectively fired — the cost-benefit now favors a second PSP (or at least network tokens to make card credentials portable) despite doubled reconciliation. Second, delivery becomes part of the correctness story: granting credits must be idempotent against the payment intent id (webhook redelivery must not grant twice) and reconciliation gains a fourth bucket — payments settled but credits never granted — so you now reconcile money <em>and</em> fulfillment. The ledger, idempotency spine, and state machine survive unchanged; that's the sign they were the right spine.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A webhook arrives: <code>refund.succeeded</code> for intent p_777 — but your database shows p_777 still in <code>processing</code>. Walk through exactly what your system does, and name the two distinct root causes this pattern can have.</p></div>
+<details><summary>Answer</summary><p>The handler dedupes the event id (new — proceed), then attempts the transition: <code>processing → refunded</code> is illegal, so it does NOT force the state. It parks the event for delayed retry and triggers a refetch of p_777 from the PSP's API. Root cause one: out-of-order delivery — the <code>payment.succeeded</code> webhook is in flight behind its sibling; the refetch (or the retried parked event, after the success event lands) resolves it within minutes. Root cause two, nastier: the success webhook was lost entirely AND the sweeper hasn't caught the stuck intent yet — the refetch heals it by walking the intent through succeeded-then-refunded with audit events for both. What you never do is jam the state to <code>refunded</code> directly: skipping <code>succeeded</code> means no settlement ledger entries were ever written, and now the refund reverses money the ledger never recorded receiving — an unbalanced ledger, found the hard way at reconciliation.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your CFO asks: "If our duplicate-charge protections are 'structurally impossible' to break, why are we paying for a daily reconciliation pipeline and an alarm? Cut one." Give the senior answer in a few sentences.</p></div>
+<details><summary>Answer</summary><p>Neither, and here's the argument: the four idempotency layers protect against failures in <em>our</em> request path — but "structurally impossible" is a claim about our code, and reconciliation is the instrument that continuously <em>tests</em> that claim against external reality. Coinbase's 2018 incident is the proof case: their code didn't double-charge anyone; the card rails reclassified and reprocessed over a million transactions, creating duplicates two layers below anything Coinbase controlled — only comparison against settlement data catches that class. An invariant without a detector is a belief; the alarm converts it into a monitored fact, and its cost is one query. You cut reconciliation the day you're willing to learn about missing money from customers instead of from a cron job.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Payments is a correctness interview in a scale costume: even huge platforms run hundreds to low thousands of payments per second, so say "small QPS" out loud and spend everything on idempotency, ledger, and reconciliation.</li>
+<li>Scope the boundary first: you orchestrate a PSP, you don't build card rails — and hosted-fields tokenization keeps card numbers off your servers entirely.</li>
+<li>Write intent before action: the intent row, the idempotency key + request hash, and the audit event commit in one transaction before any PSP call, making every crash window resumable.</li>
+<li>On a payment timeout you are in one of three unknowable worlds; the only legal move is to query by your deterministic idempotency key — a blind retry is how double charges are born.</li>
+<li>Money truth lives in an append-only double-entry ledger in integer minor units: every movement sums to zero, corrections are reversing entries, and balances are derived views verified by recomputation.</li>
+<li>Webhooks arrive late, twice, and out of order by contract — dedupe on event id, apply through the state machine with a version check, and never force an illegal transition.</li>
+<li>Reconciliation against the settlement file catches what webhooks miss — including duplicates minted by the rails themselves — and a nonzero break count after the lag window pages a human.</li>
+<li>Commit like an owner: one PSP with queue-and-drain, one CP ledger, eventual consistency only on product surfaces — and name the trigger that would change each decision.</li>
+</ul>
+</div>

@@ -1,0 +1,351 @@
+<p>Every design in this book ends the same way. "I'd watch p99 latency, queue depth, error rate. I'd alert on the burn rate." By now you've promised a dashboard a hundred times. Today the interviewer collects the debt: <em>"Design the dashboard. Design a metrics and monitoring platform — something like Datadog or Prometheus at cloud scale."</em></p>
+
+<p>Feel the stakes before you draw a box. It's 3 a.m. and a payments database is down. The on-call engineer opens the dashboard to see when the errors started — and the dashboard is a spinner. The monitoring system shared a network with the thing it was monitoring, and they died together. Now the company is debugging an outage with <code>ssh</code> and hope. A metrics platform is the one system whose availability matters <em>most</em> at the exact moment everything else is failing. That constraint will follow us through the whole design.</p>
+
+<p>And there's a second trap hiding in the prompt. This is a write-heavy firehose — millions of points per second, arriving forever, whether or not anyone is looking. Most systems in this book were read-heavy; this one inverts the ratio. Reads are rare, bursty, human. Writes never stop. And buried inside the write path is the real crux, the thing that has taken down more monitoring systems than any hardware failure: one engineer, one innocent-looking label, and an explosion you'll see coming by minute nine of the math.</p>
+
+<h2>Requirements: what "monitoring" must promise (minutes 0–5)</h2>
+
+<p>Scope it out loud: "I'll build metric ingestion from customer hosts and services, dashboard queries, and alerting. Metrics only — logs and distributed tracing are separate products, and I'll actually use that separation as a design tool later. Out of scope: billing, the UI itself, anomaly detection. Fair?"</p>
+
+<p>Functional: agents on customer machines push numeric measurements with names and labels; users query them for dashboards ("p99 latency for checkout, by region, last 6 hours"); users define alert rules that page a human when a condition holds.</p>
+
+<p>Non-functional, with numbers committed:</p>
+
+<ul>
+<li><strong>Scale:</strong> 100,000 hosts and services reporting, each emitting around 500 distinct measurements every 10 seconds. Multi-tenant — thousands of customers on shared infrastructure.</li>
+<li><strong>Ingest freshness:</strong> a point should be queryable and alert-evaluatable within ~30 seconds of being measured. Alerting on stale data is alerting on the past.</li>
+<li><strong>Retention:</strong> 13 months — you need last November's traffic to plan this November's. But nobody needs 10-second resolution from last November; that asymmetry will pay for the whole storage bill.</li>
+<li><strong>Durability, honestly tiered:</strong> losing a few seconds of metric points in a disaster is survivable — the next points arrive in 10 seconds. Losing alert <em>configurations</em> or silently showing wrong data is not.</li>
+<li><strong>The self-dependency rule:</strong> the platform must keep working — above all, keep <em>alerting</em> — while the infrastructure it monitors is on fire. Monitoring must sit outside the blast radius of the things it watches.</li>
+</ul>
+
+<p>That last line is a non-functional requirement most candidates never state, and it's the one interviewers at any company that has lived through an outage are listening for.</p>
+
+<h2>Estimation: one multiplication runs this design (minutes 5–9)</h2>
+
+<p>Do the one multiplication that shapes everything:</p>
+
+<ul>
+<li><strong>Write rate:</strong> 100K hosts × 500 series per host × 1 point per 10 s = <strong>5 million points per second</strong>, around the clock. Not peak — <em>baseline</em>. Peaks come from deploys and incidents, exactly when you can least afford to drop data.</li>
+<li><strong>Active series:</strong> 100K × 500 = <strong>50 million</strong> distinct time series alive right now. Remember this number; the crux is what happens when it moves.</li>
+<li><strong>Raw storage:</strong> a point is a timestamp plus a float — 16 bytes naive. 5M/s × 16 B = 80 MB/s ≈ <strong>7 TB per day</strong> uncompressed. A year of that is 2.5 petabytes of hot storage. Unaffordable — so compression and downsampling aren't optimizations here, they're load-bearing.</li>
+<li><strong>Reads:</strong> maybe tens of thousands of dashboard queries per second at the worst moment (an incident, everyone staring at graphs) — but each query may touch <em>thousands of series</em>. Cheap to count, expensive to serve.</li>
+<li><strong>Alert rules:</strong> call it 100K rules platform-wide. If each is a query polled every 30 seconds, that's 3,300 heavyweight queries per second forever — a number that will make us reject polling outright when we get to alerting.</li>
+</ul>
+
+<p>Say the conclusions: "Five million writes a second means the write path is the product; I'll design it first and make it boring and horizontal. Seven terabytes a day means I need roughly a 10x compression win and a downsampling story or the economics fail. And fifty million series means my true scaling axis isn't points per second — it's <em>series count</em>. Points are cheap; series are expensive. That's where I'll spend my deepest dive."</p>
+
+<h2>API and data model: series, labels, points (minutes 9–12)</h2>
+
+<p>The unit of everything is a <strong>series</strong>: one metric name plus one exact combination of label key-values. <code>http_request_ms{service="checkout", endpoint="/pay", status="500"}</code> is one series. Change any label value and it's a <em>different</em> series with its own stream of points. This definition looks like trivia. It is actually the bomb in the basement — hold that thought.</p>
+
+<ul>
+<li><code>POST /api/v1/ingest</code> — the agent endpoint. Batched and compressed: hundreds of points per request, metric names and label sets sent once per batch and referenced by index, API-key auth per tenant. At 5M points/sec, per-point HTTP requests would be absurd; batching is the first 100x saving and it happens before our servers see a byte.</li>
+<li><code>GET /api/v1/query?expr=p99(http_request_ms{service="checkout"}) by (region)&amp;from=-6h&amp;step=60s</code> — a small expression language: select series by label match, aggregate, group, over a time range.</li>
+<li><code>POST /api/v1/alerts</code> — a rule is a query expression, a threshold, and a duration: "fire if this holds for 5 minutes."</li>
+</ul>
+
+<p>Storage model, two parts. Points: <code>(series_id, timestamp, value)</code>, append-only, time-ordered. Index: an inverted index from each label pair to the set of series ids that carry it — <code>service="checkout" → {17, 40982, …}</code> — so a query with three label matchers is three posting-list intersections, exactly like a search engine (chapter 3.19 will build the full-size version). Queries never scan points to find series; the index finds series, then points are read by id and time range.</p>
+
+<h2>The high-level machine (minutes 12–20)</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 360" role="img" aria-label="Metrics platform architecture: agents to intake to Kafka to aggregators to TSDB shards, with query service and alert evaluator">
+  <rect class="dg-node" x="8" y="150" width="96" height="60" rx="8"/>
+  <text class="dg-txt" x="20" y="174">Agents</text>
+  <text class="dg-txt-s" x="20" y="191">100K hosts</text>
+  <text class="dg-txt-s" x="20" y="204">disk buffer</text>
+  <rect class="dg-node" x="140" y="150" width="112" height="60" rx="8"/>
+  <text class="dg-txt" x="154" y="174">Intake</text>
+  <text class="dg-txt-s" x="154" y="191">auth · validate</text>
+  <text class="dg-txt-s" x="154" y="204">series budgets</text>
+  <rect class="dg-node" x="288" y="150" width="96" height="60" rx="8"/>
+  <text class="dg-txt" x="304" y="174">Kafka</text>
+  <text class="dg-txt-s" x="304" y="191">~1h buffer</text>
+  <rect class="dg-node" x="420" y="150" width="120" height="60" rx="8"/>
+  <text class="dg-txt" x="432" y="174">Aggregators</text>
+  <text class="dg-txt-s" x="432" y="191">10s windows</text>
+  <text class="dg-txt-s" x="432" y="204">sketches</text>
+  <rect class="dg-node-alt" x="584" y="90" width="128" height="44" rx="8"/>
+  <text class="dg-txt-s" x="596" y="108">TSDB shard 1 ×2</text>
+  <rect class="dg-node-alt" x="584" y="150" width="128" height="44" rx="8"/>
+  <text class="dg-txt-s" x="596" y="168">TSDB shard 2 ×2</text>
+  <rect class="dg-node-alt" x="584" y="210" width="128" height="44" rx="8"/>
+  <text class="dg-txt-s" x="596" y="228">TSDB shard N ×2</text>
+  <rect class="dg-node" x="420" y="278" width="120" height="48" rx="8"/>
+  <text class="dg-txt-s" x="432" y="298">Alert evaluator</text>
+  <text class="dg-txt-s" x="432" y="313">streaming</text>
+  <rect class="dg-node" x="584" y="282" width="128" height="40" rx="8"/>
+  <text class="dg-txt-s" x="596" y="306">pager / notify</text>
+  <rect class="dg-node" x="140" y="24" width="112" height="44" rx="8"/>
+  <text class="dg-txt-s" x="154" y="50">Dashboards</text>
+  <rect class="dg-node" x="288" y="24" width="120" height="44" rx="8"/>
+  <text class="dg-txt-s" x="300" y="43">Query service</text>
+  <text class="dg-txt-s" x="300" y="58">merge partials</text>
+  <line class="dg-edge" x1="104" y1="180" x2="140" y2="180" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="252" y1="180" x2="288" y2="180" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="384" y1="180" x2="420" y2="180" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="540" y1="166" x2="584" y2="118" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="540" y1="180" x2="584" y2="172" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="540" y1="194" x2="584" y2="228" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="480" y1="210" x2="480" y2="278" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="540" y1="302" x2="584" y2="302" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="252" y1="46" x2="288" y2="46" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="408" y1="46" x2="600" y2="90" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="100" y="140">5M pts/s</text>
+  <text class="dg-txt-s" x="262" y="232">partition by hash(series)</text>
+  <text class="dg-txt-s" x="464" y="80">fan out, read</text>
+</svg>
+<figcaption>The complete machine. Writes flow left to right and never stop; the Kafka buffer decouples intake from storage. The alert evaluator taps the stream — it does not poll the database.</figcaption>
+</figure>
+
+<p><strong>Write path.</strong> The agent on each host collects measurements, batches 10 seconds' worth, compresses, and pushes. It also keeps a small disk-backed buffer — minutes of data — which is our degraded mode when intake is unreachable (that's the self-dependency section). The <strong>intake fleet is stateless</strong>: authenticate the tenant, validate the payload, enforce cardinality budgets (crux, coming), then produce to Kafka. Stateless means an intake node is disposable and the fleet scales linearly with load — at 5M points/sec I want zero cleverness here.</p>
+
+<p><strong>Why Kafka in the middle?</strong> Chapter 1.11's rule: put a queue where the producer's health must not depend on the consumer's. Agents must never be told "storage is slow, stop measuring" — during an incident, write volume spikes at the precise moment storage is struggling. Kafka absorbs the spike, and an hour of buffered stream (a few hundred MB/s batched and compressed — under a terabyte) means a storage-layer incident costs us <em>delay</em>, not <em>data</em>. Partitions are keyed by <code>hash(series_id)</code>, so every point for a given series lands in the same partition, in order — which is exactly what the next stage needs.</p>
+
+<p><strong>Stream aggregators</strong> consume the partitions and do the 10-second windowing work (deep dive 1), then write to <strong>TSDB shards</strong> — the time-series database, sharded by series id, each shard replicated ×2. Because points for one series always flow through one partition to one shard, a shard owns its series completely: no cross-shard writes, ever.</p>
+
+<p><strong>Read path.</strong> A dashboard query hits the query service, which uses the index to resolve label matchers to series ids, fans out to only the shards owning those series, and each shard returns <em>partial aggregates</em> — not raw points — which the query service merges. Alert evaluation branches off the aggregator stream instead of querying at all. Both of those sentences hide the same idea, and it's deep dive 1.</p>
+
+<h2>Deep dive 1: pre-aggregation — and why you may never average a percentile (minutes 20–27)</h2>
+
+<p>Raw points at 10-second resolution are what agents send. But almost every question humans ask is coarser: "requests per minute," "p99 over 5 minutes." So the aggregators fold each series' raw points into <strong>10-second windows storing min, max, sum, and count</strong>. Those four numbers are magic for one reason: they are <em>mergeable</em>. Sum of sums is the sum. Min of mins is the min. Count of counts is the count. Merge windows across time and you get 1-minute and 1-hour rollups for free; merge across hosts and you get the fleet view; merge across shards at query time and fan-out works. Any average is <code>sum ÷ count</code>, exact, at every zoom level. This is why shards can return partial aggregates instead of shipping millions of raw points to the query node — a 10–100x reduction in bytes moved and stored, and it's the same partial-aggregate trick chapter 2.9 used in stream jobs.</p>
+
+<p>Then someone asks for p99, and the magic dies. <strong>Percentiles do not merge.</strong> You cannot combine two p99s into anything meaningful — not with an average, not with a max, not with anything. Here's the two-host proof, worth performing on the whiteboard:</p>
+
+<ul>
+<li>Host A handles 9,900 requests, all around 50 ms. Its p99 is 50 ms.</li>
+<li>Host B is sick — garbage-collecting, swapping — and handles 200 requests at 2,000 ms each. Its p99 is 2,000 ms.</li>
+<li>"Average of p99s": (50 + 2,000) / 2 = <strong>1,025 ms</strong>.</li>
+<li>The truth: 10,100 requests combined; the slowest 200 are the 2,000 ms ones, which is more than the top 1%, so the fleet p99 is <strong>2,000 ms</strong>. The average told you half the truth — you'd believe you meet a 1,500 ms SLO while one request in fifty takes two full seconds.</li>
+<li>Now shrink host B to 50 slow requests. Both hosts' p99s are unchanged, so the "average" is still 1,025 ms — but the true fleet p99 is now <strong>50 ms</strong>, because the slow requests no longer reach the top 1%. Same input numbers, opposite truth. The averaged percentile isn't approximately wrong. It carries <em>no information</em>.</li>
+</ul>
+
+<p>So what do you store, if not percentiles? You store a <strong>sketch</strong>: a small, lossy summary of the whole distribution — think of it as a histogram with cleverly chosen buckets. <strong>t-digest</strong> keeps buckets finer near the tails, where percentiles live; <strong>DDSketch</strong> uses exponentially growing buckets, which guarantees the answer is within a fixed relative error, say 1% — your p99 of 2,000 ms might read 1,985 or 2,015, never 1,025. These are new names but an old friend: chapter 2.10's trade, bounded error for tiny constant memory — a few KB summarizing millions of values. And the property that makes them the answer here, the actual reason the industry settled on them, is that <strong>sketches merge</strong>. Combine host A's sketch with host B's and you get exactly the sketch of the combined traffic; merge sketches across 10-second windows and you get the hour. So the aggregator's window record is really: min, max, sum, count, <em>and a sketch</em>. Every percentile at every zoom level, from mergeable parts.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 280" role="img" aria-label="Per-host sketches merge into one window sketch that answers any percentile; averaging p99s gives fiction">
+  <rect class="dg-node" x="8" y="24" width="140" height="56" rx="8"/>
+  <text class="dg-txt-s" x="22" y="46">Host A sketch</text>
+  <text class="dg-txt-s" x="22" y="63">9,900 req · p99 50ms</text>
+  <rect class="dg-node" x="8" y="104" width="140" height="56" rx="8"/>
+  <text class="dg-txt-s" x="22" y="126">Host B sketch</text>
+  <text class="dg-txt-s" x="22" y="143">200 req · p99 2,000ms</text>
+  <rect class="dg-node" x="8" y="184" width="140" height="40" rx="8"/>
+  <text class="dg-txt-s" x="22" y="208">… 998 more hosts</text>
+  <rect class="dg-node-alt" x="280" y="94" width="160" height="70" rx="8"/>
+  <text class="dg-txt" x="296" y="122">Merged sketch</text>
+  <text class="dg-txt-s" x="296" y="141">one per window</text>
+  <rect class="dg-node" x="552" y="94" width="160" height="70" rx="8"/>
+  <text class="dg-txt" x="568" y="120">Any percentile</text>
+  <text class="dg-txt-s" x="568" y="139">p50 / p99 / p99.9</text>
+  <line class="dg-edge" x1="148" y1="52" x2="280" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="148" y1="132" x2="280" y2="132" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="148" y1="200" x2="280" y2="150" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="440" y1="129" x2="552" y2="129" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="290" y="200">merge = union of the data, lossless in shape</text>
+  <text class="dg-bad" x="290" y="240">avg(p99s) = 1,025 ms — pure fiction</text>
+  <text class="dg-good" x="290" y="262">merged sketch p99 = 2,000 ms — truth</text>
+</svg>
+<figcaption>Sketches merge across hosts and across time windows; stored percentiles merge into nonsense. This single property decides what the aggregators write.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Two schools each report their 99th-percentile exam score. Averaging those two numbers tells you nothing about the combined 99th percentile — it depends entirely on how many students each school has and the shape of everyone's marks. But if each school hands over a compressed tally — "so many students scored 40–50, so many 50–60…" — you just add the tallies bucket by bucket and read off any percentile of the combined student body. The tally is the sketch. The analogy's one crack: real sketches blur bucket edges slightly to stay small, which is why the answer is "within 1%," not exact.</p>
+</div>
+
+<h2>Deep dive 2: cardinality — one label from disaster (minutes 27–35)</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Everything in this platform scales with the number of <em>series</em>, not the number of points. A series is cheap to sample but expensive to <em>exist</em>: an index entry, an in-memory head chunk on a shard, a row in every fan-out. And series count is set not by us but by our users' label choices, multiplicatively. One engineer adding one label with unbounded values — <code>user_id</code>, <code>request_id</code>, <code>session</code> — can mint more series in an hour than the platform accumulated in a year. The write firehose is predictable; cardinality is the axis that explodes without warning. Defending it at intake, before bad series are born, is the difference between a monitoring platform and a beautiful outage machine. This is where I'd spend my remaining depth, and where the interviewer is hoping I'll go.</p>
+</div>
+
+<p>Walk the multiplication. <code>http_request_ms</code> with labels <code>service</code> (50 values), <code>endpoint</code> (40), <code>status_class</code> (5): at worst 50 × 40 × 5 = 10,000 series. In practice fewer — only combinations that actually occur are born — but bounded, because every label is bounded. Add <code>host</code> across 1,000 machines and you're at a few million series. Big, budgeted, fine.</p>
+
+<p>Now a well-meaning engineer, debugging one slow customer, ships <code>http_request_ms{…, user_id="…"}</code>. Five million active users. Every unique combination that occurs becomes a brand-new series: 5M users × even a handful of endpoint combinations each ≈ <strong>50 million new series</strong> — the entire platform's existing total, doubled by one line of code, in one afternoon. Each new series wants ~1–2 KB of head memory and index space on a shard: 50–100 GB of RAM demanded from machines provisioned for steady state. Index posting lists bloat; every dashboard query touching that metric now merges millions of series; shards OOM one by one. And tomorrow those users are back with new session labels — dead series pile up in the index like unclaimed mail. This exact failure is so common in the Prometheus world that the official documentation warns in bold that every unique key-value label combination is a new time series, and that unbounded values like user IDs and email addresses must never be labels; community postmortems of Prometheus servers OOMing from a single high-cardinality label are a genre of their own.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Cardinality multiplication: bounded labels give 10,000 series; adding user_id gives 50 million">
+  <rect class="dg-node" x="8" y="30" width="160" height="52" rx="8"/>
+  <text class="dg-txt-s" x="20" y="52">http_request_ms</text>
+  <text class="dg-txt-s" x="20" y="69">1 metric</text>
+  <text class="dg-txt" x="182" y="62">×</text>
+  <rect class="dg-node" x="206" y="30" width="110" height="52" rx="8"/>
+  <text class="dg-txt-s" x="220" y="52">service</text>
+  <text class="dg-txt-s" x="220" y="69">50 values</text>
+  <text class="dg-txt" x="330" y="62">×</text>
+  <rect class="dg-node" x="354" y="30" width="110" height="52" rx="8"/>
+  <text class="dg-txt-s" x="368" y="52">endpoint</text>
+  <text class="dg-txt-s" x="368" y="69">40 values</text>
+  <text class="dg-txt" x="478" y="62">×</text>
+  <rect class="dg-node" x="502" y="30" width="110" height="52" rx="8"/>
+  <text class="dg-txt-s" x="516" y="52">status</text>
+  <text class="dg-txt-s" x="516" y="69">5 values</text>
+  <text class="dg-good" x="8" y="122">= 10,000 series — bounded, budgeted, fine</text>
+  <rect class="dg-bad" x="8" y="146" width="200" height="52" rx="8"/>
+  <text class="dg-txt-s" x="22" y="168">+ label user_id</text>
+  <text class="dg-txt-s" x="22" y="185">5,000,000 values</text>
+  <line class="dg-edge" x1="208" y1="172" x2="280" y2="172" marker-end="url(#arrow)"/>
+  <text class="dg-bad" x="292" y="168">≈ 50,000,000 new series in an afternoon:</text>
+  <text class="dg-bad" x="292" y="188">~100 GB of shard RAM, from one line of code</text>
+</svg>
+<figcaption>Series count is a product of label value counts. Every factor is fine until one factor is "how many users do you have."</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A sorting office builds one pigeonhole per unique address pattern it has ever seen. Sort mail by city × neighborhood × street and you need a big wall of pigeonholes — but a bounded wall. Let one clerk add "× recipient's full name" to the sorting scheme and the office now needs a pigeonhole per person: the building fills with millions of tiny boxes, nearly all holding a single letter, and finding anything means walking past all of them. The letters (points) were never the problem — the <em>boxes</em> (series) are. And the fix is the same in both worlds: the rule about what counts as a valid sorting key gets enforced at the front door, not discovered in the warehouse.</p>
+</div>
+
+<p>Defenses, in the order they should fire:</p>
+
+<ul>
+<li><strong>Series budgets at intake.</strong> Every (tenant, metric) pair gets a distinct-series budget — say 10K by default, raisable on request. Intake tracks approximate distinct-series counts per metric with a HyperLogLog (chapter 2.10, again: a KB-scale counter is all we can afford at 5M points/sec). Over budget → new series are rejected or, gentler, <em>relabeled</em>: strip the offending label so points still flow into the coarser series, and increment a loudly-visible "series over budget" counter for that tenant. Existing series keep working; the explosion is contained at the door, before a single shard allocates a byte.</li>
+<li><strong>The routing rule.</strong> Teach it as policy, enforce it as product: <em>if a label's values are unbounded, it isn't a metric dimension — it's an event attribute; send it to logs or traces.</em> Metrics answer "how is the system doing," aggregated over bounded dimensions. "What happened to user 48210" is a query for logs (indexed per-event, retention-cheap) or traces. This is the real reason observability comes as three products, not one — the storage economics of bounded versus unbounded cardinality are irreconcilable, so the split is architectural, not marketing.</li>
+<li><strong>Monitor the monitoring.</strong> A standing per-tenant report of top cardinality offenders — which metrics, which labels, growth rate — plus an alert on cardinality growth itself. The platform metric I'd watch most nervously is "new series per minute per tenant." A cardinality bomb announces itself minutes before it detonates; this report is the fuse you can see burning.</li>
+</ul>
+
+<h2>Deep dive 3: the TSDB — compression and retention tiers (minutes 35–40)</h2>
+
+<p>Inside a shard, storage is LSM-flavored, tuned for time. Incoming points append to a write-ahead log (crash recovery) and an in-memory <strong>head block</strong> holding each series' most recent chunk — recent data is both the hottest to query and the cheapest to serve from RAM. Every two hours the head is sealed into an immutable, time-partitioned block on disk with its own inverted index; background compaction merges small blocks into bigger ones. Deleting expired data is dropping whole blocks — no tombstones, no surgery. Append, seal, compact: the LSM idea from chapter 1.13, with time as the natural partition key.</p>
+
+<p>Compression is where this design's economics live, and the intuition takes two sentences. Timestamps arrive on a metronome — every 10 seconds — so store the <em>change of the change</em> (delta-of-delta), which is almost always exactly zero: one bit per timestamp. Values barely move between neighbors — a temperature gauge reads 42.1 then 42.1 — so XOR each value's bits against the previous value's and store only the handful of bits that differ, which for an unchanged value is again a single bit.</p>
+
+<div class="box story"><div class="box-tag">War story — Facebook's Gorilla</div>
+<p>Both tricks come from one paper. Around 2013, Facebook's monitoring store (ODS, built on HBase) had become too slow to be useful during incidents — engineers debugging an outage would issue queries and wait seconds for graphs, at exactly the moment seconds mattered. The team's observation: virtually all debugging queries touched the last day or so of data. So they built Gorilla, an in-memory time-series database holding the most recent 26 hours, and published it at VLDB 2015. The compression results made the paper famous: with delta-of-delta timestamps, 96% of timestamps compressed to a single bit; with XOR value encoding, about half of values did too; a 16-byte point shrank to 1.37 bytes on average — a 12x win that made "26 hours of everything, in RAM" affordable at an ingest rate of about 700 million points per minute. Queries went from seconds to milliseconds — around 70x faster — which changed engineer behavior: people built tools that speculatively ran queries they'd never have dared before. The paper's encodings became the industry default; Prometheus's own storage engine credits Gorilla-style XOR compression directly. When you write "delta-of-delta + XOR" on the whiteboard, you're citing one of the most-adopted systems papers of its decade.</p>
+</div>
+
+<p>Compression makes raw retention affordable for days; <strong>downsampling</strong> makes 13 months affordable. Three tiers, each an honest statement about what questions old data answers:</p>
+
+<ul>
+<li><strong>Hot: raw 10-second windows, 7 days, NVMe.</strong> Incident debugging needs full resolution; nearly all queries land here. Compressed, this is a few TB across the fleet — comfortable.</li>
+<li><strong>Warm: 1-minute rollups, 30 days.</strong> A background job merges hot windows (those mergeable min/max/sum/count/sketch records — the same trick, third appearance) into 1-minute records. Sixth the points; week-over-week questions don't miss the resolution.</li>
+<li><strong>Cold: 1-hour rollups, 13 months, object storage.</strong> Capacity planning and seasonal comparisons. Tens of TB on the cheapest bytes money buys.</li>
+</ul>
+
+<p>The query planner picks the tier by time range — "last 3 hours" reads hot, "last quarter" reads cold — and can stitch tiers at the boundary of a long range. Users never ask; the system chooses. Downsampling jobs are idempotent (rerunning a window produces identical output — chapter 2.2's habit), so a crashed job is re-run, not repaired.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 220" role="img" aria-label="Three retention tiers: hot raw 7 days, warm 1-minute 30 days, cold 1-hour 13 months, with downsampling jobs between">
+  <rect class="dg-node-alt" x="8" y="56" width="180" height="64" rx="8"/>
+  <text class="dg-txt" x="22" y="80">HOT · raw 10s</text>
+  <text class="dg-txt-s" x="22" y="98">7 days · NVMe</text>
+  <rect class="dg-node" x="256" y="56" width="180" height="64" rx="8"/>
+  <text class="dg-txt" x="270" y="80">WARM · 1-min</text>
+  <text class="dg-txt-s" x="270" y="98">30 days</text>
+  <rect class="dg-node" x="504" y="56" width="208" height="64" rx="8"/>
+  <text class="dg-txt" x="518" y="80">COLD · 1-hour</text>
+  <text class="dg-txt-s" x="518" y="98">13 months · object store</text>
+  <line class="dg-edge" x1="188" y1="88" x2="256" y2="88" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="436" y1="88" x2="504" y2="88" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="192" y="76">downsample</text>
+  <text class="dg-txt-s" x="440" y="76">downsample</text>
+  <text class="dg-txt-s" x="8" y="160">Query planner picks the tier by range:</text>
+  <text class="dg-txt-s" x="8" y="182">"last 3h" → hot · "last 30d" → warm · "last year" → cold</text>
+  <text class="dg-txt-s" x="8" y="204">Rollups merge min/max/sum/count + sketch — the mergeability trick, again</text>
+</svg>
+<figcaption>Retention tiers trade resolution for years. The mergeable window record is what makes downsampling a cheap merge instead of a recomputation.</figcaption>
+</figure>
+
+<h2>Alerting: evaluate the stream, not the database</h2>
+
+<p>The obvious alerting design is a poller: every 30 seconds, run each rule's query against the TSDB. The estimate already killed it — 100K rules is 3,300 heavyweight queries per second of pure background load, most of them re-reading the same freshly written data over and over, competing with the humans mid-incident who actually need the query path. Polling is a design that works in the demo and bankrupts you at scale.</p>
+
+<p>Instead, evaluation moves into the stream. Alert rules are compiled and pushed down to evaluator nodes that consume the same aggregated windows flowing out of the aggregators; each evaluator holds its rules' state in memory — a small sliding window per rule — and updates it incrementally as data arrives. Evaluating 100K rules becomes filtering a stream you were already producing: no TSDB load at all, and alert latency equals ingest freshness, ~30 seconds. The honest footnote: gnarly rules — long lookbacks, joins across many metrics — still fall back to scheduled queries. Streaming for the 95%, polling for the awkward tail.</p>
+
+<p>Then make the alerts humane, because a noisy pager is a disabled pager. A rule fires only after its condition holds for a configured duration ("for 5 minutes"), which forgives one bad scrape. It clears at a lower threshold than it fires (hysteresis) so a metric oscillating around the line doesn't page in a loop, and identical firings dedupe into one incident. And the platform natively supports burn-rate alerts on SLOs — chapter 2.8's fast-window-plus-slow-window pattern — because "the error budget is burning 14x too fast" is the page that matters, and customers shouldn't have to hand-build it.</p>
+
+<h2>The self-dependency rule: monitor from outside the blast radius</h2>
+
+<p>Now the requirement I flagged in minute two. A monitoring platform that shares fate with what it monitors is a smoke detector wired to the house mains: it dies in exactly the fire it exists to announce. So the platform runs in its <strong>own failure domain</strong> — separate accounts, separate clusters, ideally separate regions from the monitored infrastructure; it must never depend on the customer's databases, queues, or service mesh. Internally the same razor applies one level down: the component that delivers pages depends on almost nothing — if every TSDB shard is dead, "evaluate stream, send page" must still work, and the final notification hop rides an independent third-party path, because a pager that depends on the platform it reports on has the same disease one layer deeper.</p>
+
+<p>The agent is the last line. When intake is unreachable, agents keep collecting and spool to their local disk buffer — say 30 minutes — because the customer's incident review will want the data measured <em>during</em> our outage. On reconnect, agents send the freshest points first (alerting needs <em>now</em>, not twenty minutes ago) and trickle the backlog behind them, rate-limited by intake so that 100K agents flushing simultaneously don't become the retry stampede of chapter 2.7 and kill the intake that just recovered.</p>
+
+<div class="box story"><div class="box-tag">War story — Datadog, March 8, 2023</div>
+<p>The monitoring vendor's nightmare happened in public. Starting around 06:00 UTC, a routine security update of systemd rolled out automatically — via an unattended-upgrades channel left enabled — across tens of thousands of Datadog's virtual machines, spanning multiple regions on multiple cloud providers. On the updated hosts, a systemd-networkd restart wiped the network routes used by the container networking layer, knocking the nodes off the network almost simultaneously. Datadog's web app, dashboards, and monitors degraded for many customers; full recovery took more than a day, and the company published an unusually detailed public postmortem. Three lessons map straight onto this chapter. First: the trigger wasn't customer traffic — it was a change applied everywhere at once; the fix included disabling the legacy auto-update channel and rolling out base-OS changes gradually, like any other deploy. Second: during recovery, Datadog explicitly prioritized restoring live telemetry and alerting over backfilling historical data — freshest-first, exactly the ordering our agents implement. Third: customers whose own systems were healthy were blind anyway, because their eyes lived in someone else's failure domain — the self-dependency rule doesn't stop applying just because monitoring is someone else's product. Some teams now keep a minimal independent probe — even a crude external ping — precisely so that "is the monitoring down, or is everything down?" has an answer.</p>
+</div>
+
+<h2>Failure modes and operations (minutes 40–45)</h2>
+
+<p><strong>Intake overload.</strong> A tenant's deploy goes wrong and their agents triple output; or a cardinality bomb slips past budgets. Intake sheds by priority, chapter 2.7 style: platform-health metrics and any series referenced by an alert rule are protected; unreferenced custom metrics shed first, per-tenant, with the drop counted and visible to that tenant. Degrade the nice-to-haves, defend the pager.</p>
+
+<p><strong>TSDB shard death.</strong> Two replicas per shard; a dead replica's partner serves reads while a new one rebuilds by replaying Kafka — the buffer doubles as the recovery log. If a time range is missing from all replicas, the query API must say so: partial data gets a <em>partial</em> flag, rendered as a gap. Never zero-fill — a silent gap reads as "the metric dropped to zero," which pages someone for a ghost, or worse, convinces an absence-based alert that everything is fine. In monitoring, honest gaps beat smooth lies; a wrong chart is worse than no chart.</p>
+
+<p><strong>Aggregator crash.</strong> Windows in flight are lost — but the source points are still in Kafka, so the replacement replays from the last committed offset and rebuilds the same windows. Kafka's retention is our exactly-once eraser: reprocessing produces identical windows (idempotent again), so the failure costs freshness, never correctness.</p>
+
+<p><strong>What I'd watch</strong> — the platform's own golden signals: end-to-end ingest lag (measurement time to queryable, the freshness SLO), dropped-point rate by cause (budget, shed, malformed — each cause is a different conversation with a different tenant), per-tenant series growth rate (the fuse), Kafka consumer lag per partition, alert-evaluation delay, and query p99 by tier. <strong>Rollouts:</strong> the platform deploys like any serious system — canary one intake node, one shard replica, one evaluator; watch its own metrics; auto-roll-back on freshness regression. The Datadog incident is the standing reminder that "apply everywhere at once" is an outage pattern, not an efficiency.</p>
+
+<p><strong>At 10x</strong> — a million hosts, 50M points/sec, half a billion series: intake and Kafka scale linearly (stateless fleet, more partitions). What breaks first is series-shaped, as the crux predicted: index memory per shard and query fan-out width. The moves: more shards via consistent hashing with shard splitting (chapter 1.9), a two-level query tree so the root merges dozens of partial merges instead of thousands of shard responses, and per-tenant cell isolation (chapter 2.5) so one giant tenant's cardinality accident is contained inside its own cell instead of degrading a thousand neighbors.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>What the interviewer probes next, nearly verbatim:</p>
+<ul>
+<li>"A customer ships a <code>user_id</code> label at 2 p.m. Walk me through the next ten minutes — what breaks first, and where do you stop it?" (They want the explosion math, then intake budgets — defense before the shards, not cleanup after.)</li>
+<li>"Why can't you just store p99 per host and average at query time?" (The two-host example, performed. If you can't produce it, the sketch answer sounds like cargo cult.)</li>
+<li>"Your intake is fully down for 20 minutes. What exactly did customers lose?" (Nothing measured — agents buffered; alerting was late; freshest-first backfill, rate-limited so recovery doesn't self-DDoS.)</li>
+<li>"Why not evaluate alert rules by querying the TSDB on a schedule?" (3,300 queries/sec of background load versus filtering a stream you already produce — the estimate is the answer.)</li>
+<li>"A shard lost two hours of one series. What must the query API do, and what must it never do?" (Partial flag and a visible gap; never zero-fill, because absence alerts and gap-reading humans will both be lied to.)</li>
+</ul>
+</div>
+
+<h2>The committed choices, priced</h2>
+
+<table>
+<thead><tr><th>Choice</th><th>Why</th><th>What it costs</th></tr></thead>
+<tbody>
+<tr><td>Kafka buffer between intake and storage</td><td>Absorbs incident-hour spikes; storage trouble costs delay, not data; doubles as shard-rebuild log</td><td>~30s added freshness; a large cluster to operate; one more system that must outlive outages</td></tr>
+<tr><td>Pre-aggregate into 10s windows of min/max/sum/count + sketch</td><td>Mergeable across hosts, windows, shards; 10–100x storage and query-bytes win</td><td>Sub-10-second spikes are invisible; raw sample values are gone forever</td></tr>
+<tr><td>Sketches for percentiles (t-digest / DDSketch)</td><td>Percentiles don't merge; sketches do, with ~1% bounded error in KBs</td><td>Approximate answers; explaining "why is p99 slightly different today" to exact-minded customers</td></tr>
+<tr><td>Series budgets + rejection at intake</td><td>Cardinality bombs contained before shards allocate anything</td><td>Deliberately drops customer data; budget-raise requests become a support workflow</td></tr>
+<tr><td>Streaming alert evaluation</td><td>100K rules for free on a stream you already produce; alert latency = ingest freshness</td><td>Evaluator state to manage; complex rules need a query-based fallback path anyway</td></tr>
+<tr><td>Three retention tiers with downsampling</td><td>13 months affordable; queries pick resolution by range automatically</td><td>Old data loses resolution permanently; downsampling jobs are one more thing to run and watch</td></tr>
+<tr><td>Separate failure domain + agent disk buffers</td><td>Monitoring outlives the outages it narrates; measured-during-outage data survives</td><td>Duplicated infrastructure, real money; agents get heavier and need their own hygiene</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c18-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, how adding one label to one metric can take down an entire metrics platform.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A metrics platform doesn't store "a metric" — it stores one time series per unique combination of a metric's label values, and everything expensive (memory, index entries, query work) scales with how many series exist. Bounded labels like status code multiply into a bounded number of series, and that's fine. But a label like user_id has millions of values, so every user who shows up mints a brand-new series — one line of code can double the platform's total series count in an afternoon. Each new series demands index space and RAM on a storage shard, so shards run out of memory and queries that touch the metric slow to a crawl. That's why platforms enforce series budgets at the front door and reject or strip the label before storage ever sees it. The rule of thumb: if a label's values are unbounded, it belongs in logs or traces, not in a metric.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Rerun the sizing for an IoT fleet: 1 million devices, 20 metrics each, one point per 60 seconds. Points per second? Active series? Which parts of this chapter's design would you actually change?</p></div>
+<details><summary>Answer</summary><p>1M × 20 / 60s ≈ 333K points/sec — 15x <em>less</em> write volume than our design. But active series = 20 million, and device fleets churn: devices die and are replaced, so series accumulate. Cardinality stays a first-class concern while the firehose shrinks. You'd keep intake budgets, the index design, and retention tiers; you could shrink Kafka and the aggregator fleet dramatically, and might merge intake and aggregation into one stage. The lesson is the chapter's thesis inverted: points/sec dropped 15x but the design barely simplifies, because series count — not write rate — was always the load-bearing number.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Product flips a requirement: "customers must be able to see metrics <em>per user</em> — that's the feature." You can't just say no anymore. Design your way out without breaking the platform.</p></div>
+<details><summary>Answer</summary><p>Route around metrics, don't bend them. Per-user questions are event queries, so ship the data as structured events into the logs/traces product, where each event carries user_id as an attribute and cost scales with event volume, not distinct users. If the product needs per-user <em>aggregates</em> (say, a customer-facing usage graph), run a dedicated stream job keyed by user into its own store — a deliberate, provisioned high-cardinality system with its own budget, not a label smuggled into the shared TSDB. What reads senior: naming the boundary explicitly — bounded dimensions are metrics, unbounded identities are events — and meeting the requirement by choosing the right system rather than heroically misusing the one on the whiteboard.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Design the "dead man's switch": customers want an alert when a metric <em>stops arriving</em> (a host died, an agent broke). Detecting absence across 50 million series sounds like scanning 50 million last-seen timestamps every 30 seconds. Make it cheap.</p></div>
+<details><summary>Answer</summary><p>Scope, don't scan. Absence only matters where someone asked: track last-seen only for series referenced by an absence-type alert rule — thousands, not millions — as a tiny state map inside the streaming evaluators, which see every arriving window anyway; a timer wheel fires when a tracked series goes quiet past its threshold. For whole-host death, don't watch 500 series per host — watch one designated heartbeat series per agent. Second-order senior point: absence detection is exactly why gap honesty matters — if shard failures were silently zero-filled, a dead host would look alive at value zero, and the dead man's switch would sleep through the funeral.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A teammate proposes: "Storage is cheap now. Skip downsampling — keep raw 10-second data for the full 13 months. Simpler system, fewer jobs." Argue it properly, with numbers, before you disagree — or agree.</p></div>
+<details><summary>Answer</summary><p>Steelman first: it deletes the downsampling jobs, the warm/cold write paths, and the tier-picking planner — real complexity, gone. Now the numbers: 7 TB/day raw is ~2.5 PB/year uncompressed; Gorilla-style compression (~12x) brings it to ~200 TB — storable, and in object storage even affordable. But storage was never the real bill: a "last quarter" dashboard query now reads ~800K raw points <em>per series</em> instead of ~2K hourly rollups — a 400x penalty on exactly the wide, slow queries humans run while impatient. You'd end up pre-computing coarse aggregates at query time, repeatedly, which is downsampling with worse economics. Verdict: keep tiers; concede that if the product were "raw forensic archive, rarely queried," the teammate wins — the design follows the query pattern, not the storage price.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks first at 10x (one million hosts, 50M points/sec, 500M series) — and what's your first structural move?</p></div>
+<details><summary>Answer</summary><p>Not intake, not Kafka — both scale linearly by adding stateless nodes and partitions. Series-shaped things break first: shard head/index memory (500M series × ~2 KB ≈ a terabyte of RAM to distribute) and query fan-out, where the root now merges partials from hundreds of shards and the merge itself becomes the bottleneck. First moves: split shards along the consistent-hash ring, and add an intermediate merge layer so the query tree is two levels deep. The structural move worth naming: per-tenant cells — a giant tenant gets its own intake-to-TSDB slice, so its cardinality accidents and query storms are contained. If you said "add more Kafka," you scaled the part that was already fine.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>One multiplication shapes the whole design: 100K hosts × 500 series × one point per 10 s = 5M points/sec of write firehose, and 50M live series.</li>
+<li>The true scaling axis is series count, not points per second — series cost index space and RAM just by existing, and user-chosen labels set their number multiplicatively.</li>
+<li>One unbounded label (user_id, request_id) can double a platform's series count in an afternoon; defend with series budgets at intake, and route unbounded identities to logs and traces instead.</li>
+<li>Pre-aggregate into windows of min/max/sum/count plus a sketch — mergeable parts power host rollups, downsampling, and shard fan-out alike; stored percentiles merge into pure fiction.</li>
+<li>Gorilla-style compression (delta-of-delta timestamps, XOR values) turns 16-byte points into ~1.4 bytes, and retention tiers — raw 7d, 1-min 30d, 1-hr 13mo — turn 13 months from petabytes into tens of terabytes.</li>
+<li>At 100K alert rules, evaluate on the stream you already produce instead of polling the database thousands of times a second — and add for-durations, hysteresis, and burn-rate support so the pager stays trusted.</li>
+<li>Monitoring must outlive what it monitors: separate failure domain, a pager path that depends on almost nothing, and agents that buffer to disk and backfill freshest-first.</li>
+<li>When data is missing, show a gap and a partial flag — in monitoring, a smooth lie is worse than an honest hole.</li>
+</ul>
+</div>

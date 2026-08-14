@@ -1,0 +1,318 @@
+<p>"Design WhatsApp." The interviewer says it casually, like they're asking you to design a doorbell. And honestly, sending a text from phone A to phone B <em>sounds</em> like a doorbell. Message in, message out. Fifteen minutes, tops. What's the catch?</p>
+
+<p>The catch is the phone. Your user is on a train going through a tunnel. Their connection drops mid-send, comes back for four seconds, drops again, comes back on a different cell tower with a different IP address. Somewhere in that chaos they typed "I'm at the hospital, come now" and hit send. That message is not allowed to vanish. Not allowed to arrive twice. Not allowed to arrive <em>after</em> the message they sent next. A chat app is a promise made over the least reliable network humans use, and the interview is about how you keep that promise.</p>
+
+<p>So say the crux out loud in the first five minutes: "The interesting problem here is guaranteed, ordered delivery over flaky mobile connections — I want to spend most of our time on the acknowledgment protocol and offline delivery." That sentence tells the interviewer you've seen this fire before. Now let's perform the 45 minutes at the senior bar.</p>
+
+<h2>Requirements: shrink it, then commit to numbers</h2>
+
+<p>WhatsApp is many products wearing one icon. Scope it down, out loud: "I'll build 1:1 chat and small groups — up to 1,024 members, WhatsApp's real cap. In scope: delivery and read receipts, offline delivery, history synced across a user's devices, and online/last-seen presence. Out of scope: calls, stories, payments. Typing indicators I'll cut too — if we have spare time they're a five-minute add-on, and I'll say why they're architecturally free. Fair?"</p>
+
+<p>Functional requirements: send and receive in 1:1 chats and groups; see ticks (sent, delivered, read); receive everything missed while offline; open a new phone and see history; see whether a contact is online.</p>
+
+<p>Non-functional requirements are where the design comes from, so put numbers on them and commit:</p>
+
+<ul>
+<li><strong>Never lose an accepted message.</strong> Once the server acknowledges, the message survives crashes, restarts, deploys. This is the load-bearing sentence of the design.</li>
+<li><strong>Ordered within a conversation.</strong> Everyone sees the same messages in the same order. Across different chats we don't care — and saying so is a senior move, because global ordering is expensive and useless here.</li>
+<li><strong>Fast when online:</strong> send-to-deliver under 500&nbsp;ms at p95 when both parties are connected.</li>
+<li><strong>Scale:</strong> 1&nbsp;billion users, 50&nbsp;billion messages a day. (Real WhatsApp passed 2 billion users and 100 billion messages a day in 2020 — we're designing at a conservative half of reality.)</li>
+<li><strong>Availability over consistency for presence</strong> — a stale "online" dot is harmless. <strong>The opposite for messages</strong> — a lost message is a broken promise.</li>
+</ul>
+
+<h2>Estimation: three numbers that shape everything</h2>
+
+<p>Three calculations, each gating a decision — the only reason to do math at a whiteboard.</p>
+
+<p><strong>Message rate.</strong> 50 billion over 86,400 seconds ≈ 580K messages per second average. Evenings peak around 3x — call it <strong>1.5–2 million per second</strong>, and New Year's Eve blows past even that. Conclusion: no single anything sits on the message path. Every tier shards.</p>
+
+<p><strong>Concurrent connections.</strong> The number most candidates miss, and the one that shapes the architecture. Sub-second delivery means no polling — every online user holds a <em>persistent connection</em>. If 40% of a billion users are connected at any moment, that's <strong>400 million open sockets</strong>. A well-tuned server holds 1–2 million idle connections (an idle socket costs memory and a heartbeat, not CPU). So the connection tier is roughly <strong>400–500 machines, sized by socket count, not request throughput</strong>. A different scaling axis than anything we've designed before — it's why this chapter exists.</p>
+
+<p><strong>Storage.</strong> A text message is ~200 bytes with metadata. 50B/day × 200B ≈ <strong>10&nbsp;TB/day</strong>, ~3.6&nbsp;PB/year before replication. Write-heavy, append-only, never updated, read as "recent messages in one conversation." That shape screams wide-column LSM store (Cassandra/HBase-class — Chapter 1.13), not a relational database. Media is 100x bigger but boring: blob storage behind a CDN (Chapter 1.7), message carries a pointer. Decision made; media never appears again.</p>
+
+<h2>API and data model: quick, then move</h2>
+
+<p>Messages ride a WebSocket — a long-lived two-way connection either side can push down at any time. The frames:</p>
+
+<pre><code>client → server:  send {client_msg_id, convo_id, payload}
+server → client:  ack {client_msg_id, seq}
+server → client:  message {convo_id, seq, sender, payload}
+client → server:  receipt {convo_id, seq, type: delivered|read}
+</code></pre>
+
+<p>Plain HTTPS covers the non-realtime edges: <code>GET /messages?convo_id=&amp;before_seq=&amp;limit=</code> for history, <code>POST /media</code> for uploads. Core tables: <code>conversations</code> (members, type), <code>messages</code> (keyed by conversation plus a server-assigned sequence number — much more soon), and <code>inbox</code> — one queue per user <em>per device</em>, holding pointers to messages that device hasn't fetched. Note <code>client_msg_id</code>: the client generates it, and it's about to do a lot of work.</p>
+
+<h2>The high-level machine</h2>
+
+<p>Everything you've built so far had one comforting property: stateless app servers — any request can hit any box. A chat gateway breaks that rule, deliberately. When phone B connects, its socket lives on <em>one specific machine</em> — gateway 42 — and delivering to B means finding that machine. Stateful servers are the exception you accept because the requirement (server pushes to phone, instantly) demands it.</p>
+
+<p>So the machine needs a directory: the <strong>connection registry</strong>, a sharded Redis keeping <code>user_id, device_id → gateway_id</code> — written on connect, refreshed by heartbeat, with a ~60-second TTL so crashed gateways' entries evaporate on their own. The path of one message:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Message routing from sender through gateways and registry to recipient">
+  <rect class="dg-node" x="10" y="40" width="95" height="46" rx="8"/>
+  <text class="dg-txt" x="22" y="62">Phone A</text>
+  <text class="dg-txt-s" x="22" y="78">sender</text>
+  <rect class="dg-node" x="145" y="40" width="70" height="46" rx="8"/>
+  <text class="dg-txt" x="160" y="68">LB</text>
+  <rect class="dg-node-alt" x="255" y="40" width="115" height="46" rx="8"/>
+  <text class="dg-txt" x="267" y="62">Gateway 17</text>
+  <text class="dg-txt-s" x="267" y="78">holds A's socket</text>
+  <rect class="dg-node-alt" x="470" y="40" width="115" height="46" rx="8"/>
+  <text class="dg-txt" x="482" y="62">Gateway 42</text>
+  <text class="dg-txt-s" x="482" y="78">holds B's socket</text>
+  <rect class="dg-node" x="620" y="40" width="90" height="46" rx="8"/>
+  <text class="dg-txt" x="632" y="62">Phone B</text>
+  <text class="dg-txt-s" x="632" y="78">recipient</text>
+  <line class="dg-edge" x1="105" y1="63" x2="145" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="215" y1="63" x2="255" y2="63" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="370" y1="63" x2="470" y2="63" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="385" y="55">3. route</text>
+  <line class="dg-edge" x1="585" y1="63" x2="620" y2="63" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="588" y="55">4.</text>
+  <rect class="dg-node" x="330" y="150" width="185" height="52" rx="8"/>
+  <text class="dg-txt" x="342" y="172">Registry (Redis)</text>
+  <text class="dg-txt-s" x="342" y="190">user+device → gateway</text>
+  <line class="dg-edge" x1="330" y1="98" x2="370" y2="150" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="255" y="130">2. where is B?</text>
+  <rect class="dg-node" x="40" y="240" width="235" height="56" rx="8"/>
+  <text class="dg-txt" x="52" y="262">Message svc + Cassandra</text>
+  <text class="dg-txt-s" x="52" y="280">durable write, assigns seq</text>
+  <line class="dg-edge" x1="295" y1="86" x2="180" y2="240" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="150">1. persist FIRST</text>
+  <rect class="dg-node" x="470" y="240" width="170" height="56" rx="8"/>
+  <text class="dg-txt" x="482" y="262">Push (FCM/APNs)</text>
+  <text class="dg-txt-s" x="482" y="280">if B is offline</text>
+  <line class="dg-edge" stroke-dasharray="5,4" x1="595" y1="240" x2="660" y2="90" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>One message's journey. Step 1 — the durable write — happens before anything else. Steps 3–4 are just delivery attempts; if they fail, the inbox and a push notification catch B later.</figcaption>
+</figure>
+
+<p>Walk it aloud: A's send frame arrives at gateway 17, which hands it to the message service. The service <em>durably persists it and assigns a sequence number</em> — then and only then does A get the ack. Next it looks up B in the registry and forwards to gateway 42, which pushes down B's socket. If B isn't in the registry, the message waits in B's inbox and a push notification through FCM/APNs wakes the app (Chapter 3.3's whole subject). Write path and read path both exist; the loop is closed. Time to deep-dive.</p>
+
+<div class="box story"><div class="box-tag">War story — WhatsApp's fifty engineers</div>
+<p>In September 2015, WIRED reported a number that made the industry blink: WhatsApp was serving <strong>900 million users with roughly 50 engineers</strong>. Facebook, with a similar-sized crowd, had thousands. Half the secret was ruthless scope — no feeds, no ads, just messaging. The engineering half was Erlang on FreeBSD: a language Ericsson built for telephone switches — millions of cheap, isolated, crash-and-restart processes, one per connection, with hot code reloading so you deploy without dropping sockets. WhatsApp engineer Rick Reed had pushed a single tuned server past <strong>2 million concurrent TCP connections</strong> in 2012, and the production fleet ran around a million per box. So our "400M sockets ÷ ~1M per box ≈ a few hundred gateways" is roughly the shape WhatsApp actually ran — quoting production history, not guessing.</p>
+</div>
+
+<h2>Deep dive 1: the ack ladder</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>This is the hard part the question was invented to probe. Delivery over a flaky network isn't made reliable by hoping the network behaves — it's made reliable by a <em>ladder of acknowledgments</em>, each rung a distinct promise from a distinct party, plus retries that are safe to repeat. Every tick in the WhatsApp UI is a rung of a distributed-systems protocol. Candidates who treat ticks as UI polish fail this question; candidates who can say precisely <em>what each tick proves, who sends it, and what happens if it never comes</em> pass at the senior level. Spend your time here.</p>
+</div>
+
+<p>Rung one: <strong>client → server</strong>. A's phone sends the message and starts a retry timer. Until the server's ack arrives, the phone keeps the message in local storage and resends — after 2 seconds, 4, 8 — surviving app restarts, tunnels, and tower switches. The single tick ✓ means exactly one thing: <em>the server has this message durably</em>. Which forces the golden rule: <strong>persist before you ack</strong>. Write to Cassandra (and the recipient's inbox), then ack. Never the reverse. An ack-then-persist server that crashes in the gap has lied: the phone shows ✓, deletes its local copy, and the hospital message is gone forever with a checkmark on it.</p>
+
+<p>But retries create a new bug: if the <em>ack</em> gets lost, the phone resends a message the server already has. Duplicate. This is exactly what Chapter 2.2 solved with idempotency keys, and here the key is <code>client_msg_id</code> — a UUID the <em>phone</em> generates at send time. The server keeps a short-lived dedup record (id → seq, TTL a day or so); a resend of a known id gets the same ack back and writes nothing. Retries plus idempotent ids turn flaky networks from a correctness problem into a mere latency problem. That sentence is worth saying verbatim at the whiteboard.</p>
+
+<p>Rung two: <strong>server → recipient, confirmed</strong>. When B's phone receives the message, it sends a <code>delivered</code> receipt up its own socket; the server records it and pushes ✓✓ to A. The double tick proves not "the server tried" but "B's device has it in local storage." Rung three: B opens the chat, a <code>read</code> receipt flows, A's ticks turn blue. Three rungs, three different promises, from three different places.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 370" role="img" aria-label="Sequence diagram of the ack ladder between sender, server, and recipient">
+  <rect class="dg-node" x="60" y="8" width="120" height="34" rx="8"/>
+  <text class="dg-txt" x="90" y="30">Sender</text>
+  <rect class="dg-node" x="300" y="8" width="120" height="34" rx="8"/>
+  <text class="dg-txt" x="332" y="30">Server</text>
+  <rect class="dg-node" x="540" y="8" width="120" height="34" rx="8"/>
+  <text class="dg-txt" x="558" y="30">Recipient</text>
+  <line class="dg-edge" stroke-dasharray="3,5" x1="120" y1="42" x2="120" y2="360"/>
+  <line class="dg-edge" stroke-dasharray="3,5" x1="360" y1="42" x2="360" y2="360"/>
+  <line class="dg-edge" stroke-dasharray="3,5" x1="600" y1="42" x2="600" y2="360"/>
+  <line class="dg-edge" x1="120" y1="75" x2="360" y2="75" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="67">send m1 (id a1b2) — retries until ✓</text>
+  <rect class="dg-node-alt" x="310" y="88" width="120" height="24" rx="6"/>
+  <text class="dg-txt-s" x="320" y="104">durable write, seq 42</text>
+  <line class="dg-edge" x1="360" y1="135" x2="120" y2="135" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="180" y="127">✓  ack (seq 42) — the promise</text>
+  <line class="dg-edge" x1="360" y1="175" x2="600" y2="175" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="410" y="167">deliver m1 (seq 42)</text>
+  <line class="dg-edge" x1="600" y1="210" x2="360" y2="210" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="430" y="202">delivered receipt</text>
+  <line class="dg-edge" x1="360" y1="245" x2="120" y2="245" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="200" y="237">✓✓  delivered to B</text>
+  <text class="dg-txt-s" x="608" y="280">B opens chat</text>
+  <line class="dg-edge" x1="600" y1="300" x2="360" y2="300" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="450" y="292">read receipt</text>
+  <line class="dg-edge" x1="360" y1="335" x2="120" y2="335" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="185" y="327">✓✓  read (blue)</text>
+</svg>
+<figcaption>The ack ladder. Each tick is sent by a different party and proves a different fact. The first ✓ only exists after the durable write — never before.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The ack ladder is registered post. You hand the parcel over the counter and the clerk stamps your receipt — but only <em>after</em> the parcel is physically in the post office's custody, because the receipt makes them responsible for it. That's the single tick, and why the stamp can't come first. Later a delivery confirmation arrives — the parcel reached the house — the double tick. Whether they've opened it is a third, separate fact — the blue tick. And if you never got a receipt, you assume the post office never got the parcel, and you bring it back: the client retry. One honest gap: real post offices don't handle you bringing the same parcel twice; our dedup ids are the extra machinery for that.</p>
+</div>
+
+<h3>Ordering: timestamps lie, sequences don't</h3>
+
+<p>Now the second half of the crux. Suppose we order messages by the phone's clock. A's phone runs 40 seconds fast (phone clocks drift, and users change them). A writes "yes", B writes "wait, no" — and half the group sees them swapped. Worse: a phone coming online sends a message composed an hour ago. Client timestamps are opinions, not facts. Display them; never sort by them.</p>
+
+<p>The fix is the one we already smuggled in: the server assigns each message a <strong>per-conversation sequence number</strong> at durable-write time. Like the ticket machine at a deli counter — your place in line is decided at the counter, not by when you left home. Order is decided once, centrally; every device sorts by <code>seq</code> forever after, and a client holding 41 and 43 <em>knows</em> it has a gap and asks for 42. Gap-free numbering needs a single writer per conversation: shard conversations across message-service instances by consistent hashing (Chapter 1.9), so one instance owns convo 9 and increments its counter — with a fencing token (Chapter 2.3) so a stale owner can't hand out duplicates during failover.</p>
+
+<p>Notice what we did <em>not</em> build: any ordering across conversations. Per-conversation sequencing means a chatty 1,024-member group funnels through one owner — a deliberate, bounded hot spot, fine because one group's humans can only type so fast. The moment "group" becomes "channel with 5 million subscribers," this breaks — hold that thought for deep dive 3.</p>
+
+<h2>Deep dive 2: offline delivery and multi-device sync</h2>
+
+<p>B's phone is dead in a drawer. Messages keep arriving. Where do they wait?</p>
+
+<p>In B's <strong>inbox</strong>: a per-device queue of pointers ("convo 9, seq 42…47"), appended in the same durable write as the message itself. When B reconnects, the gateway drains the inbox in sequence order; B acks the highest seq received; everything at or below is trimmed. Waking a dead phone is the push notification's job — FCM/APNs delivers a contentless "you have messages," the OS launches the app, the app connects and drains. The push is a doorbell, not a mail slot: unreliable, sometimes late, sometimes dropped — and that's fine, because the inbox is the source of truth and the next connect for <em>any</em> reason drains it. Reliability lives in the inbox; the push is just a kick.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The inbox is the pigeonhole rack at a hostel reception. While you're away, mail piles up in your slot in arrival order — reception never runs after you with letters. When you walk in, you empty your pigeonhole in one go, oldest first. The push notification is reception texting "you've got mail": helpful, but nothing breaks if you miss it, because the letters are still in the slot when you show up.</p>
+</div>
+
+<p>Multi-device is why the inbox is per <em>device</em>. B's phone and laptop each hold their own cursor — the highest seq drained per conversation — so a laptop closed for a week catches up independently while the phone stays live. A brand-new device gets history the other way: paging backwards through the messages table (<code>before_seq</code>) on demand, not replaying 200,000 inbox pointers. Receipts need one rule: "delivered" fires when the <em>first</em> device gets the message, "read" when <em>any</em> device reads it — and read state syncs across devices so the laptop doesn't re-badge chats the phone already read. Undrained inbox rows get a TTL (30 days, WhatsApp's real policy) so an abandoned device can't grow a queue forever.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 290" role="img" aria-label="Offline inbox filling up and draining in order on reconnect">
+  <rect class="dg-zone" x="15" y="30" width="240" height="230" rx="10"/>
+  <text class="dg-txt" x="30" y="55">B's inbox (phone)</text>
+  <rect class="dg-node" x="30" y="70" width="200" height="30" rx="6"/>
+  <text class="dg-txt-s" x="42" y="90">convo 9, seq 43</text>
+  <rect class="dg-node" x="30" y="108" width="200" height="30" rx="6"/>
+  <text class="dg-txt-s" x="42" y="128">convo 9, seq 44</text>
+  <rect class="dg-node" x="30" y="146" width="200" height="30" rx="6"/>
+  <text class="dg-txt-s" x="42" y="166">convo 2, seq 17</text>
+  <text class="dg-txt-s" x="30" y="205">appended at write time,</text>
+  <text class="dg-txt-s" x="30" y="222">while B is offline</text>
+  <rect class="dg-node" x="320" y="55" width="150" height="48" rx="8"/>
+  <text class="dg-txt" x="332" y="77">Push service</text>
+  <text class="dg-txt-s" x="332" y="93">"you have messages"</text>
+  <rect class="dg-node-alt" x="550" y="55" width="150" height="48" rx="8"/>
+  <text class="dg-txt" x="565" y="77">B's phone</text>
+  <text class="dg-txt-s" x="565" y="93">wakes, reconnects</text>
+  <line class="dg-edge" stroke-dasharray="5,4" x1="470" y1="79" x2="550" y2="79" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="320" y="170" width="150" height="48" rx="8"/>
+  <text class="dg-txt" x="332" y="192">Gateway</text>
+  <text class="dg-txt-s" x="332" y="208">drains in seq order</text>
+  <line class="dg-edge" x1="255" y1="150" x2="320" y2="185" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="470" y1="194" x2="580" y2="115" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="480" y="160">43, 44, 17…</text>
+  <line class="dg-edge" x1="625" y1="103" x2="480" y2="180" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="560" y="180">ack highest</text>
+  <text class="dg-txt-s" x="560" y="196">→ rows trimmed</text>
+</svg>
+<figcaption>Offline delivery. The inbox is the reliable half (source of truth, drained on any reconnect); the push notification is the unreliable half (just a wake-up kick).</figcaption>
+</figure>
+
+<h2>Deep dive 3: storage that survives years of messages</h2>
+
+<p>Commit: Cassandra-class wide-column store. Why: 580K writes/sec is bread and butter for an LSM engine that turns writes into sequential appends; the read pattern ("latest N of one conversation") maps onto one partition read; and messages are immutable, so we give up nothing by giving up transactions. Postgres would need heroic sharding to take this write volume; Cassandra takes it natively — essentially Discord's design, which moved trillions of messages through Cassandra and later ScyllaDB on the same data model.</p>
+
+<p>The trap is the partition key. <code>conversation_id</code> alone means one partition holds a conversation's <em>entire history</em> — and a busy group grows that partition forever. Unbounded partitions are the Chapter 2.6 disease: multi-gigabyte partitions, compaction pain, one hot node. The fix is worth naming precisely: partition by <strong><code>(conversation_id, time_bucket)</code></strong> — say one bucket per month — clustered by <code>seq</code> descending. Every partition is now bounded, "recent messages" reads the newest bucket, and paging history walks backwards bucket by bucket.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 230" role="img" aria-label="Unbounded partition versus time-bucketed partitions">
+  <rect class="dg-bad" x="30" y="35" width="660" height="40" rx="8"/>
+  <text class="dg-txt" x="45" y="60">partition = convo 9 : every message ever — grows without bound</text>
+  <text class="dg-txt-s" x="30" y="105">vs. bucket by month:</text>
+  <rect class="dg-good" x="30" y="120" width="200" height="40" rx="8"/>
+  <text class="dg-txt" x="45" y="145">convo 9 | 2026-06</text>
+  <rect class="dg-good" x="255" y="120" width="200" height="40" rx="8"/>
+  <text class="dg-txt" x="270" y="145">convo 9 | 2026-07</text>
+  <rect class="dg-good" x="480" y="120" width="200" height="40" rx="8"/>
+  <text class="dg-txt" x="495" y="145">convo 9 | 2026-08</text>
+  <text class="dg-txt-s" x="30" y="195">each partition bounded; "recent" = newest bucket; history = walk backwards</text>
+</svg>
+<figcaption>The partition-key decision. One conversation must not equal one eternal partition — add a time bucket so every partition stays a bounded size.</figcaption>
+</figure>
+
+<p><strong>Groups</strong> reuse the whole machine. A group message is one durable write to the messages table plus <strong>fan-out on write</strong> to each member's inbox — up to 1,024 pointer appends, batched. And one optimization pays immediately: members' sockets cluster on a few hundred gateways, so route <em>one</em> copy per gateway and let it fan out to its local sockets, not 1,024 copies through the routing tier. But say the boundary out loud: fan-out-on-write scales with recipients, so a broadcast channel with 5 million subscribers means 5 million inbox writes per message. There the model flips to fan-out-on-read — subscribers pull from one channel timeline — the celebrity problem, treated fully in the news feed chapter (3.5).</p>
+
+<h2>Presence: the feature that can outweigh messages</h2>
+
+<p>Presence looks trivial — a green dot — and it's the easiest place to accidentally design a system bigger than the messaging path. The data is simple: the gateway heartbeat we already have (every ~30 seconds) updates <code>last_seen[user]</code> in Redis; online = heartbeat within the last minute. The danger is distribution. A phone on weak signal flaps — connect, drop, connect — several times a minute. Naively broadcasting every transition to ~200 contacts turns one flapping phone into hundreds of updates a minute; at 400M connected users, presence would drown message traffic.</p>
+
+<p>So don't gossip every flicker. Three throttles: <strong>subscribe, don't broadcast</strong> — push presence only to users with that chat open right now (a handful); everyone else fetches last-seen on demand. <strong>Debounce</strong> — publish a transition only if it held ~10 seconds, which erases flapping. <strong>Degrade first</strong> — presence is the designated first thing shed under load (Chapter 2.7 thinking): a stale dot costs nothing, a delayed message costs trust. Privacy rides the read path: "last seen: nobody" just filters the read. And typing indicators, if asked, are presence's little sibling: fire-and-forget frames to open-chat subscribers, no durability, dropped freely under load — which is why cutting them in minute one cost nothing.</p>
+
+<h2>One honest paragraph on end-to-end encryption</h2>
+
+<p>Real WhatsApp runs the Signal protocol: messages are encrypted on the sender's device and only recipients' devices hold keys. Architecturally — the honest part — almost nothing we built changes, because every mechanism operates on <em>envelopes</em>, not contents: sequences, acks, inboxes, and receipts never read the payload, and now the payload is ciphertext. What E2E kills is every feature that needed the server to read messages: server-side search, link previews, cloud history for a new device. (Real WhatsApp deletes messages from its servers on delivery, keeps undelivered ones ~30 days, and moves history via encrypted backups — our server-side-history design is the Messenger/Telegram-cloud model, a fork I'd state out loud.) Multi-device gets harder: senders encrypt per recipient <em>device</em>. And metadata — who talks to whom, when — stays visible regardless. In an interview this is the right depth: name what changes, name what doesn't, don't derail into cryptography.</p>
+
+<h2>Failure modes and operations</h2>
+
+<p><strong>A gateway dies with a million connections.</strong> The sockets vanish; a million phones notice within seconds and all try to reconnect. This is the reconnect storm — chat's signature failure mode — and unmanaged, it can hammer the LB, auth, and registry hard enough to knock over healthy gateways: one dead box becomes a cascade. The defenses are boring and mandatory: <strong>jittered exponential backoff baked into the client</strong> (wait a random 0–5 s, then 2× with jitter — shipped long before the outage, because you can't push code to phones during one); gateways interchangeable at connect time so the LB spreads the refugees; reconnect rate as a first-class metric, your earliest outage alarm. Messages sent to B during the gap? Routing fails, B is treated as offline, inbox plus push catch it. Nothing lost — durability never lived on the gateway.</p>
+
+<p><strong>Deploys use the same muscle deliberately.</strong> Never kill a gateway with a million sockets; <em>drain</em> it: stop accepting new connections, then tell existing clients in small random batches to reconnect elsewhere, over ten minutes. A deploy is a controlled, slow-motion version of the failure you already survived — which is exactly why it's safe.</p>
+
+<p><strong>Region failover.</strong> Messages and inboxes replicate asynchronously to a second region (Chapter 2.5). Async means an honest RPO: lose a region and the last few seconds of <em>acked</em> writes may not have replicated. I'd commit to async anyway — synchronous cross-region acks put 80–150 ms of speed-of-light tax inside every tick, poisoning the p95 for a once-a-decade event. Then name the safety net: the ack ladder is an end-to-end repair protocol. Any message not yet <em>delivered</em> still sits on the sender's phone with one grey tick; after failover those can be resent, and <code>client_msg_id</code> dedup makes resending safe. The ladder we built for flaky networks quietly covers datacenter loss too.</p>
+
+<p><strong>What I'd watch</strong> (Chapter 2.8 discipline): send→delivered p50/p99 for online pairs — the product-truth metric; ack latency (server health); reconnect rate (storm detector); inbox backlog depth and <em>age</em> (is offline delivery draining?); per-gateway connection count; push success rate. Page on delivery p99 and reconnect spikes; dashboard the rest. <strong>At 10x:</strong> gateways and Cassandra scale by adding boxes, since partitions stay bounded — the real pain is amplification: group fan-out multiplying inbox writes, and the registry under 10x-sized reconnect herds. I'd invest there first.</p>
+
+<div class="box story"><div class="box-tag">War story — WhatsApp's New Year's Eve</div>
+<p>New Year's Eve is chat's Super Bowl: the whole planet sends "Happy New Year" inside the same rolling midnight hour, time zone by time zone. On December 31, 2017, WhatsApp processed a record <strong>75 billion messages in one day</strong> — 13 billion images, 5 billion videos — with about <strong>20 billion from India alone</strong>, whose midnight lands in one synchronized burst. The previous record, 63 billion, was set exactly one year earlier: the peak grows double-digit percent every year, on schedule. And that same night the pressure showed — WhatsApp went down for around an hour across several regions, users fleeing to other apps with their midnight wishes. Both halves belong in your interview: chat load is brutally calendar-driven, so capacity-plan for the year's known worst hour, not the average second — and even the best-run messaging system on Earth still buckled at its peak. Design the degradation path before midnight does it for you.</p>
+</div>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>What the interviewer probes next, nearly verbatim — each aimed at a rung of the ladder or a stateful corner:</p>
+<ul>
+<li>"Walk me through <em>exactly</em> what happens when I hit send and lose signal. Where is the message at each moment?" — retry-until-ack, local persistence, dedup by client id, in order.</li>
+<li>"Your server acks and then crashes before writing. What does the sender believe, and is it true?" — the durable-before-ack trap, stated backwards to see if you catch it.</li>
+<li>"A gateway holding a million connections dies. Narrate the next 60 seconds." — reconnect storm, jittered backoff, where messages wait meanwhile.</li>
+<li>"Two devices, one user. Which flips the message to 'delivered', and how do both stay consistent?" — per-device inboxes and cursors, receipt merge rules.</li>
+<li>"How does a group of 1,000 stay ordered, and what's the write amplification?" — per-convo sequencer, 1× message + N pointers, and the channel boundary where fan-out flips to pull.</li>
+<li>"Why not Postgres for the messages?" — they want the workload argument, not a religion argument.</li>
+</ul>
+</div>
+
+<h2>The choices and their bills</h2>
+
+<table>
+<thead><tr><th>Committed choice</th><th>Why</th><th>The bill you pay</th></tr></thead>
+<tbody>
+<tr><td>Stateful WebSocket gateways</td><td>Server-push in &lt;500 ms; polling can't do it at 400M users</td><td>Lose stateless scaling; need a registry, draining, and storm defenses</td></tr>
+<tr><td>Durable write before ack</td><td>The ✓ must be a promise, not a guess</td><td>Storage write sits inside every send's latency budget</td></tr>
+<tr><td>Client-generated ids + server dedup</td><td>Makes infinite retries safe over flaky links</td><td>Dedup table on the hot path; trust clients to generate ids</td></tr>
+<tr><td>Server-assigned per-convo seq</td><td>One order authority; gap detection free; clocks can't lie</td><td>Single writer per convo — a deliberate, bounded hot spot</td></tr>
+<tr><td>Cassandra, key (convo, month-bucket)</td><td>Append-heavy load, partition-local reads, bounded partitions</td><td>No ad-hoc queries or transactions; bucket-walking history code</td></tr>
+<tr><td>Fan-out on write to inboxes (≤1,024)</td><td>Cheap reads, instant delivery, offline for free</td><td>N writes per message; breaks at channel scale — flip to pull there</td></tr>
+<tr><td>Inbox as truth, push as kick</td><td>Reliability where it's controllable; OS push is best-effort</td><td>Two paths to build; offline latency depends on OS wake behavior</td></tr>
+<tr><td>Async cross-region replication</td><td>Keeps ~100 ms of speed-of-light out of every ack</td><td>Seconds of RPO on region loss — disclosed, partly repaired by the ladder</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c04-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, why WhatsApp's server must save a message to disk <em>before</em> sending the single grey tick — and why resending a message can never create duplicates.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>The grey tick isn't decoration — it's a promise that the server now owns your message, so your phone is allowed to stop worrying about it. If the server ticked first and saved second, a crash in between would break the promise: your phone shows ✓ and moves on, but the message never reached durable storage and is silently gone. So the order is law: write to storage, then ack. The other half: until the tick arrives, your phone re-sends the message again and again, and re-sends could create duplicates — except every message carries an id your phone generated when you pressed send. The server remembers ids it has already stored, so a re-send of a known id just gets the same ack again and writes nothing. Saving-before-acking means nothing accepted is ever lost; ids-with-dedup mean retrying is always safe — together they turn a terrible network into a mere annoyance.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Add typing indicators to the design in three sentences. What guarantees do they need, and what infrastructure do they reuse?</p></div>
+<details><summary>Answer</summary><p>When you type, your phone sends a fire-and-forget frame through your gateway, routed only to users who currently have this chat open — the presence subscription list we already maintain. No durability, no inbox, no receipts, no retries: if it's lost, the next keystroke sends another, and under load these frames are dropped first. Typing indicators are presence with a shorter fuse — they reuse the sockets, routing, and subscriptions the real system already built, which is why cutting them from scope cost nothing.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>It's December 31st. Modeling from WhatsApp's real numbers (75B messages that day in 2017, growing yearly), your peak hour will run 4–5x normal peak, and you can't buy 5x hardware. What degrades, in what order, and what must never degrade?</p></div>
+<details><summary>Answer</summary><p>Never degrades: the durable write and the ack — the promise is the product. Shed in order: (1) presence and typing entirely; (2) batch receipts — coalesce delivered/read updates, seconds late instead of instant; (3) defer media processing — accept uploads but delay thumbnailing, letting texts jump the queue; (4) let inbox drains and group fan-out lag by seconds, since inboxes absorb backlog by design. Every step converts "instant" cosmetics into "seconds late" while accepted-means-durable stays absolute. And pre-warm — NYE is the one peak you can circle on a calendar, so capacity-test against last year's record times 1.3, because it grows every year.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: enterprise demands server-side search over message history ("find every message mentioning invoice #4412"). What does this cost, and how would you build the search path?</p></div>
+<details><summary>Answer</summary><p>First cost, said honestly: it kills end-to-end encryption — the server can't index what it can't read, so this is now the Slack/Messenger trust model, a product decision to surface, not sneak past. Build-wise: don't query Cassandra — wide-column stores can't text-search. Emit every stored message onto a stream (CDC into Kafka, Chapter 2.9), consume into an inverted index (Elasticsearch-class, Chapter 3.19) partitioned per user or workspace so searches stay partition-local. Search is eventually consistent — findable seconds after sending, stated as an explicit SLA. The messages table stays the source of truth; the index is a rebuildable derived view, so index corruption is an inconvenience, not data loss.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimate the gateway fleet: 300M concurrent connections, boxes with 64&nbsp;GB RAM, roughly 20&nbsp;KB of memory per idle connection. Don't forget failure headroom.</p></div>
+<details><summary>Answer</summary><p>Per box: budget ~40&nbsp;GB for connection state (rest for OS, TLS, spikes) → 40&nbsp;GB / 20&nbsp;KB ≈ 2M theoretical; run at half for burst safety → 1M per box. 300M / 1M = 300 boxes minimum. Headroom: a dead box's 1M connections must land on survivors <em>during a reconnect storm</em>, and an AZ loss moves tens of boxes' worth at once — provision ~30% spare: <strong>~400 gateways</strong>. Sanity-check: WhatsApp ran 1–2M connections per tuned FreeBSD/Erlang box, so the per-box number is historically grounded. Notice CPU never entered the math — idle sockets cost memory and heartbeats, which is why this tier sizes on RAM and file descriptors.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Product ships "Communities": broadcast channels where one admin posts to 5M subscribers. Your group machinery does 1,024-member fan-out-on-write. What breaks, and what's the redesign?</p></div>
+<details><summary>Answer</summary><p>Fan-out-on-write breaks arithmetically: one post = 5M inbox writes; a few popular channels posting daily and inbox writes dwarf all real messaging. The sequencer is fine (one admin writes), but delivery flips to <strong>fan-out-on-read</strong>: the channel gets a single time-bucketed timeline; subscribers pull new posts on app-open, nudged by one batched push. Online subscribers still get a cheap nudge via the per-gateway multicast trick — one frame per gateway, not per user. Receipts change meaning: no per-user ticks (5M ticks per post is its own storm) — approximate view counts instead (Chapter 2.10 sketches). This is the push→pull boundary in miniature; the full treatment is the news feed chapter (3.5).</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>The crux of chat is guaranteed, ordered delivery over flaky mobile networks — solved by an ack ladder plus safe retries, not by hoping the network behaves.</li>
+<li>The single tick is a durability promise: the server persists before it acks, always, because ack-then-crash silently loses a message the sender believes is safe.</li>
+<li>Client-generated message ids with server-side dedup make infinite retries safe, turning flakiness from a correctness problem into a latency problem.</li>
+<li>Order comes from a server-assigned per-conversation sequence number — client timestamps are opinions — and sequence gaps double as a "fetch what I missed" protocol.</li>
+<li>Chat gateways are the justified exception to stateless services: sized by socket count (~1M per box), found via a TTL'd connection registry, always drained rather than killed.</li>
+<li>Offline delivery = per-device inbox as durable source of truth + push notification as an unreliable wake-up kick; reconnecting drains the inbox in order.</li>
+<li>Partition messages by (conversation, time-bucket) so no partition grows forever; fan-out-on-write serves groups to ~1K members, and channels flip to pull.</li>
+<li>Presence must be subscribed, debounced, and first to shed; the reconnect storm is chat's signature outage, defended by client-side jittered backoff shipped long before you need it.</li>
+</ul>
+</div>

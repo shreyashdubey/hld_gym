@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c05",
+  "items": [
+    {
+      "id": "p3c05-q01", "level": 1, "type": "mcq", "tag": "fanout",
+      "q": "In a news feed, what does 'fanout-on-write' mean?",
+      "options": [
+        {"t": "When a user posts, the system pushes that post into each follower's precomputed feed", "correct": true,
+         "why": "Right. The work happens once, at write time, so every follower's feed read becomes a single cheap cache lookup instead of a merge across hundreds of accounts."},
+        {"t": "Building a user's feed from scratch each time they open the app", "correct": false,
+         "why": "That's fanout-on-read, also called pull. The 'write' in the name tells you when the work happens — at post time, not at read time."},
+        {"t": "Replicating each post to multiple database nodes", "correct": false,
+         "why": "That's replication for durability (Chapter 1.8). Fanout is about distributing a post into follower feeds, not about copies for safety."},
+        {"t": "Broadcasting a post to every user of the platform", "correct": false,
+         "why": "Fanout only targets the author's followers. Broadcasting to everyone would be write amplification with no upper bound at all."}
+      ]
+    },
+    {
+      "id": "p3c05-q02", "level": 1, "type": "mcq", "tag": "estimation",
+      "q": "The chapter estimates ~200K feed reads/sec at peak against ~5K posts/sec. What decision does that ratio drive?",
+      "options": [
+        {"t": "Do extra work at write time so reads become cheap cache hits", "correct": true,
+         "why": "Yes — a ~50:1 read/write ratio is the whole argument for precomputing feeds. You gladly amplify the rare operation (writes) to make the common one (reads) a single lookup."},
+        {"t": "Shard the database by post ID", "correct": false,
+         "why": "Sharding choices come from data size and access patterns, not directly from this ratio. The ratio's job is deciding where the compute happens: write time vs read time."},
+        {"t": "Use a stronger consistency model for reads", "correct": false,
+         "why": "Backwards — heavy read traffic pushes you toward relaxing consistency (cached, slightly stale feeds), not tightening it."},
+        {"t": "Add more app servers", "correct": false,
+         "why": "Capacity planning is downstream. The ratio's architectural message is about precomputation — that's the decision the estimate exists to gate."}
+      ]
+    },
+    {
+      "id": "p3c05-q03", "level": 1, "type": "mcq", "tag": "hybrid",
+      "q": "What single fact forces the feed to use a hybrid push/pull design instead of pure push?",
+      "options": [
+        {"t": "Follower counts follow a power law, so one celebrity post means 100M+ writes", "correct": true,
+         "why": "Correct. Push is fine for the average account (~200 followers). It's the tail — accounts with tens or hundreds of millions of followers — that turns one tap into minutes of total fleet capacity."},
+        {"t": "Redis cannot store that many lists", "correct": false,
+         "why": "It can — the chapter sizes the whole feed cache at ~2.4 TB across ~40 shards. Storage isn't the blocker; write amplification per celebrity post is."},
+        {"t": "Users follow too many accounts on average", "correct": false,
+         "why": "That's a pull-side cost (more outboxes to merge at read). The hybrid is forced by the write side: a few authors with enormous follower counts."},
+        {"t": "Posts contain media that is too large to copy", "correct": false,
+         "why": "Media never enters fanout at all — only post IDs are pushed, and media lives on the CDN. The problem is the number of writes, not their size."}
+      ]
+    },
+    {
+      "id": "p3c05-q04", "level": 1, "type": "mcq", "tag": "read-path",
+      "q": "Why does the feed cache store post IDs rather than full post bodies?",
+      "options": [
+        {"t": "IDs keep the cache ~2.4 TB instead of hundreds of TB, and bodies get cached once in a shared post cache", "correct": true,
+         "why": "Right. A post pushed to 200 followers as a body would be stored 200 times; as an ID it's 16 bytes per follower plus one shared cached body. The cost is a hydration step at read, which the post cache makes cheap."},
+        {"t": "Redis cannot store objects larger than 1 KB", "correct": false,
+         "why": "Redis handles values up to hundreds of MB. The reason is economics and duplication, not a technical limit."},
+        {"t": "Post bodies change too frequently to cache", "correct": false,
+         "why": "Nearly the opposite — post bodies are essentially immutable, which makes them ideal cache material. That's exactly why one shared post cache works so well."},
+        {"t": "IDs are needed for the ranking model to work", "correct": false,
+         "why": "The ranker works on candidates either way; it fetches its own features. The ID-only choice is about RAM and write amplification."}
+      ]
+    },
+    {
+      "id": "p3c05-q05", "level": 1, "type": "mcq", "tag": "ranking",
+      "q": "The scorer service misses its 50 ms latency budget on a request. What does the feed service do?",
+      "options": [
+        {"t": "Sort the candidates chronologically and serve that", "correct": true,
+         "why": "Yes — the degradation-menu move (Chapter 2.7). The user gets a slightly dumber feed instead of an error or a slow page, and chrono_served_rate records that it happened."},
+        {"t": "Return an error and let the client retry", "correct": false,
+         "why": "That turns a quality problem into an availability problem. The feed's contract is availability first; there's always a servable feed without the model."},
+        {"t": "Wait for the scorer — ranking is a hard requirement", "correct": false,
+         "why": "Blocking blows the 200 ms page budget for something users can live without for one request. Ranking is valuable, not load-bearing."},
+        {"t": "Serve the previous session's cached page again", "correct": false,
+         "why": "Serving stale identical content on refresh looks broken to the user. Fresh candidates in time order is strictly better and just as cheap."}
+      ]
+    },
+    {
+      "id": "p3c05-q06", "level": 1, "type": "mcq", "tag": "counters",
+      "q": "What consistency contract do like counts have in this design?",
+      "options": [
+        {"t": "Approximate now, exact eventually — increments aggregate asynchronously and reconcile later", "correct": true,
+         "why": "Right. A billion likes a day can't be synchronous updates on hot post rows. Sharded counters absorb the storm, cached reads lag by seconds, and a reconciliation job repairs drift from the durable event log."},
+        {"t": "Strongly consistent — counts must always be exact", "correct": false,
+         "why": "Exact real-time counts on a viral post would mean millions of serialized writes on one row. Nobody can fact-check '1.2M likes' anyway — the display rounding hides more than the lag does."},
+        {"t": "Counts are computed fresh from the likes table on every read", "correct": false,
+         "why": "A COUNT(*) per post per feed read at 200K reads/sec is astronomically expensive. Counts are precomputed and cached, like the feed itself."},
+        {"t": "Counts are only updated once per day", "correct": false,
+         "why": "Too stale — counts converge within seconds to minutes. Eventual consistency here means a short, bounded lag, not a nightly batch."}
+      ]
+    },
+    {
+      "id": "p3c05-q07", "level": 1, "type": "mcq", "tag": "pagination",
+      "q": "Why does offset pagination ('give me items 26–50') break for a ranked feed?",
+      "options": [
+        {"t": "The ranked order shifts between requests, so pages computed at different times overlap or skip items", "correct": true,
+         "why": "Exactly. New posts arrive and scores change between page one and page two. The fix is a session snapshot: freeze the ranked ID list once, then page through the frozen copy by cursor."},
+        {"t": "Offsets are too slow for Redis lists", "correct": false,
+         "why": "Redis list index reads are fast. The problem is correctness — a moving ranking under fixed offsets — not performance."},
+        {"t": "The feed has too many items to number", "correct": false,
+         "why": "A feed page numbers a few hundred candidates at most. Scale isn't the issue; the reshuffling between requests is."},
+        {"t": "Clients cannot store an offset between requests", "correct": false,
+         "why": "Clients store cursors fine — that's the mechanism. The issue is what the offset points into when the underlying order won't hold still."}
+      ]
+    },
+    {
+      "id": "p3c05-q08", "level": 1, "type": "mcq", "tag": "ops",
+      "q": "The fanout queue develops a 30-minute backlog. What happens to the posts inside it?",
+      "options": [
+        {"t": "They arrive in followers' feeds late — nothing is lost, because posts were durably stored before the 201", "correct": true,
+         "why": "Right. Durability was settled at write time in the posts DB; the queue is durable too. Fanout lag delays delivery, never destroys it — 'delayed, not lost' is the exact phrase to say in the interview."},
+        {"t": "Posts older than the queue retention are dropped", "correct": false,
+         "why": "Even if a queue aged out events, the posts themselves live in the posts DB and reach readers via the pull path. The design has no point where an accepted post can vanish."},
+        {"t": "Users must repost anything that didn't fan out", "correct": false,
+         "why": "Never — the 201 was a promise. Asking users to redo accepted writes means the system broke its durability contract."},
+        {"t": "The feed switches to chronological mode", "correct": false,
+         "why": "Chrono fallback is the scorer's failure mode, not fanout's. A fanout backlog just means feed lists update late."}
+      ]
+    },
+    {
+      "id": "p3c05-q09", "level": 1, "type": "mcq", "tag": "product-arch",
+      "q": "Meta's 'Product Architecture' flavor of this question grades something the pure systems round mostly doesn't. What?",
+      "options": [
+        {"t": "The API contract and client behavior — payload shape, cursor semantics, optimistic UI", "correct": true,
+         "why": "Yes. Product Architecture wants hydrated payloads that paint in one pass, opaque cursors, optimistic like counts, cached-then-refresh rendering — the seam between backend and app is the graded surface."},
+        {"t": "Deeper knowledge of ML ranking models", "correct": false,
+         "why": "Neither round expects model internals — treating the scorer as a budgeted service with a fallback is the expected depth in both."},
+        {"t": "Ability to write production code on the whiteboard", "correct": false,
+         "why": "That's the coding rounds. Product Architecture is still a design interview; it just centers the product-facing contract."},
+        {"t": "Database schema normalization", "correct": false,
+         "why": "Schema basics are table stakes everywhere. The distinctive graded surface is the client-visible API and app behavior."}
+      ]
+    },
+    {
+      "id": "p3c05-q10", "level": 2, "type": "mcq", "tag": "hybrid",
+      "q": "An account with 3 million followers publishes a post. Trace what happens in this chapter's design.",
+      "options": [
+        {"t": "The post lands in the posts DB (the author's outbox); fanout skips it; followers' read paths merge it in from the outbox", "correct": true,
+         "why": "Correct — 3M is over the 1M threshold, so no pushes happen at all. The outbox write already occurred as part of storing the post, and readers stitch it in at read time from a heavily cached key."},
+        {"t": "Fanout pushes to all 3M followers but at lower priority", "correct": false,
+         "why": "Priority tiers still spend 3M writes per post. The hybrid's point is that above the threshold you spend zero fanout writes, because read-time merging is cheaper."},
+        {"t": "The post is pushed only to the most active 1M followers", "correct": false,
+         "why": "Partial fanout gives you both code paths' costs on the same post and still needs the merge for everyone else. The clean split — push or pull per author — is simpler and sufficient."},
+        {"t": "The post goes to a special celebrity queue that fans out overnight", "correct": false,
+         "why": "Overnight delivery breaks the freshness requirement badly for exactly the posts most people are waiting to see. Read-time merge delivers them within seconds with no fanout at all."}
+      ]
+    },
+    {
+      "id": "p3c05-q11", "level": 2, "type": "mcq", "tag": "read-path",
+      "q": "During hydration, the counter service times out but the post cache and CDN respond. What should the feed service return?",
+      "options": [
+        {"t": "The full page, with stale or omitted counts on affected posts", "correct": true,
+         "why": "Right — per-field graceful degradation. Counts are decoration; the page is the product. Holding 25 rendered posts hostage for a like number inverts the value of what you're serving."},
+        {"t": "An error, since the response would be incomplete", "correct": false,
+         "why": "Failing a whole page over its least important field turns a minor dependency wobble into user-visible downtime. The parallel-hydration design exists precisely so fields can fail independently."},
+        {"t": "Only the posts whose counts loaded successfully", "correct": false,
+         "why": "Dropping posts because a side-dish fetch failed shrinks and reshuffles the feed unpredictably — far more visible than a missing count."},
+        {"t": "Retry the counts until they arrive", "correct": false,
+         "why": "Retrying inside the request burns the 200 ms budget on the field users check least. Ship now; the next refresh will have fresh counts."}
+      ]
+    },
+    {
+      "id": "p3c05-q12", "level": 2, "type": "mcq", "tag": "cold-start",
+      "q": "A user who has been inactive for 90 days opens the app. Their feed list was evicted. What happens?",
+      "options": [
+        {"t": "The read falls back to pull: fetch followees' outboxes, merge, rank, serve, and rebuild the cache in the background", "correct": true,
+         "why": "Yes — one slower first page, then back on the fast path. The pull path doubles as cache-miss recovery, new-user backfill, and dormant-return handling: one mechanism, several problems."},
+        {"t": "They see an empty feed until new posts are fanned out to them", "correct": false,
+         "why": "Fanout only covers the future; an empty feed for a returning user would look like a broken app. The posts DB has everything needed to rebuild the past on demand."},
+        {"t": "A batch job pre-rebuilds all inactive users' feeds nightly", "correct": false,
+         "why": "That re-creates the exact waste the dormant-skip optimization removed — building feeds for people who may never return. Rebuild lazily, on the read that proves they're back."},
+        {"t": "The app shows trending content until their graph is re-fanned-out", "correct": false,
+         "why": "Trending fallback is for users who follow nobody. This user has a follow graph; the pull path serves their real feed on the very first request."}
+      ]
+    },
+    {
+      "id": "p3c05-q13", "level": 2, "type": "mcq", "tag": "fanout",
+      "q": "Why does the fanout worker skip followers who haven't opened the app in 30 days?",
+      "options": [
+        {"t": "A large share of fanout writes would land in lists nobody reads; those users rebuild by pull if they return", "correct": true,
+         "why": "Right — it can cut fanout cost dramatically, and the pull path guarantees correctness for anyone who comes back. Classic trade: cheaper steady-state writes for one slower page on return."},
+        {"t": "Inactive users' Redis lists have been deleted, so writes would fail", "correct": false,
+         "why": "Writes to a fresh key would simply recreate the list — Redis doesn't error. The point is that the write is wasted, not that it fails."},
+        {"t": "It protects those users' privacy", "correct": false,
+         "why": "Privacy isn't involved — the post is public to followers either way. This is purely a cost optimization on write amplification."},
+        {"t": "To keep the follower list query fast", "correct": false,
+         "why": "The graph query returns everyone regardless; filtering happens after. The savings are in the Redis writes not performed, which dwarf the query cost."}
+      ]
+    },
+    {
+      "id": "p3c05-q14", "level": 2, "type": "mcq", "tag": "ranking",
+      "q": "Feed quality has quietly degraded for a week: engagement is down, but every latency and error dashboard is green. Which failure fits?",
+      "options": [
+        {"t": "The feature pipeline is lagging — the scorer is ranking confidently on stale features", "correct": true,
+         "why": "This is the silent failure the chapter flags: stale affinity data doesn't error, it just ranks worse. It's why feature age gets monitored with the same seriousness as latency."},
+        {"t": "The scorer service is down", "correct": false,
+         "why": "A dead scorer is loud — chrono_served_rate pins to 1.0 and its own error metrics fire. The scenario says everything is green, which points at a failure no standard dashboard catches."},
+        {"t": "The fanout queue has a backlog", "correct": false,
+         "why": "Backlog shows up immediately in the fanout-lag metric and in 'my followers see my posts late' complaints — loud in a different way, and it doesn't smell like a slow week-long quality drift."},
+        {"t": "The feed cache hit rate dropped", "correct": false,
+         "why": "Hit-rate drops surface as latency (pull rebuilds are slower) — which the scenario rules out. Quality-down-while-green is the signature of stale ranking inputs."}
+      ]
+    },
+    {
+      "id": "p3c05-q15", "level": 2, "type": "mcq", "tag": "pagination",
+      "q": "Users report seeing the same post twice: once yesterday evening, again this morning. Which mechanism failed?",
+      "options": [
+        {"t": "The seen store — the cross-session filter that drops already-served post IDs during candidate generation", "correct": true,
+         "why": "Right. Within one session the frozen snapshot prevents duplicates; across sessions it's the seen store's job. Yesterday-then-today duplication is precisely its failure signature (expired too early, or the filter was skipped)."},
+        {"t": "The session-snapshot cursor", "correct": false,
+         "why": "The snapshot only guards one session's pages against each other. These sightings are in different sessions — outside the snapshot's jurisdiction entirely."},
+        {"t": "The ranking model re-scored the post highly", "correct": false,
+         "why": "The scorer may indeed love the post both days — that's allowed. The seen filter exists to overrule it for content the user already saw; scoring it isn't the bug, serving it is."},
+        {"t": "Fanout delivered the post twice", "correct": false,
+         "why": "Duplicate IDs in a feed list are expected under at-least-once delivery — and are exactly what read-time dedup and the seen filter are there to absorb. The read-side filter failing is the story."}
+      ]
+    },
+    {
+      "id": "p3c05-q16", "level": 2, "type": "mcq", "tag": "counters",
+      "q": "A user taps like and instantly sees the count go from 41 to 42, even though the counter service won't process the increment for seconds. How?",
+      "options": [
+        {"t": "The client bumps the displayed count optimistically; the backend converges later", "correct": true,
+         "why": "Yes — read-your-own-writes, faked at the edge. The one number a user actually verifies is their own action, so the client handles it locally while the counter service stays eventually consistent for everyone else."},
+        {"t": "Like writes are synchronous even though reads are cached", "correct": false,
+         "why": "Making every like a synchronous counter write reintroduces the hot-row problem the counter service exists to avoid. The instant '42' never came from the server."},
+        {"t": "The counter service prioritizes the liker's read", "correct": false,
+         "why": "Per-user read priority in a shared counter cache would be complex and still racy. Far simpler: the client already knows the user liked it — no server round trip needed to display that."},
+        {"t": "Counts are stored per-client, not centrally", "correct": false,
+         "why": "Counts are global facts stored centrally; only the +1 for your own fresh like is layered on locally until the backend catches up."}
+      ]
+    },
+    {
+      "id": "p3c05-q17", "level": 2, "type": "mcq", "tag": "estimation",
+      "q": "At 10x today's traffic, which cost grows fastest and what is the named lever against it?",
+      "options": [
+        {"t": "The scorer fleet — and the lever is scoring fewer candidates per request", "correct": true,
+         "why": "Right. Fanout and caches scale linearly with cheap operations, but ML inference is expensive per item: 10x requests × 500 candidates is the money pit. Cutting candidates 500 → 200 more than halves it for a measurable quality cost."},
+        {"t": "The posts database — the lever is a bigger primary", "correct": false,
+         "why": "Posts are sharded by author and write-light relative to everything else. Vertical scaling is also the weakest lever in the book at this scale."},
+        {"t": "The CDN — the lever is more origin servers", "correct": false,
+         "why": "CDNs are built to scale reads almost arbitrarily and offload origins; media is the least worried box in the 10x story."},
+        {"t": "The social graph — the lever is caching follower counts", "correct": false,
+         "why": "Follower-count caching is already assumed and trivially cheap. The graph reads scale linearly; nothing about them is the fastest-growing bill."}
+      ]
+    },
+    {
+      "id": "p3c05-q18", "level": 2, "type": "mcq", "tag": "read-path",
+      "q": "Why do media bytes never flow through the feed service — only CDN URLs in the payload?",
+      "options": [
+        {"t": "Serving images through app servers would drown them in bandwidth that a CDN handles at the edge for a fraction of the cost", "correct": true,
+         "why": "Right (Chapter 1.7). Feed servers do orchestration measured in kilobytes; a single photo can outweigh the entire rest of the page. Clients fetch media directly from edge caches near them."},
+        {"t": "The feed service is not allowed to access blob storage", "correct": false,
+         "why": "It could — that's a permissions detail, not the reason. The reason is economics and latency: bytes should travel the short edge path, not through your orchestration tier."},
+        {"t": "CDN URLs are needed for the ranking model's media features", "correct": false,
+         "why": "The model uses media *type* as a feature, which comes from post metadata. URL-vs-bytes in the response payload has nothing to do with ranking."},
+        {"t": "Media is too large to fit in a JSON response", "correct": false,
+         "why": "Base64-in-JSON is possible, just terrible. The design reason is offloading delivery to the edge, not a format limit."}
+      ]
+    },
+    {
+      "id": "p3c05-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Push or pull for the feed?' Which answer performs at E5?",
+      "options": [
+        {"t": "\"Hybrid, and the follower distribution decides the split: push under ~1M followers because fanout finishes in seconds, pull above it because one celebrity post is 100M writes — and users follow few enough celebrities that the read merge stays cheap.\"", "correct": true,
+         "why": "A commitment, driven by the distribution, with both cost curves named and a bounded read-side cost. This is the crux answered as an owner, in three sentences."},
+        {"t": "\"Push has fast reads but expensive writes; pull has cheap writes but slow reads. Both are used in industry, so it depends on the workload.\"", "correct": false,
+         "why": "True, balanced, and uncommitted — the option-listing pattern. The workload was given to you; 'it depends' after the numbers exist reads as declining to decide."},
+        {"t": "\"Push, because reads dominate 50:1 and precomputation makes them O(1).\"", "correct": false,
+         "why": "Committed and correctly reasoned — for the average case. It walks straight into the celebrity trap the question was built around, which the interviewer will spring one sentence later. Half the distribution isn't the distribution."},
+        {"t": "\"Pull, because it's always correct and much simpler — no fanout infrastructure to operate.\"", "correct": false,
+         "why": "The simplicity instinct is healthy, but the numbers kill it here: 200K reads/sec × hundreds of followed accounts is ~80M outbox reads/sec of largely repeated work. Simplicity that ignores the load math reads junior, not lazy-smart."}
+      ]
+    },
+    {
+      "id": "p3c05-q20", "level": 3, "type": "mcq", "tag": "crux",
+      "q": "You have 20 minutes of deep-dive time left on this problem. Where does a senior candidate spend it?",
+      "options": [
+        {"t": "The fanout decision and its threshold, then ranking's budget-and-fallback — announced as an agenda", "correct": true,
+         "why": "Fanout is the crux this question exists to probe, and ranking is Meta's favorite follow-up; proposing that agenda out loud is the driving-the-room behavior the rubric rewards."},
+        {"t": "The follows table schema and its indexes", "correct": false,
+         "why": "Necessary, routine, and already sketched in five minutes. Spending deep-dive time on assumed competence is touring rooms that aren't on fire."},
+        {"t": "A complete multi-region active-active strategy for the feed", "correct": false,
+         "why": "Genuinely deep but not this question's fire — and starting it with 20 minutes left risks the classic unfinished-deep-dive fail. Mention it as an extension; spend the time on the crux."},
+        {"t": "Covering every remaining component briefly so nothing is missed", "correct": false,
+         "why": "Breadth was the first half of the interview. The deep-dive phase grades depth on the hard parts; even coverage of easy parts adds no signal at the senior bar."}
+      ]
+    },
+    {
+      "id": "p3c05-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "The ranking team ships a model that lifts engagement 2% but doubles scorer p99 from 50 ms to 100 ms, blowing your 200 ms page budget on slow requests. Your call as the feed owner?",
+      "options": [
+        {"t": "Hold the rollout at its current cohort; offer paths that buy the quality inside the budget — fewer scored candidates, a distilled model, or a raised timeout with chrono fallback absorbing the overruns — and let guardrail metrics arbitrate", "correct": true,
+         "why": "This treats latency as a budget you own, not a preference — and negotiates with options rather than vetoing. Naming the fallback as a release valve and letting measurements decide is the operator's answer."},
+        {"t": "Ship it — 2% engagement at Meta scale is enormous and worth some latency", "correct": false,
+         "why": "It might be! But 'worth it' isn't yours to declare by vibes when the page SLO breaks — feed latency has its own engagement cost, which this answer never weighs. Unmeasured trade-offs read junior at any level."},
+        {"t": "Block it — the 50 ms budget is the contract, full stop", "correct": false,
+         "why": "Budget-as-religion ignores that budgets serve the product. A flat veto with no path forward is the mirror image of shipping blind: a decision without the trade-off examined."},
+        {"t": "Ship it and remove the chrono fallback so all feeds get the better model", "correct": false,
+         "why": "Removing the degradation path while doubling the dependency's latency is maximizing exposure at the worst moment. The fallback is what makes bolder model experiments safe at all."}
+      ]
+    },
+    {
+      "id": "p3c05-q22", "level": 3, "type": "mcq", "tag": "what-breaks",
+      "q": "Interviewer: 'A celebrity with 200M followers posts, and simultaneously your fanout fleet loses half its workers. What actually degrades?' The best answer:",
+      "options": [
+        {"t": "\"Almost nothing couples: the celebrity post skips fanout entirely, so it's live within seconds via read-time merge. The worker loss halves fanout throughput, so ordinary posts arrive late — fanout lag climbs, nothing is lost, and I'd shed dormant-follower pushes to recover.\"", "correct": true,
+         "why": "This answer shows the design's decoupling paying off under a compound failure, names the user-visible symptom precisely, and includes the recovery lever. Calm, specific, mechanical — the senior register."},
+        {"t": "\"The celebrity post would be severely delayed since fanout capacity is halved.\"", "correct": false,
+         "why": "This reveals a missed mechanism: celebrity posts never touch fanout in the hybrid — that's the entire point of the threshold. The failure affects exactly the posts that *do* fan out."},
+        {"t": "\"Feeds would start erroring until workers are restored.\"", "correct": false,
+         "why": "The read path doesn't depend on fanout workers at all — it reads caches and outboxes. Confusing write-side degradation with read-side availability misreads the architecture's main seam."},
+        {"t": "\"We'd need to fail over to the pull path for all users temporarily.\"", "correct": false,
+         "why": "A global mode-switch is a dramatic intervention the design doesn't need — feed lists still serve reads fine; they're just briefly staler. Overreacting to a lag with a failover reads as not trusting your own architecture."}
+      ]
+    },
+    {
+      "id": "p3c05-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A PM demands exact, real-time like counts: 'users deserve accurate numbers.' Your senior response?",
+      "options": [
+        {"t": "Quantify the cost and probe the need: exact-real-time means serialized writes on viral hot rows for a difference display rounding already hides — then confirm the one case users verify, their own like, is already instant via the optimistic client", "correct": true,
+         "why": "This reframes a feelings-requirement into a cost/benefit the PM can actually decide on, and shows the user-facing need is already met by a cheaper mechanism. Pushing back with numbers and an alternative is the senior pattern."},
+        {"t": "Build it — requirements come from product, and engineering's job is to deliver them", "correct": false,
+         "why": "Deference isn't collaboration. Accepting an implicit architectural rewrite (hot-row serialization at a billion likes/day) without surfacing its cost fails the PM as much as the system."},
+        {"t": "Refuse — eventual consistency is the industry standard for counters", "correct": false,
+         "why": "'Industry standard' is an appeal to authority, not an argument. The PM deserves the actual trade-off: what exactness costs here and what approximation actually loses (nearly nothing, post-rounding)."},
+        {"t": "Compromise by making counts exact for posts under 1,000 likes", "correct": false,
+         "why": "Clever-sounding, but small counts are where the async counter is already accurate within seconds — the compromise spends complexity where the problem doesn't exist and leaves the hot-row case unsolved."}
+      ]
+    },
+    {
+      "id": "p3c05-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your 1M threshold — why not 100K, or 10M?' What is this question actually grading?",
+      "options": [
+        {"t": "Whether the number connects to mechanisms: fanout time per post, how many accounts are exempted, and the read-merge cost per user — any value whose curves you can defend passes", "correct": true,
+         "why": "Threshold questions are never about the constant; they're calibration probes. Knowing that 100K trades more merging for less write amplification — and what data would move you — is the passing answer at any specific number."},
+        {"t": "Whether you know the industry-standard threshold", "correct": false,
+         "why": "There isn't one — real systems tune it continuously against their own distributions. Citing a 'standard' signals memorization where judgment was requested."},
+        {"t": "Whether you'll defend your first answer under pressure", "correct": false,
+         "why": "Stubbornness isn't conviction. Updating the threshold when the interviewer supplies new constraints is fine — what's graded is whether the reasoning machinery exists, not whether the number survives."},
+        {"t": "Whether you can compute 1M × 20 bytes quickly", "correct": false,
+         "why": "Arithmetic is assumed. The probe is about the three cost curves crossing, not the multiplication — a fast wrong-framework answer scores below a slow right-framework one."}
+      ]
+    },
+    {
+      "id": "p3c05-q25", "level": 3, "type": "mcq", "tag": "ops",
+      "q": "You get to keep exactly three feed alerts. Which set best covers the failure space?",
+      "options": [
+        {"t": "Feed p99 latency, fanout lag, and chrono_served_rate", "correct": true,
+         "why": "One alert per independent failure domain: the read path's SLO, the write path's health, and the ranking dependency's degradation — together they catch cache trouble (as latency), backlog, and scorer decay. Coverage per alert is the game."},
+        {"t": "CPU, memory, and disk on the feed servers", "correct": false,
+         "why": "Resource metrics are causes, not symptoms — they page you for things users may never feel and sleep through things users do feel. Alert on user-visible behavior; keep resources on dashboards."},
+        {"t": "Feed p99, feed p50, and feed error rate", "correct": false,
+         "why": "Three views of one failure domain — the read path — while fanout could silently fall a day behind. Redundant coverage of one seam is the classic alerting mistake."},
+        {"t": "Scorer p99, feature age, and model engagement lift", "correct": false,
+         "why": "All ranking, no feed. This is the scorer team's page, not the feed owner's — with these three, a dead Redis fleet or a stuck fanout queue pages nobody."}
+      ]
+    }
+  ]
+}

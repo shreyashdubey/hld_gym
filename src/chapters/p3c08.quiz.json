@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c08",
+  "items": [
+    {
+      "id": "p3c08-q01", "level": 1, "type": "mcq", "tag": "crux",
+      "q": "What is the crux of the ticket-booking problem?",
+      "options": [
+        {"t": "Serving the seat map to millions of users quickly", "correct": false,
+         "why": "That's the decoy. The map is 5MB of cacheable data — a CDN problem, solved in Part 1. The interviewer lit a different fire."},
+        {"t": "Thousands of buyers racing for the same seat, with exactly one allowed to win", "correct": true,
+         "why": "Right. Concurrency correctness on a few burning-hot rows — not traffic volume — is what this question exists to probe. 'Never sell one seat twice' is an invariant, not a target."},
+        {"t": "Storing hundreds of millions of historical orders", "correct": false,
+         "why": "Order history is routine append-mostly data. Nothing about it is contended or hard at this scale."},
+        {"t": "Integrating with many payment providers", "correct": false,
+         "why": "Integration breadth is a product feature, not a design challenge. One provider is enough to surface every hard money-path problem."}
+      ]
+    },
+    {
+      "id": "p3c08-q02", "level": 1, "type": "mcq", "tag": "race",
+      "q": "Why does 'check if the seat is free, then write sold' oversell under concurrency?",
+      "options": [
+        {"t": "The database loses writes under heavy load", "correct": false,
+         "why": "The database does exactly what it's told — both writes commit fine. The bug is in the application's two-step pattern, not in the database dropping anything."},
+        {"t": "The check and the write are separate operations, and two requests can both pass the check in the gap between them", "correct": true,
+         "why": "Exactly. Both read 'free' before either writes, so both writes proceed and both commit. The entire race lives in the gap between read and write, and default isolation levels don't close it."},
+        {"t": "SQL doesn't support conditions on updates", "correct": false,
+         "why": "It does — UPDATE ... WHERE is precisely the fix. The naive code just does the condition as a separate earlier read instead of inside the write."},
+        {"t": "Network latency reorders the two requests", "correct": false,
+         "why": "Ordering isn't the issue — any interleaving where both reads happen before both writes loses, and that interleaving is near-certain when thousands race."}
+      ]
+    },
+    {
+      "id": "p3c08-q03", "level": 1, "type": "mcq", "tag": "conditional-write",
+      "q": "After running the atomic conditional write to claim a seat, how does your code know whether it won?",
+      "options": [
+        {"t": "It re-reads the row to see who the holder is", "correct": false,
+         "why": "You could, but you don't need to — and reading-after-writing reintroduces the two-step habit this design exists to kill. The write itself already told you."},
+        {"t": "The rows-affected count: 1 means you claimed it, 0 means the condition failed and the seat is gone", "correct": true,
+         "why": "Right. The guard condition either matched (your write applied, seat is yours) or matched nothing (someone beat you). One statement, one answer, no gap."},
+        {"t": "It waits for a confirmation event on the queue", "correct": false,
+         "why": "Queues are for the async work after a sale (tickets, emails). The claim itself is synchronous — the database answers in the same round trip."},
+        {"t": "It checks whether an exception was thrown", "correct": false,
+         "why": "A failed condition isn't an error — the UPDATE succeeds and simply matches zero rows. Relying on exceptions here would miss every lost race."}
+      ]
+    },
+    {
+      "id": "p3c08-q04", "level": 1, "type": "mcq", "tag": "holds",
+      "q": "What is the purpose of the 10-minute hold with a TTL?",
+      "options": [
+        {"t": "To give the buyer time to pay while guaranteeing an abandoned cart returns the seat automatically", "correct": true,
+         "why": "Right. The hold takes the seat off the market while a human types a card number; the expiry means no seat is ever stranded by someone closing the tab."},
+        {"t": "To batch writes for database efficiency", "correct": false,
+         "why": "Holds aren't a performance trick — write volume here is tiny. They exist for the human in the loop."},
+        {"t": "To let the system raise the price while demand is visible", "correct": false,
+         "why": "Dynamic pricing was explicitly scoped out — and holds that repriced mid-checkout would be a trust catastrophe."},
+        {"t": "To keep the seat map cache warm", "correct": false,
+         "why": "The cache is refreshed from the database on its own schedule. Holds change what the map shows but aren't about caching at all."}
+      ]
+    },
+    {
+      "id": "p3c08-q05", "level": 1, "type": "mcq", "tag": "optimistic",
+      "q": "Why does the chapter reject optimistic concurrency (version check + retry) for the seat-claim path?",
+      "options": [
+        {"t": "It can't be implemented in Postgres", "correct": false,
+         "why": "It absolutely can — a version column and UPDATE ... WHERE version = x is standard Postgres. The rejection is about workload fit, not capability."},
+        {"t": "Optimistic concurrency assumes conflicts are rare, but here conflict is the whole point — losers retry and amplify load into a storm", "correct": true,
+         "why": "Yes. 4,000 contenders, 1 winner, 3,999 retries against seats that are already gone. Under maximal contention, optimistic locking is a load amplifier aimed at your hottest rows."},
+        {"t": "It is slower than pessimistic locking in all cases", "correct": false,
+         "why": "Backwards — at low contention optimistic is usually cheaper because nobody waits on locks. The problem is specifically high contention."},
+        {"t": "Version numbers can overflow", "correct": false,
+         "why": "A 64-bit version outlives the universe. This is not a real concern."}
+      ]
+    },
+    {
+      "id": "p3c08-q06", "level": 1, "type": "mcq", "tag": "waiting-room",
+      "q": "What does the virtual waiting room fundamentally protect?",
+      "options": [
+        {"t": "The user's place in line during page refreshes", "correct": false,
+         "why": "The signed queue token does preserve position, but that's a UX property of the queue — not what the queue exists for."},
+        {"t": "The store and inventory database, by decoupling arrival demand from admitted load", "correct": true,
+         "why": "Right. The token bucket admits a fixed rate no matter how many millions arrive, so the hard-to-scale purchase path sees constant load. Admission control instead of autoscaling."},
+        {"t": "The CDN from cache misses", "correct": false,
+         "why": "The CDN is the one part that handles raw arrival volume happily — the queue page itself lives on it."},
+        {"t": "Ticket revenue, by creating urgency", "correct": false,
+         "why": "A 200:1 demand ratio needs no manufactured urgency. The queue is an engineering pressure valve, not a sales tactic."}
+      ]
+    },
+    {
+      "id": "p3c08-q07", "level": 1, "type": "mcq", "tag": "expiry",
+      "q": "What is 'lazy expiry' of a hold?",
+      "options": [
+        {"t": "A background job that deletes expired holds every night", "correct": false,
+         "why": "That's a sweeper — the chapter runs one, but only for cosmetics. Nightly would leave ghost holds on the map for hours."},
+        {"t": "The claim query itself treats an expired hold as free, so the next claimant reclaims it atomically with no janitor needed for correctness", "correct": true,
+         "why": "Right. The guard clause includes 'or held but expired' — reclaim happens inside the same atomic write. The sweeper only tidies the cached map."},
+        {"t": "Extending the hold whenever the user is active", "correct": false,
+         "why": "That's session keep-alive, and it would let a camper pin a seat forever. Holds extend only when payment starts, deliberately."},
+        {"t": "Expiring holds only when memory runs low", "correct": false,
+         "why": "That's a cache eviction policy. Holds live in the database with explicit timestamps, not in a memory-pressured cache."}
+      ]
+    },
+    {
+      "id": "p3c08-q08", "level": 1, "type": "mcq", "tag": "consistency",
+      "q": "In this design, which component is the strongly consistent (CP) island?",
+      "options": [
+        {"t": "The seat-map cache", "correct": false,
+         "why": "The map is deliberately AP — seconds stale, best-effort held overlays. It's a hint, not the truth."},
+        {"t": "The queue service", "correct": false,
+         "why": "Queue positions can be approximate and eventually consistent; nobody double-buys a seat because a position estimate was off by 50."},
+        {"t": "The inventory database holding seat state", "correct": true,
+         "why": "Yes. One Postgres primary, source of truth for free/held/sold. If it's briefly unavailable, purchases fail loudly and safely — correctness over availability, but only for this one island."},
+        {"t": "The CDN", "correct": false,
+         "why": "The CDN serves static assets and stale snapshots — the most AP thing in the whole diagram."}
+      ]
+    },
+    {
+      "id": "p3c08-q09", "level": 1, "type": "mcq", "tag": "idempotency",
+      "q": "Why does the purchase call carry an idempotency key?",
+      "options": [
+        {"t": "So a double-click or a retry after timeout results in exactly one charge", "correct": true,
+         "why": "Right. The provider recognizes the repeated key and returns the original result instead of charging again — which is also what makes 'ask again' safe after an ambiguous timeout."},
+        {"t": "To encrypt the card number in transit", "correct": false,
+         "why": "TLS and tokenization handle that. Idempotency keys are about deduplicating operations, not securing them."},
+        {"t": "To link the payment to the user's session for analytics", "correct": false,
+         "why": "It does end up correlating records, but that's incidental. Its job is making retries safe."},
+        {"t": "To let the provider process payments in order", "correct": false,
+         "why": "Keys carry no ordering meaning — each purchase is independent. The key answers 'have you seen this exact request before?'"}
+      ]
+    },
+    {
+      "id": "p3c08-q10", "level": 2, "type": "mcq", "tag": "race",
+      "q": "Two admitted users tap seat 14B within the same millisecond. In the committed design, where exactly is the winner decided?",
+      "options": [
+        {"t": "At the load balancer, which serializes requests per seat", "correct": false,
+         "why": "Load balancers don't know about seats, and building seat-affinity routing to fake serialization is over-engineering a problem the database already solves."},
+        {"t": "Inside the database, when the two conditional UPDATEs execute — the first to run matches the guard, the second matches zero rows", "correct": true,
+         "why": "Right. The database serializes writes to a row; the guard makes that serialization decide the race. One winner, one instant loser, no gap, no coordination anywhere else."},
+        {"t": "In the seat-map cache, whichever user's map showed the seat as free", "correct": false,
+         "why": "Both maps showed it free — the map is a stale hint with no authority. If the cache decided winners, staleness would equal overselling."},
+        {"t": "By timestamp comparison in the application servers", "correct": false,
+         "why": "App-server clocks differ by milliseconds and app-level comparison reintroduces a read-then-decide gap. Distributed timestamp arbitration is exactly the machinery this design avoids needing."}
+      ]
+    },
+    {
+      "id": "p3c08-q11", "level": 2, "type": "mcq", "tag": "staleness",
+      "q": "A user clicks a seat the map showed as free and gets 'seat already taken.' Support files it as a bug. Your call?",
+      "options": [
+        {"t": "Working as designed — the map is a hint, the conditional write is the truth, and even a perfectly live map would be stale by the time the click arrives", "correct": true,
+         "why": "Right. There is no staleness level at which this UX disappears, because the world changes between render and click. The design accepts the papercut to shed millions of reads/sec; polish the error UX, not the consistency."},
+        {"t": "A bug — the map must be made strongly consistent with inventory", "correct": false,
+         "why": "Chasing map freshness buys almost nothing: 300ms after a perfectly fresh render, the seat can still be gone. You'd pay 2M reads/sec against the CP island for an unfixable race."},
+        {"t": "A bug in the cache invalidation logic specifically", "correct": false,
+         "why": "Maybe worth a glance if staleness exceeds the few-second budget, but the reported behavior happens even with flawless invalidation. It's inherent."},
+        {"t": "Working as designed, but the hold TTL should be shortened to reduce it", "correct": false,
+         "why": "Shorter TTLs change how long held seats stay unavailable, not the render-to-click race. Wrong dial."}
+      ]
+    },
+    {
+      "id": "p3c08-q12", "level": 2, "type": "mcq", "tag": "payments",
+      "q": "Mid-drop, the payment provider's p99 latency jumps from 2s to 30s. What breaks first downstream?",
+      "options": [
+        {"t": "The seat-map cache falls behind", "correct": false,
+         "why": "The cache refreshes on its own timer from the database — payment latency doesn't touch it."},
+        {"t": "Pending-payment seats pile up, freezing inventory in an unbuyable state while the queue keeps admitting shoppers into an emptying store", "correct": true,
+         "why": "Yes — every in-flight purchase pins a seat for minutes instead of seconds. Conversion craters first; error graphs move later. Defenses: tight timeouts, circuit breaker, and turning the admission dial down."},
+        {"t": "The inventory database runs out of storage", "correct": false,
+         "why": "Slow payments create waiting state machines, not data volume. Storage is unaffected."},
+        {"t": "The waiting-room queue overflows", "correct": false,
+         "why": "The queue is the one component built to hold arbitrary numbers of waiting people cheaply. It's the pressure absorber, not the casualty."}
+      ]
+    },
+    {
+      "id": "p3c08-q13", "level": 2, "type": "mcq", "tag": "monitoring",
+      "q": "Hold-to-purchase conversion drops from 75% to 20% ten minutes into a drop, while error rates still look normal. Most likely explanations?",
+      "options": [
+        {"t": "Users are indecisive today", "correct": false,
+         "why": "Human behavior across hundreds of thousands of users is statistically stable — a 55-point swing in minutes is a system signal, not a mood."},
+        {"t": "Payments are quietly degrading, or bots are taking holds they never intend to pay for", "correct": true,
+         "why": "Right — those are the two forces that decouple holding from buying. That's exactly why this metric is the early-warning light: it moves minutes before timeouts surface as errors."},
+        {"t": "The seat map cache is too stale", "correct": false,
+         "why": "Staleness affects clicks-to-successful-holds (people click taken seats), not what happens after a hold is already won."},
+        {"t": "The reconciliation job is running slow", "correct": false,
+         "why": "Reconciliation is an offline auditor — it observes sales, it doesn't sit in the purchase path, so it can't move conversion."}
+      ]
+    },
+    {
+      "id": "p3c08-q14", "level": 2, "type": "mcq", "tag": "fairness",
+      "q": "Why does the design randomize queue order within the opening surge window instead of strict first-come-first-served?",
+      "options": [
+        {"t": "Randomization is cheaper to implement than ordering", "correct": false,
+         "why": "Cost is a wash — assigning random ranks vs sequence numbers is the same work. The reason is fairness, not efficiency."},
+        {"t": "Strict FIFO in the surge rewards the fastest scripts and connections — bots and lucky networks — while a lottery over the window is fairer to humans", "correct": true,
+         "why": "Right. 'First' in a 100-millisecond stampede measures automation quality, not devotion. Randomize the surge, go FIFO after, and show honest positions so the queue stays trusted."},
+        {"t": "FIFO queues can't scale to millions of entries", "correct": false,
+         "why": "They can — an append-only list with a counter is trivial at this size. Scale isn't the objection; what FIFO measures is."},
+        {"t": "Randomization prevents users from refreshing the page", "correct": false,
+         "why": "Refresh-stability comes from the signed queue token, which works identically under either ordering policy."}
+      ]
+    },
+    {
+      "id": "p3c08-q15", "level": 2, "type": "mcq", "tag": "locking",
+      "q": "A teammate proposes SELECT ... FOR UPDATE for the seat claim. On drop day, what's the actual failure mode you'd warn about?",
+      "options": [
+        {"t": "It produces wrong answers under concurrency", "correct": false,
+         "why": "No — it's correct. Waiters see the committed 'sold' state when the lock releases. The objection is operational, not logical, and saying 'it's correct but…' is the fair way to argue it."},
+        {"t": "Thousands of transactions queue on one row's lock, each pinning a connection, until pool exhaustion takes down requests for unrelated seats too", "correct": true,
+         "why": "Right — the contention ceiling. Lock queues turn into connection starvation, and the blast radius escapes the hot seat to the whole database. Fine for a normal booking site; wrong above this ceiling."},
+        {"t": "Postgres doesn't support row locks", "correct": false,
+         "why": "It does — SELECT FOR UPDATE is core Postgres. Knowing the tool exists and when it stops fitting is the point."},
+        {"t": "Row locks don't survive replica failover", "correct": false,
+         "why": "True but irrelevant — locks are transaction-scoped and in-flight transactions abort on failover under any scheme. That's not the drop-day problem."}
+      ]
+    },
+    {
+      "id": "p3c08-q16", "level": 2, "type": "mcq", "tag": "payments",
+      "q": "You charge a card and the request times out — no response at all. The safe next move is:",
+      "options": [
+        {"t": "Assume it failed and release the seat immediately", "correct": false,
+         "why": "If the charge actually landed, you've taken money and given the seat away — manufacturing the exact seat/money disagreement the design works to avoid, when you could simply have asked."},
+        {"t": "Assume it succeeded and mark the seat sold", "correct": false,
+         "why": "If the charge never landed, you've sold a seat for free and blocked a real buyer. Guessing in either direction is the error."},
+        {"t": "Ask again: retry or query with the same idempotency key — the provider's answer is deterministic — keeping the seat pending until you know", "correct": true,
+         "why": "Right. The idempotency key converts 'unknown' into 'knowable' — the retry can't double-charge, and the status answer resolves the seat. Only if the provider stays dark past the window do you fail safe and let reconciliation refund any straggler."},
+        {"t": "Charge a second time with a fresh key to be sure", "correct": false,
+         "why": "A fresh key defeats the entire dedup mechanism — now a double charge is likely rather than impossible. The old key is precisely what makes retrying safe."}
+      ]
+    },
+    {
+      "id": "p3c08-q17", "level": 2, "type": "mcq", "tag": "expiry",
+      "q": "The background hold-sweeper crashes and nobody notices for an hour during a busy sale. What's the correctness impact?",
+      "options": [
+        {"t": "Expired holds block their seats until it restarts, and some may oversell", "correct": false,
+         "why": "Half right, all wrong: nothing can oversell (the guard clause is unchanged), and expired holds don't block claims — the claim query itself reclaims them."},
+        {"t": "None — lazy expiry means claims reclaim expired holds atomically; the only symptom is ghost 'held' seats lingering on the cached map", "correct": true,
+         "why": "Right. The sweeper is cosmetic by design; correctness lives entirely in the conditional write's guard. This separation is what makes the janitor safe to lose."},
+        {"t": "The inventory database will fill with dead rows and slow down", "correct": false,
+         "why": "Holds are status flags on existing seat rows, not new rows — an hour of un-swept holds is zero extra data."},
+        {"t": "Payments start failing because holds can't transition", "correct": false,
+         "why": "Hold transitions (pending_payment, sold, release) are done by the purchase saga's own writes, not by the sweeper."}
+      ]
+    },
+    {
+      "id": "p3c08-q18", "level": 2, "type": "mcq", "tag": "reconciliation",
+      "q": "The reconciliation job finds a successful charge with no corresponding sold seat. The automated response should be:",
+      "options": [
+        {"t": "Grant the payer the seat their hold pointed at", "correct": false,
+         "why": "That seat may legitimately belong to someone else by now — granting it would let the auditor CREATE a double-sell. The job observes and refunds; it never reassigns seats."},
+        {"t": "Auto-refund the charge with an apology, and log the event to the audit trail", "correct": true,
+         "why": "Right — this is the refund-money-never-un-sell-seats rule, automated. A late payment success after a released hold is expected rare behavior with a predetermined, human-free resolution."},
+        {"t": "Page an engineer to decide", "correct": false,
+         "why": "Save the page for the true never-event (a seat sold twice). Charge-without-seat has one correct answer known in advance — automate it, or your on-call drowns in known cases."},
+        {"t": "Wait 24 hours in case the order record arrives late", "correct": false,
+         "why": "A brief grace period for webhook lag is fine, but 24 hours of holding a customer's money for a seat they'll never get turns a papercut into a complaint. Refund promptly."}
+      ]
+    },
+    {
+      "id": "p3c08-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "The interviewer asks you to commit: how do you prevent overselling? The strongest E5 answer is:",
+      "options": [
+        {"t": "\"Serializable isolation on all transactions — the database will sort out conflicts.\"", "correct": false,
+         "why": "Serializable would abort one of the racers, so it's not wrong — but it's a blunt instrument: retry storms on aborts under this contention, a global performance tax, and it signals you'd rather trust a setting than design the write. The probes that follow will hurt."},
+        {"t": "\"An atomic conditional write: claim the seat with one guarded UPDATE — held only if free or expired — rows-affected tells me who won. Losers fail fast. Row locks would be correct but queue connections at this contention; optimistic retries would amplify load exactly when conflicts peak.\"", "correct": true,
+         "why": "Commitment, mechanism, and the ladder of rejected alternatives with reasons tied to THIS workload's contention profile. That's the full senior package: not just the right answer, but why the adjacent answers lose here."},
+        {"t": "\"Pessimistic locking, optimistic locking, or conditional writes — all three can work, it depends on the load.\"", "correct": false,
+         "why": "True and useless — the load is given (thousands racing per seat), so 'it depends' is a refusal to apply the numbers you have. Option-listing at the crux is the most expensive place to hedge."},
+        {"t": "\"Route all purchases for one event through a single ordered Kafka partition so there's no concurrency at all.\"", "correct": false,
+         "why": "This can be made to work, but you've bought a queue, a consumer, offset management, and an async purchase UX to replicate what one guarded UPDATE does synchronously. Complexity without a payoff reads as reaching for big tools before simple ones."}
+      ]
+    },
+    {
+      "id": "p3c08-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Probe: 'A hold expired at 12:10, seat 14B was resold at 12:10:05, and the original buyer's payment success arrives at 12:10:40. Both have paid. Rule?' The senior commitment is:",
+      "options": [
+        {"t": "Refund the late payment and keep the resale — money is reversible, a seat granted to someone else is not — and note that extend-on-payment-start makes this case rare in the first place", "correct": true,
+         "why": "A committed rule with the asymmetry that justifies it, plus the prevention layer that shrinks the case to stragglers. Deciding this at design time instead of at 3am is exactly what the probe is testing."},
+        {"t": "Cancel the resale — the original buyer initiated payment first", "correct": false,
+         "why": "Clawing back a confirmed seat breaks the system's most sacred promise to the party who did nothing wrong, and 'initiated first' resurrects timestamp arbitration. Reversing money is bounded pain; reversing confirmations is trust damage."},
+        {"t": "Let both keep tickets and upgrade one at the venue", "correct": false,
+         "why": "This is quietly deciding that overselling is acceptable — the invariant abandoned via customer service. Venues sell out; there is no guaranteed upgrade inventory at a Coldplay show."},
+        {"t": "Prevent it entirely by making holds non-expiring once payment begins", "correct": false,
+         "why": "Closest wrong answer — extension IS the right first layer, but 'non-expiring' means a wedged payment pins a seat forever. You still need a bounded window plus the refund rule for whatever leaks past it; claiming total prevention denies the distributed reality."}
+      ]
+    },
+    {
+      "id": "p3c08-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: '100 million users show up instead of 10 million. What do you re-architect?' Best answer:",
+      "options": [
+        {"t": "\"Shard the inventory database tenfold to handle the load.\"", "correct": false,
+         "why": "The inventory never sees arrival load — admission caps it. Sharding a 5MB dataset that receives a fixed admitted write rate is scaling a component whose load didn't change; it signals the admission insight didn't land."},
+        {"t": "\"Almost nothing in the purchase path — the token bucket means the store sees the same admitted rate regardless of line length. What must scale 10x is the cheap part: the CDN-served queue page and the queue service, which is a sharded counter and shards trivially.\"", "correct": true,
+         "why": "The payoff of the whole architecture, stated with confidence: demand and capacity were deliberately decoupled, so 10x demand stresses only the component designed to be trivially scalable. Knowing what NOT to re-architect is the senior signal."},
+        {"t": "\"Add more app servers and database replicas across the board.\"", "correct": false,
+         "why": "Uniform scaling ignores the design's shape — most components see zero additional load. Spending evenly across a system with one pressured point is how budgets and complexity both bloat."},
+        {"t": "\"Move to a multi-region active-active setup to spread the users.\"", "correct": false,
+         "why": "Active-active inventory for one event means the same seat claimable in two regions — you've reintroduced the oversell race at continental scale, with conflict resolution as the new unsolved crux. Geography doesn't dilute contention on a single seat."}
+      ]
+    },
+    {
+      "id": "p3c08-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Probe: 'How do you KNOW you've never sold a seat twice?' The answer that reads senior:",
+      "options": [
+        {"t": "\"The conditional write makes it impossible, so there's nothing to check.\"", "correct": false,
+         "why": "The mechanism is sound but 'impossible, so unverified' is the tell of someone who hasn't operated software. Bugs, migrations, manual ops fixes, and admin tools all bypass clean designs. Trust and verify."},
+        {"t": "\"A reconciliation job continuously proves the invariant — every sold seat maps to exactly one order and one charge — and its only acceptable output is zero; any nonzero pages a human immediately. The design prevents; the auditor proves.\"", "correct": true,
+         "why": "Right — invariants get monitors, not vibes. Prevention and independent verification as separate layers, plus a paging policy that treats one oversell as a never-event, is operational maturity speaking."},
+        {"t": "\"We'd know from customer complaints at the venue.\"", "correct": false,
+         "why": "Detecting your invariant violation via humans at a stadium gate is the Bad Bunny incident — discovery at the point of maximum damage, months of refunds, and a regulator. The whole point of the auditor is to know first."},
+        {"t": "\"Extensive load tests before each drop verify the locking logic.\"", "correct": false,
+         "why": "Valuable and worth doing, but tests prove the code you tested, not the system as it runs — with its migrations, hotfixes, and operator actions. Pre-launch testing complements a production invariant check; it can't replace one."}
+      ]
+    },
+    {
+      "id": "p3c08-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A candidate opens their Ticketmaster design by sharding the seats table across 10 nodes 'for drop-day scale.' What's the sharpest critique?",
+      "options": [
+        {"t": "Ten shards is too few — big drops need at least a hundred", "correct": false,
+         "why": "Accepting the premise and haggling over the number misses that the premise is wrong on two independent counts."},
+        {"t": "The dataset is 5MB with a few hundred writes/sec — and sharding can't help anyway, because thousands of buyers contend on the SAME seat, which lives on one shard wherever you put it", "correct": true,
+         "why": "Both barrels: the numbers show no throughput problem exists, and the actual problem — same-row contention — is untouched by any partitioning scheme. Sharding solves 'too much load spread across rows,' not 'all load on one row.' Estimation gating design, applied."},
+        {"t": "Sharding is fine but they should use consistent hashing for it", "correct": false,
+         "why": "Refining the mechanics of an unnecessary solution. The critique that matters is that no partitioning of 5MB fixes single-row contention."},
+        {"t": "It's reasonable — better to over-provision inventory than risk drop-day overload", "correct": false,
+         "why": "Sharding the money-critical CP island isn't free insurance: cross-shard transactions for adjacent-seat purchases, harder reconciliation, more failover machinery — real complexity bought against a problem the estimate says doesn't exist."}
+      ]
+    },
+    {
+      "id": "p3c08-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Payment provider is degrading mid-drop (30s latencies, some timeouts). Rank the response. The strongest first move is:",
+      "options": [
+        {"t": "Increase payment retries so more charges eventually get through", "correct": false,
+         "why": "Piling retries onto a drowning dependency is the classic cascade accelerant — more concurrent load on the provider, longer queues, more pinned seats. It's the intuitive move and the wrong one (p2c07's core lesson)."},
+        {"t": "Trip the circuit breaker AND turn the waiting-room admission rate down, letting the queue absorb demand while pending-seat pileup drains", "correct": true,
+         "why": "Both dials, correctly paired: the breaker stops feeding the sick dependency; the admission dial stops manufacturing new shoppers who can't check out. Recognizing the waiting room as the system's backpressure valve — not just an entry gate — is the senior read."},
+        {"t": "Extend all hold TTLs so users have time to retry payment themselves", "correct": false,
+         "why": "This freezes even more inventory for longer — amplifying exactly the pileup you're fighting. Sympathetic to users, hostile to the system."},
+        {"t": "Fail over to a backup payment provider immediately", "correct": false,
+         "why": "A second provider is a legitimate resilience investment to raise in the interview — but as a mid-incident 'immediately' move it's fantasy unless pre-integrated and pre-tested, and it dodges the load-management question being asked."}
+      ]
+    },
+    {
+      "id": "p3c08-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Requirement flip: the event becomes general admission — 50,000 identical tickets, no seat selection. A candidate keeps the per-seat design unchanged, treating tickets as 50,000 anonymous 'seats.' Your assessment:",
+      "options": [
+        {"t": "Wrong — without seat identity the design collapses to contention on shared state, and the honest redesign is a sharded counter (or a pre-generated ticket queue), which the anonymous-seat trick only crudely approximates", "correct": true,
+         "why": "Sharp. Assigning buyers to arbitrary anonymous rows IS a rough sharded counter, but done accidentally: you inherit per-row machinery (holds, maps, adjacency) that no longer means anything, plus retry-on-collision logic a deliberate counter design handles cleanly. Recognizing that a changed requirement changes the natural data model — rather than force-fitting the old one — is the judgment being probed."},
+        {"t": "Fine — 50,000 rows is 50,000 rows either way, and reuse beats redesign", "correct": false,
+         "why": "Reuse is a virtue when the model still fits. Here buyers don't want a specific row, so making them race for arbitrary ones manufactures collisions the domain doesn't require — the model actively fights the requirement."},
+        {"t": "Wrong — general admission needs no concurrency control since tickets are identical", "correct": false,
+         "why": "The invariant survives the flip: exactly 50,000 sales, never 50,001. Identical tickets concentrate contention onto one counter rather than eliminating it — arguably the hotter problem (p2c06)."},
+        {"t": "Fine, but the seat map should be hidden in the UI", "correct": false,
+         "why": "A cosmetic patch over a structural mismatch. The backend still runs hold/claim machinery for seat identities nobody chose — the UI hiding it doesn't recover the wasted collisions or complexity."}
+      ]
+    }
+  ]
+}

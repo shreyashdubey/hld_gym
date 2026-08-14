@@ -1,0 +1,358 @@
+<p>The interviewer writes a hashtag on the whiteboard and says: "Design trending topics. Every public event on the platform flows to you — every video view, every search, every hashtag use. Show me the top ten right now, for the last hour and the last day, and keep it fresh." Then the number drops: "Ten million events per second."</p>
+
+<p>Your first instinct is everyone's first instinct, and it's the trap the question was built around: dump events into a store and run <code>SELECT key, COUNT(*) GROUP BY key ORDER BY count DESC LIMIT 10</code>. At ten million writes per second, over a <em>sliding</em> window, with a fresh answer due every few seconds — that query isn't slow. It's fictional. No database on earth runs it at this rate on live data.</p>
+
+<p>What makes this a senior favorite is that the honest answer requires giving up something engineers hate giving up: exactness. The passing candidate says, early and out loud, "I cannot count this exactly in real time, and I'm going to prove it with arithmetic — so I'll count it approximately now and exactly later." Everything else in the design falls out of that one committed sentence. This chapter is that interview, played at the E5 bar. It's also the payoff chapter for the probabilistic structures you met in Part 2 — this is the problem count-min sketch was born for.</p>
+
+<h2>Requirements: pin the product before the plumbing</h2>
+
+<p>First, shrink the problem out loud. "Top-K" and "trending" sound like one feature. They're two, and I'll say so at the whiteboard: <strong>top-K</strong> is "biggest counts in a window" — most-viewed videos this hour. <strong>Trending</strong> is "rising fastest against its own baseline" — a hashtag doing 50x its normal rate. Same pipeline, different final scoring. I'll build the counting machine once and hang both scores off it.</p>
+
+<p><strong>Functional requirements:</strong></p>
+<ul>
+<li>Top-K most-frequent keys (hashtags, video IDs, search queries) over sliding windows: last 5 minutes, last hour, last 24 hours.</li>
+<li>K is configurable from 10 (a trends widget) up to 1,000 (an internal dashboard).</li>
+<li>A separate "trending" list ranked by rise-over-baseline, not raw volume.</li>
+<li>A read API that any surface (home page, search page) can call.</li>
+<li>Out of scope, agreed with the interviewer: personalization, spam/bot filtering (I'll assume a filter stage upstream owns that), and historical analytics UI.</li>
+</ul>
+
+<p><strong>Non-functional requirements — with numbers I'm committing to:</strong></p>
+<ul>
+<li>Ingest 10M events/second at peak, with spikes beyond during global moments.</li>
+<li>Leaderboard freshness: results at most ~5 seconds stale. Near-real-time, not real-time — I'm saying that out loud because it buys me the whole design.</li>
+<li>Counts may be <em>approximate</em> for display (within roughly 1% on the big entries), but must become <em>exact</em> in the historical record within hours.</li>
+<li>Read latency p99 under 100ms — which will turn out to be trivial.</li>
+<li>Availability beats freshness for the widget: serving a 30-second-old list is fine; serving an error is not.</li>
+</ul>
+
+<h2>Estimation: the number that forces the whole design</h2>
+
+<p>This is the rare problem where estimation isn't a warm-up — it <em>is</em> the argument. I want to prove the naive design impossible, with arithmetic, before I replace it.</p>
+
+<p><strong>Volume.</strong> 10M events/sec ≈ 864 billion events/day — call it a trillion. At ~100 bytes per event that's about 1 GB/s of ingest, roughly 86 TB/day of raw log. Big, but a log is the easy part: Kafka and object storage eat this for breakfast.</p>
+
+<p><strong>Distinct keys.</strong> Billions of videos exist; hundreds of millions get at least one view a day; add search queries (near-unbounded) and hashtags. Call it ~2 billion distinct keys touched per day.</p>
+
+<p><strong>Now the kill shot: what does exact counting cost?</strong> A hash map from key to count: ~8 bytes of hashed key, 8 bytes of count, plus buckets, pointers, and load-factor slack — realistically ~100 bytes per entry. 2 billion keys × 100 bytes = <strong>200 GB of RAM for one window</strong>. But a sliding hour needs me to expire per-minute contributions, so I really need counts <em>per key per minute</em> — that multiplies the state again. And whatever holds it must absorb 10M random-access writes per second, and be snapshotted every minute, and be rebuilt when a node dies. This isn't "add more machines" territory; it's a structurally wrong shape. Meanwhile, here's the punchline I want the interviewer to hear: <strong>a count-min sketch giving useful accuracy at this traffic costs ~16 MB. Not gigabytes — megabytes — because its size doesn't depend on the number of distinct keys at all.</strong></p>
+
+<p>Three conclusions, each driving a decision:</p>
+<ul>
+<li>Exact real-time counting of all keys is off the table → the live path uses sketches (approximate, fixed memory).</li>
+<li>Exactness is still required eventually → keep the raw log and run exact batch counts over it hourly. Two paths, merged.</li>
+<li>The read side is one small cached blob (K ≤ 1,000 entries ≈ 50 KB) → reads are trivial. All the difficulty lives in the write/aggregation path, so that's where I'll spend the interview.</li>
+</ul>
+
+<h2>API and data model — quickly</h2>
+
+<p>The public surface is one endpoint:</p>
+
+<pre><code>GET /trending?window=1h&amp;k=50&amp;mode=top|rising
+→ { "as_of": 1723620004, "window": "1h", "entries": [
+     { "key": "#eclipse", "rank": 1, "count_est": 41200000 }, ... ] }</code></pre>
+
+<p>Note <code>count_est</code>, not <code>count</code> — the field name admits the approximation, and the UI rounds ("41.2M") the way every view counter you've ever seen does. Internally: an event stream <code>{type, key, geo, ts}</code> partitioned by <code>hash(key)</code>; in-memory sketch state on counting shards; a Redis leaderboard blob per (window, mode); and a warehouse table <code>exact_counts(key, hour, count)</code> written by the batch path.</p>
+
+<h2>High-level design: one machine, two speeds</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 360" role="img" aria-label="Dual-path architecture: events flow through Kafka to sketch shards and an aggregator to a cache, while a batch path computes exact counts and a diff alarm compares the two">
+  <rect class="dg-node" x="8" y="62" width="88" height="48" rx="8"/>
+  <text class="dg-txt" x="20" y="82">Events</text>
+  <text class="dg-txt-s" x="20" y="99">10M/s</text>
+  <rect class="dg-node" x="124" y="62" width="94" height="48" rx="8"/>
+  <text class="dg-txt" x="136" y="82">Kafka</text>
+  <text class="dg-txt-s" x="136" y="99">by hash(key)</text>
+  <rect class="dg-zone" x="244" y="18" width="176" height="196" rx="10"/>
+  <text class="dg-txt-s" x="256" y="36">counting shards ×50</text>
+  <rect class="dg-node" x="258" y="46" width="148" height="42" rx="8"/>
+  <text class="dg-txt-s" x="268" y="63">minute-ring of</text>
+  <text class="dg-txt-s" x="268" y="78">sketches + heap</text>
+  <rect class="dg-node" x="258" y="102" width="148" height="42" rx="8"/>
+  <text class="dg-txt-s" x="268" y="119">minute-ring of</text>
+  <text class="dg-txt-s" x="268" y="134">sketches + heap</text>
+  <rect class="dg-node" x="258" y="158" width="148" height="42" rx="8"/>
+  <text class="dg-txt-s" x="268" y="175">minute-ring of</text>
+  <text class="dg-txt-s" x="268" y="190">sketches + heap</text>
+  <rect class="dg-node-alt" x="452" y="86" width="112" height="52" rx="8"/>
+  <text class="dg-txt" x="464" y="107">aggregator</text>
+  <text class="dg-txt-s" x="464" y="124">merge every 2s</text>
+  <rect class="dg-node" x="596" y="86" width="114" height="52" rx="8"/>
+  <text class="dg-txt" x="608" y="107">leaderboard</text>
+  <text class="dg-txt-s" x="608" y="124">cache → reads</text>
+  <line class="dg-edge" x1="96" y1="86" x2="124" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="218" y1="86" x2="244" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="112" x2="452" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="564" y1="112" x2="596" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="171" y1="110" x2="171" y2="252" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="180" y="200">also archived</text>
+  <rect class="dg-node" x="124" y="256" width="94" height="48" rx="8"/>
+  <text class="dg-txt" x="136" y="276">raw log</text>
+  <text class="dg-txt-s" x="136" y="293">object store</text>
+  <rect class="dg-node" x="258" y="256" width="120" height="48" rx="8"/>
+  <text class="dg-txt" x="270" y="276">hourly batch</text>
+  <text class="dg-txt-s" x="270" y="293">exact counts</text>
+  <rect class="dg-node" x="418" y="256" width="106" height="48" rx="8"/>
+  <text class="dg-txt" x="430" y="276">exact store</text>
+  <text class="dg-txt-s" x="430" y="293">history</text>
+  <rect class="dg-node" x="576" y="256" width="134" height="48" rx="8"/>
+  <text class="dg-txt" x="588" y="276">diff alarm</text>
+  <text class="dg-txt-s" x="588" y="293">fast vs exact</text>
+  <line class="dg-edge" x1="218" y1="280" x2="258" y2="280" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="378" y1="280" x2="418" y2="280" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="524" y1="280" x2="576" y2="280" marker-end="url(#arrow)"/>
+  <line class="dg-bad" x1="653" y1="138" x2="653" y2="252" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="662" y="200">compare</text>
+</svg>
+<figcaption>The two-speed machine. Top row: approximate answers in seconds. Bottom row: exact answers in hours. The diff alarm is what keeps the fast path honest.</figcaption>
+</figure>
+
+<p><strong>Write path.</strong> Every event lands in Kafka, partitioned by <code>hash(key)</code> — so all events for <code>#eclipse</code> flow to the same partition, and one counting shard owns each key's full stream. Each of ~50 counting shards consumes its partitions and maintains, in memory, a ring of per-minute count-min sketches plus small heaps of candidate top keys (deep dive 1). Every 2 seconds, an aggregator pulls each shard's current candidates with their window counts, merges them, and writes the top-K blob for each window into the leaderboard cache.</p>
+
+<p><strong>Read path.</strong> An API server answers <code>GET /trending</code> straight from the cache. One blob, a few kilobytes, refreshed every 2 seconds — even 100K read QPS is a non-event, and a CDN could take it further. I'll say this once and move on: the read path is deliberately boring.</p>
+
+<p><strong>Slow path.</strong> Kafka also archives everything to object storage in hourly partitions. An hourly batch job (Flink or Spark — I'll say Flink in batch mode) computes <em>exact</em> counts per key per hour: a shuffle-and-sum over ~36 billion events, a thoroughly ordinary big-data job. It writes exact hourly top-K into the historical store, <em>overwriting</em> the approximate snapshots the fast path recorded, and feeds the diff alarm that compares the two paths (failure section).</p>
+
+<p>Why two paths — isn't this the "lambda architecture" everyone spent the 2010s arguing about? Yes, and I'm choosing it on purpose, so let me defend it. The pure-streaming alternative (kappa: one exactly-once stream job holding exact keyed counts) re-imports the very problem my estimation ruled out: exact per-key state for billions of keys, now spread across a giant stateful cluster with checkpoint and recovery pain to match. Here the product genuinely tolerates approximation for the live number and genuinely wants exactness only for the record — that split in requirements is exactly when lambda earns its keep. The cost is real and I'll name it before the interviewer does: two codepaths that can disagree, and I must monitor their disagreement rather than assume it away. That monitor turns out to be a feature — it's my correctness alarm.</p>
+
+<div class="box story"><div class="box-tag">War story — Twitter, Storm, and where "lambda" came from</div>
+<p>This exact design has a birthplace. In 2011 Twitter acquired BackType, a social-analytics startup whose engineer Nathan Marz had built Storm — the first widely used open-source stream processor, released that September. Storm became Twitter's real-time analytics backbone, and the canonical demo topology was literally this chapter: a rolling, sharded count of the top-N words and hashtags in the firehose. Marz then wrote up the pattern he'd been living: you can't afford exact real-time computation over the full history, so you run a fast approximate "speed layer" beside a slow exact "batch layer" and merge them at query time — he named it the Lambda Architecture, and argued the batch layer also buys "human fault tolerance": when a bug corrupts your live numbers, recomputing from the immutable log fixes history. The pattern drew famous criticism (Jay Kreps' "kappa" essay: two codepaths, double maintenance), and for many pipelines kappa won. But top-K at firehose scale is the workload lambda was invented for — and Twitter kept investing in the fast layer for years, replacing Storm in 2015 with Heron, an API-compatible engine it built for better debuggability and efficiency, described in a published SIGMOD paper.</p>
+</div>
+
+<h2>Deep dive 1: the fast path — a sketch and a heap</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>The hard part of this whole problem is one sentence: <strong>you cannot afford a counter per key, and you cannot rank what you never stored.</strong> Everything hinges on two structures working as a pair. The count-min sketch answers "roughly how many times have I seen this key?" in fixed memory — but it cannot list keys; it only answers questions about keys you name. The min-heap remembers <em>which</em> keys are currently worth naming. Sketch = counts without names; heap = names without counts. Candidates who reach for just one of the two get stuck in front of the interviewer: a sketch alone can't produce a top-10 list, and a heap alone has no counts to rank by. The pair — plus the fact that sketches merge cleanly — is the entire trick, and it's where this interview is won.</p>
+</div>
+
+<p>A count-min sketch (Part 2, chapter 10 — here's the payoff) is a small 2-D array of counters: <code>d</code> rows, <code>w</code> columns. Each row has its own hash function. The mechanics, walked honestly:</p>
+
+<ul>
+<li><strong>Update:</strong> for an event on key <code>x</code>, compute <code>d</code> hashes; in each row <code>i</code>, increment cell <code>[i][h_i(x)]</code>. That's it — four hashes, four increments. Nanoseconds.</li>
+<li><strong>Query:</strong> read those same <code>d</code> cells and take the <strong>minimum</strong>. Other keys hash-colliding into a cell can only have <em>added</em> to it, so every cell is an overcount; the minimum is the least-polluted view.</li>
+<li><strong>Error direction:</strong> therefore the estimate is <em>never below</em> the true count, and above it by at most about <code>(e/w) × N</code> with high probability, where <code>N</code> is the total number of events the sketch has absorbed. Deeper (<code>d</code>) makes a bad overestimate exponentially less likely; wider (<code>w</code>) shrinks the overestimate itself.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="An event key hashes into one cell per row of a count-min sketch; the minimum cell is the estimate, which is compared against the top-K min-heap">
+  <rect class="dg-node" x="8" y="120" width="112" height="52" rx="8"/>
+  <text class="dg-txt" x="22" y="141">#eclipse</text>
+  <text class="dg-txt-s" x="22" y="158">+1 event</text>
+  <text class="dg-txt-s" x="148" y="56">h1</text>
+  <rect class="dg-node" x="170" y="40" width="300" height="24" rx="4"/>
+  <rect class="dg-node-alt" x="262" y="40" width="20" height="24" rx="3"/>
+  <text class="dg-txt-s" x="148" y="116">h2</text>
+  <rect class="dg-node" x="170" y="100" width="300" height="24" rx="4"/>
+  <rect class="dg-node-alt" x="398" y="100" width="20" height="24" rx="3"/>
+  <text class="dg-txt-s" x="148" y="176">h3</text>
+  <rect class="dg-node" x="170" y="160" width="300" height="24" rx="4"/>
+  <rect class="dg-node-alt" x="204" y="160" width="20" height="24" rx="3"/>
+  <text class="dg-txt-s" x="148" y="236">h4</text>
+  <rect class="dg-node" x="170" y="220" width="300" height="24" rx="4"/>
+  <rect class="dg-node-alt" x="330" y="220" width="20" height="24" rx="3"/>
+  <line class="dg-edge" x1="120" y1="134" x2="170" y2="54" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="120" y1="142" x2="170" y2="112" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="120" y1="152" x2="170" y2="172" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="120" y1="160" x2="170" y2="230" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="480" y="30">w = 1M cells per row</text>
+  <line class="dg-edge" x1="470" y1="140" x2="520" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt" x="500" y="128">min of 4 cells</text>
+  <text class="dg-txt-s" x="500" y="160">est = 41,203</text>
+  <rect class="dg-node" x="560" y="180" width="152" height="96" rx="8"/>
+  <text class="dg-txt" x="574" y="204">min-heap, size K</text>
+  <text class="dg-txt-s" x="574" y="226">est &gt; smallest?</text>
+  <text class="dg-txt-s" x="574" y="243">→ evict + admit</text>
+  <text class="dg-txt-s" x="574" y="260">else ignore</text>
+  <line class="dg-edge" x1="580" y1="165" x2="600" y2="180" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>One event, four hashes, four increments; a query takes the minimum cell and lets the heap decide admit-or-ignore. Memory never grows with the number of distinct keys.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A count-min sketch is a wall of shared tally counters. You don't get your own counter — you get assigned one by hash, and strangers share it with you, clicking it up for their own keys. So any single counter reads too high, never too low. The fix: assign everyone <em>four</em> counters on four differently-shuffled walls, and when asked for your count, report the <strong>smallest</strong> of your four — it's the one the fewest strangers polluted. The analogy breaks in one place worth saying: real tally walls run out of counters; a sketch never refuses a new key. It just gets statistically noisier as N grows — which is exactly the knob we'll tune.</p>
+</div>
+
+<p><strong>Sizing — one worked example, because the interviewer will ask.</strong> I'll commit: <code>w</code> = 1M cells, <code>d</code> = 4, 4-byte counters → 16 MB per sketch. Error ≈ <code>e/w</code> ≈ 2.7 per million events absorbed. For a full merged hour of global traffic (N ≈ 36 billion), that's an overcount of roughly 100K on any query, wrong by more only ~2% of the time (that's the <code>d</code> = 4 doing its job). A top hashtag in that hour sits around 36M+ events, so we're ranking with ~0.3% noise. For the entries that matter, that's invisible. Note the trade honestly: error scales with <em>total traffic through the sketch</em>, not with distinct keys — the knob is width, and I'll come back to it in ops.</p>
+
+<p><strong>Now the heap.</strong> The sketch can't tell me <em>which</em> keys are big — I can only ask it about keys I name. So each shard keeps a min-heap of the current candidates: on each event, query the sketch for that key's estimate; if the key is already in the heap, update it; otherwise, if the estimate beats the heap's smallest member, evict the smallest and admit the newcomer. A hash-set alongside gives O(1) membership checks. I'll keep per-minute heaps of ~2,000 candidates per shard — far more than K, deliberately, so real risers can't slip through the cracks between minutes.</p>
+
+<p><strong>What the overestimate does to top-K — and who's allowed to care.</strong> Since estimates only err upward, the failure mode is a <em>false entrant</em>: a middling key whose four cells all got unlucky collisions sneaks in near the boundary — rank 9 or 10 in a top-10, the tail of a top-1000. It can bump a legitimate key out. Ranks 1 through 5, separated by millions, are effectively immune; the noise lives where neighbors are ~100K apart. My commitment: for a trends widget or a "popular now" shelf, boundary churn is invisible and acceptable. For anything with money or contracts attached — advertiser reporting, creator payouts — it is not, and those numbers must come from the exact path, full stop. There's even a useful asymmetry to name: threshold alerts built on CMS can fire falsely but can never <em>miss</em> a genuinely hot key, because estimates never read low.</p>
+
+<div class="box story"><div class="box-tag">War story — Reddit counts views with a sketch's cousin</div>
+<p>In 2017 Reddit's engineering blog laid out how they built per-post view counts — the little "N views" number — and it's a confession that exact counting loses at scale. They wanted <em>unique</em> viewers per post, and for a viral post that means tracking millions of distinct user IDs; keeping a real set per post would burn megabytes each across millions of posts, almost all of it for a number nobody audits. Their pipeline: every view event flows through Kafka into a consumer named Nazar that filters and dedups (deciding whether a view is countable at all), then into a counter service named Abacus that maintains the count in Redis using HyperLogLog — a probabilistic structure that estimates distinct-count in about 12 KB regardless of whether a post had ten thousand or ten million viewers. They accepted roughly 1% error, permanently, in a user-facing number, and traded it for fixed tiny memory. Different sketch than ours — HLL answers "how many <em>distinct</em>?", CMS answers "how many <em>times</em>?" — but the identical senior judgment: measure what exactness costs, notice nobody needs it here, and say so in the design doc.</p>
+</div>
+
+<h2>Deep dive 2: windows that slide, and what "trending" actually ranks</h2>
+
+<p>"Last hour" is a sliding window: at 12:47 it means 11:47→12:47. Rebuilding a sketch of 36 billion events every 2 seconds is obviously out, so I'll do what nearly every production system does: <strong>quantize</strong>. Each shard keeps one sketch per <em>minute</em> — a tumbling window that closes and becomes immutable when the minute rolls over — arranged in a ring of 60. The current minute's sketch is the only one being written. A query for the sliding hour reads all 60: because sketches with the same dimensions and hash seeds merge by <strong>element-wise addition of their counter arrays</strong>, summing a key's estimate across the ring gives its count for the trailing hour. When minute 61 begins, the ring's write head advances and the oldest sketch is wiped and reused — expiry is free, no tombstones, no compaction.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="A ring of per-minute sketches: the write head fills the current minute, a query sums all buckets, and the oldest bucket gets overwritten as time advances">
+  <rect class="dg-zone" x="16" y="70" width="688" height="96" rx="10"/>
+  <rect class="dg-bad" x="34" y="92" width="70" height="52" rx="6"/>
+  <text class="dg-txt-s" x="44" y="114">12:47</text>
+  <text class="dg-txt-s" x="44" y="130">oldest</text>
+  <rect class="dg-node" x="118" y="92" width="70" height="52" rx="6"/>
+  <text class="dg-txt-s" x="128" y="114">12:48</text>
+  <rect class="dg-node" x="202" y="92" width="70" height="52" rx="6"/>
+  <text class="dg-txt-s" x="212" y="114">12:49</text>
+  <text class="dg-txt" x="296" y="124">… 60 buckets …</text>
+  <rect class="dg-node" x="432" y="92" width="70" height="52" rx="6"/>
+  <text class="dg-txt-s" x="442" y="114">13:45</text>
+  <rect class="dg-node" x="516" y="92" width="70" height="52" rx="6"/>
+  <text class="dg-txt-s" x="526" y="114">13:46</text>
+  <rect class="dg-node-alt" x="600" y="92" width="86" height="52" rx="6"/>
+  <text class="dg-txt-s" x="610" y="114">13:47 now</text>
+  <text class="dg-txt-s" x="610" y="130">write head</text>
+  <path class="dg-edge" fill="none" d="M 643 92 C 643 30, 69 30, 69 86" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="270" y="40">next minute: wipe + reuse oldest</text>
+  <text class="dg-txt-s" x="16" y="196">query "last hour" = sum the key's estimate across all 60 buckets (sketches merge by adding cells)</text>
+  <text class="dg-txt-s" x="16" y="216">16 MB × 60 ≈ 1 GB per shard — the whole sliding hour, in RAM, forever-fixed size</text>
+</svg>
+<figcaption>Tumbling minutes composed into a sliding hour. Expiry is just the write head lapping the ring.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>It's a clock face of 60 small notebooks. You only ever write in the notebook for the current minute. Anyone asking "what happened in the last hour?" reads all 60 and adds them up. When a new minute starts, you grab the oldest notebook, erase it, and start writing — no shredding ceremony, no archive room. The honest cost: your "hour" is really "the last 59-to-60 whole minutes," quantized to minute edges. Nobody staring at a trends widget can tell, and I'll say so rather than hide it.</p>
+</div>
+
+<p>The day window works the same way one level up: when a minute-ring bucket retires, its contents have already been folded (added, cell by cell) into the current <em>hour</em> sketch, and 24 hourly sketches in a second ring give me the sliding day. Memory per shard: 60 × 16 MB + 24 × 16 MB + heaps ≈ 1.4 GB. Comfortable on one box, with room for 10x.</p>
+
+<p>One subtlety I'd volunteer before the interviewer finds it: how do shards afford window queries for thousands of candidates? Answer: incrementally. When a key first enters a candidate heap, the shard sums its ring once and caches that windowed count; afterwards it just adds live increments as they happen and, at each minute rollover, subtracts the expiring bucket's contribution for each cached candidate. A few thousand candidates × 60-bucket touch-ups per minute is noise.</p>
+
+<p><strong>Now "trending," which is a different question than "big."</strong> A top-K-by-volume list is Sisyphus content: the same megastars every day. Trending must rank <em>acceleration</em>: current rate against the key's own baseline. My committed score: <code>score = (c_now + s) / (c_base + s)</code>, where <code>c_now</code> is the key's last-15-minutes count, <code>c_base</code> is its average 15-minute count over the trailing day (both straight from the rings), and <code>s</code> is a smoothing constant (say 5,000) that stops a key going 3 → 300 views from "trending" at 100x. Plus a floor: ignore keys below a minimum current volume. Rank candidates by score instead of count, and the same machine serves both lists. This velocity-over-volume choice is not academic — Twitter said publicly, back in 2010, that trends are computed to surface <em>sharp spikes over sustained volume</em>, which is precisely why Justin Bieber famously stopped being a permanent fixture of the trends box despite having more raw tweet volume than almost anything else on the platform. Volume is fame; trending is news.</p>
+
+<h2>Deep dive 3: sharding, merging, and the viral-key question</h2>
+
+<p>I partitioned by <code>hash(key)</code>, so here's the question I should raise before the interviewer does: a viral key is <em>one key</em>. When <code>#eclipse</code> does 3M events/sec, every one of them lands on the same partition, the same shard. Did I just build chapter p2c06's hot-partition nightmare on purpose?</p>
+
+<p>No — and the reason is worth spelling out, because it's the difference between this system and a normal database. A hot key in Postgres means row locks, index contention, disk. A hot key here means <em>four hashes and four integer increments</em>, no locks, no allocation, memory that's already resident. One core sustains millions of these per second; a shard has many cores. And the stream layer helps before events even arrive: producers pre-aggregate — instead of shipping 3M individual <code>{#eclipse, +1}</code> events, each producer batches a few hundred milliseconds locally and ships <code>{#eclipse, +2,913}</code> deltas. A viral key <em>collapses</em> under pre-aggregation (millions of events, one key), so the hotter the key, the better batching works. Sketches absorb the celebrity problem; that's half the reason I chose them.</p>
+
+<p>Key-hash partitioning also buys correctness cheaply: each key's counts live wholly on one shard, so a shard's estimate for its keys is the <em>global</em> estimate — no cross-shard reconciliation per key. The aggregator's merge every 2 seconds is then almost embarrassingly simple: each shard sends its top ~2,000 candidates per window with their ring-summed counts (~50 shards × 2K entries × 40 bytes ≈ 4 MB per pull); the aggregator unions them, sorts, takes K, writes the cache blob.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 310" role="img" aria-label="Shards send candidate lists to an aggregator that unions, sorts, and publishes; an inset shows sketch merge as element-wise addition of counter arrays">
+  <rect class="dg-node" x="10" y="26" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="24" y="49">shard 7</text>
+  <text class="dg-txt-s" x="24" y="68">top-2K + counts</text>
+  <rect class="dg-node" x="10" y="118" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="24" y="141">shard 8</text>
+  <text class="dg-txt-s" x="24" y="160">top-2K + counts</text>
+  <rect class="dg-node" x="10" y="210" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="24" y="233">shard 9</text>
+  <text class="dg-txt-s" x="24" y="252">top-2K + counts</text>
+  <rect class="dg-node-alt" x="250" y="100" width="180" height="98" rx="8"/>
+  <text class="dg-txt" x="264" y="126">aggregator</text>
+  <text class="dg-txt-s" x="264" y="148">1. union candidates</text>
+  <text class="dg-txt-s" x="264" y="165">2. sort by count</text>
+  <text class="dg-txt-s" x="264" y="182">3. take K → publish</text>
+  <rect class="dg-node" x="490" y="118" width="130" height="56" rx="8"/>
+  <text class="dg-txt" x="504" y="141">leaderboard</text>
+  <text class="dg-txt-s" x="504" y="160">cache blob</text>
+  <line class="dg-edge" x1="160" y1="54" x2="250" y2="120" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="160" y1="146" x2="250" y2="148" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="160" y1="238" x2="250" y2="178" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="430" y1="148" x2="490" y2="146" marker-end="url(#arrow)"/>
+  <rect class="dg-zone" x="400" y="210" width="310" height="90" rx="10"/>
+  <text class="dg-txt-s" x="414" y="230">sketch merge = element-wise ADD</text>
+  <rect class="dg-node" x="414" y="242" width="100" height="22" rx="3"/>
+  <text class="dg-txt-s" x="424" y="258">3 0 7 1</text>
+  <text class="dg-txt" x="524" y="259">+</text>
+  <rect class="dg-node" x="542" y="242" width="100" height="22" rx="3"/>
+  <text class="dg-txt-s" x="552" y="258">1 4 0 2</text>
+  <text class="dg-txt" x="414" y="290">=</text>
+  <rect class="dg-good" x="432" y="272" width="100" height="22" rx="3"/>
+  <text class="dg-txt-s" x="442" y="288">4 4 7 3</text>
+  <text class="dg-txt-s" x="552" y="290">same w, d, seeds!</text>
+</svg>
+<figcaption>The 2-second merge. Inset: why sketches compose — union of two streams = cell-by-cell addition, provided both sketches share dimensions and hash seeds.</figcaption>
+</figure>
+
+<p>That inset deserves one careful paragraph, because interviewers probe it and candidates fumble it. Count-min sketches over two disjoint streams merge by <strong>adding corresponding cells</strong> — every cell is a sum of contributions, so the union's cells are the sums of the parts, and all error guarantees carry over. People say "max" here surprisingly often, because HyperLogLog — the other famous sketch — <em>does</em> merge by taking the max of corresponding registers (its registers record maxima of hash patterns, not sums). Mixing up the two isn't trivia: merge CMS with max and every key that spans sketches gets silently undercounted. Mergeability is also why this architecture recovers well: any set of per-shard, per-minute sketches can be recombined later, in any grouping — across time (the ring sum), across shards (if I ever switch to random partitioning), or across datacenters.</p>
+
+<p>So where's the real pinch point? <strong>The aggregator.</strong> It's a fan-in of one: every shard reports to it, its cadence sets the freshness SLO, and at 10x shards its pull-merge-sort loop and connection fan-in grow linearly. My answer, committed: it's nearly stateless (its whole world is rebuilt from shard pulls every 2 seconds), so I run two of them in an active-passive pair with a fencing token on cache writes (chapter p2c03) — a stale ex-leader must not overwrite fresher blobs. At 10x I make it a two-level merge tree: 10 mid-level mergers each own 50 shards, one root merges 10 pre-sorted lists. Merge trees are how this design scales sideways forever.</p>
+
+<h2>Failure modes and operations — before you ask</h2>
+
+<p><strong>Counting shard dies.</strong> The state at risk is its rings. Closed minute-sketches are immutable, so each is checkpointed to object storage on rollover — 16 MB a minute, trivial. Recovery: a replacement downloads the 59 closed minutes and replays only the <em>current</em> minute from Kafka (consumer offsets mark the spot) — that's ~12M events, tens of seconds. Until it's back, the leaderboard is missing one shard's candidates; I'd rather serve a list that's briefly blind to 2% of keys than serve nothing, and the diff alarm will tell me if that blindness ever mattered.</p>
+
+<p><strong>Aggregator dies.</strong> Nearly nothing is lost — its state regenerates from the next round of shard pulls. The standby fences, takes over, and the cache goes at most a few refresh cycles stale. This "stateless-ish recovery" is a direct dividend of pushing all real state down into mergeable sketches.</p>
+
+<p><strong>The fast and slow paths disagree.</strong> This is the alarm I care about most, because it's the only end-to-end correctness check an approximate system has. Every hour, when exact batch counts land, a comparator scores the fast path's archived snapshots against truth: top-10 overlap (should be 10/10, alert under 8), and relative count error on the head (alert above ~2%). Divergence means something structural — a shard silently down, a Kafka partition unassigned, sketch saturation, or mismatched hash seeds after a bad deploy. It's my smoke detector, and it's the second half of why the batch path exists.</p>
+
+<p><strong>Sketch accuracy drifts.</strong> Error is ~<code>(e/w) × N</code>: it grows with traffic, not with keys. So the monitor is simple — track N per sketch and the implied error bound versus the count gap around rank K; when the ratio degrades (traffic doubles, say), widen <code>w</code> on the next deploy. Doubling width halves error for double the memory: 32 MB a minute is still nothing. This is a knob you turn twice a year, not a crisis.</p>
+
+<p><strong>Rollout.</strong> New scoring formula or resized sketches ship in shadow mode: the new pipeline runs beside the old on the same Kafka stream, publishing to a dark cache, while the comparator scores both against batch truth for a week. Trending is a feedback loop — what you show people changes what they click — so I want numbers before users see anything. Rollback is flipping the serving pointer back.</p>
+
+<p><strong>At 10x (100M events/sec):</strong> in order — the aggregator fan-in goes first (fixed: merge tree, above); sketch error bounds go second (fixed: wider sketches, linear memory); Kafka partition count and producer pre-aggregation get retuned; the batch job just runs on more cores. Notably absent from this list: total sketch memory per shard as a function of <em>distinct keys</em> — that's the number that never moves, and it's why this design 10x's gracefully while the hash-map design died in the estimation section.</p>
+
+<div class="box story"><div class="box-tag">War story — YouTube's 301 views</div>
+<p>For years, every fast-rising YouTube video displayed the same eerie view count: frozen at "301+" while likes and comments kept climbing into the thousands. The mechanism, which YouTube engineers explained publicly after a famous 2012 explainer video made it a meme: below 300 views, the count was cheap and served straight from the fast path — nobody commits fraud for 40 views. Above that threshold, views started to matter (monetization, charts), so the count froze while a slower verification pipeline deduplicated and audited events before updating the public number; the extra "1" was just increments racing the freeze check. YouTube reworked it in 2015 so counts keep updating, but the architecture confession stands, and it's this chapter's design wearing a trench coat: a cheap approximate path for display, an exact audited path for anything with money attached, and a visible seam between them. When your interviewer asks "is approximate really acceptable for users?", this is your answer: the biggest video site on earth froze its most famous number at 301 for years, and the platform thrived.</p>
+</div>
+
+<div class="box lens"><div class="box-tag">At the whiteboard — what the interviewer probes next</div>
+<p>Once the dual-path design is up, senior-level probing goes straight at the seams:</p>
+<ul>
+<li>"Your sketch overestimates. Show me a user or a team that overestimation actually hurts." — They want the false-entrant-at-the-boundary story, and the billing/payout line you refuse to cross with approximate numbers.</li>
+<li>"One hashtag is doing 3M events/sec. Walk me through exactly where that load lands." — They're checking you know a hot key here is increments, not locks — and that pre-aggregation collapses it further.</li>
+<li>"A counting shard just died. What's lost, and what does recovery look like, minute by minute?" — Checkpointed immutable minutes + replay-the-current-minute is the answer; hand-waving "it's replicated" is not.</li>
+<li>"Why carry two codepaths? Kreps would say kappa." — Defend lambda <em>for this workload</em> with the state-size math, and concede the maintenance cost honestly.</li>
+<li>"How would you find out your leaderboard has been quietly wrong for a week?" — If you didn't build the fast-vs-batch diff alarm, this question ends the round.</li>
+</ul>
+</div>
+
+<h2>The committed choices, priced</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Why I committed to it</th><th>What it costs me</th></tr></thead>
+<tbody>
+<tr><td>Count-min sketch + min-heap fast path</td><td>Fixed ~16 MB per window regardless of billions of keys; nanosecond updates</td><td>Approximate, overestimate-only; boundary ranks churn; can never enumerate keys, only rank named candidates</td></tr>
+<tr><td>Exact hourly batch over the raw log</td><td>Exact history, advertiser-grade numbers, and the end-to-end diff alarm</td><td>Two codepaths to keep in agreement; exactness arrives hours late</td></tr>
+<tr><td>Partition by hash(key)</td><td>Each key's global count lives on one shard — merge is a cheap union-and-sort</td><td>A viral key concentrates on one shard (absorbed by cheap increments + producer pre-aggregation)</td></tr>
+<tr><td>Tumbling minutes composed into sliding windows</td><td>One write structure serves 5m/1h/24h; expiry is free ring reuse</td><td>Windows quantized to minute edges; "last hour" is really the last 59–60 whole minutes</td></tr>
+<tr><td>Ratio-to-baseline trending score with smoothing + floor</td><td>Surfaces spikes, not permanent celebrities; explainable and debuggable</td><td>Two tuning constants that need periodic re-fitting as traffic patterns drift</td></tr>
+<tr><td>Leaderboard cache refreshed every 2s</td><td>Read path becomes one cached blob; read QPS is irrelevant to the design</td><td>Users see numbers a few seconds stale — stated openly, not hidden</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c12-f1">
+<p class="fey-prompt">A junior asks: "Why can't we just keep a big hash map of counts and sort it? And what do the sketch and the heap each do?" Answer in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>A hash map needs an entry per distinct key, and we see about two billion keys a day — that's hundreds of gigabytes of RAM being hammered by ten million writes a second, per window, and it dies. A count-min sketch fixes the memory problem by letting keys share a small grid of counters: updating is a few hashes and increments, and its size never grows no matter how many keys exist. The catch is collisions only ever add, so its answers are slightly too high, never too low — and it can't list keys at all, it can only answer "how big is this key?" for keys you name. That's the heap's job: it remembers the current best candidates, admitting a key whenever its sketch estimate beats the smallest member. Together: the sketch holds the counts without the names, the heap holds the names worth ranking. And because it's all approximate, we run an exact batch count over the raw log every hour to correct the record and to alarm if the fast path ever drifts.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Product asks for per-country trending — 200 countries, same windows. Naively that's 200 sketch-rings per shard (200 × 16 MB × 60 ≈ 192 GB per shard). Fix the memory without giving up the feature.</p></div>
+<details><summary>Answer</summary><p>Use the error formula instead of copying the global sizing. CMS error is ~(e/w) × N where N is traffic <em>through that sketch</em> — and a per-country sketch only absorbs that country's events. A country with 1% of traffic needs roughly 1% of the width for the same relative error. So size sketches by country volume: the top handful keep w = 1M, mid-tier countries get 128K, the long tail gets 16K — total lands around 10–15 GB per shard, not 192. Alternatively re-partition by (country, key) so each shard only hosts a few countries' rings. The senior signal is noticing that sketch error scales with traffic, not keys, and letting that asymmetry pay for the feature.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>10x the firehose: 100M events/sec. Name what breaks, in order, and the fix for each. Then name the one thing that conspicuously does <em>not</em> break.</p></div>
+<details><summary>Answer</summary><p>(1) The aggregator's fan-in and merge loop — fix with a two-level merge tree (mid-level mergers own ~50 shards each, root merges pre-sorted lists). (2) Sketch error bounds — error ~(e/w) × N grows 10x with N, so widen w 10x: 160 MB per minute-sketch, ~10 GB per shard ring, still fine on one box. (3) Kafka partition count and producer pre-aggregation windows need retuning; more counting shards come along for the ride. (4) The batch job needs 10x cores — an accounting problem, not a design problem. What doesn't break: per-shard memory as a function of distinct keys — sketches are size-fixed in the dimension that killed the hash map, which is exactly why this design was chosen.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: the consumer of top-K is now the ads team, and the counts feed advertiser billing — exact, auditable, and fresh within ~10 seconds. What survives of your design, and what must change?</p></div>
+<details><summary>Answer</summary><p>Don't try to tune a sketch into exactness — re-run the estimation, because the requirement flip also flips the key space. Billing counts are per <em>ad campaign</em>, and there are maybe 10 million active campaigns, not 2 billion organic keys. Exact keyed counts for 10M keys ≈ 10M × ~50 bytes ≈ 500 MB — that fits in an exactly-once streaming job's keyed state (Flink with checkpoints, or sharded Redis with an idempotent ledger, chapter p2c02). So the sketch path survives for organic trending, and billing gets its own exact pipeline; the raw-log archive and the diff-alarm habit carry over. The senior move is recognizing that "exact" became affordable the moment the key count shrank — the arithmetic, not the architecture, makes the call.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Sizing drill: one shard's minute-sketch absorbs 12M events. You want overcounts under 1,000 with at least 95% confidence per query. Choose w, d, and compute the memory.</p></div>
+<details><summary>Answer</summary><p>Target relative error ε = 1,000 / 12M ≈ 8.3 × 10⁻⁵. Width w ≈ e/ε ≈ 2.718 / 0.000083 ≈ 33K cells — round up to 64K for headroom (halves the error, costs nothing). Confidence: failure probability per query ≈ e⁻ᵈ, so d = 3 gives ~5% (borderline) and d = 4 gives ~1.8% — take d = 4. Memory: 64K × 4 rows × 4-byte counters = 1 MB per minute-sketch, 60 MB for the hour ring. The lesson: at per-shard, per-minute granularity, sketches are so cheap that you should always buy an extra factor of 2 on width rather than shave megabytes.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>The crux is memory arithmetic: billions of distinct keys make an exact real-time hash map cost hundreds of gigabytes, while a count-min sketch costs megabytes because its size is independent of key count.</li>
+<li>The fast path is a pair with split jobs: the sketch stores counts without names (overestimate-only, tunable via width and depth), and a size-K min-heap stores the names worth ranking.</li>
+<li>Overestimation's damage is concentrated at the leaderboard boundary — false entrants near rank K — which is acceptable for display surfaces and never acceptable for money.</li>
+<li>Sliding windows come from tumbling minute buckets in a ring: write one, sum sixty, overwrite the oldest — expiry is free.</li>
+<li>Count-min sketches merge by element-wise <em>addition</em> of cells (HyperLogLog is the one that merges by max), and that mergeability is what makes sharding, window composition, and recovery cheap.</li>
+<li>"Trending" ranks velocity against a key's own baseline, with smoothing and a volume floor — a deliberately different metric from top-K by volume, or the list is just celebrities forever.</li>
+<li>A viral key concentrates on one shard by design and is absorbed there, because sketch updates are lock-free increments and producers pre-aggregate; the true pinch point is the aggregator, fixed with a merge tree and a fenced standby.</li>
+<li>The exact batch path isn't redundancy — it corrects the historical record and powers the fast-vs-exact diff alarm, the only end-to-end correctness check an approximate system has.</li>
+</ul>
+</div>

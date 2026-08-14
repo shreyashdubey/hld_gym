@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c10",
+  "items": [
+    {
+      "id": "p3c10-q01", "level": 1, "type": "mcq", "tag": "estimation",
+      "q": "Why does the rate limiter's throughput requirement equal the API's total QPS?",
+      "options": [
+        {"t": "Because the limiter runs on every single request — it sits in the request path itself", "correct": true,
+         "why": "Right. There's no sampling: every request must be checked before it's served. That's the number that forbids any per-request trip to a central counter — whatever the check costs is multiplied by 1M/sec."},
+        {"t": "Because the limiter stores one record per request", "correct": false,
+         "why": "Token buckets store per-key state (two numbers), not per-request records. Storing per request is the sliding-log approach, rejected precisely because it scales with QPS."},
+        {"t": "Because 429 responses are as expensive as normal responses", "correct": false,
+         "why": "Actually 429s should be far cheaper — served from gateway memory without touching downstream. The QPS equality comes from the check running on every request, not from rejection cost."},
+        {"t": "It doesn't — the limiter only needs to handle abusive traffic", "correct": false,
+         "why": "You can't know which traffic is abusive until you've checked it. Every request, innocent or not, passes through the limiter, so it sees full API QPS."}
+      ]
+    },
+    {
+      "id": "p3c10-q02", "level": 1, "type": "mcq", "tag": "algorithms",
+      "q": "What's the boundary bug that rules out fixed-window counting?",
+      "options": [
+        {"t": "The counter resets at window edges, so a client can do 2x the limit in seconds by straddling the boundary", "correct": true,
+         "why": "Exactly. 100 requests at 0:59 and 100 more at 1:01 are both 'legal' — 200 requests in two seconds against a 100/min limit. Token bucket has no reset moment, so there's no boundary to exploit."},
+        {"t": "Windows drift out of sync across servers", "correct": false,
+         "why": "Clock sync is a real distributed-systems concern, but it's not THE fixed-window bug. Even on one perfectly-clocked server, the reset-at-boundary burst exists."},
+        {"t": "Fixed windows use too much memory", "correct": false,
+         "why": "Backwards — fixed windows are the cheapest option (one counter per key). Memory is the weakness of sliding logs, which store every timestamp."},
+        {"t": "Fixed windows can't express per-endpoint limits", "correct": false,
+         "why": "Any algorithm can be keyed per endpoint. The flaw is temporal — the hard reset at the window edge — not structural."}
+      ]
+    },
+    {
+      "id": "p3c10-q03", "level": 1, "type": "mcq", "tag": "algorithms",
+      "q": "How much state does a token bucket need per key?",
+      "options": [
+        {"t": "Two numbers: current tokens and the last-refill timestamp", "correct": true,
+         "why": "Yes — refill is computed lazily from elapsed time × rate whenever the key is touched, so no background process and no per-request records. This tininess is why 50M keys fit in ~12GB."},
+        {"t": "A timestamp for every request in the current window", "correct": false,
+         "why": "That's the sliding log. Exact, but memory grows with request rate — a non-starter at 1M QPS."},
+        {"t": "One counter, reset by a timer every window", "correct": false,
+         "why": "That's fixed-window state. The token bucket never resets; it drips continuously, computed from the stored timestamp on each access."},
+        {"t": "A queue of pending requests", "correct": false,
+         "why": "That's a leaky-bucket-as-queue implementation, which smooths traffic by delaying it. A rate limiter decides allow/deny immediately; nothing is queued."}
+      ]
+    },
+    {
+      "id": "p3c10-q04", "level": 1, "type": "mcq", "tag": "redis",
+      "q": "Why does the Redis bucket run inside a Lua script instead of a GET followed by a SET?",
+      "options": [
+        {"t": "The script executes atomically, so two clients can't interleave read-decide-write and spend the same token twice", "correct": true,
+         "why": "Right. Redis runs one script at a time, making the whole read-modify-write uninterruptible. The race isn't handled with locks or retries — it's made impossible."},
+        {"t": "Lua scripts run faster than individual commands", "correct": false,
+         "why": "Scripts do save round trips, but that's a pipelining benefit you could get other ways. The load-bearing property is atomicity, not speed."},
+        {"t": "GET and SET can't store two fields", "correct": false,
+         "why": "HMGET/HMSET handle multiple fields fine. The problem is that two separate commands from two gateways can interleave — both read '1 token', both allow."},
+        {"t": "Lua is required to set TTLs on keys", "correct": false,
+         "why": "EXPIRE works as a plain command anywhere. The script exists to close the read-modify-write race, and the TTL just rides along inside it."}
+      ]
+    },
+    {
+      "id": "p3c10-q05", "level": 1, "type": "mcq", "tag": "distributed-counting",
+      "q": "Limit 60/min, two gateways with independent local counters, no sync. An abuser sends 50 requests through each. What happens?",
+      "options": [
+        {"t": "All 100 requests are admitted", "correct": true,
+         "why": "Both gateways see 50 < 60 and allow everything — 1.7x the limit passes silently. This undercount race is the core problem: local counters over-admit by up to the gateway count."},
+        {"t": "Each gateway admits 30, rejecting the rest", "correct": false,
+         "why": "That would require statically splitting the limit across gateways — a real technique, but not what independent full-limit counters do. Unsynced counters each apply the whole 60."},
+        {"t": "The requests are randomly distributed between admitted and rejected", "correct": false,
+         "why": "Nothing is random here. Each counter deterministically compares 50 to 60 and allows — the failure is systematic under-counting, which is what makes it silent and dangerous."},
+        {"t": "40 requests are rejected once the counters gossip", "correct": false,
+         "why": "The scenario says no sync — and that's the point. Without some form of reconciliation, the gateways never learn the global total existed."}
+      ]
+    },
+    {
+      "id": "p3c10-q06", "level": 1, "type": "mcq", "tag": "redis",
+      "q": "In the Redis key rl:{acct_9f3k}:reads, what do the curly braces do?",
+      "options": [
+        {"t": "They're a hash tag: Redis Cluster hashes only the braced part, so all of this account's keys land on one shard", "correct": true,
+         "why": "Correct — and that co-location is what lets one Lua script atomically touch the user bucket and tenant bucket together, since scripts can only span keys on a single shard."},
+        {"t": "They mark the key as high priority for eviction protection", "correct": false,
+         "why": "Redis has no priority syntax in key names. Eviction is governed by policy and TTLs; braces only affect cluster slot hashing."},
+        {"t": "They encrypt the account ID", "correct": false,
+         "why": "Nothing is encrypted — the braces are routing metadata for the cluster's slot calculation, visible in plaintext."},
+        {"t": "They're just a naming convention with no mechanical effect", "correct": false,
+         "why": "In Redis Cluster they're mechanical: CRC16 runs over only the braced substring. Same tag, same slot, same shard — that's what makes multi-key scripts possible."}
+      ]
+    },
+    {
+      "id": "p3c10-q07", "level": 1, "type": "mcq", "tag": "headers",
+      "q": "Which response tells a rate-limited client what it needs to behave well?",
+      "options": [
+        {"t": "429 with Retry-After and X-RateLimit-Limit/Remaining/Reset headers", "correct": true,
+         "why": "Yes. Retry-After says when to come back; the X-RateLimit trio lets clients watch their budget drain and self-throttle before hitting the wall — which also deflects 'API is broken' support tickets."},
+        {"t": "403 Forbidden with an empty body", "correct": false,
+         "why": "403 means 'not authorized', which misleads clients into re-authenticating. 429 exists specifically for rate limiting, and an empty body teaches the client nothing."},
+        {"t": "503 Service Unavailable", "correct": false,
+         "why": "503 says the server is unhealthy — clients and load balancers may fail away from a perfectly healthy service. The server is fine; the client is over budget. Different signal."},
+        {"t": "200 with an error field in the JSON body", "correct": false,
+         "why": "Soft errors inside 200s break every generic retry library and monitoring rule. Status codes are the contract; use the one that means exactly this."}
+      ]
+    },
+    {
+      "id": "p3c10-q08", "level": 1, "type": "mcq", "tag": "failure-policy",
+      "q": "What does 'fail open' mean for a rate limiter?",
+      "options": [
+        {"t": "When the limiter's backing store is unreachable, requests are allowed through", "correct": true,
+         "why": "Right — availability over accuracy. The protection layer failing shouldn't become the outage. The cost: over-admission during the failure, which is why security-sensitive endpoints get the opposite policy."},
+        {"t": "The limiter opens more capacity as traffic grows", "correct": false,
+         "why": "That's autoscaling, a different concept. Fail open/closed describes behavior during the limiter's own failure, not under load."},
+        {"t": "Rejected requests are retried automatically by the server", "correct": false,
+         "why": "Server-side retry of rejected requests would defeat the limit entirely. Retrying is the client's job, guided by Retry-After."},
+        {"t": "All limits are removed permanently after an incident", "correct": false,
+         "why": "Fail open is a temporary stance during the failure only — when the store recovers, enforcement resumes automatically (helped by TTL'd state rebuilding from live traffic)."}
+      ]
+    },
+    {
+      "id": "p3c10-q09", "level": 1, "type": "mcq", "tag": "tiered-sync",
+      "q": "In the tiered design, what bounds worst-case over-admission for one key?",
+      "options": [
+        {"t": "Roughly burst × number of gateways, lasting one sync interval", "correct": true,
+         "why": "Correct. Each gateway can independently hold up to the full burst before the first sync lands; then the regional balance goes negative and every gateway chokes the key. Spike bounded, duration bounded, then automatic payback."},
+        {"t": "Zero — the Lua script prevents any over-admission", "correct": false,
+         "why": "The script closes the race on the Redis shard, but the local buckets answer without consulting Redis at all between syncs. That blind window is exactly where the bounded leak lives."},
+        {"t": "The size of the Redis cluster", "correct": false,
+         "why": "Cluster size affects capacity and shard count, not accuracy. The leak comes from local optimism between syncs — it exists even with an infinitely large Redis."},
+        {"t": "Unbounded — the design trades away all accuracy", "correct": false,
+         "why": "The whole point of the sync tier is that the leak is bounded and self-correcting: one window of burst × gateways, then the negative balance forces repayment at the steady rate."}
+      ]
+    },
+    {
+      "id": "p3c10-q10", "level": 2, "type": "mcq", "tag": "policy",
+      "q": "You're adding limits for POST /send-sms, which costs real money per call and runs at ~50 QPS. Which mode, and why?",
+      "options": [
+        {"t": "Strict mode — synchronous regional Redis check, paying the ~1ms", "correct": true,
+         "why": "Yes. Over-admitting SMS sends is direct financial loss, and at 50 QPS on a path already spending hundreds of ms, 1ms is a rounding error. The tax and the risk line up: pay for accuracy exactly where mistakes are expensive."},
+        {"t": "Local mode — the tiered design handles everything", "correct": false,
+         "why": "Local mode's worst case is burst × gateways of over-admission — thousands of paid SMS messages sent for free during one sync window. The design's honesty is knowing which endpoints can't absorb that."},
+        {"t": "No limiter — 50 QPS is too small to matter", "correct": false,
+         "why": "Low QPS is precisely how expensive endpoints look until someone abuses one. Cost per call, not call volume, is what decides protection."},
+        {"t": "Local mode but with a very small burst", "correct": false,
+         "why": "Closer — shrinking the local slice reduces the leak but never eliminates it, and gateway count still multiplies it. When the per-call cost is money, buy the synchronous check."}
+      ]
+    },
+    {
+      "id": "p3c10-q11", "level": 2, "type": "mcq", "tag": "failure-policy",
+      "q": "Regional Redis is down. A user mistypes their password twice, then logs in correctly. The login endpoint is fail-closed with a 5/min local allowance. What do they experience?",
+      "options": [
+        {"t": "Nothing unusual — three attempts fit inside the local allowance", "correct": true,
+         "why": "Right, and this is why fail-closed on auth is livable: real users make a handful of attempts, well under the tight local bucket. The wall only exists for bots spraying thousands of attempts — the thing the limit is actually for."},
+        {"t": "All logins are rejected until Redis recovers", "correct": false,
+         "why": "Fail-closed here doesn't mean deny-everything — it means only the conservative local allowance survives. Total lockout would make every limiter blip an authentication outage."},
+        {"t": "Logins succeed but with added latency", "correct": false,
+         "why": "The local check is in-process memory — microseconds. If anything, skipping the failed sync path makes checks marginally faster, not slower."},
+        {"t": "The limiter fails open and brute-force protection is suspended", "correct": false,
+         "why": "That's exactly the policy we rejected for auth: attackers can sometimes cause limiter outages, so failing open there turns every outage into an attack window. Auth keeps its clamp."}
+      ]
+    },
+    {
+      "id": "p3c10-q12", "level": 2, "type": "mcq", "tag": "hot-key",
+      "q": "One stolen API key is hammered at 500K QPS across all gateways. What load does the Redis shard owning that key actually see?",
+      "options": [
+        {"t": "Roughly the normal delta-sync rate — a bounded number of batched ops per second", "correct": true,
+         "why": "Correct, and it's the design's quiet superpower: gateways reject locally once the synced balance goes negative, so the shard sees ~20 syncs/sec per gateway regardless of attack size. The local tier converts a 500K QPS attack into hundreds of Redis ops."},
+        {"t": "500K ops/sec — the shard melts", "correct": false,
+         "why": "Only if every request consulted Redis, which is the central-counter design we rejected. In the tiered design, per-request traffic never reaches the shard; only periodic deltas do."},
+        {"t": "The load spreads evenly across all shards", "correct": false,
+         "why": "One key hashes to one slot on one shard — sharding never helps with a single hot key. What saves the shard is the local pre-filter, not key distribution."},
+        {"t": "Zero — abusive keys are blocked at the CDN", "correct": false,
+         "why": "There's no separate blocking layer in this design; the limiter IS the defense. The shard still participates via sync — it just sees bounded reconciliation traffic instead of the flood."}
+      ]
+    },
+    {
+      "id": "p3c10-q13", "level": 2, "type": "mcq", "tag": "headers",
+      "q": "A deploy bug 429s 10,000 clients in the same second, all with 'Retry-After: 2'. What happens two seconds later, and what's the fix?",
+      "options": [
+        {"t": "They all retry in the same instant — a synchronized stampede. Fix: jitter, in the SDK backoff and in the server's Retry-After values", "correct": true,
+         "why": "Yes — identical retry times convert one spike into a repeating one. Randomizing both sides (full jitter in client backoff, jittered Retry-After from the server) spreads the wave. This is the thundering-herd pattern from Part 2 wearing a rate-limit hat."},
+        {"t": "Nothing — 429s are cheap, so retries don't matter", "correct": false,
+         "why": "Individual 429s are cheap; a synchronized wall of retries arriving in one instant is not. The problem is the correlation in time, not the per-request cost."},
+        {"t": "Clients back off exponentially, so the load naturally spreads", "correct": false,
+         "why": "Exponential backoff without jitter stays synchronized — everyone doubles the same interval from the same starting instant. Jitter, not exponent, is what breaks the alignment."},
+        {"t": "The limiter absorbs it — that's its job", "correct": false,
+         "why": "It will keep rejecting, but the repeated synchronized spikes waste capacity and can mask real signals in your 429 metrics. Shaping client behavior via headers and SDKs is part of the limiter's design surface."}
+      ]
+    },
+    {
+      "id": "p3c10-q14", "level": 2, "type": "mcq", "tag": "fairness",
+      "q": "Tenant BigCorp has 1,000 API users sharing a 5,000/s tenant limit. One of their batch jobs goes rogue at 20,000/s. With only a tenant-level bucket, what goes wrong, and what fixes it?",
+      "options": [
+        {"t": "The rogue job eats the whole tenant allowance, starving BigCorp's 999 other users; fix is chaining a per-user bucket with the tenant bucket, both must pass", "correct": true,
+         "why": "Right. The tenant bucket protects the platform from BigCorp, but nothing protects BigCorp from itself. Two chained checks — per-user AND per-tenant — put a ceiling on any single user's share. One Lua script with hash-tagged keys keeps it a single round trip."},
+        {"t": "Nothing — the tenant stays within its purchased limit", "correct": false,
+         "why": "The platform is fine, but the customer isn't: their interactive users get 429s because one internal job consumed everything. Fairness inside the tenant is part of the product."},
+        {"t": "The platform is overloaded because 20,000/s leaks through", "correct": false,
+         "why": "The tenant bucket caps admitted traffic at 5,000/s regardless of demand — the platform-facing protection works. What breaks is the allocation among BigCorp's own users."},
+        {"t": "Redis crashes from the extra 15,000 rejected requests per second", "correct": false,
+         "why": "Rejections happen at gateway-local buckets once the tenant balance syncs negative — Redis sees bounded delta traffic, same as any hot key. The failure here is fairness, not load."}
+      ]
+    },
+    {
+      "id": "p3c10-q15", "level": 2, "type": "mcq", "tag": "tiered-sync",
+      "q": "You shrink the sync interval from 50ms to 10ms. What improves, what worsens?",
+      "options": [
+        {"t": "Over-admission window shrinks 5x; Redis sync traffic grows ~5x", "correct": true,
+         "why": "Exactly the knob's two ends: accuracy is proportional to sync frequency, and so is reconciliation load. That's why the tuned answer is adaptive — sync hot keys faster rather than syncing everything faster."},
+        {"t": "Both accuracy and Redis load improve", "correct": false,
+         "why": "There's no free lunch in this knob. Every gateway now sends 100 batches/sec instead of 20 — the accuracy gain is bought with fan-in pressure."},
+        {"t": "Request latency rises because checks wait for sync", "correct": false,
+         "why": "The check path never waits for sync in local mode — that decoupling is the design's core. Sync frequency affects accuracy and Redis load, not per-request latency."},
+        {"t": "Nothing changes until you also shrink the burst", "correct": false,
+         "why": "Burst and sync interval are independent knobs on the same leak: worst case ≈ burst × gateways per sync window. Shrinking either one shrinks the exposure."}
+      ]
+    },
+    {
+      "id": "p3c10-q16", "level": 2, "type": "mcq", "tag": "ops",
+      "q": "Your 429-rate dashboard spikes 50x at 14:02 — across all API keys and all endpoints simultaneously. Most likely cause?",
+      "options": [
+        {"t": "A bad limits-config push at 14:02", "correct": true,
+         "why": "An attack concentrates on some keys or some endpoints; only shared infrastructure — like the hot-reloaded policy table every gateway consumes — moves ALL keys at once. This is why the 429 metric is broken down by key and endpoint: the shape of the spike names the culprit."},
+        {"t": "A coordinated botnet attack on the whole API", "correct": false,
+         "why": "Even large botnets hit specific keys, IPs, or endpoints — the spike would be concentrated. A perfectly uniform 50x across every customer at one instant has config written all over it."},
+        {"t": "Redis cluster failure", "correct": false,
+         "why": "Redis failing triggers local-only mode, which fails OPEN for most classes — you'd see fewer 429s and rising over-admission, roughly the opposite signature."},
+        {"t": "Normal daily traffic peak", "correct": false,
+         "why": "Diurnal peaks are gradual ramps you've seen every day, not a 50x step at a named minute. Step changes in dashboards almost always align with a deploy or config event."}
+      ]
+    },
+    {
+      "id": "p3c10-q17", "level": 2, "type": "mcq", "tag": "llm-limits",
+      "q": "An LLM API limits at 500 requests/min. One customer sends 400 requests/min, each with a 150K-token context. What's wrong with this limiter?",
+      "options": [
+        {"t": "It counts the wrong unit — requests instead of tokens — so cost varies 1000x within the same 'limit'", "correct": true,
+         "why": "Right. A 100-token request and a 150K-token request cost wildly different GPU time, and requests/min can't see the difference. The fix is tokens-per-minute: same bucket machinery, but cost = token count, debited as an estimate at admission and reconciled after completion."},
+        {"t": "Nothing — 400 < 500, the customer is within limits", "correct": false,
+         "why": "Within the letter of the limit while consuming perhaps a hundred times the intended compute. When per-request cost varies enormously, request counting is a limit in name only."},
+        {"t": "The limit is too high and should be 100/min", "correct": false,
+         "why": "Tightening the request count punishes small-context users while barely denting big-context cost. No requests/min number is right when unit cost spans three orders of magnitude — change the unit, not the number."},
+        {"t": "Large contexts should be a separate premium endpoint", "correct": false,
+         "why": "Product segmentation can help pricing, but the limiter still needs a cost-proportional unit within any tier — otherwise the same skew reappears inside the premium endpoint."}
+      ]
+    },
+    {
+      "id": "p3c10-q18", "level": 2, "type": "mcq", "tag": "distributed-counting",
+      "q": "A teammate proposes consistent-hashing each API key to one gateway so counting is exact and local. For your global anycast API, which failure is decisive?",
+      "options": [
+        {"t": "A hot key becomes a hot machine, and geo-split clients pay cross-region forwarding hops on every request", "correct": true,
+         "why": "Both kill it: forwarding a Tokyo request to the key's 'owner' gateway in Virginia blows the 1ms budget 100x, and one abused key can now saturate an entire gateway — the very outcome limiting exists to prevent. (For a single-region internal API, though, the idea is genuinely sound.)"},
+        {"t": "Consistent hashing is too slow to compute per request", "correct": false,
+         "why": "Hashing is nanoseconds — computation was never the issue. The issue is where the hash sends the traffic: across regions, and all of one key's load to one machine."},
+        {"t": "Gateways can't store per-key state", "correct": false,
+         "why": "They already do — the tiered design keeps local buckets in gateway memory. State placement isn't the objection; traffic placement is."},
+        {"t": "It requires Redis anyway, so nothing is saved", "correct": false,
+         "why": "Sticky routing genuinely would eliminate the sync tier — that's its real appeal. It fails on latency and hot-machine grounds, not on failing to deliver its promise of local exactness."}
+      ]
+    },
+    {
+      "id": "p3c10-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'So your design admits 40x the burst for 50ms. Is that... acceptable?' Which response earns the senior grade?",
+      "options": [
+        {"t": "\"For cached reads, yes — 8,000 stray requests is about 1.6 CPU-seconds across the fleet, and the key gets choked within 50ms. For payments or SMS it's not acceptable, which is why those run strict mode and pay 1ms for a synchronous check.\"", "correct": true,
+         "why": "Quantified leak, bounded duration, and a per-endpoint policy that prices accuracy where mistakes cost money. Owning the flaw with numbers is stronger than pretending the design has none."},
+        {"t": "\"It's a known limitation of distributed systems.\"", "correct": false,
+         "why": "True and empty. Naming the category without quantifying THIS system's exposure or showing the mitigation reads as reciting, not engineering."},
+        {"t": "\"I'd shrink the sync interval to 5ms so the window is negligible.\"", "correct": false,
+         "why": "Reflexively tuning one knob to its extreme trades a quantified leak for a 10x Redis fan-in bill, unexamined. The senior answer differentiates by endpoint cost instead of buying maximum accuracy for traffic that doesn't need it."},
+        {"t": "\"No — I'd redesign around a synchronous central check to remove the window entirely.\"", "correct": false,
+         "why": "Abandoning the architecture under one probe reads as panic, and the 'fix' resurrects the design we killed with numbers: 1M synchronous ops/sec on a store whose failure now takes the whole API down."}
+      ]
+    },
+    {
+      "id": "p3c10-q20", "level": 3, "type": "mcq", "tag": "crux",
+      "q": "What is the actual crux of 'design a global rate limiter' — the thing the question exists to probe?",
+      "options": [
+        {"t": "Distributed counting under a latency budget: accurate, fast, distributed — pick two", "correct": true,
+         "why": "Yes. The algorithm is a solved recap; the hard part is that exact global counts require synchronous coordination the 1ms budget forbids. Every real design is a negotiated position on that triangle, and naming the triangle early is the senior signal."},
+        {"t": "Choosing between token bucket and sliding window", "correct": false,
+         "why": "A worthwhile paragraph, but it's Part 1 material — any algorithm still faces the 40-gateways problem. Candidates who spend twenty minutes here have toured the room with curtains while the counting room burns."},
+        {"t": "Handling the storage for billions of counters", "correct": false,
+         "why": "The math says ~12GB — a small Redis cluster. When your estimation shows storage is trivial, saying so and moving on is itself a senior move; dwelling there signals the numbers aren't driving the design."},
+        {"t": "Designing informative 429 responses", "correct": false,
+         "why": "Real craft and worth a minute — but it's polish on the edge of the system. The interviewer lit the fire in the distributed-counting room."}
+      ]
+    },
+    {
+      "id": "p3c10-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Mid-interview, the requirement flips: 'Plans now include a hard cap of exactly 1M calls/month, and overage bills per call.' The senior response is:",
+      "options": [
+        {"t": "\"That's a different system: billing needs durable, exact, idempotent counting — a ledger fed asynchronously from admit events — with the limiter just enforcing a flag when the ledger says the cap is hit.\"", "correct": true,
+         "why": "Recognizing that a protection system (approximate, fast, evaporating state) can't moonlight as an accounting system (exact, durable, auditable) is the judgment being tested. Two systems with an honest seam beats one system doing both badly."},
+        {"t": "\"Easy — add a monthly-window bucket next to the per-second one.\"", "correct": false,
+         "why": "A monthly bucket in Redis inherits everything billing can't tolerate: over-admission windows, state lost on restart, double-counted retries. Money-adjacent counting with best-effort infrastructure is how billing incidents are born."},
+        {"t": "\"Switch the whole limiter to strict mode so counts are exact.\"", "correct": false,
+         "why": "Strict mode is regionally atomic, but the state is still memory-resident, TTL'd, and not audit-grade — and you just put 1M synchronous checks/sec back in the request path to solve a problem that isn't latency-sensitive at all."},
+        {"t": "\"Push back — hard caps are bad product design.\"", "correct": false,
+         "why": "Sometimes requirements deserve pushback, but this one is a legitimate, common business model. Refusing the requirement instead of designing for it reads as dodging."}
+      ]
+    },
+    {
+      "id": "p3c10-q22", "level": 3, "type": "mcq", "tag": "failure-policy",
+      "q": "A staff engineer proposes simplifying: 'Fail open everywhere. One policy, no matrix.' What's the strongest objection?",
+      "options": [
+        {"t": "Auth limits are security controls — failing open means any limiter outage suspends brute-force protection, and attackers can sometimes cause the outage", "correct": true,
+         "why": "This is the asymmetry that breaks the uniform policy: for reads, a limiter outage over-admits cheap traffic; for login/OTP, it opens a credential-stuffing window on demand. The cost of each mistake, not tidiness, decides the policy — per class."},
+        {"t": "Fail open is always wrong; limiters should fail closed", "correct": false,
+         "why": "Inverting the uniformity is the same mistake in the other direction: fail-closed reads means the protection layer's outage becomes an API outage. Neither blanket policy survives the cost asymmetry."},
+        {"t": "One policy makes the config table too small to be useful", "correct": false,
+         "why": "Simplicity is a virtue, not a flaw — a smaller config would be better if it were safe. The objection has to be about consequences, not table size."},
+        {"t": "Uptime metrics would look worse during incidents", "correct": false,
+         "why": "Fail open actually preserves uptime metrics — that's its selling point. The real cost is invisible on an uptime dashboard: what got admitted, or brute-forced, while the guard was down."}
+      ]
+    },
+    {
+      "id": "p3c10-q23", "level": 3, "type": "mcq", "tag": "scale",
+      "q": "The fleet grows 40 → 400 gateways. What quietly broke in the limiter, and what's the first fix?",
+      "options": [
+        {"t": "The over-admission bound grew 10x with gateway count; first fix is capping each gateway's local burst slice, then aggregating sync through per-AZ tiers", "correct": true,
+         "why": "The leak formula has gateway count as a factor, so fleet growth silently degrades accuracy with zero alerts firing — unless you monitor over-admission itself. The slice cap restores the bound; sync aggregation handles the 10x fan-in. Tiering, applied again."},
+        {"t": "Nothing — the design scales horizontally", "correct": false,
+         "why": "The check path scales for free, but 'horizontally scalable' as an incantation misses that accuracy is inversely proportional to fleet size in this design. The thing that broke isn't throughput — it's the guarantee."},
+        {"t": "Redis runs out of memory for the extra state", "correct": false,
+         "why": "State scales with active keys, not gateways — Redis memory barely notices the fleet. Fan-in of sync traffic and the widened blind window are what grow with gateway count."},
+        {"t": "Local buckets no longer fit in gateway memory", "correct": false,
+         "why": "Each gateway holds buckets only for keys it actively serves — a few hundred MB at most. Per-gateway memory is independent of how many other gateways exist."}
+      ]
+    },
+    {
+      "id": "p3c10-q24", "level": 3, "type": "mcq", "tag": "ops",
+      "q": "You've built the limiter and limits are agreed with product. How do you turn it on for a live API with paying customers?",
+      "options": [
+        {"t": "Shadow mode first — evaluate and log would-be 429s without enforcing — then enforce class by class behind flags, cheap reads first", "correct": true,
+         "why": "Shadow data's first revelation is always which legitimate heavy users your limits would have broken — better discovered in a log than in their outage. Stripe ran exactly this dark-launch pattern before enforcement. Gradual, observable, reversible: the rollout is part of the design."},
+        {"t": "Enable everywhere at once — limits were agreed with product, so they're correct", "correct": false,
+         "why": "Agreed limits are hypotheses about real traffic. Big-bang enforcement tests the hypothesis on paying customers with no rollback signal until support tickets arrive."},
+        {"t": "Enable for new customers only; grandfather existing ones indefinitely", "correct": false,
+         "why": "This dodges the risk instead of measuring it, leaves the fleet unprotected against exactly the established heavy hitters, and creates a permanent two-tier policy debt."},
+        {"t": "Enable at 10x the intended limits, then ratchet down over months", "correct": false,
+         "why": "Closer to reasonable, but inflated limits enforce almost nothing while still risking edge-case breakage, and you learn less than shadow mode teaches — which measures the REAL limits against real traffic from day one."}
+      ]
+    },
+    {
+      "id": "p3c10-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A candidate answers the whole problem with: 'Every gateway checks a central Redis cluster synchronously — Lua makes it atomic, hash tags shard it, done in 1ms.' Technically accurate. Why does it grade below the tiered answer?",
+      "options": [
+        {"t": "It puts 1M synchronous ops/sec and a hard dependency into every request — Redis stumbling now takes the whole API down, and the 1ms tax lands on traffic that didn't need the accuracy", "correct": true,
+         "why": "The mechanics are right but the judgment is missing: no differentiation by endpoint cost, no story for the limiter's own failure, no recognition that the limiter must never be the outage. The tiered answer spends latency and accuracy where each is cheap — that allocation is the senior content."},
+        {"t": "Lua scripts can't implement token buckets correctly", "correct": false,
+         "why": "They can and do — the candidate's mechanics are fine. Grading at this level is about system consequences, not implementation trivia."},
+        {"t": "Redis is the wrong technology for rate limiting", "correct": false,
+         "why": "Redis is the industry workhorse for exactly this (Stripe's limiters run on it). The flaw is the topology — synchronous and central for all traffic — not the tool."},
+        {"t": "1ms of added latency is always unacceptable for an API", "correct": false,
+         "why": "The design itself pays 1ms happily in strict mode for expensive endpoints. The problem is paying it universally, plus the availability coupling — nuance the blanket answer lacks in both directions."}
+      ]
+    }
+  ]
+}

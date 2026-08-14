@@ -1,0 +1,359 @@
+<p>"Design search for a large marketplace. Two hundred million listings, a search box, results ranked by relevance. Go." You've used search ten thousand times today — and the moment you try to design it, you discover you have no idea how it works. Your database instincts are worse than useless here: chapter 1.14 already showed that <code>LIKE '%taylor swift%'</code> on ten million rows takes 40 seconds, because B-trees can only answer prefix questions. This problem can't be solved by picking a database. You have to build a different kind of index entirely.</p>
+
+<p>The interviewer knows most candidates will say "I'd use Elasticsearch" and stop. That answer is worth almost nothing — it's the name of a box, not a design. What they're probing is whether you know what's <em>inside</em> the box: how text becomes an index, how two words become an intersection of sorted lists, how ranking works, how an index spread over thirty machines answers in 150 milliseconds, and — the part that separates levels — how an index built out of <em>immutable files</em> absorbs thousands of updates per second and makes them searchable within seconds.</p>
+
+<p>So today you are the search team. Elasticsearch is allowed as a shorthand for "Lucene plus distribution," but every time you say it, you must be able to open the lid.</p>
+
+<h2>Requirements: what "search" means today (minutes 0–5)</h2>
+
+<p>Scope out loud: "I'll build: keyword search over listings with relevance ranking; filters and facets — category, brand, price range, with counts; near-real-time updates, meaning a new or edited listing is searchable within seconds; pagination. Out of scope: the typeahead box — that's a different machine with a 50ms budget and prefix-shaped queries, chapter 3.2 — and semantic 'meaning' search, which I'll leave a socket for and chapter 3.24 fills. Fair?"</p>
+
+<p>Non-functional, with committed numbers:</p>
+
+<ul>
+<li><strong>Corpus:</strong> 200 million listings, ~2KB of searchable text each (title, description, brand, category).</li>
+<li><strong>Query latency:</strong> p99 under 200ms server-side. Search sits on the critical path of buying; Amazon's famous internal finding — roughly 1% of sales lost per 100ms of added latency — is why this number is a requirement, not a wish.</li>
+<li><strong>Freshness:</strong> new and edited listings searchable within ~10 seconds. Seconds, not milliseconds — and I'll defend that honestly rather than promise "instant."</li>
+<li><strong>Availability over completeness:</strong> I'd rather show slightly degraded results than an error page. I'll commit to what "degraded" means later.</li>
+<li><strong>Never the source of truth:</strong> the catalog database owns the data; search is a derived index, rebuildable from scratch. Chapter 1.14's rule, now load-bearing.</li>
+</ul>
+
+<h2>Estimation: two workloads that fight (minutes 5–9)</h2>
+
+<p>Run the numbers to find out what kind of problem this is.</p>
+
+<ul>
+<li><strong>Corpus:</strong> 200M docs × 2KB = <strong>400GB of text</strong>. An inverted index over it — term dictionary, posting lists, word positions, plus the columnar structures for facets — typically lands in the same ballpark as the text itself: call it <strong>~300GB</strong>. Small data by modern standards. So this is not a storage problem.</li>
+<li><strong>Queries:</strong> 20M daily searchers × 3 searches ≈ 60M/day ≈ 700/sec average, <strong>~2,000/sec peak</strong>.</li>
+<li><strong>Sharding:</strong> one machine could <em>hold</em> 300GB, but one machine can't score 2,000 queries/sec against it inside 200ms, and I want the hot parts of the index living in page cache. I'll split into <strong>10 shards of ~30GB</strong>, each with 2 replicas — 30 index-serving nodes. Here's the multiplication that matters: every query visits <em>every</em> shard, so 2,000 queries/sec becomes <strong>20,000 shard-searches/sec</strong>, spread across replicas. Shard count is fan-out width; I'll come back to why that shapes tail latency.</li>
+<li><strong>Index writes:</strong> ~2% of listings change daily — 4M updates/day ≈ 50/sec average, but bulk catalog imports burst to <strong>thousands/sec</strong>.</li>
+</ul>
+
+<p>Now the conclusion the numbers were for: <strong>this system runs two workloads that fight over the same machines.</strong> Queries want quiet CPUs and a warm page cache. Indexing wants CPU for text analysis and bursts of disk I/O for writing and compacting index files — and that I/O evicts the very page cache the queries were relying on. Almost every operational scar this system will ever collect comes from that fight. It decides my architecture: replicas serve queries while primaries absorb writes, background compaction gets throttled, bulk imports run off-peak — and at 10x I'd separate indexing onto its own tier entirely. Naming this tension unprompted is the estimation payoff.</p>
+
+<h2>API and data model: quick (minutes 9–12)</h2>
+
+<ul>
+<li><code>GET /search?q=noise+cancelling&amp;category=electronics&amp;price_max=200&amp;cursor=…</code> → ranked results, facet counts (<code>brand: {Sony: 812, Bose: 340…}</code>), a cursor, and — important later — a <code>partial: true</code> flag when a shard didn't answer.</li>
+<li><strong>There is no write API.</strong> Documents reach the index through CDC from the catalog database — Debezium tails the DB's replication log, publishes changes to Kafka, an indexer consumes them. The application never writes to the index directly; chapter 1.14 buried dual-writes and I'm not exhuming them.</li>
+<li>The indexed document: <code>{doc_id, title, description, brand, category, price, rating, updated_at}</code>. Text fields get analyzed for search; <code>brand</code>, <code>category</code>, <code>price</code> are kept as exact values for filters and facets.</li>
+</ul>
+
+<h2>The high-level machine (minutes 12–20)</h2>
+
+<p>Before drawing boxes, I have to make the decision that shapes them all: when I split this index across 10 machines, <em>what</em> do I split by? There are only two candidates, and one of them is a famous trap.</p>
+
+<p><strong>Shard by term?</strong> Machine 1 holds the posting lists for terms A–C, machine 2 for D–F… Seductive: a single-word query touches exactly one machine. Now walk a real query through it. "cheap goa flights" — three terms, three different machines. To AND them, someone must <em>intersect</em> the posting lists: "cheap" might list 4 million doc IDs, "goa" 2 million. So machines start shipping multi-megabyte ID lists to each other, per query, at 2,000 queries/sec — the intersection, the expensive part, happens across the network. Worse: term popularity is brutally skewed, so the machine holding "iphone" melts while the machine holding "xylophone" idles — a hot-partition problem (chapter 2.6) built into the layout. Term sharding dies on exactly the queries people type.</p>
+
+<p><strong>Shard by document — my commitment.</strong> Each shard holds a <em>complete miniature index</em> over its slice of documents: hash the doc ID, all of that document's terms live together. Every multi-term intersection is now <em>local</em> — no posting list ever crosses the network. The price: every query fans out to all 10 shards, each scores its own top candidates locally, and a coordinator merges the per-shard top-Ks into a global top-K. Ten small local searches plus one cheap merge beats one distributed intersection, every time. This is how Lucene-based systems (Elasticsearch, Solr), and every large web search engine, actually shard.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Doc sharding is ten branch libraries, each holding complete books with a complete back-of-book index for its own shelves. Ask all ten "best three books on Goa, cheap flights?" and each answers from its own shelves in parallel; you merge ten short lists. Term sharding is one absurd central library where branch 1 holds every book's pages containing words starting with A–C. To answer one question you'd cart wheelbarrows of page numbers between branches and collate them in the street. The analogy breaks in one place: real branch libraries hold different <em>kinds</em> of books, while our shards must be a random, even mix — a shard that accidentally held all the electronics would break both load balance and ranking.</p>
+</div>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Query coordinator fanning out to four document-sharded index nodes and merging their top results">
+  <rect class="dg-node" x="10" y="130" width="90" height="48" rx="8"/>
+  <text class="dg-txt" x="30" y="158">Client</text>
+  <rect class="dg-node-alt" x="150" y="118" width="150" height="72" rx="8"/>
+  <text class="dg-txt" x="166" y="146">Coordinator</text>
+  <text class="dg-txt-s" x="166" y="163">fan out, merge,</text>
+  <text class="dg-txt-s" x="166" y="177">rerank top-K</text>
+  <rect class="dg-node" x="400" y="16" width="180" height="52" rx="8"/>
+  <text class="dg-txt" x="414" y="38">Shard 1 (docs 0–25%)</text>
+  <text class="dg-txt-s" x="414" y="55">local BM25 → top-100</text>
+  <rect class="dg-node" x="400" y="96" width="180" height="52" rx="8"/>
+  <text class="dg-txt" x="414" y="118">Shard 2</text>
+  <text class="dg-txt-s" x="414" y="135">local BM25 → top-100</text>
+  <rect class="dg-node" x="400" y="176" width="180" height="52" rx="8"/>
+  <text class="dg-txt" x="414" y="198">Shard 3</text>
+  <text class="dg-txt-s" x="414" y="215">local BM25 → top-100</text>
+  <rect class="dg-node" x="400" y="256" width="180" height="52" rx="8"/>
+  <text class="dg-txt" x="414" y="278">Shard 4</text>
+  <text class="dg-txt-s" x="414" y="295">local BM25 → top-100</text>
+  <line class="dg-edge" x1="100" y1="154" x2="150" y2="154" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="300" y1="130" x2="400" y2="46" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="300" y1="146" x2="400" y2="122" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="300" y1="166" x2="400" y2="200" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="300" y1="182" x2="400" y2="280" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="600" y="42">×2 replicas</text>
+  <text class="dg-txt-s" x="600" y="122">×2 replicas</text>
+  <text class="dg-txt-s" x="600" y="202">×2 replicas</text>
+  <text class="dg-txt-s" x="600" y="282">×2 replicas</text>
+  <text class="dg-txt-s" x="310" y="88">every query → every shard</text>
+  <text class="dg-txt-s" x="150" y="220">answer = as slow as the</text>
+  <text class="dg-txt-s" x="150" y="236">slowest shard (tail latency)</text>
+</svg>
+<figcaption>Doc-sharded fan-out. Intersections stay local to each shard; only small top-K lists travel. The cost: p99 is set by the slowest of ten shards on every single query.</figcaption>
+</figure>
+
+<p><strong>Read path:</strong> query → coordinator → parse and analyze the query text (same pipeline as indexing — this symmetry matters, you'll see why) → fan out to one healthy copy of each of the 10 shards → each shard runs the match-and-score locally and returns its top ~100 doc IDs with scores → coordinator merges, takes the global top ~1000, reranks (deep dive 2), fetches display fields, returns top 20 with facet counts.</p>
+
+<p><strong>Write path:</strong> catalog DB commit → CDC (Debezium → Kafka, partitioned by doc ID so updates to one listing stay ordered) → indexer consumers → each document routed to its shard by hash → shard analyzes text and buffers the document → within seconds a <em>refresh</em> makes it searchable (deep dive 3 — the crux). Kafka gives me replay, backpressure absorption during import bursts, and an indexing-lag metric for free (consumer offset lag — chapter 2.9).</p>
+
+<div class="box story"><div class="box-tag">War story — a recipe app for his wife</div>
+<p>The machinery you're deploying has an unusually human origin. Around 2004, Shay Banon was an out-of-work programmer who had followed his wife to London, where she was training as a chef. He started building her a recipe search app and reached for Apache Lucene — the Java search library Doug Cutting had written in 1999 (and named after his wife's middle name). Banon found raw Lucene painful to embed, so he wrote a friendlier wrapper and open-sourced it as Compass. Years later, working on distributed systems, he realized search needed to be scale-out from day one — so he threw Compass away and rewrote it as a distributed, JSON-over-HTTP service: Elasticsearch, released in 2010. It became one of the most-deployed pieces of infrastructure on earth, and the company behind it, Elastic, went public in 2018. Banon has joked for years that his wife is still waiting for her recipe app. The design lesson hiding in the story: Elasticsearch's genius was not inventing search — Lucene's inverted index and segment model already existed — it was wrapping a single-machine index in sharding, replication, and a clean API. That layering, Lucene inside and distribution outside, is exactly the design you're presenting.</p>
+</div>
+
+<p>Loop closed, both paths traceable. Now I announce the agenda: "Three deep dives: the index itself and how text becomes searchable; ranking; and the hardest part — how an index made of immutable files stays seconds-fresh. In that order."</p>
+
+<h2>Deep dive 1: the inverted index, honestly (minutes 20–28)</h2>
+
+<p>Chapter 1.14 gave the book-index picture: instead of <em>document → words</em>, store <em>word → documents</em>. At build depth, the structure is: a <strong>term dictionary</strong> (every distinct term after analysis, sorted, so lookup is a binary search or better) where each term points to its <strong>posting list</strong> — the sorted list of doc IDs containing it, and per doc, the <strong>term frequency</strong> (how many times it appears — ranking fuel) and the <strong>positions</strong> (word offsets — phrase-query fuel, so "noise cancelling" as a phrase means: both terms in the doc, at adjacent positions).</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Three documents flowing through the analysis pipeline into a term dictionary with posting lists">
+  <rect class="dg-node" x="10" y="40" width="192" height="52" rx="8"/>
+  <text class="dg-txt" x="24" y="62">Doc 1</text>
+  <text class="dg-txt-s" x="24" y="80">"Cheap flights to Goa"</text>
+  <rect class="dg-node" x="10" y="120" width="192" height="52" rx="8"/>
+  <text class="dg-txt" x="24" y="142">Doc 2</text>
+  <text class="dg-txt-s" x="24" y="160">"Goa beach guide"</text>
+  <rect class="dg-node" x="10" y="200" width="192" height="52" rx="8"/>
+  <text class="dg-txt" x="24" y="222">Doc 3</text>
+  <text class="dg-txt-s" x="24" y="240">"Cheap Goa hotels"</text>
+  <rect class="dg-node-alt" x="248" y="118" width="150" height="60" rx="8"/>
+  <text class="dg-txt" x="262" y="142">Analyzer</text>
+  <text class="dg-txt-s" x="262" y="160">tokenize · lowercase</text>
+  <text class="dg-txt-s" x="262" y="172">stem</text>
+  <rect class="dg-zone" x="436" y="24" width="272" height="252" rx="10"/>
+  <text class="dg-txt" x="452" y="52">Term → posting list</text>
+  <text class="dg-txt-s" x="452" y="84">beach  → [2]</text>
+  <text class="dg-txt-s" x="452" y="112">cheap  → [1, 3]</text>
+  <text class="dg-txt-s" x="452" y="140">flight → [1]</text>
+  <text class="dg-txt-s" x="452" y="168">goa    → [1, 2, 3]</text>
+  <text class="dg-txt-s" x="452" y="196">guide  → [2]</text>
+  <text class="dg-txt-s" x="452" y="224">hotel  → [3]</text>
+  <text class="dg-txt-s" x="452" y="256">each entry: doc ID + freq + positions</text>
+  <line class="dg-edge" x1="202" y1="66" x2="248" y2="134" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="202" y1="146" x2="248" y2="148" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="202" y1="226" x2="248" y2="162" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="398" y1="148" x2="436" y2="148" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Build: every document is analyzed once, and each of its terms is appended to that term's posting list. "flights" became "flight" — the same analyzer must run on queries, or they'll miss.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Extend the book-index analogy to its breaking points, because that's where the engineering lives. A book index maps chosen terms to page numbers — our index maps <em>every</em> term to documents, with counts and positions, so it can rank and match phrases, which a book index never does. A book index is compiled once, for a finished book — ours must absorb thousands of edits per second, and a paper index's answer to an edit ("reprint the book") is deep dive 3's entire problem. And a book index covers one book — ours is torn into ten pieces on ten machines. The book index is the data structure; everything hard in this chapter is what the book never needed.</p>
+</div>
+
+<h3>The text pipeline: product decisions in an engineering costume</h3>
+
+<p>Between raw text and the index sits the <strong>analyzer</strong>, and every stage trades recall (finding more) against precision (finding right). I'll commit per stage:</p>
+
+<ul>
+<li><strong>Tokenize + lowercase:</strong> split on word boundaries, fold case. Uncontroversial — until you meet Chinese or Japanese, which have no spaces; then you need a language-aware segmenter, which is why real systems configure analyzers per language.</li>
+<li><strong>Stem, lightly:</strong> fold word forms so "running shoes" finds "running shoe" — but aggressive stemmers infamously collapse "universal" and "university." I'll use a light stemmer: most of the recall, few of the embarrassments.</li>
+<li><strong>Stopwords: keep them.</strong> The textbook says drop "the," "to," "a" — their posting lists contain every document and discriminate nothing. Modern engines keep them, and here's the honest reason: phrase queries need them. Search "the who" or "to be or not to be" in an index that dropped stopwords and you get nonsense. Compression makes their storage cost bearable, and ranking (next dive) already makes near-universal terms weigh almost nothing — so dropping them buys little and breaks real queries.</li>
+<li><strong>Synonyms: query time, committed.</strong> "sofa" should find "couch." Expand at index time (index "couch" docs under both terms) and the synonym list is <em>baked into the index</em> — every list change means a full reindex. Expand at query time (rewrite the query to <code>sofa OR couch</code>) and updates are instant, at the price of slightly costlier queries. Merchandising teams change synonym lists weekly; I'll pay the query cost.</li>
+</ul>
+
+<p>One consequence to say explicitly: the analyzer is a <em>contract between index and query</em>. Documents were indexed as "flight"; the query must also stem "flights" → "flight" or it silently finds nothing. And changing an analyzer means every already-indexed document is wrong — analyzer changes require a full reindex. Hold that; it becomes the ops story.</p>
+
+<div class="box story"><div class="box-tag">War story — GitHub throws out the search engine</div>
+<p>Text analysis is such a product decision that GitHub eventually couldn't use a text search engine at all. For years GitHub ran code search on general-purpose engines (Solr, then Elasticsearch) — and code kept breaking the text assumptions: stemming, lowercasing, and punctuation-stripping are exactly wrong for code, where a search for <code>=&gt;</code> or a case-sensitive identifier must match precisely, and users expect regular expressions. So GitHub built Blackbird — a search engine written in Rust, described in detail in their 2023 engineering posts — around n-gram indexing (indexing short character sequences instead of "words") to support exact and regex matching. The scale facts from their own account: about 45 million repositories and 115TB of content; content-addressable deduplication (most repos are forks or copies) shrank what actually needed indexing to roughly a quarter of that; the ingest pipeline indexed on the order of 120,000 documents per second while building the index. The lesson for your interview isn't "build your own engine" — it's that the analyzer chapter of search is not plumbing. GitHub rebuilt the entire stack because tokenization — the "boring" first stage — was the wrong shape for their product.</p>
+</div>
+
+<h3>Answering a query: intersection with skips</h3>
+
+<p>Query "cheap goa," AND semantics. Both posting lists are <strong>sorted by doc ID</strong> — that's the whole trick. Intersecting two sorted lists is a linear merge: two fingers, advance the smaller. But when one list is huge and one is small ("goa" appears in 2M docs, "cheap goa beachfront" narrows fast), linear is wasteful — so posting lists carry <strong>skip pointers</strong>: shortcuts stored every block (Lucene works in blocks of 128 compressed doc IDs) saying "the next block starts at doc 88,201." Looking for doc 88,000? Skip whole blocks without decompressing them. The rarest term drives: start from the shortest list, and use skips to leap through the long ones. This is why AND queries over millions of postings finish in single-digit milliseconds — and it only works because the lists are sorted, which is a fact about the <em>files</em> that deep dive 3 must preserve.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Two sorted posting lists intersected, with skip pointers jumping over blocks of the longer list">
+  <text class="dg-txt" x="10" y="52">"goa"</text>
+  <rect class="dg-node" x="80" y="30" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="98" y="52">3</text>
+  <rect class="dg-node" x="140" y="30" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="158" y="52">7</text>
+  <rect class="dg-good" x="200" y="30" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="216" y="52">12</text>
+  <rect class="dg-node" x="260" y="30" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="276" y="52">29</text>
+  <rect class="dg-node" x="320" y="30" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="336" y="52">41</text>
+  <rect class="dg-node" x="380" y="30" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="396" y="52">57</text>
+  <rect class="dg-good" x="440" y="30" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="456" y="52">88</text>
+  <rect class="dg-node" x="500" y="30" width="60" height="34" rx="6"/>
+  <text class="dg-txt-s" x="512" y="52">104</text>
+  <path class="dg-edge" fill="none" d="M 228 26 C 300 -6 400 -6 464 24" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="300" y="14">skip pointer: next block ≥ 88</text>
+  <text class="dg-txt" x="10" y="172">"cheap"</text>
+  <rect class="dg-good" x="80" y="150" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="96" y="172">12</text>
+  <rect class="dg-good" x="140" y="150" width="56" height="34" rx="6"/>
+  <text class="dg-txt-s" x="156" y="172">88</text>
+  <rect class="dg-node" x="200" y="150" width="60" height="34" rx="6"/>
+  <text class="dg-txt-s" x="212" y="172">301</text>
+  <line class="dg-edge" x1="108" y1="150" x2="222" y2="68" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="168" y1="150" x2="462" y2="68" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="80" y="220">Shorter list drives: seek 12 → match. Seek 88 → skip the 29–57 block unread → match.</text>
+  <text class="dg-txt-s" x="80" y="240">Seek 301 → "goa" exhausted. Result: docs 12, 88. Sorted lists make AND cheap.</text>
+</svg>
+<figcaption>Two-term AND. The rare term drives; skip pointers let the common term's list be leapt through block by block, never fully read.</figcaption>
+</figure>
+
+<h2>Deep dive 2: ranking — BM25, then a second opinion (minutes 28–34)</h2>
+
+<p>Matching found 400,000 docs containing "wireless headphones." Order decides whether the product works. The intuition ladder, no heavy math:</p>
+
+<p><strong>TF-IDF, the two instincts:</strong> a doc mentioning your term often is more relevant (term frequency), and rare terms matter more than common ones — matching "sennheiser" says far more than matching "wireless" (inverse document frequency: weight ∝ how few docs contain the term). Good instincts, two famous failures. Raw TF is linear, so a listing that stuffs "headphones" fifty times into its description outranks every honest one. And raw TF ignores length: three mentions in a 40-word title-and-blurb is a strong signal; three mentions in a 4,000-word spec dump is noise.</p>
+
+<p><strong>BM25 — my committed scorer — is TF-IDF with those two failures patched.</strong> First, <em>saturation</em>: term-frequency contribution flattens — the 2nd occurrence adds a lot, the 10th barely anything, the 50th nothing. Keyword stuffing stops paying. Second, <em>length normalization</em>: occurrences in a short doc count for more than in a long one, so the spec dump stops winning on volume. That's the whole idea; the formula is just these dials (k1 for saturation, b for length) around IDF. It has been the default in Lucene and Elasticsearch since 2016 for a reason: it's cheap — computed straight from the numbers already sitting in the posting lists — and brutally hard to beat as a first pass.</p>
+
+<p><strong>The architecture is two-phase, and this is worth saying explicitly.</strong> Phase one: BM25 scores everything that matches and keeps the top ~1000 — cheap enough to run over millions of postings. Phase two: <em>rerank</em> those 1000 with everything expensive: freshness, seller rating, click-through history, conversion rate, personalization, and eventually a learned model — affordable precisely because it runs on 1000 candidates, not 400,000. <strong>Retrieve-then-rerank is the socket that ML plugs into.</strong> When the company later wants "semantic search," a vector-similarity scorer (chapter 3.24) slots into phase two — or becomes a second retriever alongside BM25 — without touching the index machinery below. Name this shape in the interview; it shows you know where the next five years of the system go.</p>
+
+<p><strong>One distributed honesty:</strong> BM25's IDF needs a global count — "how many docs contain this term?" — but each shard only knows its own slice. My shards are filled by hashing doc IDs, so each is a large random sample of the corpus, and with 20 million docs per shard, local frequencies are statistically indistinguishable from global ones. I'll commit: local IDF, no coordination. If shards were ever small or skewed (per-tenant indexes, say), scores would drift comparably across shards and the merged ranking would wobble — the fix is a periodic global-stats broadcast, or a two-pass query that gathers stats first (Elasticsearch ships this as an option; it's off by default for the same reason I'm not using it: at this scale the approximation is free and the extra round-trip isn't).</p>
+
+<p><strong>Facets, one paragraph, one structure:</strong> the inverted index answers "which docs contain X" but facet counts need the reverse — "for these 400,000 matching docs, what's in their <code>brand</code> field?" Walking posting lists backwards would be absurd, so the index keeps a second, columnar structure alongside: <strong>doc values</strong> — for each field, a dense array from doc ID → value, like a column store bolted to the text index. Filters, facet counts, sorting by price, and the rerank phase's feature lookups all read doc values. One sentence of vocabulary, big whiteboard payoff.</p>
+
+<h2>Deep dive 3: the index that never edits itself (minutes 34–42)</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>This is the question the problem was invented to probe. Everything so far — sorted posting lists, skip pointers, compressed blocks — describes a beautifully <em>frozen</em> structure. Now a seller edits a title. That one edit logically touches a posting list for every term in the document — inserting doc IDs into the middle of hundreds of compressed, sorted, carefully laid-out lists. In-place update would mean random writes shotgunned across the whole index, per document, thousands of times per second, on the same disks serving 200ms-budget queries. It cannot work, and candidates who hand-wave "the indexer updates the index" get stopped right here. The industry's answer — never update; write immutable segments, tombstone the dead, merge in the background — is the same insight as the LSM tree from chapter 1.13, rediscovered for search, and it's what "near-real-time" actually means. Spend your best minutes here.</p>
+</div>
+
+<p>Lucene's design, which is to say everyone's design:</p>
+
+<ul>
+<li><strong>Writes go to an in-memory buffer.</strong> Incoming documents are analyzed and accumulated in RAM. They are <em>not searchable yet</em>. Durability isn't the buffer's job — every document already sits safely in Kafka and, ultimately, the catalog DB; a crashed node replays.</li>
+<li><strong>Refresh: every few seconds, the buffer is frozen into a new segment.</strong> A <strong>segment</strong> is a complete, self-contained mini-index — term dictionary, posting lists, doc values — written once, sequentially, and <em>never modified again</em>. The moment it's written, it's searchable. This interval is the freshness knob, and it's why the honest promise is "searchable in seconds, not instantly": visibility isn't per-document, it's per-refresh. Elasticsearch defaults to 1 second; I'll run 1–5s and stretch it during bulk imports, because every refresh births a segment and segments aren't free.</li>
+<li><strong>A query searches every live segment</strong> and merges the results — the same fan-out-and-merge pattern as sharding, one level down. More segments = more repeated work per query, so segment count must be kept in check.</li>
+<li><strong>Merges: background compaction.</strong> A merge scheduler continually takes several small segments and rewrites them as one larger one — dropping dead documents as it goes — keeping each shard at a few dozen segments in a tiered size ladder. The price is <strong>write amplification</strong>: a long-lived document gets physically rewritten several times as its segment merges upward through the tiers. That I/O is the "indexing fights queries" tension from estimation, made flesh: a big merge saturates disk and evicts page cache, and query p99 spikes. Merges must be throttled, and watched.</li>
+<li><strong>Deletes: a tombstone bitmap.</strong> You can't remove a doc from an immutable file, so each segment carries a small side bitmap of "dead" doc IDs. Queries check it and skip the dead; the bytes are only truly reclaimed when a merge rewrites the segment without them. An <strong>update is a delete plus an insert</strong>: tombstone the old version in its segment, index the new version into the current buffer. For a fraught few seconds a document exists twice, one copy flagged dead — fine, as long as you know it and version your documents so CDC replays can't resurrect an older edit over a newer one.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="Segment lifecycle: CDC stream into RAM buffer, refresh creating immutable segments, background merge combining them, tombstone bitmap for deletes">
+  <rect class="dg-node" x="10" y="40" width="130" height="52" rx="8"/>
+  <text class="dg-txt" x="26" y="62">CDC stream</text>
+  <text class="dg-txt-s" x="26" y="80">docs + deletes</text>
+  <rect class="dg-node-alt" x="196" y="40" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="212" y="62">RAM buffer</text>
+  <text class="dg-txt-s" x="212" y="80">not searchable</text>
+  <rect class="dg-node" x="416" y="40" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="432" y="62">seg 7</text>
+  <text class="dg-txt-s" x="432" y="80">new, small</text>
+  <rect class="dg-node" x="416" y="130" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="432" y="152">seg 6</text>
+  <text class="dg-txt-s" x="432" y="170">small</text>
+  <rect class="dg-node" x="416" y="220" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="432" y="242">seg 5</text>
+  <text class="dg-txt-s" x="432" y="260">small</text>
+  <rect class="dg-node" x="580" y="130" width="130" height="80" rx="8"/>
+  <text class="dg-txt" x="596" y="160">seg 8</text>
+  <text class="dg-txt-s" x="596" y="178">merged, large</text>
+  <text class="dg-txt-s" x="596" y="194">dead docs gone</text>
+  <line class="dg-edge" x1="140" y1="66" x2="196" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="336" y1="66" x2="416" y2="66" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="340" y="50">refresh, 1–5s</text>
+  <line class="dg-edge" x1="526" y1="66" x2="600" y2="130" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="526" y1="156" x2="580" y2="164" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="526" y1="246" x2="600" y2="210" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="536" y="106">background merge</text>
+  <rect class="dg-bad" x="416" y="292" width="14" height="14" rx="3"/>
+  <text class="dg-txt-s" x="440" y="304">tombstone bitmap per segment — deletes hide docs until a merge reclaims them</text>
+  <text class="dg-txt-s" x="10" y="140">segments are immutable:</text>
+  <text class="dg-txt-s" x="10" y="156">written once, sequentially,</text>
+  <text class="dg-txt-s" x="10" y="172">never edited</text>
+  <text class="dg-txt-s" x="10" y="204">queries search buffer? no —</text>
+  <text class="dg-txt-s" x="10" y="220">they search every segment</text>
+  <text class="dg-txt-s" x="10" y="236">+ check tombstones</text>
+</svg>
+<figcaption>The segment lifecycle. "Near-real-time" is the refresh arrow: documents become searchable when the buffer freezes into a segment, not when they arrive.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A printed book index can't absorb edits either — and publishing solved it the same way. You never razor-blade a printed index to squeeze in a new entry. You print a <em>supplement</em>: a fresh pamphlet indexing just the new material, and readers check the main index plus the supplements. Corrections come as an errata slip — "ignore the entry on page 212" — which is exactly a tombstone. When the supplements pile up and checking five pamphlets per lookup gets tedious, you typeset a new consolidated edition: the merge, expensive but occasional, after which lookups are fast again. Where the analogy breaks, on schedule: publishers merge yearly; Lucene refreshes every second and merges continuously, and the reason it can is that computers are spectacularly good at exactly one kind of write — sequential, append-only — which is the only kind this design ever performs.</p>
+</div>
+
+<p>Two closing notes on this dive. First, the elegance is worth naming to the interviewer: <em>immutability is what makes everything else work</em> — segments can be compressed aggressively because they'll never change, cached fearlessly because they can't go stale, copied for replication as plain files, and searched lock-free while merges happen beside them. Second, that last property is not hypothetical: when Amazon rebuilt product search on Apache Lucene (its engineers, including longtime Lucene committers, have presented the migration publicly), they leaned on exactly it — index once on a writer fleet, then <em>replicate by copying segment files</em> to searcher replicas, so replicas spend zero CPU re-indexing and all of it on queries. That's the mature answer to my "two workloads fight" problem, and I'd name it as my 10x evolution: separate the indexing tier, ship segments.</p>
+
+<h2>Failure modes and operations (minutes 42–45)</h2>
+
+<p><strong>A shard's replicas die.</strong> With one replica of shard 4 down, remaining copies absorb its traffic — fine, that's headroom math. With <em>all</em> copies of shard 4 down, every query is missing 10% of the corpus. Commit per product: for a marketplace, <strong>serve partial results and flag them</strong> (<code>partial: true</code>, log it, alarm on it) — a search page with 90% of listings is a mild degradation; an error page is a checkout funnel severed. I'd make the opposite call for compliance or legal-discovery search, where a silently incomplete answer is the worst possible outcome and failing loudly is the feature. Saying <em>both</em> commitments, matched to products, is the senior version of this answer.</p>
+
+<p><strong>The index is corrupted / the mapping must change / a bug poisoned documents.</strong> One recovery story covers them all, and it's the payoff of "never the source of truth": <strong>reindex from the database</strong>. Build a brand-new index version alongside the old (new analyzers, new sharding, whatever changed), bulk-load it from a DB snapshot, let CDC catch it up to now, dual-serve to compare quality, then flip the alias — and keep the old index warm for instant rollback. This is chapter 2.11's expand-and-contract migration wearing a search costume, and it's also just... a routine operation. Teams that treat reindex as an emergency have an emergency; teams that run it monthly have a tool. Analyzer change? Reindex. Shard count change? Reindex. It's the answer to half the ops questions, which is exactly why the index must stay derived.</p>
+
+<p><strong>Indexing lag.</strong> A bulk import or an indexer crash and CDC consumer lag grows — the index falls minutes behind truth. Because ingestion is Kafka, this degrades gracefully (freshness suffers, queries don't) and measurably: <strong>consumer offset lag is the freshness SLO metric</strong>. Alert when lag exceeds, say, 60 seconds.</p>
+
+<p><strong>What I watch:</strong> query p99 <em>per shard</em> (the coordinator's p99 is the max over shards, so one sick shard poisons everything — find it directly); indexing lag; <strong>segment count per shard</strong> and <strong>merge backlog</strong> (climbing segment counts mean merges are losing the race — query latency follows within the hour); page-cache hit rate on index nodes; partial-result rate. Canary rollouts for anything touching the analyzer or scorer, with side-by-side ranking-quality comparison, because relevance regressions don't throw exceptions — they just quietly stop selling things.</p>
+
+<p><strong>At 10x</strong> — 2 billion docs, 20K QPS: more shards widen every fan-out, and p99-of-the-slowest gets worse purely by max-over-N statistics, so I'd fight tail latency directly (hedged requests to a second replica after ~50ms; chapter 2.7's tail toolkit), split the indexing tier from the serving tier with segment-file replication as above, and partition indexes by product vertical so most queries fan out to a fraction of shards. What breaks first, though, is none of these — it's merge I/O colliding with query cache. The fight from minute five is still the fight at 10x; it just has more money involved.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard — what the interviewer probes next</div>
+<p>Search interviews follow the candidate's confidence to the exact place it runs out. Expect these, near-verbatim:</p>
+<ul>
+<li>"Why not shard by term? Each query would touch one machine instead of all ten." (They want the cross-shard intersection autopsy: multi-term queries shipping megabytes of posting lists, plus the "iphone shard" hot partition.)</li>
+<li>"A seller edits a title and searches three seconds later — the old title still shows. Bug? Walk the pipeline." (CDC lag plus refresh interval, stated calmly with numbers, plus which operations re-check the source of truth.)</li>
+<li>"Segments are immutable. So what does DELETE actually do?" (Tombstone bitmap, skipped at query time, reclaimed at merge — and update = delete + reinsert, with versioning against replay.)</li>
+<li>"Your query p50 is flat but p99 spikes every few minutes. First suspect?" (A large merge stealing disk and evicting page cache — check merge activity against the latency timeline before blaming anything else.)</li>
+<li>"BM25's IDF is computed per shard. When does that visibly mis-rank?" (Small or non-random shards; at 20M random docs per shard it's statistically invisible — knowing <em>when the approximation is safe</em> is the point.)</li>
+<li>"Now make it search 40 languages." (Per-language analyzers, CJK segmentation, and an honest admission that analysis is where the complexity lives.)</li>
+</ul>
+</div>
+
+<h2>The committed choices, priced</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Chose</th><th>Cost accepted</th></tr></thead>
+<tbody>
+<tr><td>Shard layout</td><td>By document — intersections stay local</td><td>Every query fans out to all shards; p99 governed by the slowest</td></tr>
+<tr><td>Index updates</td><td>Immutable segments + refresh + background merges</td><td>Seconds of visibility delay; write amplification; merge I/O fights query cache</td></tr>
+<tr><td>Deletes</td><td>Tombstone bitmap until merge</td><td>Dead docs consume space and query checks until compaction</td></tr>
+<tr><td>First-phase scoring</td><td>BM25 with shard-local IDF</td><td>Slight cross-shard score drift — negligible at 20M random docs/shard</td></tr>
+<tr><td>Ranking architecture</td><td>Two-phase: BM25 top-1000 → feature/ML rerank</td><td>Extra hop and fetch; a doc BM25 misses can't be reranked in</td></tr>
+<tr><td>Synonyms</td><td>Query-time expansion</td><td>Costlier queries; buys instant list updates without reindex</td></tr>
+<tr><td>Stopwords</td><td>Keep them</td><td>Bigger index; buys working phrase queries ("the who")</td></tr>
+<tr><td>Ingestion</td><td>CDC → Kafka → indexers; index is derived, never primary</td><td>Seconds of staleness, stated; correctness re-checked at the source</td></tr>
+<tr><td>Shard loss</td><td>Serve partial results, flagged</td><td>Occasionally incomplete results — right for commerce, wrong for compliance</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c19-f1">
+<p class="fey-prompt">A junior asks: "Why don't search engines just update the index when a document changes, like a database updates a row? Why all this segments-and-merges ceremony?" Answer in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Because one document edit isn't one write — a document's words appear in hundreds of posting lists, and those lists are sorted, compressed, and packed tightly on disk, so updating in place means hundreds of random writes into the middle of compressed files for every single edit. At thousands of edits per second, on the same disks answering queries, that's death. So search engines never edit anything: new documents pile up in memory, and every few seconds the pile is frozen into a small immutable "segment" — a complete mini-index written once, sequentially, which is the one kind of write disks are great at. Queries just search all segments and combine answers; deletes are a little "ignore this doc" bitmap; and a background process merges small segments into big ones so the pile never gets deep. The price is honesty about freshness — a change is searchable after the next freeze, seconds later, not instantly — and some background I/O. That trade, sequential-writes-plus-slight-delay instead of random-writes-right-now, is the same one an LSM-tree database makes, and it's what "near-real-time search" means.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Add phrase queries.</strong> The PM wants quoted search: <code>"noise cancelling"</code> must match those words adjacent and in order. What extra data does the index need, how does the query use it, and what does it cost?</p></div>
+<details><summary>Answer</summary><p>The index must store <em>positions</em>: for each posting, the word offsets where the term occurs (doc 12: "noise" at positions 3, 41; "cancelling" at 4, 19). The query first runs the normal AND intersection to find docs containing both terms, then, for each candidate, checks the position lists for a pair differing by exactly one (3 and 4 — match). Cost: positions are the bulkiest part of a posting entry — storing them can roughly double index size, and phrase checking adds per-candidate work. That's also the final nail for dropping stopwords: "The Who" is nothing <em>but</em> stopwords, and without their positions the phrase can't be verified. Most engines (Lucene included) index positions by default for exactly this reason.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>10x, but which 10x?</strong> Scenario A: corpus grows to 2 billion docs, QPS stays 2K. Scenario B: corpus stays 200M, QPS grows to 20K. Which is the easier scale-up for this design, and what breaks first in each?</p></div>
+<details><summary>Answer</summary><p>B is far easier: 10x QPS against the same corpus is solved by adding replicas of the existing shards — reads scale horizontally, no resharding, no data movement; what eventually breaks is coordinator throughput and cost. A is the hard one: 10x docs means ~100 shards, and every query now fans out to 100 machines — p99 is the max over 100 shard latencies, so tail latency degrades by pure statistics even if every shard is healthy (hedged requests and partitioning the corpus so queries touch fewer shards are the counters); meanwhile 10x documents also means 10x indexing and merge I/O grinding against queries on every node. Recognizing that read scale and data scale stress completely different parts of this design — replicas versus fan-out width — is the senior answer.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>The requirement flips.</strong> Product now demands updates searchable in under 100ms — "when a seller hits save, search must reflect it immediately." What actually breaks if you just set the refresh interval to 50ms, and what do you propose instead?</p></div>
+<details><summary>Answer</summary><p>Refreshing every 50ms means birthing twenty tiny segments per second per shard: segment counts explode, every query pays the per-segment overhead hundreds of times, and the merge scheduler drowns trying to compact confetti — query latency collapses within minutes. Instead, split the requirement. If the seller just needs to see <em>their own</em> edit reflected (the overwhelmingly common real need), serve that by ID from the source database — read-your-own-writes without touching search freshness. If specific hot documents genuinely must rank in general searches instantly, engines offer a real-time get from the in-memory buffer by ID, but ranking-visible-instantly for all docs means the coordinator would have to search the unfrozen buffer too — expensive and complex. The senior move is interrogating the requirement first: "searchable by whom, in what query?" usually shrinks 100ms-for-everyone into read-your-writes-for-the-author plus 1-second refresh for everyone else.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Right-size a smaller problem.</strong> Internal knowledge-base search: 20 million docs × 5KB, 50 queries/sec, updates trickle in. Sketch the deployment. Do you shard?</p></div>
+<details><summary>Answer</summary><p>Corpus: 100GB of text, index in the same ballpark — one modern machine holds this in NVMe and mostly in RAM. 50 QPS is nothing. So: one node carrying the whole index, one or two replicas for availability and deploys, same CDC ingestion pattern, no shards, no coordinator fan-out — which also deletes the distributed-IDF caveat and the tail-latency story entirely. Sharding here would add fan-out latency and operational surface to solve a problem the numbers say doesn't exist. The architecture of this chapter is what 200M docs and 2K QPS <em>forced</em>; quoting it at 20M docs and 50 QPS is the over-engineering tell from chapter 0.1.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>The stuffing attack.</strong> A seller titles their listing "iPhone iPhone iPhone iPhone case iPhone" and repeats "iPhone" forty more times in the description. Under raw TF-IDF, what happens to searches for "iphone"? Under BM25? What ranking layer finishes the job?</p></div>
+<details><summary>Answer</summary><p>Raw TF is linear in occurrences, so 45 mentions ≈ 45x the term score — the junk case outranks Apple's own listing. BM25's saturation flattens the curve: by the tenth repetition the marginal gain is near zero, so stuffing buys a mildly elevated score, not domination — and length normalization claws some of that back as the description bloats. But BM25 alone still can't distinguish "legitimately about iPhones" from "spam about iPhones" — that's the rerank phase's job, where features BM25 can't see (click-through rate, conversion, seller reputation, report rate) demote listings that match well but perform badly with humans. Text score gets you into the top-1000; behavior decides the top-10. That division of labor is exactly why the two-phase architecture exists.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>An inverted index maps each term to a sorted posting list of doc IDs with frequencies and positions; sorted order plus skip pointers is what makes multi-term AND queries cheap.</li>
+<li>The analyzer — tokenize, lowercase, stem lightly, keep stopwords, expand synonyms at query time — is a set of product decisions, and it's a contract: queries must be analyzed identically to documents, and changing it means reindexing.</li>
+<li>BM25 is TF-IDF with saturation (stuffing stops paying) and length normalization (long docs stop winning on volume); serve it as phase one of retrieve-then-rerank, the architecture ML and vector search later plug into.</li>
+<li>Segments are the crux: writes buffer in RAM and freeze into immutable mini-indexes every few seconds — "near-real-time" means visible at the next refresh — with deletes as tombstone bitmaps and background merges paying write amplification to keep query costs flat.</li>
+<li>Shard by document, never by term: intersections stay local and only top-K lists cross the network, at the price of full fan-out and a p99 set by the slowest shard.</li>
+<li>Shard-local IDF is fine when shards are large random samples — knowing when an approximation is safe is itself the senior signal.</li>
+<li>The index is derived, fed by CDC, and never the source of truth — which turns corruption, analyzer changes, and resharding into one routine operation: reindex from the database and flip an alias.</li>
+<li>Watch per-shard query p99, CDC lag, segment count, and merge backlog; the permanent operational fight is indexing I/O versus query page cache, and at 10x you resolve it by splitting the tiers and shipping segment files.</li>
+</ul>
+</div>

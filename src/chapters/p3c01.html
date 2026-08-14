@@ -1,0 +1,302 @@
+<p>"Let's start with something simple. Design a URL shortener — like bit.ly." The interviewer smiles. You almost relax. Every course opens with this problem; you've seen a hundred diagrams for it. Client, server, database, done. What could possibly go wrong?</p>
+
+<p>Here's what the smile means. The interviewer knows this problem is small — that's why they picked it. No celebrity fanout, no consensus, no petabytes. Nowhere to hide: every point comes from <em>judgment</em> — the numbers you run, the choices you commit to, the traps you spot in features that look trivial. Mid-level candidates recite the memorized diagram and stall when asked "why?" three times in a row. Senior candidates treat it as what it is: a small problem that deserves a senior answer, with pacing so clean the interviewer never has to steer.</p>
+
+<p>This first walkthrough does double duty: it solves the shortener at the E5 bar, and it narrates the clock — where each phase lands in a 45-minute round — so you can watch chapter 0.1's framework actually run. One sentence per phase notes the time; that habit is half of what "drives the room" means.</p>
+
+<h2>Requirements: shrink it out loud (minutes 0–5)</h2>
+
+<p>Even a small problem gets scoped out loud: "I'll build: shorten a URL, redirect a short code to its long URL, optional custom aliases like <code>bit.ly/my-launch</code>, optional expiry, and lightweight click stats — counts, not dashboards. Out of scope: user accounts beyond an owner ID, paid analytics. Fair?"</p>
+
+<p>Then the non-functional list, with numbers committed rather than fished for:</p>
+
+<ul>
+<li><strong>Scale:</strong> 100 million new links per month; each link averages 100 clicks over its life — roughly 10 billion redirects a month.</li>
+<li><strong>Latency:</strong> the redirect inserts itself into <em>every click</em>. Server-side p99 under 20 ms, so the added delay stays invisible.</li>
+<li><strong>Availability:</strong> the redirect path outranks creation. Failing to mint links for an hour is embarrassing; breaking ten billion existing links is company-ending.</li>
+<li><strong>Codes must not be guessable in sequence.</strong> If <code>abc123</code> exists, an attacker learns nothing about <code>abc124</code>. Why this matters becomes a war story later.</li>
+</ul>
+
+<p>Clock check: five minutes gone, scope agreed, flag already planted on the read path — that's where the deep dives will go.</p>
+
+<div class="box story"><div class="box-tag">War story — TinyURL, bit.ly, and the redirect that became a business</div>
+<p>The whole product category exists because of a unicycle forum. In 2002, Kevin Gilbertson, a unicyclist from Blaine, Minnesota, got tired of long URLs wrapping and breaking in emails to his unicycling newsgroup, so he built TinyURL — the first notable shortener, and one of the oldest still running. It stayed hobby-sized until Twitter's 140-character limit made every long URL painfully expensive; in May 2009 Twitter made bit.ly (launched 2008) its default shortener, replacing TinyURL, and traffic exploded — competitor tr.im announced shutdown within months of losing that slot. Then Twitter built its own wrapper, t.co, and took the default back. That should have killed bit.ly. Instead the company had realized the redirect log <em>is</em> the product — every click says who clicked what, when, from where — and it survived by selling that analytics layer to marketers. Remember this at 301-versus-302 time: the boring response code is a revenue decision.</p>
+</div>
+
+<h2>Estimation: find out what problem this actually is (minutes 5–9)</h2>
+
+<p>Run the numbers — they're about to overturn the assumption most candidates walk in with.</p>
+
+<ul>
+<li><strong>Writes:</strong> 100M links/month ≈ 40/sec average, ~120/sec at 3x peak. That is <em>nothing</em>. A laptop does this.</li>
+<li><strong>Reads:</strong> 10B redirects/month ≈ 4,000/sec average, ~12,000/sec peak. Read-to-write ratio: about 100 to 1.</li>
+<li><strong>Storage:</strong> a row is a 7-character code, a ~200-byte URL, an owner ID and two timestamps — call it 500 bytes with index overhead. Five years is 6 billion rows × 500 bytes = <strong>3 TB</strong>. Even a full billion links is 500 GB — one commodity NVMe drive.</li>
+</ul>
+
+<p>Now say the conclusion out loud: <strong>"This is a read-heavy, small-data system. Storage will never be the problem — 3 TB fits on one box — so I won't shard for data size; that would solve an imaginary problem. The real constraints are read QPS and latency, so the design is a cache in front of a key-value store, and everything else serves that."</strong> The estimate just made three decisions: no sharding for size, cache-first architecture, deep dives on the read path. Estimation doing its job — driving decisions, not decorating the whiteboard.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A URL shortener is a coat check. You hand over something long and unwieldy; you get back a tiny numbered ticket. Nobody thinks the hard part is closet space — a thousand coats fit in one room. The hard parts are the ticket numbers (two customers must never get the same one, even with three attendants working at once) and the pickup rush, a hundred times busier than drop-off. Closet space = storage: a non-problem. Tickets and the pickup queue = ID generation and the read path: the whole game. One break in the analogy — a coat check hands out tickets in order, and we specifically must not.</p>
+</div>
+
+<h2>API and data model: quick, then move (minutes 9–12)</h2>
+
+<p>Two minutes, not ten — this section proves you can turn requirements into shapes, then gets out of the way.</p>
+
+<ul>
+<li><code>POST /links</code> with <code>{long_url, custom_alias?, expires_at?}</code> → <code>201 {code: "xK9fQ2a"}</code>. Authenticated; accepts an idempotency key so a retried request doesn't mint two codes (chapter 2.2 habit — one sentence, earns a nod).</li>
+<li><code>GET /{code}</code> → <code>302</code> with <code>Location: long_url</code>, or <code>404</code> unknown, or <code>410 Gone</code> expired. Unauthenticated — the hot path.</li>
+<li><code>GET /links/{code}/stats</code> → <code>{clicks: 18234}</code>. Owner-only.</li>
+</ul>
+
+<p>One table carries the system — <code>links</code>: <code>code</code> (primary key), <code>long_url</code>, <code>owner_id</code>, <code>created_at</code>, <code>expires_at</code>. Click counts live elsewhere, never written synchronously by the redirect — that's deep dive three. Notice the access pattern: every hot-path query is "the row for exactly this code." Pure key-value, no joins, no ranges. Hold that thought — it decides the database.</p>
+
+<h2>The high-level machine (minutes 12–20)</h2>
+
+<p>Draw the complete loop before going deep anywhere — both paths, traceable end to end.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 372" role="img" aria-label="Full URL shortener architecture with separate create and redirect paths">
+  <rect class="dg-node" x="10" y="160" width="80" height="48" rx="8"/>
+  <text class="dg-txt" x="26" y="188">Client</text>
+  <rect class="dg-node" x="122" y="160" width="64" height="48" rx="8"/>
+  <text class="dg-txt" x="138" y="188">LB</text>
+  <rect class="dg-node" x="240" y="52" width="124" height="48" rx="8"/>
+  <text class="dg-txt" x="256" y="74">Create API</text>
+  <text class="dg-txt-s" x="256" y="91">~120/sec peak</text>
+  <rect class="dg-node-alt" x="240" y="252" width="124" height="48" rx="8"/>
+  <text class="dg-txt" x="252" y="274">Redirect svc</text>
+  <text class="dg-txt-s" x="252" y="291">~12K/sec peak</text>
+  <rect class="dg-node" x="420" y="20" width="150" height="44" rx="8"/>
+  <text class="dg-txt" x="434" y="41">Counter table</text>
+  <text class="dg-txt-s" x="434" y="57">leases ID blocks</text>
+  <rect class="dg-node" x="420" y="252" width="110" height="48" rx="8"/>
+  <text class="dg-txt" x="440" y="274">Redis</text>
+  <text class="dg-txt-s" x="440" y="291">code→URL</text>
+  <rect class="dg-node" x="566" y="150" width="144" height="52" rx="8"/>
+  <text class="dg-txt" x="580" y="172">DynamoDB</text>
+  <text class="dg-txt-s" x="580" y="190">links table, 3 TB</text>
+  <rect class="dg-node" x="420" y="322" width="180" height="40" rx="8"/>
+  <text class="dg-txt-s" x="432" y="340">click queue → aggregator</text>
+  <text class="dg-txt-s" x="432" y="355">async, lossy is OK</text>
+  <line class="dg-edge" x1="90" y1="184" x2="122" y2="184" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="186" y1="170" x2="240" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="186" y1="198" x2="240" y2="266" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="364" y1="62" x2="420" y2="48" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="364" y1="90" x2="566" y2="162" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="364" y1="270" x2="420" y2="270" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="530" y1="262" x2="566" y2="196" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="364" y1="296" x2="420" y2="330" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="378" y="40">lease 1M</text>
+  <text class="dg-txt-s" x="440" y="120">put code→URL</text>
+  <text class="dg-txt-s" x="536" y="240">on miss</text>
+  <text class="dg-txt-s" x="196" y="150">write path</text>
+  <text class="dg-txt-s" x="196" y="242">read path</text>
+</svg>
+<figcaption>The complete machine. The redirect service (highlighted) is the hot path; creation is a hundred times quieter. Click counting hangs off the side, async and allowed to be lossy.</figcaption>
+</figure>
+
+<p><strong>Write path:</strong> client posts a long URL → Create API takes the next ID from its locally held block (leased a million at a time from a counter table — deep dive one), permutes and base62-encodes it, writes <code>code → long_url</code>, returns the short link. One conditional write, no retry loop.</p>
+
+<p><strong>Read path:</strong> <code>GET /xK9fQ2a</code> → redirect service checks Redis → on hit (target 95%+) responds <code>302</code> in a few milliseconds → on miss, reads DynamoDB, fills the cache, responds. Either way it fires a click event at a queue and forgets it.</p>
+
+<p><strong>Database: I'll commit to DynamoDB.</strong> The access pattern is a pure key-value get by primary key, which is exactly what Dynamo is; conditional writes give atomic "insert if not exists," which the alias race needs; built-in TTL handles expiry cleanup; and it scales reads without me operating replicas and failovers for what is, at heart, one GET endpoint. The cost: lock-in and no rich queries — which this system never needs. The honest alternative: Postgres plus the same Redis cache is defensible at 12K reads/sec; I'm choosing the smallest 3 a.m. surface. Clock check: minute twenty, the loop is closed, and I announce my deep-dive agenda instead of waiting for one: "The interesting problems are code generation, the redirect path, and click counting. Code generation first."</p>
+
+<h2>Deep dive 1: minting codes with no bottleneck and no pattern (minutes 20–30)</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>This is why the question exists. You must generate billions of codes that are (a) unique — a collision silently sends someone to the wrong page, (b) short — 7 characters, not a 32-character hash, (c) mintable by many servers at once without queueing on a central "next number please" service, and (d) non-sequential — no guessable series. Every naive strategy fails at least one of the four, and the interviewer knows which one yours fails. Spend your best ten minutes here.</p>
+</div>
+
+<p>First, the alphabet. Base62 — digits 0–9, a–z, A–Z — because all 62 characters are URL-safe without escaping; base64's <code>+</code> and <code>/</code> need percent-encoding, defeating the point of a short link. Seven characters gives 62^7 ≈ <strong>3.5 trillion</strong> codes; our five-year forecast of 6 billion links uses 0.17% of that. Seven is enough forever — say so and move on.</p>
+
+<p>Now, how do you hand those numbers out to a fleet? Walk the options like a candidate who rejected each for a reason:</p>
+
+<ul>
+<li><strong>Global counter + base62.</strong> One database counter; every create increments it; encode the result. Unique by construction, dead simple — and wrong twice: the counter is a single point of coordination every write queues behind, and the output is perfectly sequential — shorten two links and you can name every code minted between them. Fails (c) and (d).</li>
+<li><strong>Hash the URL and truncate.</strong> MD5 the long URL, keep 7 base62 characters. Zero coordination — but truncation invites birthday collisions: they begin after the first couple of million links, and by 6 billion roughly one insert in 600 hits an existing code. Every write becomes a loop — insert, detect, re-salt, retry — with unbounded latency on an unlucky day. Subtler product bug: the same URL always hashes to the same code, so two users shortening the same page silently share one link and one click counter. Salt with the user ID and you've discarded hashing's only advantage. Fails (a) without a retry loop.</li>
+<li><strong>Pre-generated key pool (the "KGS" in every textbook).</strong> An offline job mints millions of random codes into a pool; servers claim them atomically, in batches. It genuinely works — uniqueness pre-checked, codes random. My objection is operational: an extra service, a keys database, claim bookkeeping, a "pool running dry" alarm — all to solve what the next option solves with zero new components. I'd rather not be on call for it.</li>
+<li><strong>Leased ranges + a permutation. My commitment.</strong> Keep one tiny counter row — but servers don't touch it per request. Each app server atomically leases a block of a million IDs (one conditional increment: "give me [8,000,001 … 9,000,000]") and mints from it in local memory, zero coordination. At 40 links/sec fleet-wide, the counter is touched a handful of times per <em>day</em>. Before encoding, run the ID through a fixed permutation of the space — a reversible scrambler. Because the scramble is a bijection, a perfect one-to-one shuffle, distinct inputs can never share an output: sequential IDs in, random-looking codes out, uniqueness intact. Base62-encode the result. Every write is a local increment, one scramble, one database put. No retry loop, no extra service, no sequence to guess.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 150" role="img" aria-label="ID pipeline from counter lease through permutation to base62 code">
+  <rect class="dg-node" x="10" y="40" width="130" height="56" rx="8"/>
+  <text class="dg-txt" x="24" y="62">Counter row</text>
+  <text class="dg-txt-s" x="24" y="80">lease blocks of 1M</text>
+  <rect class="dg-node" x="186" y="40" width="140" height="56" rx="8"/>
+  <text class="dg-txt" x="200" y="62">Local counter</text>
+  <text class="dg-txt-s" x="200" y="80">ID = 8,193,042</text>
+  <rect class="dg-node-alt" x="372" y="40" width="150" height="56" rx="8"/>
+  <text class="dg-txt" x="386" y="62">Permutation</text>
+  <text class="dg-txt-s" x="386" y="80">bijective shuffle</text>
+  <rect class="dg-node" x="568" y="40" width="142" height="56" rx="8"/>
+  <text class="dg-txt" x="582" y="62">Base62</text>
+  <text class="dg-txt-s" x="582" y="80">"xK9fQ2a"</text>
+  <line class="dg-edge" x1="140" y1="68" x2="186" y2="68" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="326" y1="68" x2="372" y2="68" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="522" y1="68" x2="568" y2="68" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="144" y="120">once per 1M mints</text>
+  <text class="dg-txt-s" x="352" y="120">per mint: pure local arithmetic, no coordination</text>
+</svg>
+<figcaption>Coordination happens once per million codes; everything per-request is local arithmetic. The permutation turns a boring sequence into random-looking codes without risking a collision.</figcaption>
+</figure>
+
+<p>What's inside the scrambler? Even "multiply by a large odd constant, take the remainder mod 62^7" is a perfect shuffle of the space. A Feistel network — a small reversible mixer borrowed from cryptography — is stronger, because its pattern is much harder to reverse-engineer from examples. Name it, don't derive it; the interviewer wants the property (bijection = shuffle = no collisions ever), not the algebra.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Leased ranges are raffle-ticket books. The organizer (counter table) doesn't hand out tickets one by one from a booth with a queue around the block — she hands each volunteer a book of 1,000 pre-numbered tickets and goes back to her chai. Volunteers tear off tickets at full speed: no line, no radio calls, no two people holding ticket 4711, because the books never overlap. The permutation is the twist a raffle lacks: every number passes through the same secret shuffle before printing, so no buyer can compute a neighbor's number from their own stub. Honest limit: a volunteer who loses a half-used book loses those numbers forever — true for a crashed server's stranded block too. We don't care: burning a thousand million-ID blocks wastes 0.03% of a 3.5-trillion space. Wasted IDs are free, and knowing they're free is the senior read.</p>
+</div>
+
+<p>Self-identified weakness, before the interviewer finds it: the permutation is obscurity, not cryptography — if the constant leaks, codes become enumerable again. So I never treat unguessability as a security boundary (a short code is a public name, never an access control — the abuse section makes this concrete), and I watch the 404 rate for anyone probing the space. Second weakness: the counter row is a single point for <em>leases</em> — but with day-level lease frequency and hours of runway per server, it can be down a long time before anyone notices. I'll take it.</p>
+
+<h2>Deep dive 2: the redirect — 301 vs 302, and the cache (minutes 30–36)</h2>
+
+<p>The redirect response code looks like trivia. It's a business decision, and interviewers love it because the trade-off has no free lunch.</p>
+
+<p>A <code>301 Moved Permanently</code> tells the browser "this mapping is forever — remember it." Browsers cache it aggressively: the <em>second</em> click goes straight to the destination without touching your servers. Great for the bill; fatal for two requirements. Cached-away repeat clicks are invisible to counting, and a "permanent" answer can't expire or be taken down — a browser that cached the 301 keeps sending users to a link you've since disabled for malware. A <code>302 Found</code> says "here's the destination today — ask again next time," so every click flows through you.</p>
+
+<p><strong>I'll commit to 302 (with explicit no-cache headers), because we committed to click stats and expiry, and both die under 301 caching.</strong> The honest cost: I volunteer to serve every repeat click myself — the whole 12K/sec — instead of letting the world's browsers absorb them. If the requirements flipped to no-analytics, immutable links, 301 becomes right and cuts real traffic; that's the version TinyURL could live with, and why bit.ly, whose post-Twitter business was the click log, needs every click to come home. The response code follows the requirements, not fashion.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="301 versus 302 redirect behavior on repeat clicks">
+  <rect class="dg-zone" x="10" y="16" width="340" height="220" rx="8"/>
+  <text class="dg-txt" x="26" y="42">301 permanent</text>
+  <rect class="dg-node" x="26" y="60" width="92" height="44" rx="8"/>
+  <text class="dg-txt" x="42" y="86">Browser</text>
+  <rect class="dg-node" x="200" y="60" width="120" height="44" rx="8"/>
+  <text class="dg-txt" x="216" y="86">Shortener</text>
+  <line class="dg-edge" x1="118" y1="76" x2="200" y2="76" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="128" y="66">click 1</text>
+  <rect class="dg-node" x="200" y="160" width="120" height="44" rx="8"/>
+  <text class="dg-txt" x="216" y="186">Site</text>
+  <line class="dg-edge dg-bad" x1="72" y1="104" x2="200" y2="180" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="80" y="160">click 2: cached,</text>
+  <text class="dg-txt-s" x="80" y="176">never seen by us</text>
+  <rect class="dg-zone" x="370" y="16" width="340" height="220" rx="8"/>
+  <text class="dg-txt" x="386" y="42">302 temporary</text>
+  <rect class="dg-node" x="386" y="60" width="92" height="44" rx="8"/>
+  <text class="dg-txt" x="402" y="86">Browser</text>
+  <rect class="dg-node" x="560" y="60" width="120" height="44" rx="8"/>
+  <text class="dg-txt" x="576" y="86">Shortener</text>
+  <line class="dg-edge dg-good" x1="478" y1="76" x2="560" y2="76" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="488" y="66">every click</text>
+  <rect class="dg-node" x="560" y="160" width="120" height="44" rx="8"/>
+  <text class="dg-txt" x="576" y="186">Site</text>
+  <line class="dg-edge" x1="620" y1="104" x2="620" y2="160" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="440" y="130">counted, expirable,</text>
+  <text class="dg-txt-s" x="440" y="146">revocable</text>
+</svg>
+<figcaption>With 301, repeat clicks bypass you forever — cheap, blind, irrevocable. With 302, every click comes home. We sold stats and expiry, so we buy 302 and pay the traffic.</figcaption>
+</figure>
+
+<p>Having volunteered for every click, serve them from memory. Cache-aside in Redis: key = code, value = long URL plus expiry, TTL a day. Clicks follow a power law — a small fraction of links (the tweet going viral right now) draws most traffic — exactly the shape caches love: a modest cache holds the working set and 95%+ of redirects never touch the database. 12K/sec peak fits one Redis node with a replica; I'd still run two shards for failure isolation, not throughput. If one link goes truly nuclear — a hot key in the chapter 2.6 sense — a tiny in-process LRU for the top hundred links caps the damage. One more trick that pays for its sentence: <em>negative caching</em>. Cache "this code does not exist" for a few minutes too, so a scanner hammering random codes — or a typo'd link in a big group chat — burns cache, not database.</p>
+
+<h2>Deep dive 3: counting clicks without touching the hot path (minutes 36–40)</h2>
+
+<p>The trap: "increment a counter on every redirect" quietly turns your read-heavy system write-heavy — 12,000 counter writes per second so a dashboard nobody is watching stays current to the millisecond. Say the quiet part: <strong>click counts are decorative data. They tolerate delay and small loss. The redirect tolerates neither.</strong></p>
+
+<p>So the redirect service fires a fire-and-forget event — <code>{code, timestamp}</code> — onto a queue (chapter 1.11's machinery) and returns the 302 without waiting. A small consumer group aggregates per-minute counts and flushes batched increments — "code xK9fQ2a: +1,417" — every few seconds. Twelve thousand events per second becomes a few dozen database writes per second; dashboard counts run seconds behind reality, declared acceptable when we scoped "stats lite." If the product later demands uniques or top-K trending, that's the count-min sketch and friends from chapter 2.10 bolted onto this same event stream — the stream is the extension point, the real reason to build one at all.</p>
+
+<p>The failure policy is the part that reads senior: <strong>if the queue is down, drop the events and keep redirecting.</strong> Emit a metric so we know we're undercounting, and move on. Backpressuring the redirect path to protect analytics would invert the system's priorities. Stats are the passenger; redirects are the plane.</p>
+
+<h2>The small features that hide races (minutes fit inside the dives)</h2>
+
+<p><strong>Custom aliases.</strong> "I want <code>short.ly/my-launch</code>" is a uniqueness claim, and two users can claim the same word in the same millisecond. The classic bug is check-then-insert: read "is it free?", see yes, insert — and between your read and your write, someone else did the same dance. The fix is to never check at all: one atomic conditional insert — in DynamoDB, a put with <code>attribute_not_exists(code)</code>; in Postgres, an insert against the unique primary key — and let the database referee. Exactly one claimant succeeds; the loser gets "taken, pick another." Same lesson as ticket booking in chapter 3.8 at one-thousandth the drama: uniqueness is enforced by an atomic write, never by a read followed by hope. Aliases share the namespace with generated codes, so add one structural rule — generated codes are exactly 7 characters, aliases must be 8+ — and the two can never collide by construction.</p>
+
+<p><strong>Expiry.</strong> Two mechanisms, and you need both — that's the interview point. <em>Lazy expiry</em>: the redirect path checks <code>expires_at</code> on every hit and answers <code>410 Gone</code> when past-due — the correctness mechanism, working even if cleanup never runs. <em>Cleanup</em>: DynamoDB's built-in TTL deletes expired rows for free, but it's explicitly best-effort and can lag a day or two — precisely why the lazy check must exist. Lazy check for correctness, TTL for hygiene; neither alone is complete. (Also evict the cache entry on the 410 path, or Redis serves the dead link until its own TTL runs out.)</p>
+
+<h2>Abuse: the part everyone forgets until it's a headline (minute 40)</h2>
+
+<p>A URL shortener is a machine that makes any link look harmless. That's the product — and the attack. Phishers were among the earliest heavy users of shorteners, because <code>short.ly/xK9fQ2a</code> hides the sketchy domain it points to. Raise this unprompted: check submitted URLs against a threat feed like Google Safe Browsing at creation, re-scan asynchronously (attackers submit a clean page, then swap its content once shortened), and make takedown cheap — which our 302 choice enables and a cached 301 would sabotage. Rate-limit creation per user and per IP (chapter 1.12's token buckets), because a spammer's first move is minting a million links.</p>
+
+<div class="box story"><div class="box-tag">War story — "Gone in Six Characters"</div>
+<p>In 2016, researchers Martin Georgiev and Vitaly Shmatikov published a study with a perfect title: "Gone in Six Characters: Short URLs Considered Harmful for Cloud Services." The observation was brutally simple: a 5- or 6-character token space is small enough to scan by brute force. They enumerated short links minted by goo.gl and OneDrive's 1drv.ms — and found "shared privately" documents behind short links were effectively public. Scanning surfaced live OneDrive documents, and from a discovered link they could often traverse to the rest of the account; about 7% of exposed accounts were <em>writable</em> by anyone — a ready-made mass-malware vector, since cloud folders sync down to their owners' machines. Scanned Google Maps short links revealed shared driving directions — enough, for many users, to infer home addresses. The fallout: Microsoft dropped URL shortening from OneDrive; Google moved Maps to much longer tokens. Two lessons, say both: entropy is a speed bump, not a lock — private things must authenticate at the destination, never hide behind a short code — and a spiking 404 rate is the sound of someone scanning your keyspace, which is why it belongs on the dashboard.</p>
+</div>
+
+<h2>Failure modes and operations (minutes 40–45)</h2>
+
+<p>Close the way you'd run the service. One pass, unprompted:</p>
+
+<ul>
+<li><strong>Redis dies.</strong> The full 12K/sec falls through to DynamoDB, which absorbs it — a provisioning line item, not an outage — p99 rising from ~5 ms to ~15 ms. Guard the refill stampede with request coalescing (one flight per missing key). The design survives its cache dying because we sized the DB honestly.</li>
+<li><strong>Queue dies.</strong> Covered: drop click events, count the drops, keep redirecting.</li>
+<li><strong>Counter table dies.</strong> Every server keeps minting from its leased block — hours of runway. Creation stalls only if the outage outlives everyone's blocks; redirects never notice. That graceful window is the lease design paying off.</li>
+<li><strong>Monitoring.</strong> Four numbers: redirect p99 (the product promise), cache hit rate (below ~90%, latency and DB load are about to move), 404 rate (a 50x spike is a scanner or a broken deploy — either way, page someone), queue consumer lag (stats freshness). Alert on those; everything else is a dashboard.</li>
+<li><strong>Rollout.</strong> The scary changes are the encoder and permutation — wrong once, and you mint corrupt codes forever. Ship behind a flag to 1% of creates, with an offline verifier replaying a day of IDs through old and new paths asserting identical output. Redirect changes canary by region; rollback is the flag.</li>
+<li><strong>What does 10x mean here?</strong> Honestly: almost nothing, and saying so is the senior answer. 120K redirects/sec is more Redis shards and a bigger Dynamo bill; 30 TB is still small; blocks lease hourly instead of daily — the counter doesn't blink. The junior instinct is to invent heroics for 10x; the honest read is that this shape was chosen so 10x is a bill, not a redesign. What <em>would</em> force new thinking is a requirement flip — exact-count billing, links as access controls — not more traffic.</li>
+</ul>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>Probes come fast on an opener, aimed at judgment density. Nearly verbatim:</p>
+<ul>
+<li>"Why 7 characters? Why base62 and not base64?" — checking your constants are chosen, not copied.</li>
+<li>"Two servers generate the same code — walk me through why that's impossible." — the crux probe; the answer must be structural (disjoint blocks + bijection), not "we check the DB."</li>
+<li>"You said 302 — but that means you eat every repeat click. Defend it." — they want the requirement-driven trade-off, and proof you know what 301 would buy.</li>
+<li>"Your Redis cluster just died at peak. What does the user experience?" — the answer should already be sized: DB absorbs it, latency triples, nobody notices.</li>
+<li>"How do you stop me crawling your keyspace tonight?" — rate limits, negative caching, 404-rate alerting, and the honest admission that entropy delays a scanner but only auth stops one.</li>
+<li>"What would you build differently at 100x?" — the trap where over-engineers reveal themselves; the strong answer defends the current shape and names the one real pressure point (regional read replicas for global latency).</li>
+</ul>
+</div>
+
+<h2>The committed choices, priced</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Chose</th><th>Over</th><th>The cost I accepted</th></tr></thead>
+<tbody>
+<tr><td>Code generation</td><td>Leased ID ranges + bijective permutation</td><td>KGS pool; hash+truncate; raw counter</td><td>Permutation is obscurity, not security; crashed servers strand partial blocks (0.03% of space — free)</td></tr>
+<tr><td>Redirect code</td><td>302 + no-cache</td><td>301 permanent</td><td>We serve every repeat click ourselves — analytics and revocability are paid for in QPS</td></tr>
+<tr><td>Database</td><td>DynamoDB</td><td>Postgres + replicas</td><td>Lock-in, per-request pricing, no ad-hoc queries — fine, the access pattern is one key-value get</td></tr>
+<tr><td>Click counts</td><td>Async queue + batched aggregation</td><td>Synchronous increment</td><td>Counts lag seconds and can undercount during queue outages — declared acceptable up front</td></tr>
+<tr><td>Expiry</td><td>Lazy check + DynamoDB TTL sweeper</td><td>Either alone</td><td>Two mechanisms to reason about; TTL lags up to ~48h (correctness never depends on it)</td></tr>
+<tr><td>Alias claims</td><td>Atomic conditional insert</td><td>Check-then-insert</td><td>None — this one is simply correct; check-then-insert is simply a race</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c01-f1">
+<p class="fey-prompt">A junior asks: "A URL shortener is just a hash map with a website in front — why do interviewers keep asking about it?" Answer in five or six sentences, naming the one genuinely hard part.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>You're right that the data is tiny — a billion links fit on one drive — and that's the first lesson: notice it's small and refuse to shard imaginary petabytes. What's not trivial is minting the codes: many servers must generate billions of unique 7-character codes without queueing at a central counter and without a guessable sequence, because guessable codes let strangers walk your keyspace. The trick: lease each server a big block of numbers so coordination is rare, then push every number through a reversible shuffle so output looks random but can never collide. Second lesson: the redirect is read-heavy and latency-critical, so a cache serves nearly everything, and click counting goes through a queue so it can never slow a redirect. Even the response code is a decision: 301 lets browsers cache the redirect and you lose analytics; 302 means every click comes to you and can be counted, expired, or revoked. Small system — but every piece is a judgment call, which is what the interview grades.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: click counts are now <strong>exact</strong> — billed to advertisers at ₹2 per click. Which parts of the design must change, and which survive?</p></div>
+<details><summary>Answer</summary><p>The fire-and-forget click path dies: "drop events when the queue is down" is now dropping money. Billing needs durable accounting — persist the click event (acked queue write, or an outbox row) <em>before</em> returning the 302, deduplicate on an event ID downstream, reconcile daily (chapter 2.2's ledger thinking). The redirect gets slower and gains a dependency — the honest price, and saying so is the senior framing. Everything else survives untouched.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your CEO read a blog post and demands 301 redirects "to cut serving costs." Write the two-sentence reply that commits, and name the product change that would make the CEO right.</p></div>
+<details><summary>Answer</summary><p>Something like: "301 lets browsers cache the redirect, so repeat clicks never reach us — never counted, and a link we take down for malware keeps working in every browser that cached it; analytics and abuse takedown both break. If we ever drop click stats and promise immutable links, 301 becomes right and I'll make the switch that day." Commit, price it, name the flip condition — that last clause separates a preference from a judgment.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Now add multi-region: users in India, Europe, and the US should all see &lt;50 ms redirects. Sketch the minimal extension. What's the consistency catch, and why is it almost harmless here?</p></div>
+<details><summary>Answer</summary><p>Redirects are reads, so replicate the read path: Redis plus an async DynamoDB global-table replica per region, DNS/anycast routing users to the nearest. Creation stays single-region-writer — 120/sec needs no geo-distributed writes. The catch: a just-minted link takes a second or two to reach remote regions, so a Berlin user clicking a brand-new Mumbai link could 404. Almost harmless: creators read via their home region, cross-region clicks within seconds of creation are rare, and a 404 on a fresh code can fall back to the writer region. Bonus: pre-partition the ID space per region so even leases never cross an ocean.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks first if link <em>creation</em> goes 1000x — say, an API partner starts minting 40,000 links/sec programmatically? Walk the write path and find the choke points in order.</p></div>
+<details><summary>Answer</summary><p>In order: (1) The Safe Browsing check — an external synchronous call per create — chokes first; go async (create optimistically, scan within seconds, kill bad links after the fact). (2) Leases jump to one per ~25 seconds fleet-wide — still trivial, but worth 10M blocks. (3) Dynamo write throughput needs provisioning — a bill, not a design change; note the permutation accidentally guarantees no hot partition, since consecutive IDs scatter. (4) The real break: 40K/sec ≈ 100B links/month, so five years is 6 <em>trillion</em> links — overflowing 62^7's 3.5T space. The redesign is 8-character codes: the constant you defended at minute 22 is what 1000x actually breaks.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimation drill, 90 seconds: how much RAM does Redis need for a 95% hit rate, given the power-law click pattern? State your assumptions.</p></div>
+<details><summary>Answer</summary><p>Assume today's traffic concentrates on recent and viral links: say 95% of the day's ~330M redirects hit the ~20M most active links — well under 1% of all 6B (power laws are steeper than intuition suggests). Entry: 7-byte code + ~200-byte URL + overhead ≈ 300 bytes. 20M × 300B = 6 GB — one modest Redis node. The meta-answer: cache sizing is a footnote here, and knowing when a sub-problem is a footnote is the skill being drilled.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>The shortener is a small problem graded on judgment density: run the numbers, discover it's read-heavy and small-data, and say out loud that storage is a non-problem before designing for the read path.</li>
+<li>The crux is minting codes: base62 at 7 characters gives 3.5 trillion, and the winning generator leases big ID blocks (coordination once per million codes) then applies a bijective shuffle so codes can't collide and can't be guessed in sequence.</li>
+<li>Hash-and-truncate buys a collision retry loop and accidental dedup; a raw counter is a bottleneck and an enumeration invitation; a key pool works but is an extra service to babysit — reject each for its specific reason.</li>
+<li>301 vs 302 is a requirements decision: 301 offloads repeat clicks to browser caches but blinds analytics and breaks takedown; commit to 302 because we sold stats and expiry, and name the traffic cost accepted.</li>
+<li>Click counting must never tax the redirect: fire events at a queue, aggregate into batched increments, and when the queue dies, drop stats and keep redirecting.</li>
+<li>Custom aliases are a uniqueness race; the only correct claim is one atomic conditional insert — check-then-insert is a bug wearing a code review approval.</li>
+<li>Expiry needs both a lazy check on read (correctness) and a TTL sweeper (hygiene); neither alone is complete.</li>
+<li>Short codes are public names, not access controls — the OneDrive/goo.gl scanning study proved entropy only slows attackers — so monitor 404 rate, rate-limit creation, and put real auth at the destination.</li>
+<li>The honest 10x answer is "bigger bill, same shape," and being able to say why is worth more than inventing heroics.</li>
+</ul>
+</div>

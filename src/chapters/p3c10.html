@@ -1,0 +1,325 @@
+<p>"Design a rate limiter for our public API." The candidate before you smiled at this question. A counter, an <code>if</code> statement, a 429. Ten minutes, done. That candidate did not get the senior grade, because this question is a trap with a friendly face. The counter is trivial. What's hard is <em>where the counter lives</em>.</p>
+
+<p>Here's the moment the question is built around. Your API runs behind 40 gateways spread across three continents. A customer's key is limited to 100 requests per second. That customer's traffic — or an abuser holding their stolen key — arrives through anycast routing, so their requests land on all 40 gateways at once. Each gateway sees a gentle trickle: two or three requests per second. Every local counter says "fine." Globally, the key is doing 4,000 requests per second, and your database is on fire.</p>
+
+<p>So the real question is: how do 40 machines on three continents agree on one number, thousands of times per second, without adding latency to every single API call your company serves? That's distributed counting under a latency budget of about one millisecond. It has no perfect answer — which is exactly why interviewers love it. The senior move is to name the impossible corner early and negotiate what you'll sacrifice.</p>
+
+<h2>Requirements: pin down what "limit" means</h2>
+
+<p>Functional requirements I'd state and get agreement on:</p>
+
+<ul>
+<li><strong>Limit by multiple scopes:</strong> per API key (the main one), per tenant/organization, per IP for unauthenticated traffic, with different limits per endpoint class (reads vs writes vs auth).</li>
+<li><strong>Burst allowance:</strong> a client doing 100/s steady should be allowed to briefly spike to 200 — real traffic is lumpy, and punishing lumpiness makes an API miserable to use.</li>
+<li><strong>Graceful rejection:</strong> a 429 response that tells the client its limit, what remains, and when to retry — not a mystery error.</li>
+<li><strong>Limits change without a deploy:</strong> support raises a customer's limit from a config table, effective in seconds.</li>
+</ul>
+
+<p>Non-functional, with numbers I'll commit to:</p>
+
+<ul>
+<li><strong>Overhead ≤ 1ms added latency at p99, ~0.1ms typical.</strong> The limiter sits in the path of every request; its cost is a tax on the whole company.</li>
+<li><strong>Scale: the limiter's QPS equals the API's QPS.</strong> 1M requests/sec at peak, globally, across ~40 gateways in 3 regions.</li>
+<li><strong>Availability beats accuracy — mostly.</strong> A broken limiter must not take the API down. I'll accept temporary over-admission (letting a bit too much through) on cheap endpoints; I will not accept it on expensive ones. This asymmetry becomes a per-endpoint policy, and it's the heart of my design.</li>
+<li><strong>Global fairness-ish:</strong> one key's limit should hold globally, approximately. I'll be explicit later about how approximate.</li>
+</ul>
+
+<h2>Estimation: one number forbids the obvious design</h2>
+
+<p>Most estimation in this problem exists to kill one idea: the single central counter.</p>
+
+<p><strong>Throughput.</strong> The limiter runs on every request, so it does 1M checks/sec at peak. Whatever the check costs, multiply by a million per second, forever. This is why the check must be nearly free.</p>
+
+<p><strong>Latency.</strong> A counter in one central place means every request pays a round trip to it. Cross-continent RTT is 80–150ms — my budget is 1ms, so a global synchronous counter is dead before we start; it's not a design option, it's a 100x budget violation. Same-region Redis is 0.5–1ms — affordable, but it puts a network hop and a dependency into every request. Reading a counter in the gateway's own memory is under a microsecond — effectively free. Those three numbers <em>are</em> the architecture: they force a tiered design where the common case stays local.</p>
+
+<p><strong>Memory.</strong> Token-bucket state is two numbers per key (token count, last-refill timestamp). Say 50M active keys × 3 endpoint classes × ~80 bytes ≈ 12GB. A small Redis cluster holds this comfortably. Memory is not the problem here. Coordination is — I'll say that out loud so the interviewer knows I've found the right fire.</p>
+
+<h2>API and data model: quick, then move on</h2>
+
+<p>The limiter exposes one call to the gateway code:</p>
+
+<pre><code>check(key, endpoint_class, cost=1)
+  -&gt; { allowed: bool, remaining: int, retry_after_ms: int }</code></pre>
+
+<p><code>cost</code> matters: one request can debit more than one token (a batch call costs 10; an LLM call debits tokens-of-text, more on that later). Policies live in a small config table, hot-reloaded to every gateway:</p>
+
+<table>
+<thead><tr><th>Scope</th><th>Endpoint class</th><th>Rate</th><th>Burst</th><th>Mode</th><th>If limiter fails</th></tr></thead>
+<tbody>
+<tr><td>per key</td><td>reads</td><td>100/s</td><td>200</td><td>local</td><td>fail open</td></tr>
+<tr><td>per key</td><td>writes</td><td>10/s</td><td>20</td><td>strict</td><td>fail open</td></tr>
+<tr><td>per key</td><td>auth (login, OTP)</td><td>5/min</td><td>5</td><td>strict</td><td>fail closed</td></tr>
+<tr><td>per tenant</td><td>all</td><td>5,000/s</td><td>8,000</td><td>local</td><td>fail open</td></tr>
+</tbody>
+</table>
+
+<p>The <em>mode</em> and <em>failure</em> columns are the interesting part of this data model — each is a committed decision I'll defend in the deep dives.</p>
+
+<h2>The algorithm: token bucket, committed</h2>
+
+<p>Quick recap from Part 1, then a commitment. <strong>Fixed window</strong> (count per calendar minute) has the boundary bug: 100 requests at 0:59 and 100 more at 1:01 — 200 in two seconds, all "legal." <strong>Sliding log</strong> (store every request timestamp) is exact but costs memory per request, which at 1M QPS is a non-starter. <strong>Leaky bucket</strong> smooths output to a fixed drip — great for protecting a fragile downstream, hostile to bursty clients. <strong>Token bucket</strong>: the bucket holds up to <code>burst</code> tokens, refills at <code>rate</code> tokens/sec, each request takes one. Steady rate enforced, short bursts allowed, and state is two numbers per key.</p>
+
+<p>I'll commit to token bucket: it's burst-friendly, dirt cheap, and it's the industry default — Stripe and AWS both run their API limits on it. Cost of the choice: a client can legally spike to <code>burst</code> above steady rate, so downstream services must be sized for bursts. That's a price I want to pay, because the alternative is punishing every mobile client that wakes up and syncs.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A token bucket is a prepaid chai card that refills on a drip. The stall tops up your card at 100 rupees an hour, capped at 200. Sip steadily and you never notice the limit. Skip a while and you can splurge — but only up to the cap, and then you're back to the drip. Fixed-window counting is the stall that resets everyone's tab at the top of the hour: order 100 chais at 9:59 and 100 more at 10:01 and the tab never objects. The analogy breaks in one place: a chai card is one card in one pocket. Our problem is that the same "card" is being swiped at 40 stalls at once.</p>
+</div>
+
+<h2>High-level design: three tiers of truth</h2>
+
+<p>The architecture follows straight from the latency numbers: keep the common case in gateway memory, reconcile nearby, reconcile-globally lazily.</p>
+
+<ul>
+<li><strong>Tier 1 — gateway-local buckets (microseconds):</strong> every gateway keeps token buckets in its own memory for keys it's actively serving. Every request is checked here, in-process. This is the fast path and the availability story: it works even when everything else is down.</li>
+<li><strong>Tier 2 — regional Redis (milliseconds):</strong> the region's source of truth. Gateways push their spending as deltas every 50ms and pull the corrected bucket state back. The bucket math on Redis runs in a Lua script, atomically. Endpoints marked <em>strict</em> skip the local answer and check here synchronously.</li>
+<li><strong>Tier 3 — global reconciliation (seconds):</strong> an async job aggregates per-key spend across regions, so a key hammering all three regions gets its regional allowances squeezed. Deliberately slow and boring — cross-continent coordination is exactly what we refused to put in the request path.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 360" role="img" aria-label="Tiered rate limiter: local buckets in gateways, regional Redis, global reconciler">
+  <rect class="dg-zone" x="10" y="34" width="340" height="240" rx="10"/>
+  <text class="dg-txt-s" x="22" y="54">Region: us-east</text>
+  <rect class="dg-node" x="26" y="66" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="38" y="86">Gateway 1</text>
+  <text class="dg-txt-s" x="38" y="102">local buckets (~µs)</text>
+  <rect class="dg-node" x="26" y="126" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="38" y="146">Gateway 2</text>
+  <text class="dg-txt-s" x="38" y="162">local buckets (~µs)</text>
+  <rect class="dg-node" x="26" y="186" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="38" y="206">Gateway 14</text>
+  <text class="dg-txt-s" x="38" y="222">local buckets (~µs)</text>
+  <rect class="dg-node-alt" x="222" y="120" width="112" height="76" rx="8"/>
+  <text class="dg-txt" x="234" y="146">Regional</text>
+  <text class="dg-txt" x="234" y="164">Redis</text>
+  <text class="dg-txt-s" x="234" y="182">Lua, ~1ms</text>
+  <line class="dg-edge" x1="176" y1="89" x2="222" y2="140" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+  <line class="dg-edge" x1="176" y1="149" x2="222" y2="156" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+  <line class="dg-edge" x1="176" y1="209" x2="222" y2="176" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+  <text class="dg-txt-s" x="176" y="250">delta sync every 50ms</text>
+  <rect class="dg-zone" x="380" y="34" width="330" height="240" rx="10"/>
+  <text class="dg-txt-s" x="392" y="54">Region: eu-west (same shape)</text>
+  <rect class="dg-node" x="396" y="96" width="150" height="46" rx="8"/>
+  <text class="dg-txt" x="408" y="116">Gateways ×13</text>
+  <text class="dg-txt-s" x="408" y="132">local buckets</text>
+  <rect class="dg-node-alt" x="580" y="120" width="112" height="76" rx="8"/>
+  <text class="dg-txt" x="592" y="146">Regional</text>
+  <text class="dg-txt" x="592" y="164">Redis</text>
+  <text class="dg-txt-s" x="592" y="182">Lua, ~1ms</text>
+  <line class="dg-edge" x1="546" y1="119" x2="580" y2="145" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+  <rect class="dg-node" x="250" y="300" width="230" height="48" rx="8"/>
+  <text class="dg-txt" x="266" y="320">Global reconciler</text>
+  <text class="dg-txt-s" x="266" y="336">async, seconds</text>
+  <line class="dg-edge" x1="278" y1="196" x2="330" y2="300" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+  <line class="dg-edge" x1="636" y1="196" x2="440" y2="300" marker-end="url(#arrow)" stroke-dasharray="5 4"/>
+</svg>
+<figcaption>The check path never leaves the gateway (solid boxes, microseconds). Everything dashed is asynchronous — spending reports flow inward, corrected budgets flow back out.</figcaption>
+</figure>
+
+<p><strong>The check path (every request):</strong> gateway looks up the key's local bucket → refill by elapsed time → take a token or reject with 429. No network. <strong>The sync path (every 50ms):</strong> each gateway batches "key X spent N tokens" deltas for all its active keys into one pipelined call per Redis shard; the Lua script applies the debits to the regional bucket and returns the true remaining balance, which the gateway adopts as its new local ceiling. A key that overspent regionally comes back negative, and every gateway in the region starts rejecting it within 50ms.</p>
+
+<p>Notice what the sync path does to load: instead of 1M Redis ops/sec (one per request), Redis sees ~20 batched syncs per second per gateway — hundreds of pipelined calls a second carrying thousands of deltas. The request path and the coordination path are fully decoupled. That decoupling is also where the accuracy leak lives, which brings us to the crux.</p>
+
+<h2>Deep dive 1: counting across 40 gateways</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Exact global counting requires synchronous coordination on every request; the latency budget forbids synchronous coordination. Pick two of three: accurate, fast, distributed — you can't have all of them. Everything else in this chapter is bookkeeping around this triangle. The senior signal is not solving it — nobody solves it — it's quantifying exactly how much accuracy you're giving up, for which endpoints, and proving the leak is bounded and priced.</p>
+</div>
+
+<p>Walk the failure concretely first. Limit: 60/min. Two gateways, no sync. An abuser splits traffic evenly: each gateway counts 50, each says "50 &lt; 60, allow." 100 requests hit the origin against a limit of 60. Local-only counters don't fail loudly — they <em>under-count and over-admit</em>, silently, by a factor of up-to-the-gateway-count. With 40 gateways, a 100/s limit quietly becomes a 4,000/s limit exactly when someone malicious — the very person limits exist for — spreads their load.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Two gateways each count 50 against a limit of 60 and both allow, so 100 requests pass">
+  <rect class="dg-node" x="10" y="94" width="140" height="60" rx="8"/>
+  <text class="dg-txt" x="26" y="118">Abuser</text>
+  <text class="dg-txt-s" x="26" y="136">100 req/min</text>
+  <rect class="dg-node" x="240" y="26" width="180" height="62" rx="8"/>
+  <text class="dg-txt" x="254" y="50">Gateway A</text>
+  <text class="dg-txt-s" x="254" y="68">count 50 &lt; 60 → allow</text>
+  <rect class="dg-node" x="240" y="160" width="180" height="62" rx="8"/>
+  <text class="dg-txt" x="254" y="184">Gateway B</text>
+  <text class="dg-txt-s" x="254" y="202">count 50 &lt; 60 → allow</text>
+  <line class="dg-edge" x1="150" y1="110" x2="240" y2="60" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="150" y1="138" x2="240" y2="188" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="168" y="76">50 req</text>
+  <text class="dg-txt-s" x="168" y="186">50 req</text>
+  <rect class="dg-node" x="520" y="94" width="188" height="60" rx="8"/>
+  <text class="dg-txt" x="536" y="118">Origin</text>
+  <text class="dg-txt-s dg-bad" x="536" y="136">100 admitted, limit 60</text>
+  <line class="dg-edge" x1="420" y1="60" x2="520" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="188" x2="520" y2="140" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>The undercount race: every local view is legal, the global total is 1.7x the limit. More gateways, bigger multiplier.</figcaption>
+</figure>
+
+<p>Two obvious fixes, both wrong for the general case, and I'll reject them out loud. <strong>Central counter:</strong> every request checks regional Redis synchronously — accurate within a region, but adds ~1ms and a hard dependency to every request, and at 1M QPS it means a Redis fleet doing 1M atomic ops/sec that, if it stumbles, takes the entire API with it. I'll use it selectively, not universally. <strong>Sticky routing:</strong> consistent-hash each key to one gateway, so its counter is exact and local. Clean on a whiteboard, breaks in production: geo/anycast routing means a global customer's requests genuinely originate on three continents; hashing them to one gateway means cross-region hops (there goes the latency budget) and turns every hot key into a hot <em>machine</em>. It's a fine design for a single-region internal API — worth saying, because knowing where a rejected design works is a senior signal.</p>
+
+<p>So: local buckets with 50ms async sync, and now the honest math. <strong>Worst case over-admission ≈ per-key burst × number of gateways, for one sync window.</strong> Key limit 100/s, burst 200, 40 gateways, 50ms sync. An attacker who sprays all 40 gateways in the same 50ms can seed 40 fresh local buckets, each holding the full burst of 200: up to 8,000 requests admitted — 40x the burst — before the first sync lands. Within ~50ms, the regional bucket goes deeply negative, every gateway adopts the negative balance, and the key is choked until it repays at 100 tokens/s. So the leak is a one-time spike of <code>burst × gateways</code>, lasting at most one sync interval, followed by automatic payback.</p>
+
+<p>Is 8,000 extra requests acceptable? <em>Depends entirely on what they cost</em> — which is why "mode" is a per-endpoint policy, not a global setting:</p>
+
+<ul>
+<li><strong>Cheap reads (cached GET, ~0.2ms CPU):</strong> 8,000 stray requests ≈ 1.6 CPU-seconds smeared across 40 machines. Noise. Local mode, leak accepted.</li>
+<li><strong>Expensive operations (payments, SMS sends, LLM inference at whole GPU-seconds each):</strong> 8,000 over-admitted calls is real money and real damage. These go <strong>strict mode</strong>: the gateway checks regional Redis synchronously, paying the ~1ms. These endpoints are low-QPS and already cost tens to thousands of milliseconds, so 1ms is a rounding error on exactly the paths where accuracy matters most. The tax and the risk line up perfectly.</li>
+</ul>
+
+<p>And there's a knob between the extremes: cap how much burst a local bucket may hold before checking in — say <code>burst/8</code> per gateway — and the worst case drops 8x at the cost of hot keys syncing more often. I'd ship with that knob conservative and tune it from measurements.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A stadium with 40 entrance gates and a 60,000-person fire-safety limit. Give every gate its own clicker and radio a total every minute: fast lines, but between radio calls the gates are collectively blind — 40 gates × a burst of entries each can overshoot the cap until the next call, after which gates start turning people away. One central turnstile would count perfectly and create a two-hour queue. And the VIP vault door doesn't use clickers at all — the guard phones the control room and waits for a yes, because being wrong at <em>that</em> door is expensive. Clickers for the crowd, the phone for the vault: that's local mode and strict mode.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Cloudflare</div>
+<p>Cloudflare built rate limiting that enforces limits for millions of customer domains across its edge network, and they wrote up the design in "How we built rate limiting capable of scaling to millions of domains." Two decisions stand out. First, they chose <em>not</em> to count globally: counters live inside each PoP (point of presence), because anycast routing naturally pins a given client to its nearest PoP — so per-PoP counting is accurate for the case that matters, a real client or botnet node hammering from one place. Second, their storage was memcached, which offers only GET, SET, and atomic INCR — no way to run multi-step bucket logic atomically. So instead of a token bucket they used the sliding-window approximation: weight the previous window's count by how much of it still overlaps, add the current window. Two counters per key, no timestamps stored, and their measured error was about 0.003% across a 400-million-request sample. It's a beautiful example of the whole game: pick where counting is <em>allowed</em> to be local, then pick the algorithm your atomic primitives can actually support.</p>
+</div>
+
+<h2>Deep dive 2: Redis mechanics — the atomic take</h2>
+
+<p>The regional tier has its own race to close. A bucket check is read-modify-write: read tokens, decide, write back. Two gateways syncing the same key concurrently can interleave: both read "1 token left," both decide yes, both write 0 — two spent, one existed. At thousands of syncs a second this isn't a corner case; it's a steady drip of exactly the over-admission we built this tier to stop.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 270" role="img" aria-label="Interleaved get and set loses a debit; a Lua script serializes the whole read-modify-write">
+  <rect class="dg-zone" x="10" y="30" width="330" height="220" rx="10"/>
+  <text class="dg-txt" x="26" y="56">Without Lua: interleaved</text>
+  <text class="dg-txt-s" x="26" y="88">GW A: GET → 1 token</text>
+  <text class="dg-txt-s" x="26" y="112">GW B: GET → 1 token</text>
+  <text class="dg-txt-s" x="26" y="136">GW A: allow, SET 0</text>
+  <text class="dg-txt-s" x="26" y="160">GW B: allow, SET 0</text>
+  <text class="dg-txt-s dg-bad" x="26" y="196">2 requests spent 1 token</text>
+  <rect class="dg-zone" x="380" y="30" width="330" height="220" rx="10"/>
+  <text class="dg-txt" x="396" y="56">With Lua: serialized</text>
+  <rect class="dg-node-alt" x="396" y="72" width="298" height="42" rx="8"/>
+  <text class="dg-txt-s" x="410" y="98">Redis runs one script at a time</text>
+  <text class="dg-txt-s" x="396" y="140">script A: read 1 → allow → write 0</text>
+  <text class="dg-txt-s" x="396" y="164">script B: read 0 → deny</text>
+  <text class="dg-txt-s dg-good" x="396" y="200">exactly 1 token spent</text>
+</svg>
+<figcaption>Redis executes a Lua script as one uninterruptible unit, so read-decide-write can't interleave. The race isn't handled — it's made impossible.</figcaption>
+</figure>
+
+<p>Redis's fix is elegant: it's single-threaded for command execution, and a Lua script runs as one uninterruptible unit. Put the entire refill-decide-debit inside a script and the race cannot happen — no locks, no retries. The bucket, sketched:</p>
+
+<pre><code>-- KEYS[1] = rl:{acct_9f3k}:reads
+local rate, burst = tonumber(ARGV[1]), tonumber(ARGV[2])
+local now,  cost  = tonumber(ARGV[3]), tonumber(ARGV[4])
+local s = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(s[1]) or burst
+local ts     = tonumber(s[2]) or now
+-- refill for elapsed time, capped at burst
+tokens = math.min(burst, tokens + (now - ts) / 1000 * rate)
+local ok = tokens &gt;= cost
+if ok then tokens = tokens - cost end
+redis.call('HMSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('PEXPIRE', KEYS[1], 120000)  -- idle keys self-clean
+return { ok, tokens }</code></pre>
+
+<p>Three operational details that interviewers probe. <strong>Sharding:</strong> 12GB of state and the sync load spread over a Redis Cluster, keys distributed by hash. The <code>{acct_9f3k}</code> braces are a hash tag — Redis Cluster hashes only the tagged part, so all of one account's keys (reads bucket, writes bucket, tenant bucket) land on the same shard and one script can touch them together. <strong>The TTL</strong> means idle keys evaporate; memory tracks <em>active</em> keys, not all keys ever seen. <strong>The hot key:</strong> one abuser hammering one key means all traffic for that key converges on a single shard — sharding doesn't help, because it's one key. Here the tiered design quietly saves us: the abuser's requests hit gateway-local buckets, which start rejecting locally once the synced balance goes negative. The shard never sees per-request traffic — only ~20 delta syncs/sec per gateway, bounded regardless of how hard the key is hammered. The local tier isn't just a latency optimization; it's a shield that turns a million-QPS attack on one key into a few hundred Redis ops per second. Cheap 429s are the point: a rejection served from gateway memory costs microseconds and touches nothing downstream.</p>
+
+<h2>Deep dive 3: policy — failing, replying, and sharing fairly</h2>
+
+<p><strong>Fail open or fail closed?</strong> When regional Redis is unreachable, the gateway must choose alone. I commit per endpoint class, by asking which mistake costs more. <strong>Reads fail open</strong> (local-only counting continues, accuracy degrades): blocking every legitimate read because the <em>limiter</em> — a protection layer — is sick would be the outage causing itself; over-admitting cached reads for a few minutes is absorbable. <strong>Auth endpoints fail closed</strong> (only the tight local allowance survives; anything beyond it is rejected): the 5/min limit on login and OTP attempts <em>is</em> a security control against credential-stuffing and brute force. Failing open there means every limiter outage is an attack window — and attackers can create limiter outages. A real user retrying a password twice stays under the local allowance and never notices; a bot spraying thousands of attempts hits the wall. Same mechanism, opposite defaults, each derived from the cost of being wrong.</p>
+
+<p><strong>Reply craft.</strong> A 429 is a conversation, not a door slam:</p>
+
+<pre><code>HTTP/1.1 429 Too Many Requests
+Retry-After: 2
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-RateLimit-Reset: 1755162032</code></pre>
+
+<p>Well-behaved clients read <code>Retry-After</code> and back off; your SDKs should do exponential backoff with <em>full jitter</em> built in, because a thousand clients all told "retry in 2s" will return as one synchronized stampede — so jitter the server's own <code>Retry-After</code> values too. And <code>X-RateLimit-Remaining</code> quietly deflects support tickets: clients can watch their own budget drain instead of filing "API is broken" when they hit the wall.</p>
+
+<p><strong>Multi-tenant fairness.</strong> One bucket per key isn't enough when keys belong to organizations. I run two chained checks: the per-user bucket <em>and</em> the tenant-wide bucket, both must pass. The tenant bucket protects the platform from a tenant whose thousand users are collectively huge; the per-user bucket protects a tenant from its own noisiest user eating the whole org allowance. Chained buckets in one Lua script (hash tags put them on the same shard) keep it one round trip.</p>
+
+<p><strong>LLM APIs change the unit.</strong> For inference endpoints, requests/min is the wrong currency — one request can cost 100 tokens or 100,000, a 1000x cost range that request-counting can't see, which is why Anthropic and OpenAI publish tokens-per-minute limits. Same token-bucket machinery, but <code>cost</code> becomes the token count: debit an estimate at admission (prompt tokens + <code>max_tokens</code>), reconcile against actual usage when the response completes, refund the difference. Cost-proportional limiting like this is its own deep topic — p3c23 takes it on properly.</p>
+
+<div class="box story"><div class="box-tag">War story — Stripe</div>
+<p>Stripe's engineering blog post "Scaling your API with rate limiters" (Paul Tarjan) remains the most-cited production writeup of this problem, and its lesson is that one limiter is never enough. Stripe runs four in concert: a token-bucket request limiter per user (the classic), a concurrent-request limiter capping in-flight requests, and two <em>load shedders</em> — one reserving fleet capacity so that critical calls like charge creation survive even when analytics-style traffic floods in, and a worker-utilization shedder as the last line, dropping low-priority traffic only as workers approach saturation. The limiters are token buckets implemented in Redis. Two operational details are pure senior craft: they fail open — if Redis is having trouble, requests go through rather than the limiter becoming the outage — and they rolled the system out in shadow mode first, logging what <em>would</em> have been rejected for real traffic before turning on enforcement, then enabling it gradually behind feature flags. Rate limiting at Stripe isn't one guard at one door; it's layered defenses, each catching what the previous layer can't see.</p>
+</div>
+
+<h2>Failure modes and operations</h2>
+
+<p><strong>Regional Redis cluster down.</strong> Gateways detect failed syncs and enter local-only mode: reads keep flowing with degraded accuracy (over-admission bounded by the math above), strict-mode endpoints follow their fail-open/fail-closed policy, auth stays clamped. I'll say the quiet part loudly: in this mode the limiter is <em>lying a little</em> by design, and the dashboard should say so — a visible "degraded accuracy" state, not silent drift. Recovery is clean because Redis state has TTLs: buckets rebuild from live traffic within a window or two; there is no replay or backfill to run.</p>
+
+<p><strong>What I monitor</strong> — each metric watches one specific way this design fails:</p>
+
+<ul>
+<li><strong>Limiter overhead p99:</strong> the 1ms promise, enforced by an alert. If strict-mode checks slow down, this catches it first.</li>
+<li><strong>Over-admission rate:</strong> the reconciler compares each key's actual global admits against its limit, after the fact. Our accuracy loss is <em>measurable</em> — so measure it. If it drifts above ~5% for any endpoint class, shrink the sync interval or the local burst slice. This metric is the design's honesty made visible; most teams never think to track it.</li>
+<li><strong>429 rate by endpoint and top keys:</strong> a spike is either an attack (one key) or a bad limit/config push (all keys) — the breakdown tells you which in one glance.</li>
+<li><strong>Redis shard CPU and sync lag:</strong> fan-in pressure and hot-shard skew, the 10x early warnings.</li>
+</ul>
+
+<p><strong>Rollout.</strong> Never enforce a new limiter cold. Shadow mode first — evaluate every request, log the would-be 429s, enforce nothing — because the first thing shadow data shows you is which <em>legitimate</em> heavy users your chosen limits would have broken. Fix the limits, then enforce endpoint class by endpoint class behind flags, cheap reads first. Limit changes go through config, take effect in seconds, and roll back the same way.</p>
+
+<p><strong>At 10x</strong> (10M QPS, ~400 gateways): the local tier scales for free — it's per-gateway memory. Two things break. The over-admission bound is proportional to gateway count, so it grew 10x: answer is shrinking the local burst slice and promoting more endpoint classes to strict, trading a little latency back for accuracy. And Redis sync fan-in grows with gateway count: answer is an aggregation hop — gateways sync to a per-AZ aggregator, aggregators sync to regional Redis — the same tiering trick applied once more.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This problem is a latency-vs-accuracy interrogation. A passing senior answer commits to tiered counting, quantifies the over-admission window unprompted, and splits policy by endpoint cost. Expect these probes:</p>
+<ul>
+<li>"Your sync interval is 50ms and an attacker knows it. Walk me through the worst 200ms." — they want the burst × gateways math, the negative-balance choke, and the local-slice knob, with numbers.</li>
+<li>"Why not route each API key to one gateway with consistent hashing and skip Redis entirely?" — they're testing whether you know where sticky routing breaks (geo-split clients, hot machines) <em>and</em> where it's fine (single-region internal APIs).</li>
+<li>"Redis loses the shard holding a big customer's bucket — what happens to their next request?" — fail-open/fail-closed per class, local-only degradation, TTL-based recovery.</li>
+<li>"Product wants a hard monthly quota of exactly 1M calls, tied to billing. Same system?" — trap. Billing quotas need accurate, durable, idempotent counting — a ledger problem (p2c02), not a token bucket. Saying "different system" is the pass.</li>
+</ul>
+</div>
+
+<h2>The committed choices, priced</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Why</th><th>Cost accepted</th></tr></thead>
+<tbody>
+<tr><td>Token bucket</td><td>Burst-friendly, two numbers per key, industry default</td><td>Legal short spikes to burst above steady rate; downstream sized for it</td></tr>
+<tr><td>Local buckets + 50ms async sync</td><td>Check stays in-process (~µs); limiter can never take the API down</td><td>Over-admission up to burst × gateways for one sync window</td></tr>
+<tr><td>Strict mode for expensive endpoints</td><td>Mistake cost ≫ 1ms; these paths are slow and rare anyway</td><td>+1ms and a regional Redis dependency on those paths</td></tr>
+<tr><td>Regional truth, lazy global reconcile</td><td>Cross-continent RTT (80–150ms) can't live in the request path</td><td>A key can briefly draw ~limit per region before squeeze</td></tr>
+<tr><td>Fail open (reads) / fail closed (auth)</td><td>Priced by cost-of-mistake asymmetry per class</td><td>Outage → over-admission on reads, false 429s possible on auth</td></tr>
+<tr><td>Redis Cluster + Lua + hash tags</td><td>Atomic read-modify-write; one shard owns each key's state</td><td>Abused key = hot shard, absorbed by local pre-filter</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c10-f1">
+<p class="fey-prompt">A junior asks: "Why not keep one global counter per API key in a database? It'd always be correct." Explain the design in 5–6 sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>One global counter means every API request, worldwide, waits on a round trip to that counter — and between continents that's 100ms, on an API where our whole latency budget for limiting is one millisecond. So we keep a small token bucket in each gateway's own memory and answer instantly, then every 50ms all gateways report their spending to a shared Redis in their region, which corrects everyone's balance. The price is honesty about a small window: for up to 50ms, gateways can collectively let through more than the limit — at worst the burst size times the number of gateways — and then the shared balance goes negative and everyone starts rejecting until it's paid back. For cheap requests that leak is harmless, so we take the speed. For expensive things like payments we skip the shortcut and check Redis synchronously, because one extra millisecond is nothing on a path where being wrong costs real money. The trick isn't avoiding the accuracy-vs-speed trade — it's choosing it per endpoint instead of once for everything.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Add rate limiting for <em>unauthenticated</em> traffic (no API key — only an IP address). What changes, and what new problem does IP-keying create?</p></div>
+<details><summary>Answer</summary><p>Cardinality explodes (billions of possible IPs vs 50M keys), so count only at the edge tier with aggressive TTLs — never let IP keys flood regional Redis. The nasty new problem is shared IPs: mobile carrier-grade NAT can put tens of thousands of innocent users behind one address, so a tight per-IP limit punishes a whole city for one bot. Answer: coarse per-IP limits (protect infrastructure, not fairness), local-only counting — this is exactly the case where Cloudflare's per-PoP argument holds, since a given IP's traffic arrives via anycast at one PoP — and push the real abuse decision to better signals (fingerprints, behavior scoring) upstream of the limiter.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>The fleet grows from 40 to 400 gateways. Redo the worst-case over-admission math for a key with limit 100/s, burst 200, sync 50ms — and name the knob you'd turn first.</p></div>
+<details><summary>Answer</summary><p>Worst case ≈ burst × gateways = 200 × 400 = 80,000 requests in one 50ms window — 400x the burst, clearly unacceptable even for cheap reads. First knob: cap the local burst slice, e.g. each gateway may hold at most burst/32 ≈ 6 tokens before checking in, cutting the bound to ~2,500. Second: shorten the sync interval for keys observed to be hot (adaptive sync). Third: promote more endpoint classes to strict mode. Also note the fan-in fix: 400 gateways syncing directly is Redis pressure, so insert per-AZ aggregators — tiering, applied again.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: sales now sells plans with a hard cap of exactly 1,000,000 calls per month, and overage is billed per call. Does your limiter handle this?</p></div>
+<details><summary>Answer</summary><p>No — and saying so crisply is the senior move. The token-bucket tier is a <em>protection</em> system: approximate, fast, memory-resident, state that can evaporate on restart. A billed monthly quota is an <em>accounting</em> system: it must be durable, exact, auditable, and idempotent under retries (double-counting a retried request is a billing bug). Build it separately: an event stream of admitted requests into a durable, idempotent counter/ledger (p2c02), checked asynchronously — a key over its monthly cap gets flagged into the limiter's policy table within seconds. Latency-critical approximate limiting in the request path; slow exact accounting beside it. Two systems, honest seam.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A teammate proposes: "Consistent-hash every API key to one specific gateway. Counters become exact and local; delete the Redis tier." Write the two-sided critique.</p></div>
+<details><summary>Answer</summary><p>Real strengths: exact counting, zero sync machinery, no Redis to operate. Real breakages at our scale: (1) a global customer's traffic enters on three continents — forwarding it all to the one "owner" gateway adds cross-region hops that blow the 1ms budget; (2) a hot key becomes a hot <em>machine</em> — one abuser can saturate a whole gateway, and the limiter's job was to prevent exactly that; (3) every deploy or autoscale event reshuffles the hash ring and resets counts mid-window. Verdict: sound for a single-region internal API with even key distribution; wrong for a global public API. Knowing which context flips the verdict is the point of the exercise.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Design the debit flow for an LLM endpoint limited at 100K tokens/min, where you must admit or reject <em>before</em> knowing how many tokens the response will use.</p></div>
+<details><summary>Answer</summary><p>Reserve-then-reconcile. At admission, debit a pessimistic estimate: counted prompt tokens + the request's <code>max_tokens</code> (the contractual ceiling on output). Run inference. On completion, refund the unused difference to the bucket. Two edge cases prove you've thought it through: streaming responses that are cancelled mid-generation should reconcile at cancellation (charge actual tokens generated), and clients who set <code>max_tokens</code> huge "just in case" will self-throttle — their own reservations exhaust their bucket, which is a feature, not a bug: it prices honesty into the API. Use strict mode: GPU-seconds are exactly the expensive-endpoint class that over-admission must not touch. Full treatment in p3c23.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>A rate limiter runs at the full QPS of the API it protects, so its per-check budget (~1ms) forbids any synchronous global counter before design even begins.</li>
+<li>Local-only counters fail silently by over-admitting up to gateway-count times the limit — the undercount race is the problem statement, not an edge case.</li>
+<li>Commit to token bucket: burst-friendly, two numbers per key, and the industry default at Stripe and AWS.</li>
+<li>The committed architecture is tiered truth: gateway-local buckets (microseconds) synced every ~50ms to regional Redis running an atomic Lua bucket, with lazy cross-region reconciliation.</li>
+<li>Quantify the leak you accepted: worst-case over-admission ≈ burst × gateways for one sync window, then the shared balance goes negative and chokes the key — fine for cheap reads, so expensive endpoints pay ~1ms for a strict synchronous check instead.</li>
+<li>Fail-open vs fail-closed is a per-endpoint decision priced by the cost of each mistake: reads fail open for availability, auth fails closed because its limit is a security control.</li>
+<li>The local tier doubles as a shield — an abused key's million QPS becomes bounded sync traffic to Redis, and 429s cost microseconds.</li>
+<li>Operate it honestly: measure the over-admission rate itself, roll out in shadow mode first, and treat local-only degradation as a visible state, not silent drift.</li>
+</ul>
+</div>

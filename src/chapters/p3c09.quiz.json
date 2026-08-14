@@ -1,0 +1,730 @@
+{
+  "chapter": "p3c09",
+  "items": [
+    {
+      "id": "p3c09-q01",
+      "level": 1,
+      "type": "mcq",
+      "tag": "frontier",
+      "q": "In the two-level frontier, what job does each level do?",
+      "options": [
+        {
+          "t": "Front = priority bands; back = one host each",
+          "correct": true,
+          "why": "Right. Front queues are priority bands ('what matters most?'); back queues hold one host each ('whom may we bother?'). Splitting the two concerns into two structures is the whole idea."
+        },
+        {
+          "t": "Front queues hold newly discovered URLs; back queues hold URLs scheduled for freshness recrawls",
+          "correct": false,
+          "why": "Both new URLs and recrawls flow through the same two levels. The split is priority vs politeness, not discovery vs refresh."
+        },
+        {
+          "t": "Front queues are in RAM; back queues are on disk",
+          "correct": false,
+          "why": "Storage tiering exists (hot edges in RAM, bulk on disk) but it cuts across both levels. The levels are defined by what they enforce, not where they live."
+        },
+        {
+          "t": "Front queues are per-datacenter; back queues are per-machine",
+          "correct": false,
+          "why": "Distribution is handled separately, by sharding the whole frontier on host hash. Both queue levels exist inside every shard."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q02",
+      "level": 1,
+      "type": "mcq",
+      "tag": "politeness",
+      "q": "What is the invariant that makes politeness 'structural' rather than a bolted-on rate limiter?",
+      "options": [
+        {
+          "t": "Each host's URLs live in exactly one back queue, consumed one at a time",
+          "correct": true,
+          "why": "Yes. One host ↔ one queue ↔ one timer entry means concurrent requests to a host are impossible by construction — no rate-limiter bug can break what the data layout forbids."
+        },
+        {
+          "t": "Every fetcher sleeps 2 seconds between any two of its own requests, no matter which host they target",
+          "correct": false,
+          "why": "That throttles each worker, not each host — a thousand workers could still hit one host simultaneously. Politeness is per-host, and per-worker delays don't deliver it."
+        },
+        {
+          "t": "A global counter tracks total requests per second",
+          "correct": false,
+          "why": "A global cap says nothing about any single host. You can be under budget globally while flattening one small server."
+        },
+        {
+          "t": "robots.txt is checked before every fetch",
+          "correct": false,
+          "why": "Robots compliance is necessary but it's about which paths are allowed. The never-hammer-a-host guarantee comes from the queue structure, not the robots check."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q03",
+      "level": 1,
+      "type": "mcq",
+      "tag": "bloom",
+      "q": "The URL-seen Bloom filter returns a false positive for a brand-new URL. What actually happens?",
+      "options": [
+        {
+          "t": "A never-fetched page gets skipped",
+          "correct": true,
+          "why": "Correct. 'Seen' for a genuinely new URL means it gets dropped unfetched. That's the trade: ~1% of new URLs missed at first sight, usually recovered when the URL appears again via other links or the recrawl sweep."
+        },
+        {
+          "t": "The same page gets downloaded a second time, wasting one fetch",
+          "correct": false,
+          "why": "That would be a false negative — 'not seen' for a known URL — and Bloom filters can't produce those. The duplicate-fetch direction is structurally impossible."
+        },
+        {
+          "t": "The filter must be rebuilt immediately",
+          "correct": false,
+          "why": "False positives are the designed-in, budgeted behavior of a Bloom filter, not corruption. Rebuilds happen when the filter grows past its designed load, not per miss."
+        },
+        {
+          "t": "The URL is queued at lower priority",
+          "correct": false,
+          "why": "There's no demotion path here — a positive means the URL never reaches the prioritizer at all. The consequence is a skip, which is why you must decide whether skips are acceptable for your requirements."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q04",
+      "level": 1,
+      "type": "mcq",
+      "tag": "robots",
+      "q": "How should a crawler handle robots.txt?",
+      "options": [
+        {
+          "t": "Fetch per host, cache ~1 day, honor its rules, send an honest User-Agent",
+          "correct": true,
+          "why": "That's the contract. Per-host with a TTL balances freshness of the rules against fetch cost, and honest identification is what separates a crawler from an attack in an operator's logs."
+        },
+        {
+          "t": "Fetch it once per host and cache it forever",
+          "correct": false,
+          "why": "Site owners change their rules. A forever-cache means you keep crawling paths that are now disallowed — which is how crawlers end up blocked and blogged about."
+        },
+        {
+          "t": "Re-fetch it immediately before every single page request so the rules are always current",
+          "correct": false,
+          "why": "That doubles your request volume to every host — an impolite way to implement politeness. A TTL cache gives you current-enough rules at negligible cost."
+        },
+        {
+          "t": "Skip it when the server returns a 5xx error",
+          "correct": false,
+          "why": "Backwards on the failure convention: 404 means 'no rules, crawl freely,' but 5xx means the site is struggling — treat it as 'come back later,' not as permission."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q05",
+      "level": 1,
+      "type": "mcq",
+      "tag": "dedup",
+      "q": "Why does URL normalization have to happen BEFORE the URL-seen test?",
+      "options": [
+        {
+          "t": "Otherwise many spellings of one page all look new, and duplicates leak through",
+          "correct": true,
+          "why": "Right. Uppercase hosts, reordered query params, fragments, tracking junk — without canonicalizing first, the seen-set faithfully dedups strings while the crawler re-fetches the same page all day."
+        },
+        {
+          "t": "Bloom filters only accept lowercase input",
+          "correct": false,
+          "why": "Bloom filters hash arbitrary bytes; they don't care about case. The problem is semantic — many strings, one page — and hashing can't fix what normalization hasn't unified."
+        },
+        {
+          "t": "Normalization compresses URLs to save frontier memory",
+          "correct": false,
+          "why": "It sometimes shortens URLs, but that's incidental. The point is identity: making equal pages produce equal keys."
+        },
+        {
+          "t": "It's merely an optimization — running normalization after the dedup check works just as well",
+          "correct": false,
+          "why": "Order is load-bearing. Normalize-after-dedup means the dedup saw the un-canonical string — the duplicate has already slipped past the gate."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q06",
+      "level": 1,
+      "type": "mcq",
+      "tag": "dedup",
+      "q": "What does simhash give you that SHA-256 hashing of page content cannot?",
+      "options": [
+        {
+          "t": "Near-duplicate detection: similar documents get fingerprints differing in a few bits",
+          "correct": true,
+          "why": "Exactly. SHA-256 scrambles completely on a one-byte change; simhash is built so small content changes cause small fingerprint changes, turning '95% identical?' into a cheap Hamming-distance check — Google ran this over 8B pages."
+        },
+        {
+          "t": "A faster way to compute exact duplicates than cryptographic hashing of the full page body",
+          "correct": false,
+          "why": "For exact duplicates a cryptographic hash is already the right tool. Simhash exists for the question exact hashing can't answer: 'almost the same?'"
+        },
+        {
+          "t": "Collision-free fingerprints",
+          "correct": false,
+          "why": "The opposite — simhash deliberately makes similar inputs collide-ish (small distances). Collision resistance is SHA-256's virtue, and it's exactly what near-dup detection doesn't want."
+        },
+        {
+          "t": "Compression of the stored page body",
+          "correct": false,
+          "why": "Neither hash compresses content. Storage savings come from content-addressing exact duplicates; simhash's job is flagging near-copies for demotion."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q07",
+      "level": 1,
+      "type": "mcq",
+      "tag": "dns",
+      "q": "Why does a large crawler need local caching DNS resolvers instead of using the OS default path?",
+      "options": [
+        {
+          "t": "Per-fetch lookups would melt any upstream resolver",
+          "correct": true,
+          "why": "Right — and it's a hidden serializer: Mercator measured 87% of each thread's time stuck in synchronized DNS lookups, dropping to 25% with a custom parallel resolver against a local nameserver."
+        },
+        {
+          "t": "Public DNS services detect crawler traffic patterns and throttle them, so you must run your own",
+          "correct": false,
+          "why": "Resolvers don't identify crawlers. The issue is volume and latency, not blocking — you'd degrade or throttle any resolver you pointed 11K QPS at, though."
+        },
+        {
+          "t": "DNS answers must be stored durably for legal reasons",
+          "correct": false,
+          "why": "No such requirement in this design. Caching here is purely a throughput/latency play, plus it feeds the per-IP politeness check for free."
+        },
+        {
+          "t": "Crawlers must bypass DNS and connect by IP address",
+          "correct": false,
+          "why": "You still need name resolution — virtual hosting means the hostname must go in the request anyway. The fix is caching and parallelism, not bypassing DNS."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q08",
+      "level": 1,
+      "type": "mcq",
+      "tag": "traps",
+      "q": "What is a crawler trap?",
+      "options": [
+        {
+          "t": "A site area minting an effectively infinite URL space — endless calendars, session IDs",
+          "correct": true,
+          "why": "Yes. Each generated URL is technically new, so naive crawlers march on forever — toward the year 3000, one 'next month' link at a time. Defenses: depth caps, pattern heuristics, content-seen, and above all per-domain budgets."
+        },
+        {
+          "t": "A page that serves malware to bots",
+          "correct": false,
+          "why": "Malicious content is a real concern but a different one. Traps exhaust your fetch budget; they don't need to infect anything."
+        },
+        {
+          "t": "A robots.txt that disallows everything",
+          "correct": false,
+          "why": "That's just a site opting out — you honor it and move on, no harm done. Traps are the opposite: they invite infinite crawling."
+        },
+        {
+          "t": "A page engineered to load extremely slowly on purpose, tying up your crawler's connection slots",
+          "correct": false,
+          "why": "Slow responses (tarpits) exist but adaptive timeouts handle them cheaply. The trap that threatens the design is infinite URL generation flooding the frontier."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q09",
+      "level": 1,
+      "type": "mcq",
+      "tag": "estimation",
+      "q": "1B pages/day at ~100KB average per page implies roughly what sustained ingress?",
+      "options": [
+        {
+          "t": "About 100TB/day, on the order of 10Gbit/s",
+          "correct": true,
+          "why": "Right: 1B × 100KB = 100TB/day ≈ 1.2GB/s ≈ 9–10Gbit/s. This number forces fetchers across multiple machines and uplinks, and compression before storage (~4x for HTML)."
+        },
+        {
+          "t": "About 1TB/day — comfortably a single server's disk",
+          "correct": false,
+          "why": "Off by 100x: 1B × 100KB is 10^14 bytes. Getting the exponent right matters because it decides whether this is a one-box or many-box problem — and it's many."
+        },
+        {
+          "t": "About 10PB/day",
+          "correct": false,
+          "why": "Off by 100x the other way. 10PB/day is beyond even a 10x-scaled version of this crawler; inflated estimates lead to inflated architectures."
+        },
+        {
+          "t": "Bandwidth isn't a design driver here",
+          "correct": false,
+          "why": "It's one of the three numbers that gate the design: ~10Gbit/s sustained rules out any single-machine fetcher and demands compression and distributed uplinks."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q10",
+      "level": 2,
+      "type": "mcq",
+      "tag": "politeness",
+      "q": "A host starts returning 429 Too Many Requests on 30% of fetches. The correct crawler behavior is:",
+      "options": [
+        {
+          "t": "Back off that host and honor Retry-After",
+          "correct": true,
+          "why": "Yes. The server explicitly told you it's overloaded; the polite (and pragmatic) response is to widen that host's timer-heap delay. Only this host slows — the frontier keeps every other host flowing."
+        },
+        {
+          "t": "Retry the failed URLs immediately from a different fetcher IP",
+          "correct": false,
+          "why": "That's rate-limit evasion — the behavior of the crawlers that get written up in angry blog posts and blocked at the CDN level. A 429 is information, not an obstacle."
+        },
+        {
+          "t": "Drop the host from the frontier permanently — a host that throttles you isn't worth the fetches",
+          "correct": false,
+          "why": "Overkill. 429s are usually temporary load; permanent removal turns a bad afternoon into a permanent blind spot in your corpus. Back off and return later."
+        },
+        {
+          "t": "Pause the entire crawl until the host recovers",
+          "correct": false,
+          "why": "One struggling host shouldn't stall 11,500 fetches/sec across hundreds of thousands of others. Per-host isolation is exactly what the back-queue design buys you — use it."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q11",
+      "level": 2,
+      "type": "mcq",
+      "tag": "estimation",
+      "q": "A host has 200M pages and its robots.txt sets Crawl-delay: 10. What does the math tell you?",
+      "options": [
+        {
+          "t": "A full crawl would take ~63 years — impossible, so budget the host and prioritize within it",
+          "correct": true,
+          "why": "200M × 10s = 2×10^9 seconds ≈ 63 years. Politeness caps per-host coverage no matter how big your fleet is, which is why budgets and within-host prioritization are forced by arithmetic, not chosen as optimizations."
+        },
+        {
+          "t": "Add fetcher machines until the host can be fully covered within one refresh cycle",
+          "correct": false,
+          "why": "Fleet size is irrelevant here — the 10-second delay serializes the host to 0.1 fetches/sec total, across all your machines combined. This is the one bottleneck money can't buy through."
+        },
+        {
+          "t": "Ignore the crawl-delay since it's only advisory",
+          "correct": false,
+          "why": "Politeness is the unbendable requirement. Ignoring a published crawl-delay is how crawlers get IP-banned — and a banned crawler sees a distorted web, poisoning everything downstream."
+        },
+        {
+          "t": "Crawl it fully once, then never again",
+          "correct": false,
+          "why": "The math says you can't crawl it fully even once — 63 years. The realistic plan is a prioritized slice, refreshed via sitemaps and conditional GETs."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q12",
+      "level": 2,
+      "type": "mcq",
+      "tag": "ops",
+      "q": "A fetcher node crashes holding 5,000 leased URLs, 200 fetches mid-flight. What is lost?",
+      "options": [
+        {
+          "t": "Nothing durable is lost",
+          "correct": true,
+          "why": "Right. Fetchers are stateless; the frontier is the durable record. At-least-once delivery plus idempotent, content-addressed writes means a crash costs a few re-downloads — pennies, not corruption."
+        },
+        {
+          "t": "Those 5,000 URLs are lost until the next full recrawl cycle rediscovers them through links",
+          "correct": false,
+          "why": "Only true if URLs were removed from the frontier at dispatch. That's why they're leased, not deleted — the lease expiring is the recovery mechanism."
+        },
+        {
+          "t": "The frontier must roll back to its last checkpoint",
+          "correct": false,
+          "why": "No rollback needed — the frontier never lost anything. Checkpoints exist for frontier-node recovery, not for fetcher crashes."
+        },
+        {
+          "t": "Duplicate pages will corrupt the page store",
+          "correct": false,
+          "why": "The store is keyed by content hash, so a re-fetched identical page writes the same key — last-writer-wins on identical data. Idempotency is precisely what makes at-least-once safe."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q13",
+      "level": 2,
+      "type": "mcq",
+      "tag": "ops",
+      "q": "Frontier depth is growing steadily. When is that an incident vs business as usual?",
+      "options": [
+        {
+          "t": "Hot bands growing = incident; cold bands growing = normal",
+          "correct": true,
+          "why": "Exactly the split metric. The web generates URLs faster than anyone can fetch — cold bands always grow. But a deepening hot band means important, fresh pages are waiting: add capacity or rebalance shards."
+        },
+        {
+          "t": "Any sustained queue growth means the crawl is falling behind and needs more fetch capacity",
+          "correct": false,
+          "why": "By that definition every crawler is permanently failing — the frontier of the open web never drains. Total depth without the priority split is a meaningless number."
+        },
+        {
+          "t": "Depth doesn't matter as long as fetch rate hits 11.5K/s",
+          "correct": false,
+          "why": "You can hit your fetch target while spending it all on junk. Rate says you're busy; hot-band depth says whether you're busy with what matters."
+        },
+        {
+          "t": "It's an incident only when disks fill up",
+          "correct": false,
+          "why": "Disk exhaustion is the last symptom, hours or days after the real signal. Hot-band depth is the leading indicator; storage alerts are the smoke alarm going off after the house burned."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q14",
+      "level": 2,
+      "type": "mcq",
+      "tag": "sharding",
+      "q": "A teammate proposes a central Redis rate-limiter that every fetcher checks before each request, instead of host-hash sharding. What's the strongest objection?",
+      "options": [
+        {
+          "t": "A network hop and single point of failure on the hottest path, guarding what host-sharding provides for free",
+          "correct": true,
+          "why": "Yes — 11.5K checks/sec through one service, and if it degrades you either stall the crawl or fetch unchecked (breaking the one unbendable rule). Exclusive host ownership makes politeness coordination-free: ownership beats coordination."
+        },
+        {
+          "t": "Redis can't sustain 11,500 checks per second on one instance, so it will bottleneck the whole fetcher fleet",
+          "correct": false,
+          "why": "It can, easily — Redis does hundreds of thousands of ops/sec. The objection isn't throughput; it's architecture: availability coupling and a coordination dependency where none is needed."
+        },
+        {
+          "t": "Rate limiters can't express per-host delays",
+          "correct": false,
+          "why": "They can — per-key token buckets do exactly this. The design works; it's just strictly worse than getting the same guarantee from data placement with zero coordination."
+        },
+        {
+          "t": "Central services are always wrong in distributed systems",
+          "correct": false,
+          "why": "Too absolute — central coordination is fine for cold paths and control planes. The argument here is specific: this is the hottest path, guarding the most critical invariant, and a coordination-free alternative exists."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q15",
+      "level": 2,
+      "type": "mcq",
+      "tag": "traps",
+      "q": "Logs show one domain feeding you thousands of new URLs that all resolve to the same content hash. Which mechanism should be containing the damage already?",
+      "options": [
+        {
+          "t": "The per-domain budget",
+          "correct": true,
+          "why": "Right. Pattern heuristics and content-seen help you notice, but the budget is what caps the spend: a trap can generate infinite URLs, yet it can't force you to allocate fetches to them. Containment beats detection."
+        },
+        {
+          "t": "The Bloom filter should have marked the generated URLs as already seen and dropped them",
+          "correct": false,
+          "why": "Each spinner URL is genuinely new as a string, so URL-seen correctly passes them. That's the trap's whole trick — it defeats URL dedup by construction; only content-level checks and budgets see through it."
+        },
+        {
+          "t": "robots.txt should have disallowed the trap paths",
+          "correct": false,
+          "why": "A well-run site might, but traps often live on sites that are careless or adversarial. Your defenses can't depend on the trap's owner being helpful."
+        },
+        {
+          "t": "The timer heap slows the domain down enough",
+          "correct": false,
+          "why": "Politeness limits the rate of waste, not the total. At 0.5 fetches/sec forever, a trap still eats that host's slot indefinitely — the budget is what says 'enough.'"
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q16",
+      "level": 2,
+      "type": "mcq",
+      "tag": "freshness",
+      "q": "You must keep a news site's homepage fresh hourly without wasting fetches on its 15-year archive. What combination does this?",
+      "options": [
+        {
+          "t": "Adaptive recrawl rates plus conditional GETs",
+          "correct": true,
+          "why": "Right. Track observed change history, revisit fast-changing URLs often and static ones rarely, and send If-Modified-Since/ETag so a 'nothing changed' answer costs a round trip instead of 100KB. Sitemaps add free hints where offered."
+        },
+        {
+          "t": "Recrawl the whole site once daily at a uniform rate so nothing is ever missed",
+          "correct": false,
+          "why": "Uniform recrawl spends the same on the homepage and on a 2009 article. At a billion fetches a day, uniform refresh is the single biggest waste in the budget."
+        },
+        {
+          "t": "Subscribe to the site's RSS feed instead of crawling",
+          "correct": false,
+          "why": "A useful extra signal where feeds exist and are maintained, but coverage is spotty and feeds miss edits to old pages. It supplements adaptive recrawl; it can't replace it."
+        },
+        {
+          "t": "Increase the site's politeness delay to save requests",
+          "correct": false,
+          "why": "That reduces how much you CAN fetch from the host, not how wisely you spend it. Freshness is a scheduling problem; the delay is a courtesy constraint, not a scheduler."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q17",
+      "level": 2,
+      "type": "mcq",
+      "tag": "architecture",
+      "q": "Why run parsers as a separate fleet from fetchers, connected by a stream?",
+      "options": [
+        {
+          "t": "They're I/O-bound vs CPU-bound, so they scale independently, decoupled by the stream",
+          "correct": true,
+          "why": "Right on both counts. A fetcher box wants thousands of open sockets; a parser box wants cores. Coupling them means provisioning for the max of both, and a parsing stall would idle your politeness slots."
+        },
+        {
+          "t": "Parsing untrusted HTML is a security risk, so it must run fully isolated from the fetch path",
+          "correct": false,
+          "why": "Sandboxing parsers is genuinely wise (malformed HTML, decompression bombs), but it's a nice side benefit here — the architectural driver is the resource-profile mismatch and independent scaling."
+        },
+        {
+          "t": "Parsers need access to the frontier and fetchers don't",
+          "correct": false,
+          "why": "Backwards — fetchers are the frontier's main client (they pull URLs from it). Parsers only feed extracted URLs toward it through the URL-seen filter."
+        },
+        {
+          "t": "Streams are required for exactly-once processing",
+          "correct": false,
+          "why": "This design deliberately avoids exactly-once — it's at-least-once with idempotent writes throughout. The stream is for decoupling pace, not delivery-guarantee upgrades."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q18",
+      "level": 2,
+      "type": "mcq",
+      "tag": "politeness",
+      "q": "Your per-hostname delays are all honored, yet one operator reports 30 req/s hitting their server. The likely cause:",
+      "options": [
+        {
+          "t": "Shared backend behind many hostnames",
+          "correct": true,
+          "why": "Right — 60 subdomains × 0.5 req/s each = 30 req/s at one origin. The fix is a second, looser politeness layer keyed by resolved IP, applied carefully so you don't collapse a whole CDN into one queue."
+        },
+        {
+          "t": "A race condition in the timer heap let several workers pull from the same host concurrently",
+          "correct": false,
+          "why": "Possible in theory, but the logs already show per-hostname delays honored — the mechanism worked. The gap is conceptual: politeness protected name strings, not the machine behind them."
+        },
+        {
+          "t": "The operator is misreading their logs",
+          "correct": false,
+          "why": "Assume the complaint is real until proven otherwise — politeness incidents deserve the same respect as data-loss incidents. And there's a well-known mechanism that produces exactly this symptom with clean crawler logs."
+        },
+        {
+          "t": "robots.txt failed to load for those hostnames",
+          "correct": false,
+          "why": "A robots failure would affect which paths you crawl, not the aggregate request rate across hostnames. The volume math points at shared infrastructure."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q19",
+      "level": 3,
+      "type": "mcq",
+      "tag": "crux",
+      "q": "Thirty minutes into 'design a web crawler,' which topic deserves the deepest dive, and why?",
+      "options": [
+        {
+          "t": "The frontier — everything else is standard patterns",
+          "correct": true,
+          "why": "This is the crux. Storage is a blob store, parsing is a worker pool, DNS is a cache — all solved patterns. Reconciling 'fetch important things first' with 'never hammer a host' at billions-of-URLs scale is the problem the question was invented to probe."
+        },
+        {
+          "t": "Petabyte storage layout — it's the biggest number in the design, so it earns the deepest dive",
+          "correct": false,
+          "why": "Biggest number, most solved problem: append-only blobs, content-addressed, compressed. An interviewer will let you spend five minutes here, not twenty — the fire is elsewhere."
+        },
+        {
+          "t": "HTML parsing edge cases, since the web is full of broken markup",
+          "correct": false,
+          "why": "True and irrelevant at this altitude — you buy a battle-tested parser and sandbox it. Spending deep-dive time here reads as not knowing which room is burning."
+        },
+        {
+          "t": "Kubernetes orchestration of the fetcher fleet",
+          "correct": false,
+          "why": "Fleet orchestration is generic infrastructure, identical for any worker pool. Nothing crawler-specific lives there, so no crawler-specific signal can be earned there."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q20",
+      "level": 3,
+      "type": "mcq",
+      "tag": "frontier",
+      "q": "Interviewer: 'Why not one global priority queue with a politeness check that skips URLs whose host isn't ready?' The senior rebuttal is:",
+      "options": [
+        {
+          "t": "Top-of-queue URLs cluster on few hosts — politeness must shape the structure, not filter its output",
+          "correct": true,
+          "why": "Right. High-priority URLs concentrate on popular hosts, so the queue head is mostly 'not ready yet' — workers burn cycles scanning, or worse, the check has a bug and you hammer someone. The two-level design makes the bad state unrepresentable."
+        },
+        {
+          "t": "A single queue can't hold billions of entries",
+          "correct": false,
+          "why": "Disk-backed queues hold billions fine — size isn't the objection. The flaw is behavioral: what the head of the queue looks like when priority correlates with host popularity."
+        },
+        {
+          "t": "Priority queues have O(log n) operations, which is too slow",
+          "correct": false,
+          "why": "log of 10 billion is ~33 — nothing at these rates. Complexity-theory objections to a design that fails on semantics is answering the wrong question."
+        },
+        {
+          "t": "It would work fine, but the two-level design is the textbook answer interviewers are expecting you to draw",
+          "correct": false,
+          "why": "'It's what the textbook says' is the weakest justification in any interview. The design earns its complexity for a stated mechanical reason; if you can't articulate it, the interviewer assumes you memorized a diagram."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q21",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "A teammate wants exactly-once fetch semantics so no page is ever downloaded twice. Your call:",
+      "options": [
+        {
+          "t": "Reject it — duplicate fetches are pennies; coordination isn't",
+          "correct": true,
+          "why": "The senior trade: exactly-once buys protection against wasted pennies (a re-download) at the price of distributed coordination around 11.5K ops/sec. When the duplicate is idempotent and cheap, at-least-once is not a compromise — it's the correct design."
+        },
+        {
+          "t": "Accept it — exactly-once is always the gold standard for correctness",
+          "correct": false,
+          "why": "'Always' is the tell. Delivery guarantees are chosen per cost-of-duplicate: for payments, duplicates are disasters; for page fetches, they're pennies. Paying coordination costs to prevent pennies reads as pattern-matching, not judgment."
+        },
+        {
+          "t": "Compromise: run exactly-once machinery for high-priority URLs only, at-least-once for the long tail",
+          "correct": false,
+          "why": "Now you run two delivery machineries and the expensive one guards your hottest band. A split that doubles complexity to protect the least-costly failure mode is the worst of both."
+        },
+        {
+          "t": "Accept it to protect politeness, since a duplicate fetch hits a host twice",
+          "correct": false,
+          "why": "Creative but off — duplicate fetches still flow through the same back queue and timer, so the host's delay is honored either way. Politeness never needed exactly-once; it needs the queue invariant."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q22",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "Requirement flip: the crawler now feeds a legal web-archive with contractual completeness. Which committed choice must you revisit first?",
+      "options": [
+        {
+          "t": "The Bloom-only URL-seen decision",
+          "correct": true,
+          "why": "Right. For search, a skipped page is invisible noise; under a completeness contract it's a breach. Same architecture, one dial flipped: 'maybe seen' now triggers a batched exact-store check before any drop. Knowing which requirement invalidates which trade IS the senior skill."
+        },
+        {
+          "t": "The politeness delays — archiving justifies faster crawling",
+          "correct": false,
+          "why": "No requirement ever overrides politeness; that's why the chapter calls it unbendable. An archive built by DDoSing sources isn't a legal archive for long."
+        },
+        {
+          "t": "Content-hash storage — a real archive must store every duplicate capture as its own separate copy",
+          "correct": false,
+          "why": "Archives need every capture recorded, which the metadata layer already does (URL, time, status → hash). Storing identical bytes twice adds cost, not completeness — WARC-style dedup does exactly this."
+        },
+        {
+          "t": "Host-hash sharding — archives need a centralized frontier",
+          "correct": false,
+          "why": "Nothing about completeness requires centralization; sharding affects where state lives, not whether URLs get dropped. The dropped-URL risk lives in the dedup filter, and that's where the fix goes."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q23",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "'Now make it 10B pages/day.' What breaks first, and what's the honest answer about the ceiling?",
+      "options": [
+        {
+          "t": "Shards scale; bandwidth and the zipfian supply of ready hosts don't — the web becomes the limit",
+          "correct": true,
+          "why": "The deep answer. Your architecture scales; the constraint that doesn't is the supply of important hosts you're allowed to fetch from concurrently. Past a point, extra capacity buys breadth into ever-less-valuable hosts — the frontier's job shifts from keeping up to choosing well."
+        },
+        {
+          "t": "Nothing breaks — host-hash sharding means everything scales linearly",
+          "correct": false,
+          "why": "Shard-local state scales; the host pool doesn't. 'It's horizontally scalable' without naming the non-linear constraint is the buzzword shield interviewers push straight through."
+        },
+        {
+          "t": "The per-shard timer heaps become the bottleneck once pops approach 115K per second across the fleet",
+          "correct": false,
+          "why": "Heap ops are nanoseconds and the heaps are per-shard anyway — 10x shards means each heap sees the same load as before. Naming a micro-bottleneck while missing the macro one reads as not doing the math."
+        },
+        {
+          "t": "Bloom filter false positives grow 10x and skip too many pages",
+          "correct": false,
+          "why": "FP rate is set by bits-per-entry, not by traffic — you size the filter for the bigger corpus and the rate holds. Real 10x pain lives in bandwidth, the exact-store merge pipeline, and the ready-host supply."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q24",
+      "level": 3,
+      "type": "mcq",
+      "tag": "ops",
+      "q": "You get one dashboard for the crawler's on-call. The senior top row is:",
+      "options": [
+        {
+          "t": "Politeness gauges, then hot-band frontier depth",
+          "correct": true,
+          "why": "First the 'are we hurting anyone' gauges — the only invariant whose violation is instantly a sev — then the 'are we doing our actual job' signal, which is hot-band depth, not total depth. Everything else (fetch rate, DNS, storage lag) is second row."
+        },
+        {
+          "t": "CPU and memory utilization across the fetcher fleet",
+          "correct": false,
+          "why": "Fetchers are I/O-bound and stateless — their CPU tells you almost nothing about crawl health. Box-level metrics are the dashboard people build when they haven't decided what the system promises."
+        },
+        {
+          "t": "Total pages fetched per day against the 1B target, since that's the system's headline contract",
+          "correct": false,
+          "why": "A vanity number in isolation: you can hit 1B/day fetching trap junk and stale archives. Rate needs the priority-band split to mean anything, and it still ranks below the politeness gauges."
+        },
+        {
+          "t": "Blob storage growth and compression ratio",
+          "correct": false,
+          "why": "Worth tracking, slow to change, never the first thing that pages you. Storage trouble announces itself hours after the leading indicators (hot-band depth, write lag) already did."
+        }
+      ]
+    },
+    {
+      "id": "p3c09-q25",
+      "level": 3,
+      "type": "mcq",
+      "tag": "judgment",
+      "q": "A candidate says: 'To hit our fetch targets, I'll have the crawler ignore Crawl-delay on the top 1,000 sites — they're big, they can handle our traffic.' Grade this reasoning.",
+      "options": [
+        {
+          "t": "Fails — politeness is the license to operate, and big sites ban violators fleet-wide",
+          "correct": true,
+          "why": "Right, on both ethics and pragmatics. Large sites run bot management at the CDN layer; a published-delay violator gets fingerprinted and banned across millions of properties at once. The unbendable requirement is unbendable precisely when it's inconvenient."
+        },
+        {
+          "t": "Sound pragmatism — big sites have capacity to spare, and capacity-based exceptions are how real systems hit their targets",
+          "correct": false,
+          "why": "Real crawlers negotiate higher rates through official channels (webmaster tools, direct agreements) — they don't unilaterally ignore a published limit. 'They can handle it' is the reasoning in every accidental-DDoS postmortem, including the crawler that cost Read the Docs $5,000 in a month."
+        },
+        {
+          "t": "Fine if limited to fewer than 1,000 sites",
+          "correct": false,
+          "why": "The count isn't the problem; the unilateral violation is. One ignored crawl-delay is one broken contract, and the top sites are where detection is certain."
+        },
+        {
+          "t": "Wrong only because it might violate laws",
+          "correct": false,
+          "why": "Legal exposure exists, but reaching for the lawyer as the only objection misses the engineering argument: banned crawlers see a distorted web, and the distortion silently corrupts every downstream consumer. The design case against impoliteness stands on its own."
+        }
+      ]
+    }
+  ]
+}

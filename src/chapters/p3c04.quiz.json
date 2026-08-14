@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c04",
+  "items": [
+    {
+      "id": "p3c04-q01", "level": 1, "type": "mcq", "tag": "ack-ladder",
+      "q": "In the ack ladder, what does the single grey tick actually prove?",
+      "options": [
+        {"t": "The message left the sender's phone and is in transit somewhere on the network path", "correct": false,
+         "why": "Leaving the phone proves nothing — the packet can die anywhere en route. The tick only appears when the server's ack comes back, confirming custody."},
+        {"t": "The recipient's phone has received the message", "correct": false,
+         "why": "That's the double tick ✓✓, sent only after the recipient's device confirms it has the message in local storage. One rung higher on the ladder."},
+        {"t": "The server has durably stored the message", "correct": true,
+         "why": "Exactly — and only that. Not delivered, not read, not even 'sending in progress.' The ✓ is the server's promise that the message now survives crashes, which is why it must come after the durable write."},
+        {"t": "The recipient is currently online", "correct": false,
+         "why": "The single tick says nothing about the recipient at all. The message may sit in their inbox for days — the tick is purely about server durability."}
+      ]
+    },
+    {
+      "id": "p3c04-q02", "level": 1, "type": "mcq", "tag": "gateways",
+      "q": "Why does a chat app use persistent WebSocket connections instead of clients polling an HTTP endpoint?",
+      "options": [
+        {"t": "Polling can't hit sub-second delivery without a crushing volume of mostly-empty requests", "correct": true,
+         "why": "Right. Sub-second delivery via polling means every user asks 'anything for me?' every few hundred milliseconds — billions of empty requests. A persistent socket lets the server push the instant something arrives, and an idle socket costs almost nothing."},
+        {"t": "WebSockets are encrypted and HTTP is not", "correct": false,
+         "why": "Both run over TLS (wss:// and https://). Security is identical; the difference is who can initiate — over a socket, the server can push without being asked."},
+        {"t": "HTTP cannot carry chat-sized payloads", "correct": false,
+         "why": "HTTP carries payloads of any size — that's not the issue. The issue is direction and cost: server-push versus billions of empty polls."},
+        {"t": "WebSockets automatically guarantee that every message sent over them is delivered exactly once", "correct": false,
+         "why": "They guarantee nothing of the sort — a socket dies silently in a tunnel like anything else. Delivery guarantees come from the ack ladder we build on top, not from the transport."}
+      ]
+    },
+    {
+      "id": "p3c04-q03", "level": 1, "type": "mcq", "tag": "registry",
+      "q": "What does the connection registry store, and why does the system need it?",
+      "options": [
+        {"t": "A durable copy of every message that hasn't been delivered to its recipient yet", "correct": false,
+         "why": "That's the inbox's job, and it lives in durable storage — not in the registry. The registry holds only routing metadata: who is connected where."},
+        {"t": "Usernames and authentication credentials", "correct": false,
+         "why": "Auth is a separate concern handled at connect time. The registry is purely a live routing table, and its entries evaporate when devices disconnect."},
+        {"t": "The message history of active conversations", "correct": false,
+         "why": "History lives in the wide-column message store. The registry is tiny, hot, and ephemeral — a lookup table, not a database of content."},
+        {"t": "A live user+device → gateway mapping, so delivery can find the machine holding the socket", "correct": true,
+         "why": "Yes. Stateful gateways create a 'where is B connected?' problem that stateless designs never had. The registry (sharded Redis, TTL'd entries refreshed by heartbeat) is the directory that answers it."}
+      ]
+    },
+    {
+      "id": "p3c04-q04", "level": 1, "type": "mcq", "tag": "gateways",
+      "q": "Chat gateways break the 'keep servers stateless' rule from Part 1. What justifies the exception?",
+      "options": [
+        {"t": "Stateless designs cannot scale to a billion users, so statefulness becomes required at this size", "correct": false,
+         "why": "Backwards — stateless designs scale beautifully, which is why we prefer them everywhere else. The gateway is stateful despite the scaling cost, not because of it."},
+        {"t": "Instant server-push forces long-lived sockets, and a socket physically lives on one machine", "correct": true,
+         "why": "Right — the state isn't a preference, it's forced by the requirement. Once you need server-push, you need persistent connections, and a connection is inherently stateful. You then pay the bill: registry, draining, storm defenses."},
+        {"t": "Stateful servers are faster for all workloads", "correct": false,
+         "why": "No — statefulness costs you easy scaling, easy deploys, and easy failure recovery. It's accepted here only because the push requirement leaves no alternative."},
+        {"t": "It reduces the number of servers needed", "correct": false,
+         "why": "Server count isn't the driver; the fleet is sized by socket memory either way. The exception exists because server-initiated delivery is impossible without persistent connections."}
+      ]
+    },
+    {
+      "id": "p3c04-q05", "level": 1, "type": "mcq", "tag": "ordering",
+      "q": "What determines the order of messages within a conversation?",
+      "options": [
+        {"t": "The timestamp the sender's phone attached, corrected for estimated clock drift on the server", "correct": false,
+         "why": "Phone clocks drift unpredictably, users change them, and drift-correction is guesswork. Client timestamps are displayed but never sorted by — they're opinions, not facts."},
+        {"t": "The order messages arrive at the recipient's device", "correct": false,
+         "why": "Arrival order varies per recipient — two group members could see different orders. Ordering must be decided once, centrally, or 'the same chat' isn't the same chat."},
+        {"t": "A per-conversation sequence number the server assigns at write time", "correct": true,
+         "why": "Correct. One authority — the conversation's single writer — stamps each message with the next number. Every device sorts by seq forever after, and a gap in the numbers tells a client exactly what to re-fetch."},
+        {"t": "Alphabetical ordering by message id", "correct": false,
+         "why": "Message ids are random UUIDs for dedup — sorting by them would shuffle the conversation. Sequence numbers, assigned centrally, carry the order."}
+      ]
+    },
+    {
+      "id": "p3c04-q06", "level": 1, "type": "mcq", "tag": "inbox",
+      "q": "In offline delivery, what's the division of labor between the inbox and the push notification?",
+      "options": [
+        {"t": "The push notification carries the message content; the inbox is a fallback copy for when the push fails", "correct": false,
+         "why": "Reversed. OS push channels are best-effort and can be dropped, delayed, or throttled — you must never make them the delivery path. Content flows through your own socket from your own inbox."},
+        {"t": "Inbox = reliable source of truth; push = unreliable wake-up kick", "correct": true,
+         "why": "The doorbell-not-mail-slot rule. Messages wait durably in the per-device inbox, drained on any reconnect. The push (FCM/APNs) merely wakes the app — if the OS drops it, nothing is lost, because the next connect drains the inbox anyway."},
+        {"t": "They're redundant copies of the same delivery mechanism", "correct": false,
+         "why": "They're complementary, not redundant: one is durable storage you control, the other is a nudge through infrastructure you don't control. Only one of them is allowed to matter for correctness."},
+        {"t": "The inbox is only used when push notifications fail", "correct": false,
+         "why": "The inbox is always used — every message for an offline device lands there first. Push failure changes nothing except how quickly the phone finds out."}
+      ]
+    },
+    {
+      "id": "p3c04-q07", "level": 1, "type": "mcq", "tag": "storage",
+      "q": "Why is the message table partitioned by (conversation_id, time_bucket) instead of conversation_id alone?",
+      "options": [
+        {"t": "So no partition grows forever — each holds a bounded slice of one conversation", "correct": true,
+         "why": "Yes. conversation_id alone means a busy group's multi-year history piles into one ever-growing partition — the Chapter 2.6 disease. The month bucket bounds every partition, keeps 'recent messages' a single-partition read, and lets history walk backwards bucket by bucket."},
+        {"t": "To make cross-conversation queries faster", "correct": false,
+         "why": "Nothing here queries across conversations — the read pattern is always within one chat. The bucket exists to bound partition size, not to enable new queries."},
+        {"t": "Because Cassandra requires two-part partition keys", "correct": false,
+         "why": "It doesn't — single-column partition keys are common. The compound key is a deliberate design choice to cap partition growth, not a database requirement."},
+        {"t": "To spread one conversation's live write traffic evenly across many storage nodes at the same time", "correct": false,
+         "why": "Tempting, but at any moment a conversation writes to its current bucket only — live traffic still lands on one partition. The bucket solves unbounded growth over time, not instantaneous hot spots."}
+      ]
+    },
+    {
+      "id": "p3c04-q08", "level": 1, "type": "mcq", "tag": "idempotency",
+      "q": "The client generates a unique message id (client_msg_id) when the user hits send. What problem does this solve?",
+      "options": [
+        {"t": "It encrypts the message contents", "correct": false,
+         "why": "Encryption is a separate mechanism (the Signal protocol, in real WhatsApp). The id is plaintext routing/dedup metadata."},
+        {"t": "It tells the server which conversation the message belongs to", "correct": false,
+         "why": "That's convo_id, a separate field. The client_msg_id identifies this particular send attempt so repeats can be recognized."},
+        {"t": "It replaces the server's sequence number so ordering can happen on the client side instead", "correct": false,
+         "why": "They coexist with different jobs: client_msg_id (random, client-made) dedups retries; seq (ordered, server-made) orders the conversation. Neither can do the other's job."},
+        {"t": "Retries after a lost ack would otherwise store the message twice", "correct": true,
+         "why": "Right — Chapter 2.2 applied to chat. The phone retries until it sees ✓; if the ack (not the message) got lost, the retry would duplicate. The server dedups by client_msg_id and returns the original ack, making infinite retries safe."}
+      ]
+    },
+    {
+      "id": "p3c04-q09", "level": 1, "type": "mcq", "tag": "e2e",
+      "q": "WhatsApp is end-to-end encrypted. Which part of our design does E2E change the most?",
+      "options": [
+        {"t": "The ack ladder — receipts no longer work on encrypted messages", "correct": false,
+         "why": "Receipts are metadata about envelopes, not content. Delivered/read acks flow exactly as before; E2E doesn't touch them."},
+        {"t": "The gateways — encrypted messages need special routing", "correct": false,
+         "why": "Routing reads addressing metadata, which stays visible. A gateway forwards ciphertext as happily as plaintext."},
+        {"t": "Features needing the server to read content: search, link previews, cloud history", "correct": true,
+         "why": "Correct. The delivery machinery (acks, sequences, inboxes, receipts) operates on envelopes and works unchanged on ciphertext. What dies is everything that needed plaintext on the server — which is why real WhatsApp moves history via encrypted backups instead of server-side sync."},
+        {"t": "Everything — encrypted payloads force a full redesign of routing, receipts, and storage from scratch", "correct": false,
+         "why": "Almost nothing structural changes, and saying so is the honest senior answer. E2E removes content-reading features and complicates multi-device key management; the delivery machine survives intact."}
+      ]
+    },
+    {
+      "id": "p3c04-q10", "level": 2, "type": "mcq", "tag": "durability",
+      "q": "A teammate proposes: 'Ack the sender immediately, then persist asynchronously — it cuts 30ms off send latency.' What's wrong with this?",
+      "options": [
+        {"t": "Nothing — this is a standard, widely used latency optimization for hot write paths in production systems", "correct": false,
+         "why": "It's standard in systems where an occasional lost record is tolerable (metrics, logs). Chat's core requirement is 'never lose an accepted message,' and this proposal breaks exactly that requirement in exactly the failure case that matters."},
+        {"t": "A crash between ack and persist silently loses a message the sender's phone now believes is safe", "correct": true,
+         "why": "The one inversion the design can never allow. The phone sees ✓, stops retrying, may delete its local copy — and the message never reached durable storage. The 30ms buys you a lie. Durable-before-ack is the promise the product stands on."},
+        {"t": "Async persistence is slower overall", "correct": false,
+         "why": "Throughput might even improve — that's what makes it tempting. The objection isn't performance, it's correctness: the ack becomes a guess instead of a promise."},
+        {"t": "It would break message ordering", "correct": false,
+         "why": "Ordering could survive (seq could still be assigned at write). The casualty is durability: acked-but-unpersisted messages vanish in a crash, with a checkmark on them."}
+      ]
+    },
+    {
+      "id": "p3c04-q11", "level": 2, "type": "mcq", "tag": "failure",
+      "q": "A gateway holding 1M connections dies at 9pm. What's the most important defense, and where must it live?",
+      "options": [
+        {"t": "A hot standby gateway that inherits the dead machine's TCP connections and resumes them transparently", "correct": false,
+         "why": "TCP connections cannot be transplanted between machines — when the box dies, its sockets are simply gone. Phones must reconnect; the question is only whether they do it as a mob or a trickle."},
+        {"t": "Buffering messages on the load balancer until the gateway recovers", "correct": false,
+         "why": "The LB is not durable storage, and the gateway may never recover. Undeliverable messages already have a home — the inbox — and durability never lived on the gateway anyway."},
+        {"t": "Re-sending all recent messages to affected users", "correct": false,
+         "why": "Unnecessary — nothing was lost. Messages for disconnected users flow to inboxes and drain on reconnect. The danger isn't data loss; it's the reconnect stampede."},
+        {"t": "Jittered exponential backoff, shipped in the client long before the outage", "correct": true,
+         "why": "Yes — and the 'where' is the trick. A million phones reconnecting simultaneously is a storm that can cascade to healthy infrastructure; the fix spreads reconnects over time with randomness, and it must be client code deployed months in advance, because you can't ship code to phones mid-outage."}
+      ]
+    },
+    {
+      "id": "p3c04-q12", "level": 2, "type": "mcq", "tag": "inbox",
+      "q": "B's phone was off for three days; the OS also dropped the push notification. B turns the phone on and opens the app. What happens?",
+      "options": [
+        {"t": "The app connects and the gateway drains B's inbox in order — the lost push is irrelevant", "correct": true,
+         "why": "Exactly. The inbox is the source of truth; any reconnect for any reason drains it. The push was only ever a wake-up kick, so its loss cost nothing once B opened the app themselves. Reliability must never depend on the push channel."},
+        {"t": "The three days of messages are lost because the push failed", "correct": false,
+         "why": "If a dropped OS notification could lose messages, the design would be broken at its foundation. Messages wait durably in the inbox with a ~30-day TTL, entirely independent of push."},
+        {"t": "B must manually refresh each conversation to fetch what was missed while the phone was off", "correct": false,
+         "why": "The drain is automatic on connect — the gateway pushes the backlog down the fresh socket in order. Manual refresh is a polling-era design."},
+        {"t": "The senders are asked to resend their messages", "correct": false,
+         "why": "Senders finished their job when they got ✓ — the server owns delivery from that point. Bothering senders would break the promise the ack made."}
+      ]
+    },
+    {
+      "id": "p3c04-q13", "level": 2, "type": "mcq", "tag": "groups",
+      "q": "A message is sent to an 800-member group. What work does the system actually do?",
+      "options": [
+        {"t": "800 full copies of the message body are written to the message table, one per member's partition", "correct": false,
+         "why": "The message is stored once, keyed by conversation. What fans out is pointers to it (inbox rows), not the content itself — that's what keeps group storage sane."},
+        {"t": "One write; online members poll for it on their next refresh", "correct": false,
+         "why": "That's fan-out-on-read — the channel/celebrity model. For a 1,024-cap group we push, because bounded fan-out buys instant delivery and free offline handling."},
+        {"t": "One message write, ~800 inbox pointers, and about one frame per gateway hosting members", "correct": true,
+         "why": "Fan-out on write plus the multicast trick: members' sockets cluster on a few hundred gateways, so you route one copy per gateway and let it fan out to local sockets — instead of 800 copies through the routing tier. Amplification is real but bounded by the cap."},
+        {"t": "The sender's phone sends the message directly to all 800 members", "correct": false,
+         "why": "Phones can't reach each other directly (NAT, offline members, battery). Everything routes through the server, which is also what makes durability and ordering possible."}
+      ]
+    },
+    {
+      "id": "p3c04-q14", "level": 2, "type": "mcq", "tag": "ordering",
+      "q": "A user's phone clock runs 40 seconds fast. They send a message. What does the design do with their timestamp?",
+      "options": [
+        {"t": "Rejects the message until the phone's clock is corrected via NTP", "correct": false,
+         "why": "Punishing users for clock drift would make the app unusable — drifted and user-adjusted clocks are everywhere. The design simply never trusts the client clock for anything that matters."},
+        {"t": "Shows a time in the UI, but orders the conversation by server-assigned seq", "correct": true,
+         "why": "Timestamps are for humans, sequences are for ordering. The drifted clock can mislabel the minute next to the bubble, but it cannot reorder anyone's conversation, because no device ever sorts by timestamp."},
+        {"t": "Uses the timestamp for ordering since it's only 40 seconds off", "correct": false,
+         "why": "40 seconds is an eternity in a live chat — replies would appear before questions. Any tolerance threshold is a bug waiting for a bigger drift; the server sequence exists precisely so drift can't matter."},
+        {"t": "Adjusts all the user's future messages by minus 40 seconds to compensate for the drift", "correct": false,
+         "why": "Clock-correction guesswork is fragile (drift changes, users travel, clocks get fixed). The robust answer removes the dependency: order by server seq, treat client time as a display hint."}
+      ]
+    },
+    {
+      "id": "p3c04-q15", "level": 2, "type": "mcq", "tag": "presence",
+      "q": "A phone on a weak signal connects and disconnects six times a minute. Naive presence would broadcast every flicker to ~200 contacts. What's the committed fix?",
+      "options": [
+        {"t": "Broadcast every transition to all contacts — accurate presence is a core product feature worth the traffic", "correct": false,
+         "why": "At 400M connected users with flapping radios, naive presence generates more traffic than actual messaging — for a green dot. Nobody needs six flickers a minute; a ~10-second-stale dot is indistinguishable from a fresh one."},
+        {"t": "Disconnect users on weak signals to stop the flapping", "correct": false,
+         "why": "Punishing exactly the users the app most needs to serve well — flaky-network users are the design's whole reason for existing. Fix the amplification, not the victim."},
+        {"t": "Poll each contact's status every few seconds from the client", "correct": false,
+         "why": "Polling recreates the empty-request storm the WebSocket architecture exists to avoid, and scales with contacts × users. Push-to-subscribers with debounce is strictly cheaper."},
+        {"t": "Debounce transitions (~10s) and push only to contacts currently viewing a chat with that user", "correct": true,
+         "why": "Both throttles together. Debouncing erases flapping (a state must hold before it publishes); subscription shrinks the audience from 200 contacts to the handful with the chat open — everyone else fetches last-seen on demand. Presence stays a rounding error instead of dwarfing messages."}
+      ]
+    },
+    {
+      "id": "p3c04-q16", "level": 2, "type": "mcq", "tag": "multi-device",
+      "q": "B has a phone and a laptop. A message arrives at the phone at 9:00; the closed laptop opens at 9:45. When did A's ✓✓ appear, and how does the laptop catch up?",
+      "options": [
+        {"t": "✓✓ at 9:00 when the first device got it; the laptop drains its own per-device inbox at 9:45", "correct": true,
+         "why": "The committed receipt rule: 'delivered' fires on first device, 'read' on any device. Each device keeps its own inbox and cursor precisely so a closed laptop can lag by hours without delaying anyone's receipts or missing anything."},
+        {"t": "✓✓ only appears at 9:45, because 'delivered' must wait until every registered device has stored the message", "correct": false,
+         "why": "Waiting for the slowest device makes receipts hostage to whichever laptop is closed in a bag — ✓✓ could lag by weeks. 'Delivered' answers 'has it reached B?', and B's phone answered that at 9:00."},
+        {"t": "The laptop misses the message because the phone already consumed it", "correct": false,
+         "why": "This is exactly why inboxes are per device, not per user. The phone drained its inbox; the laptop's copy waits untouched in the laptop's own queue."},
+        {"t": "The phone forwards the message to the laptop directly", "correct": false,
+         "why": "Device-to-device relay fails whenever devices aren't simultaneously online — which is constantly. Each device syncs independently against the server; that's the point of per-device cursors."}
+      ]
+    },
+    {
+      "id": "p3c04-q17", "level": 2, "type": "mcq", "tag": "storage",
+      "q": "Why does this design commit to a Cassandra-class store for messages instead of sharded Postgres?",
+      "options": [
+        {"t": "Postgres cannot store text data at this volume", "correct": false,
+         "why": "Postgres stores text fine — and sharded Postgres can be pushed very far. The argument is fit and operational cost at 580K writes/sec, not capability. Claiming Postgres 'can't' invites a losing debate."},
+        {"t": "NoSQL databases are more modern and better suited to large-scale consumer applications in general", "correct": false,
+         "why": "Vintage is not an argument, and interviewers flag it as buzzword reasoning. Chapter 1.13's rule: pick the store whose data model and write path match the workload — for stated mechanical reasons."},
+        {"t": "The workload — append-only writes at 580K/s, reads inside one partition — is LSM wide-column home turf", "correct": true,
+         "why": "The senior answer is workload-shaped, not brand-shaped: messages are immutable, written at enormous rate, and read as 'recent slice of one conversation.' LSM engines turn those writes into sequential appends and that read into one partition scan. You give up joins and transactions you weren't using."},
+        {"t": "Cassandra provides message ordering automatically", "correct": false,
+         "why": "Ordering comes from our server-assigned seq; Cassandra merely sorts rows by the clustering key we hand it. Confusing storage sort order with a distributed ordering guarantee is a trap worth not falling into."}
+      ]
+    },
+    {
+      "id": "p3c04-q18", "level": 2, "type": "mcq", "tag": "registry",
+      "q": "A gateway crashes without cleaning up its registry entries. Five seconds later, a message for one of its users gets routed to the dead box. What saves the message?",
+      "options": [
+        {"t": "Nothing — messages routed to a dead gateway are lost", "correct": false,
+         "why": "If a routing failure could lose messages, the single tick would be a lie. Routing happens after the durable write precisely so that delivery can fail safely and be retried via the inbox."},
+        {"t": "The forward fails, B is treated as offline, and the already-written inbox row plus a push take over", "correct": true,
+         "why": "Delivery attempts are allowed to fail because durability happened first — the message and inbox row were persisted before routing was even attempted. Stale entries then self-heal via TTL when the dead gateway stops heartbeating. Failed delivery is a retry, never a loss."},
+        {"t": "The registry synchronously health-checks the gateway before every single lookup so stale routes never happen", "correct": false,
+         "why": "A health check per lookup would double the hot path's cost to defend against a rare event. TTL-based expiry plus fail-safe delivery achieves the same end lazily and cheaply."},
+        {"t": "The load balancer reroutes the message to another gateway", "correct": false,
+         "why": "Another gateway doesn't hold that user's socket, so rerouting the frame achieves nothing. The recovery path is offline delivery: inbox now, drain when the user reconnects somewhere real."}
+      ]
+    },
+    {
+      "id": "p3c04-q19", "level": 3, "type": "mcq", "tag": "crux-spotting",
+      "q": "Ten minutes into 'Design WhatsApp,' your high-level diagram is done. Which deep-dive offer signals you found the crux?",
+      "options": [
+        {"t": "\"I want to spend our time on the ack protocol — exactly what each tick promises, and how retries stay safe over a network that drops constantly.\"", "correct": true,
+         "why": "That's the fire this question was invented to probe. Guaranteed ordered delivery over flaky mobile links is the hard part; ticks-as-protocol is where senior candidates separate. Announcing it and steering there is the strongest move available."},
+        {"t": "\"Let me detail the media pipeline — image thumbnailing and video transcoding at scale.\"", "correct": false,
+         "why": "Media is big but boring: blob storage + CDN, solved in Chapter 1.7, and deliberately dismissed in minute one. Deep-diving it means spending your scoring window in a room that isn't burning."},
+        {"t": "\"I'll walk through the microservice decomposition — auth service, user service, message service, media service — and how they communicate.\"", "correct": false,
+         "why": "Service boundaries are organizational bookkeeping, not the hard problem — no delivery guarantee gets easier by drawing more boxes. This reads as process knowledge substituting for judgment."},
+        {"t": "\"Let's design the group admin features — roles, invites, and moderation.\"", "correct": false,
+         "why": "Product-feature CRUD with no distributed-systems teeth. The interviewer will politely redirect you, and the redirect costs you the driving-the-room points."}
+      ]
+    },
+    {
+      "id": "p3c04-q20", "level": 3, "type": "mcq", "tag": "commit-justify",
+      "q": "The interviewer asks: 'Cross-region replication for messages — synchronous or asynchronous? Commit.' The senior answer is:",
+      "options": [
+        {"t": "\"Synchronous — this product promises to never lose an accepted message, so we can never accept even a few seconds of replication lag putting acked messages at risk.\"", "correct": false,
+         "why": "Principled-sounding, but it silently spends ~100ms per send, every send, forever, to defend against a once-a-decade event — and never weighs that trade. Absolutes without costs attached read as rule-following, not judgment."},
+        {"t": "\"Both — synchronous for important messages, async for the rest.\"", "correct": false,
+         "why": "There's no signal for 'important' (E2E hides content!), so this invents an unimplementable classifier to dodge the commit. Hedges dressed as hybrids are still hedges."},
+        {"t": "\"Whichever the storage layer defaults to.\"", "correct": false,
+         "why": "Delegating a core durability/latency trade-off to a vendor default is abdication, and the interviewer will read it exactly that way. This decision is precisely the kind you're being hired to own."},
+        {"t": "\"Async, accepting seconds of RPO on region loss — sync puts ~100ms inside every ack, and the ack ladder repairs much of the loss: undelivered messages still sit on sender phones and get resent safely.\"", "correct": true,
+         "why": "A commitment, a latency mechanism, an honestly disclosed cost, and a mitigation that reuses machinery already built — the end-to-end repair insight is the part that reads E5. Choosing either option without naming its bill would read a level lower."}
+      ]
+    },
+    {
+      "id": "p3c04-q21", "level": 3, "type": "mcq", "tag": "degradation",
+      "q": "New Year's Eve midnight hits your biggest region at 5x normal peak and you can't buy 5x hardware. Rank the right degradation posture.",
+      "options": [
+        {"t": "Degrade every feature proportionally so that no single feature fully breaks and users see uniform slowness", "correct": false,
+         "why": "Proportional degradation spends scarce capacity on green dots while message acks slow down — backwards. Load shedding is triage: fully sacrifice the cosmetic to fully protect the essential."},
+        {"t": "Queue all messages and deliver them after midnight passes", "correct": false,
+         "why": "Delivering 'Happy New Year' at 12:40 is product failure at the exact moment the product matters most. The point of shedding lesser features is precisely to keep messages flowing through the spike."},
+        {"t": "Shed presence and typing first, then batch receipts, then defer media — but the durable write and ack degrade never", "correct": true,
+         "why": "The ordering principle: convert 'instant' into 'seconds late' for cosmetic features, in increasing order of user pain, while the promise (accepted = durable) stays absolute. Chapter 2.7's load-shedding discipline with product judgment — and WhatsApp's real NYE history says you'll need it."},
+        {"t": "Temporarily ack messages before persisting to absorb the burst", "correct": false,
+         "why": "This 'temporary' inversion means the year's highest traffic runs with the weakest guarantee — maximum messages exposed to loss exactly when a crash is most likely. The one thing that never degrades is the promise."}
+      ]
+    },
+    {
+      "id": "p3c04-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your per-conversation sequencer is a single point of serialization. Isn't that a bottleneck?' Best response:",
+      "options": [
+        {"t": "\"Yes, deliberately — it's bounded by how fast humans in one chat can type, and the 1,024-member cap keeps it bounded. It genuinely breaks for million-subscriber channels, where I'd flip to a pull model.\"", "correct": true,
+         "why": "Owning the hot spot as a conscious choice, quantifying why it's safe (human typing speed × capped membership), and naming the exact boundary where it fails plus the redesign beyond it. A bottleneck you chose, bounded, and fenced is a design decision, not a flaw."},
+        {"t": "\"Good catch — I'd shard each conversation's messages across multiple parallel sequencers so no single instance ever becomes a serialization point.\"", "correct": false,
+         "why": "Multiple sequencers per conversation means no single order authority — the exact property the sequencer exists to provide. Folding to a probe by breaking your own invariant is worse than defending it; the probe was testing whether you knew why you built it."},
+        {"t": "\"Bottlenecks are unacceptable — I'd switch to client timestamps with conflict resolution.\"", "correct": false,
+         "why": "Retreating to the approach the design explicitly rejected (clocks lie) to avoid a bottleneck that was never real. Not every serialization point is a problem; per-chat message rate is tiny by definition."},
+        {"t": "\"It's fine because Redis is very fast.\"", "correct": false,
+         "why": "Names a tool instead of a bound. The defensible answer is about workload math — humans × cap = bounded rate — not about any component's speed. 'Fast' without numbers is hope."}
+      ]
+    },
+    {
+      "id": "p3c04-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A staff engineer proposes: 'When both users are online — the common case — skip the database write and relay directly socket-to-socket. Persist only if the recipient is offline. Huge write savings.' Your call?",
+      "options": [
+        {"t": "Accept it — optimizing the common case is exactly what senior engineers are supposed to do", "correct": false,
+         "why": "Optimizing the common case is right when the rare case stays correct. Here the rare case (crash between ack and delivery) silently loses a message with a checkmark on it. An optimization that converts a guarantee into a probability isn't an optimization."},
+        {"t": "Reject it: the ack now promises durability the server doesn't have — a gateway crash mid-relay loses an acked message. The write stays; optimize the write path if cost bites", "correct": true,
+         "why": "The seductive optimization that breaks the invariant. 'Both online' doesn't mean 'delivery will succeed' — the recipient's socket can die in the microseconds after the ack. Once the ✓ can lie in any code path, the product's core promise is gone. Senior judgment is recognizing which invariants are priceless."},
+        {"t": "Accept it, but have the recipient's ack trigger the persist", "correct": false,
+         "why": "Then what does the sender's ✓ mean before the recipient acks? Either you delay the sender's ack until delivery (making 'sent' hostage to the recipient's radio) or you ack undurable messages. The patch just moves the hole."},
+        {"t": "Run it as an A/B experiment and compare message-loss metrics between the two variants before deciding", "correct": false,
+         "why": "You don't A/B test an invariant — the experiment's failure mode is real users' messages silently vanishing, and 'acceptable loss rate' isn't a threshold this product has. Some properties are decided by reasoning, not measured by experiment."}
+      ]
+    },
+    {
+      "id": "p3c04-q24", "level": 3, "type": "mcq", "tag": "10x",
+      "q": "Interviewer: 'Your design works at 50B messages/day. Now 10x it. What actually breaks first?' The honest senior answer:",
+      "options": [
+        {"t": "\"Nothing breaks — every tier in this design is horizontally scalable, so 10x is just a provisioning exercise.\"", "correct": false,
+         "why": "The buzzword shield. 'Horizontally scalable' is a property of tiers, not of systems — amplification effects (fan-out, reconnect storms, hot groups) grow faster than linearly, and claiming immunity invites the interviewer to push until something visibly breaks."},
+        {"t": "\"The database — at 10x we'd need to migrate to a bigger storage technology.\"", "correct": false,
+         "why": "Backwards: bounded-partition Cassandra is the tier that 10xes most gracefully — Discord ran trillions of messages on this exact model. Naming the strongest tier as the weakest suggests the design's scaling properties weren't actually traced."},
+        {"t": "\"Gateways and Cassandra scale by adding boxes — the real pain is amplification: group fan-out multiplying inbox writes, and reconnect herds hammering the registry at 10x size. I'd invest there first.\"", "correct": true,
+         "why": "The senior move is distinguishing tiers that scale linearly (buy boxes) from multiplicative effects that don't (fan-out, storms). Naming where the amplification lives shows you actually traced the load through the system rather than gestured at 'horizontal scaling.'"},
+        {"t": "\"I'd redesign from scratch — 10x invalidates the original assumptions.\"", "correct": false,
+         "why": "10x rarely invalidates a well-sharded design's assumptions; it stresses specific seams. Throwing away the architecture instead of naming its seams reads as not knowing where they are."}
+      ]
+    },
+    {
+      "id": "p3c04-q25", "level": 3, "type": "mcq", "tag": "ops",
+      "q": "You get one pager alert for this system's health at 3am. Which metric do you page on, and why?",
+      "options": [
+        {"t": "CPU utilization across the gateway fleet, since gateways are the stateful tier where failures start", "correct": false,
+         "why": "Gateways are memory-bound, so CPU is doubly wrong: the wrong resource on the wrong tier. Fleets can be healthy at high CPU and broken at low CPU; pages should fire on user pain, not machine vitals."},
+        {"t": "Total messages per second", "correct": false,
+         "why": "Throughput falls when users sleep and spikes at midnight — it measures demand, not health. A delivery-path failure can even leave send volume flat while everything silently queues."},
+        {"t": "Number of open WebSocket connections, since a sudden drop is the clearest sign of an outage in a connection-oriented system", "correct": false,
+         "why": "Useful on a dashboard (a cliff-drop hints at an outage), but it's a proxy with a huge natural daily cycle. The metric that directly answers 'is the product keeping its promise right now?' is delivery latency at the tail."},
+        {"t": "Send→delivered p99 for online pairs — the product promise, measured end to end", "correct": true,
+         "why": "Yes — page on the symptom users feel, not on causes. A sick gateway, a slow Cassandra, a wedged registry, a routing bug: all of them widen this one number. Cause-level metrics (reconnect rate, inbox backlog, node health) belong on dashboards for diagnosis after the page fires."}
+      ]
+    }
+  ]
+}

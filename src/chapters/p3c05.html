@@ -1,0 +1,333 @@
+<p>"Design the Facebook news feed." At Meta, this is the house specialty. There's a real chance your interviewer spent years working on the actual feed, which means two things: they will not be impressed by buzzwords, and they know exactly which room is on fire. One more thing before the clock starts — Meta runs this question in two flavors (Chapter 0.2). In the <strong>System Design</strong> round, the backend machine is the star. In the <strong>Product Architecture</strong> round — the flavor most product engineers get — your API contract and client behavior are graded too: what's in the payload, what the cursor promises, what the app does while a request is in flight. This walkthrough plays it as a Product Architecture candidate performing at E5, because that's the harder grading.</p>
+
+<p>Here's the trap hiding inside the question. You can design a feed that works beautifully for 499 million of your 500 million daily users — and it will melt for the last few thousand. Those few thousand are the celebrities, and one of them has more than 600 million followers. A single tap of Cristiano Ronaldo's thumb generates more write traffic than the rest of the platform combined for the next several minutes.</p>
+
+<p>The whole interview is secretly about that one moment. Everything else — caching, ranking, counters — is important supporting cast. Let's run the 45 minutes.</p>
+
+<h2>Requirements: agree on the machine before building it</h2>
+
+<p>I scope out loud and get a nod before drawing anything. <strong>Functional:</strong> users follow other users (asymmetric — I follow you, you don't follow me back); users create posts with text and media; users see a home feed of posts from accounts they follow, ranked by relevance, not just time; users like and comment, and everyone sees the counts. Out of scope, and I say so: ads, Stories, the notification system (that's Chapter 3.3), and comment threads beyond a count.</p>
+
+<p><strong>Non-functional, with numbers I'm committing to:</strong></p>
+
+<ul>
+<li><strong>Scale:</strong> 2 billion accounts, 500 million daily actives. Feed is the front door of the entire product.</li>
+<li><strong>Feed latency:</strong> under 200 ms at p99 for a page of feed. This is the number users feel with their thumb.</li>
+<li><strong>Post visibility:</strong> a new post should reach followers' feeds within seconds — I'll commit to "usually under 10 seconds." Crucially, this is allowed to slip to minutes during an incident. Feed freshness is soft; feed <em>availability</em> is not.</li>
+<li><strong>Durability:</strong> once we return 201 for a post, it is never lost. Delayed is survivable; vanished is not.</li>
+<li><strong>No duplicates:</strong> refreshing or paging should not show the same post twice — surprisingly hard with a ranked feed, and I flag it unprompted.</li>
+</ul>
+
+<p>Notice the CAP posture (Chapter 1.10) fell out of the requirements for free: the feed chooses availability and takes eventual consistency on freshness and counts. A stale feed is Tuesday. A down feed is a headline.</p>
+
+<h2>Estimation: two numbers run this whole design</h2>
+
+<p>I do only the math that changes decisions (Chapter 1.4). First number: <strong>the read/write ratio.</strong> 500M daily users open the app a few times a day and scroll a few pages each time — call it 10 feed-page fetches per user per day. That's 5 billion fetches a day, about 60K per second average, so I plan for <strong>200K reads/sec at peak</strong>. Writes: maybe one in five daily users posts, so 100M posts a day — about 1.2K/sec, call it 5K/sec at peak. That's roughly <strong>50 reads for every write</strong>. Conclusion, said out loud: I will happily do extra work at write time to make reads a cheap cache hit. That is the argument for precomputing feeds — pushing each new post into followers' feeds when it's created, so a feed read is just "get my list."</p>
+
+<p>Second number: <strong>the fanout multiplication.</strong> Pushing a post means one write per follower. An average account has ~200 followers, so 1.2K posts/sec becomes ~240K tiny cache writes/sec, maybe a million at peak. A sharded Redis fleet shrugs at that; each write is a few microseconds of list-push. So far, push looks great.</p>
+
+<p>Then I do the celebrity row of the table, because follower counts are a power law (Chapter 2.6): a 100M-follower account posts once, and that's <strong>100 million writes for one tap</strong>. At a generous 1M writes/sec of fanout capacity, one post occupies the entire fleet for 100 seconds. Ronaldo's 600M followers: ten minutes of everything we own, and every ordinary user's post queued behind it. Also: 100M copies of a post ID at ~20 bytes each is 2 GB of RAM duplicated per celebrity post — most of it for followers who won't even open the app today. <strong>This is the number that forces a hybrid design</strong>, and I say so now: "push for normal accounts, pull for celebrities — I'll deep-dive the threshold later."</p>
+
+<p>One more sizing check, because it decides what the feed cache stores: 500M active users × 300 feed entries × 16 bytes per entry (post ID plus a timestamp) ≈ <strong>2.4 TB of RAM</strong> — about 40 Redis shards. Perfectly buildable, but only because I'm storing post <em>IDs</em>, not post bodies, and only for <em>active</em> users. Store full posts and it's hundreds of terabytes. The estimate just made two design decisions for me.</p>
+
+<h2>API and data model: quick, then move</h2>
+
+<p>This is the Product Architecture section, so I'm precise but fast:</p>
+
+<ul>
+<li><code>POST /v1/media</code> → returns an upload URL for blob storage and a <code>media_id</code>. The client uploads bytes directly to blob storage, not through my app servers (Chapter 1.7).</li>
+<li><code>POST /v1/posts</code> with <code>{text, media_ids}</code> → 201 with the created post.</li>
+<li><code>GET /v1/feed?cursor=…&amp;limit=25</code> → <code>{items: […], next_cursor}</code>. The cursor is opaque — clients must not parse it, so I can change its encoding without breaking apps in the field.</li>
+<li><code>PUT /v1/posts/{id}/like</code> and <code>DELETE …/like</code> — PUT because liking is naturally idempotent (Chapter 2.2): double-tap, retry, same result.</li>
+<li><code>POST /v1/follows</code> with <code>{followee_id}</code>.</li>
+</ul>
+
+<p>Each feed item comes back <strong>fully hydrated</strong>: post body, author name and avatar, like/comment counts, CDN URLs for media. One request paints the screen. And I name the client behaviors Meta grades in this flavor: render the cached last page instantly on app open while fetching fresh behind it; show a "new posts" pill instead of yanking the scroll position; bump the like count optimistically on tap and reconcile later; prefetch the next page when the user nears the bottom.</p>
+
+<p>Data model: a <code>users</code> table; a <code>follows</code> table that I need in <em>both directions</em> — "who do I follow" (for building feeds) and "who follows X" (for fanout) — so it's stored twice, sharded by each key (Chapter 1.9); a <code>posts</code> table sharded by <code>author_id</code> with time-sortable IDs (Chapter 1.14), which means "recent posts by author X" is one cheap indexed read. Hold that thought — that per-author recent-posts index is called the author's <strong>outbox</strong>, and it's about to matter enormously.</p>
+
+<h2>High-level design: the complete machine</h2>
+
+<p>Write path first, because the write path is where the interesting decision lives.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 285" role="img" aria-label="Hybrid fanout write path: post service persists then emits event; fanout workers push to follower feed lists for normal accounts and skip celebrities">
+  <rect class="dg-node" x="8" y="118" width="76" height="44" rx="8"/>
+  <text class="dg-txt" x="22" y="144">Client</text>
+  <rect class="dg-node" x="116" y="118" width="104" height="44" rx="8"/>
+  <text class="dg-txt" x="126" y="136">Post service</text>
+  <text class="dg-txt-s" x="126" y="152">validate, persist</text>
+  <rect class="dg-node" x="116" y="24" width="104" height="44" rx="8"/>
+  <text class="dg-txt" x="130" y="42">Posts DB</text>
+  <text class="dg-txt-s" x="124" y="58">by author = outbox</text>
+  <rect class="dg-node" x="252" y="118" width="96" height="44" rx="8"/>
+  <text class="dg-txt" x="270" y="136">Queue</text>
+  <text class="dg-txt-s" x="262" y="152">post events</text>
+  <rect class="dg-node" x="380" y="118" width="112" height="44" rx="8"/>
+  <text class="dg-txt" x="388" y="136">Fanout</text>
+  <text class="dg-txt-s" x="388" y="152">workers</text>
+  <rect class="dg-node" x="380" y="24" width="112" height="44" rx="8"/>
+  <text class="dg-txt" x="390" y="42">Social graph</text>
+  <text class="dg-txt-s" x="390" y="58">who follows A?</text>
+  <rect class="dg-node" x="556" y="64" width="156" height="52" rx="8"/>
+  <text class="dg-txt" x="566" y="84">Follower feed lists</text>
+  <text class="dg-txt-s" x="566" y="102">Redis, post IDs only</text>
+  <rect class="dg-node-alt" x="556" y="196" width="156" height="52" rx="8"/>
+  <text class="dg-txt" x="566" y="216">Celebrity path</text>
+  <text class="dg-txt-s" x="566" y="234">no push, pulled at read</text>
+  <line class="dg-edge" x1="84" y1="140" x2="116" y2="140" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="168" y1="118" x2="168" y2="68" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="176" y="98">1. store</text>
+  <line class="dg-edge" x1="220" y1="140" x2="252" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="222" y="130">2. event</text>
+  <line class="dg-edge" x1="348" y1="140" x2="380" y2="140" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="436" y1="118" x2="436" y2="68" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="444" y="98">3. follower list</text>
+  <line class="dg-edge" x1="492" y1="130" x2="556" y2="98" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="490" y="86">4a. under 1M: push</text>
+  <line class="dg-edge" x1="492" y1="150" x2="556" y2="214" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="466" y="192">4b. 1M+: skip push</text>
+</svg>
+<figcaption>The write path. The post is durable in step 1 — everything after is asynchronous and allowed to lag. Step 4 is the fork the whole interview is about.</figcaption>
+</figure>
+
+<p>Walking it: the post service validates, writes the post to the sharded posts DB — <strong>durability first</strong>, this write is the promise behind the 201 — then drops a small "post created" event on a durable queue (Chapter 1.11) and returns. The user sees their own post immediately (more on that trick in the ops section). Fanout workers consume events, ask the social graph service for the follower list, and pipeline the post ID into each follower's Redis feed list — push to the front, trim the list to ~300 entries. Workers checkpoint queue offsets, so a crashed worker replays; pushes are idempotent-enough because a duplicate ID gets dropped at read by the seen-filter. Two cheap optimizations I name unprompted: skip followers who haven't opened the app in 30 days (a huge fraction of any follower list — they'll rebuild by pull if they return), and batch pushes per Redis shard so one post's fanout is a few hundred pipelined calls, not 200 individual round trips.</p>
+
+<p>Now the read path — the one that runs 200K times a second.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 320" role="img" aria-label="Read path: feed service gathers candidate IDs from feed cache and celebrity outboxes, scores them, then hydrates the top posts in parallel from post cache, counter service, and CDN">
+  <rect class="dg-node" x="8" y="140" width="72" height="44" rx="8"/>
+  <text class="dg-txt" x="20" y="166">Client</text>
+  <rect class="dg-node" x="108" y="140" width="104" height="48" rx="8"/>
+  <text class="dg-txt" x="118" y="160">Feed service</text>
+  <text class="dg-txt-s" x="118" y="176">orchestrates</text>
+  <rect class="dg-node" x="248" y="20" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="258" y="40">Feed cache list</text>
+  <text class="dg-txt-s" x="258" y="56">pushed post IDs</text>
+  <rect class="dg-node" x="248" y="88" width="140" height="48" rx="8"/>
+  <text class="dg-txt" x="256" y="108">Celeb outboxes</text>
+  <text class="dg-txt-s" x="256" y="124">+ your own posts</text>
+  <rect class="dg-node-alt" x="248" y="244" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="262" y="264">Scorer (ML)</text>
+  <text class="dg-txt-s" x="262" y="282">50 ms budget</text>
+  <rect class="dg-node" x="428" y="140" width="112" height="48" rx="8"/>
+  <text class="dg-txt" x="440" y="160">Hydrate 25</text>
+  <text class="dg-txt-s" x="440" y="176">in parallel</text>
+  <rect class="dg-node" x="576" y="40" width="136" height="44" rx="8"/>
+  <text class="dg-txt" x="586" y="58">Post cache</text>
+  <text class="dg-txt-s" x="586" y="74">bodies + authors</text>
+  <rect class="dg-node" x="576" y="108" width="136" height="44" rx="8"/>
+  <text class="dg-txt" x="586" y="126">Counter service</text>
+  <text class="dg-txt-s" x="586" y="142">approx counts</text>
+  <rect class="dg-node" x="576" y="176" width="136" height="44" rx="8"/>
+  <text class="dg-txt" x="586" y="194">CDN</text>
+  <text class="dg-txt-s" x="586" y="210">media URLs</text>
+  <line class="dg-edge" x1="212" y1="152" x2="248" y2="56" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="214" y="102">1</text>
+  <line class="dg-edge" x1="212" y1="164" x2="248" y2="120" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="230" y="140">2</text>
+  <line class="dg-edge" x1="196" y1="188" x2="256" y2="244" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="212" y="226">3</text>
+  <line class="dg-edge" x1="212" y1="164" x2="428" y2="164" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="316" y="156">4</text>
+  <line class="dg-edge" x1="540" y1="152" x2="576" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="540" y1="164" x2="576" y2="130" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="540" y1="178" x2="576" y2="196" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="108" y1="176" x2="80" y2="176" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="86" y="196">5</text>
+  <text class="dg-txt-s" x="8" y="310">1 get pushed IDs  ·  2 merge celebrities + own posts  ·  3 score ~500 candidates  ·  4 hydrate top 25 in parallel  ·  5 return page + cursor</text>
+</svg>
+<figcaption>A feed read. Steps 1–2 gather candidate IDs, step 3 ranks them, step 4 turns 25 winners into renderable posts with parallel fetches.</figcaption>
+</figure>
+
+<p>Gather candidate post IDs: the user's precomputed list (a Redis hit), plus the recent outboxes of any mega-accounts they follow, plus their own recent posts. Filter out already-seen IDs. Score the ~500 survivors (deep dive 2). Take the top 25 and hydrate them — post bodies and author profiles from a read-through post cache (Chapter 1.6; post bodies are immutable, which makes them a caching dream), like/comment counts from the counter service, media as CDN URLs. Those three hydration fetches run <strong>in parallel</strong>, and each one is allowed to fail without killing the page: if the counter service is slow, ship the feed with slightly stale counts rather than hold 25 posts hostage for a number nobody will fact-check.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Hydration is a thali counter. The plate (your feed page) gets assembled from separate stations — rice station, dal station, pickle station — all spooning in parallel, not one queue through all three. And if the pickle station is backed up, the server hands you the thali without pickle instead of letting your whole meal go cold. That's parallel fetch with graceful degradation. Where the analogy breaks: a thali missing dal is a complaint; a feed missing a like-count for three seconds is something no user has ever noticed.</p>
+</div>
+
+<p>What if the Redis list isn't there — new user, evicted user, dead shard? Fall back to <strong>pull</strong>: read the follow list, fetch each followee's outbox, merge by time, rank, serve, and repopulate the cache in the background. Slower — dozens of outbox reads instead of one list read — but correct, because the posts DB is always the source of truth. The same pull machinery handles a new follow (backfill the followee's recent posts, or let the next read's merge pick them up) and a dormant user returning after months. One mechanism, four problems solved — and I say so out loud.</p>
+
+<h2>Deep dive 1: the fanout decision</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Push or pull is not a style preference — it's forced by the shape of the follow graph, and the follow graph is a power law. Pull-for-everyone dies on reads: 200K feed requests/sec × ~400 followed accounts each = 80 million outbox reads per second, most of them recomputing the same merge they computed five minutes ago. Push-for-everyone dies on writes: one celebrity post = 100M+ writes, minutes of total fleet capacity for one tap. Neither pure strategy survives, so the design must be hybrid — and the senior signal is <em>where you put the threshold and why</em>. This is the burning room. If you take one thing from this chapter into the interview, take this paragraph.</p>
+</div>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Push is newspaper home delivery: the work happens at dawn, one copy dropped at every subscriber's door, and reading is instant. Pull is the newsstand: nothing is delivered anywhere; you walk over and ask for today's papers, and they assemble your bundle while you wait. Home delivery is wonderful — until one "paper" has 600 million subscribers and the delivery van fleet spends all day on a single edition. So you do what cities actually do: home delivery for the neighborhood papers, and for the mega-publication everyone reads, you just pick it up at the stand — it's one stand, it's always stocked, and the trip is cheap because you only visit a handful of stands. The analogy breaks in one place: real newsstands have queues, but a celebrity's outbox is a tiny, heavily cached read that scales to any number of readers.</p>
+</div>
+
+<p><strong>My commit: push for accounts under 1 million followers, pull-and-merge for accounts at or above it.</strong> Why 1M? Three curves cross near there. First, fanout time: 1M pushes at ~50K pipelined writes/sec per worker group finishes in ~20 seconds — the top edge of my "followers see it in seconds" budget. Beyond that, delivery time grows linearly into minutes. Second, population: accounts over 1M followers number in the low thousands globally — a rounding error of authors, which is exactly why exempting them is cheap. Third, read cost: a typical user follows maybe 5–20 such accounts, so the read-time merge adds a handful of small, hot, easily cached outbox reads — bounded and predictable. Anywhere from 100K to 5M is defensible; what's graded is that I know both cost curves and picked a point on purpose. The threshold is checked at post time against the author's current follower count, so an account that crosses 1M mid-week just switches paths on its next post — old pushed posts still sit in follower lists, new ones arrive via merge, and nobody notices.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 230" role="img" aria-label="Celebrity merge at read time: pushed feed list merges with a few celebrity outboxes before ranking">
+  <rect class="dg-node" x="16" y="20" width="200" height="48" rx="8"/>
+  <text class="dg-txt" x="28" y="40">Your feed list</text>
+  <text class="dg-txt-s" x="28" y="56">IDs pushed by fanout</text>
+  <rect class="dg-node-alt" x="16" y="88" width="200" height="44" rx="8"/>
+  <text class="dg-txt" x="28" y="106">Celebrity A outbox</text>
+  <text class="dg-txt-s" x="28" y="122">recent post IDs</text>
+  <rect class="dg-node-alt" x="16" y="148" width="200" height="44" rx="8"/>
+  <text class="dg-txt" x="28" y="166">Celebrity B outbox</text>
+  <text class="dg-txt-s" x="28" y="182">recent post IDs</text>
+  <rect class="dg-node" x="300" y="84" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="312" y="104">Merge by time</text>
+  <text class="dg-txt-s" x="312" y="122">drop already-seen</text>
+  <rect class="dg-node" x="500" y="84" width="160" height="52" rx="8"/>
+  <text class="dg-txt" x="512" y="104">Rank + hydrate</text>
+  <text class="dg-txt-s" x="512" y="122">same as any read</text>
+  <line class="dg-edge" x1="216" y1="44" x2="300" y2="98" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="216" y1="110" x2="300" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="216" y1="170" x2="300" y2="122" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="440" y1="110" x2="500" y2="110" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="16" y="216">A typical user follows fewer than ~20 accounts over 1M — the merge stays small, and those outboxes are the hottest, best-cached keys in the system.</text>
+</svg>
+<figcaption>Celebrity posts never enter the fanout at all. They're stitched in at read time, where the cost is a few cached reads instead of 100 million writes.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — Twitter</div>
+<p>The canonical public account of this exact design is Raffi Krikorian's 2012 "Timelines at Scale" talk, given when he ran Twitter's platform engineering. The numbers he shared are the whole argument in miniature: about 150M active users, roughly 300K timeline reads per second against only ~4K new tweets per second — reads dominating writes by nearly two orders of magnitude. So Twitter precomputed: every home timeline lived in a Redis cluster as a list capped at ~800 entries, replicated three ways, and a fanout service pushed each new tweet into follower timelines in pipelined batches of about 4,000 destinations at a time. Then the power law showed up. Lady Gaga had ~31 million followers, and a single tweet from her took <em>minutes</em> to fan out — long enough that followers sometimes saw <em>replies</em> to her tweet before the tweet itself, because the reply (from a small account) fanned out in seconds while the original was still crawling through 31 million list-pushes. Twitter's fix is the one in this chapter: stop fanning out the mega-accounts, keep their tweets in a separate path, and merge them into timelines at read time. One architecture, forced by one distribution.</p>
+</div>
+
+<p>That reply-before-the-original race is worth ten seconds in the interview: fanout means different followers receive the same post at different times, so ordering across users is never guaranteed — only ordering <em>within</em> one user's assembled page, which the read path fixes when it merges and ranks.</p>
+
+<h2>Deep dive 2: ranking, without pretending to be an ML engineer</h2>
+
+<p>Meta probes ranking on this question almost every time, and the E5 move is to be honest about the boundary: I don't design the model — I design the <em>system the model lives in</em>, which means candidate generation, a latency budget, feature freshness, and a fallback. That answer scores better than bluffing about neural architectures, because it's the answer of someone who'd actually operate this.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Ranking funnel: candidates filtered, scored by ML service, diversity rules applied, with chronological fallback on scorer timeout">
+  <rect class="dg-node" x="8" y="40" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="20" y="60">Candidates</text>
+  <text class="dg-txt-s" x="20" y="78">~800 post IDs</text>
+  <rect class="dg-node" x="168" y="40" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="180" y="60">Filters</text>
+  <text class="dg-txt-s" x="180" y="78">seen, muted, blocked</text>
+  <rect class="dg-node-alt" x="348" y="40" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="360" y="60">Scorer</text>
+  <text class="dg-txt-s" x="360" y="78">p(like), p(comment)</text>
+  <rect class="dg-node" x="528" y="40" width="180" height="52" rx="8"/>
+  <text class="dg-txt" x="540" y="60">Diversity rules</text>
+  <text class="dg-txt-s" x="540" y="78">no author streaks</text>
+  <rect class="dg-node" x="560" y="170" width="120" height="44" rx="8"/>
+  <text class="dg-txt" x="572" y="196">Page of 25</text>
+  <rect class="dg-node dg-good" x="280" y="170" width="160" height="44" rx="8"/>
+  <text class="dg-txt" x="292" y="188">Chrono sort</text>
+  <text class="dg-txt-s" x="292" y="204">the fallback feed</text>
+  <line class="dg-edge" x1="128" y1="66" x2="168" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="308" y1="66" x2="348" y2="66" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="314" y="56">~500</text>
+  <line class="dg-edge" x1="488" y1="66" x2="528" y2="66" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="618" y1="92" x2="618" y2="170" marker-end="url(#arrow)"/>
+  <line class="dg-bad" x1="400" y1="92" x2="364" y2="170" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="404" y="140">timeout</text>
+  <line class="dg-edge" x1="440" y1="192" x2="560" y2="192" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>The ranking funnel. The scorer is a box with an SLA, and the red edge is the point: when it misses its budget, the feed degrades to chronological instead of degrading to an error.</figcaption>
+</figure>
+
+<p><strong>Candidate generation</strong> is the merge we already built — pushed list plus celebrity outboxes, a few hundred IDs. Cheap filters run first (seen, muted, blocked authors), because filtering before scoring means paying the expensive step on fewer items. <strong>Scoring</strong> is a separate service with a hard budget: 50 ms of my 200 ms page budget to score ~500 candidates in one batched call. The model consumes features — how often you interact with this author, predicted probability you'll like or comment, the post's age, whether it has video — served from a feature store kept fresh by the stream pipeline (Chapter 2.9). And here's the probe Meta loves: <strong>feature freshness is a silent failure mode.</strong> If the pipeline lags a day, the scorer doesn't error — it confidently ranks with stale affinity data, and feed quality quietly rots while every dashboard stays green. So I monitor feature <em>age</em> with the same seriousness as latency, and I say that unprompted.</p>
+
+<p><strong>The fallback:</strong> if the scorer misses its deadline or its error rate spikes, the feed service sorts candidates by time and ships that (the degradation menu from Chapter 2.7). Users get a slightly dumber feed, not a spinner. I track <code>chrono_served_rate</code> as a first-class metric: near zero normally, and its climb is my early warning — often before the scorer team's own alerts fire. After scoring, <strong>diversity rules</strong> re-rank: no five-in-a-row from one author, mix media types, and a freshness floor so the model's love of proven old bangers never fully buries today's posts.</p>
+
+<div class="box story"><div class="box-tag">War story — Instagram</div>
+<p>Ranking a feed is as much a product rollout problem as a systems one, and Instagram's 2016 switch is the documented proof. Until then the feed was strictly reverse-chronological. In March 2016 Instagram announced it would reorder by relevance, publishing the motivating number: people were missing, on average, 70 percent of the posts in their feed — including about half the posts from their closest connections. The backlash was immediate and loud: users organized around keeping the chronological feed, and celebrities and businesses panic-posted "turn on notifications for our account" for weeks, afraid the algorithm would bury them. Instagram rolled it out anyway — gradually, cohort by cohort, through 2016, measuring as it went. Two years later it reported that ranked feeds had users seeing 90 percent of posts from friends, up from around 50. And in 2022, after years of user and even regulatory pressure, Instagram added chronological options back ("Following" and "Favorites") alongside the ranked default. Every beat of that story maps to a system decision: gradual rollout behind cohorts, guardrail metrics, and keeping the chronological path alive — which happens to be exactly the fallback path your scorer outage needs anyway.</p>
+</div>
+
+<h2>Deep dive 3: counts, cursors, and cold starts</h2>
+
+<p><strong>Like counts</strong> are their own scaling problem, because likes dwarf posts: 100M posts a day might collect a billion likes — 12K/sec average, with vicious spikes when something goes viral, all aimed at a single post's counter — a textbook hot row (Chapter 2.6). So counts live in a dedicated counter service: increments land on a queue or in sharded in-memory counters, get aggregated, and flush to durable storage in batches. Reads come from a cache that's a few seconds stale. The contract is <strong>approximate now, exact eventually</strong> — and the product design covers for it beautifully: a viral post displays "1.2M likes," a rounding that hides more drift than the counter service will ever produce. Meanwhile the one number a user <em>will</em> fact-check — whether their own like registered — is handled by the client bumping the count optimistically the instant they tap. That pairing — eventual consistency in the backend, read-your-own-writes faked at the edge — is a Product Architecture answer, and interviewers notice it.</p>
+
+<p><strong>Pagination</strong> has a trap: the ranked order changes between requests (new posts arrive, scores shift), so "give me items 26–50" is meaningless — page two would overlap page one. My fix: the first feed request materializes a ranked session snapshot — the scored ID list, stored server-side with a short TTL — and the cursor encodes (session, position). Paging walks the frozen snapshot: stable, duplicate-free, cheap. A pull-to-refresh starts a fresh session, and the <strong>seen store</strong> — a small per-user set of recently served post IDs, TTL of a few days — keeps the new session from re-serving what the old one already showed. A few hundred IDs per user; at this scale it's Redis pocket change, and it's the honest answer to "no duplicates across sessions."</p>
+
+<p><strong>Cold starts</strong>, quickly, since our pull path already does the heavy lifting: a brand-new user with zero follows gets a fallback candidate source (onboarding interests, popular content) — the system design just needs that pluggable source to exist. A new follow backfills the followee's recent posts into your list, or lazily lets the next read's merge find them. A returning dormant user's evicted list rebuilds by pull — one slower first page, then back on the fast path.</p>
+
+<h2>Failure modes and operations</h2>
+
+<p>Now the section that separates "good design" from "design I'd carry a pager for" — raised before the interviewer asks.</p>
+
+<ul>
+<li><strong>Fanout queue backlog.</strong> A worker bug or a Redis shard brownout and the queue is 30 minutes deep. Because the queue is durable and the post was persisted before the 201, posts are <strong>delayed, never lost</strong> — the user-visible symptom is your followers seeing your post late, and creators noticing "reach" dip. What the author never sees is their own post missing, because the read path injects your own outbox — read-your-writes, guaranteed by construction, no matter how sick fanout is. The metric is <strong>fanout lag</strong>: now minus the event's creation time, measured at dequeue. Alert in minutes; under backpressure, shed dormant-follower pushes first — they were optional anyway.</li>
+<li><strong>Scorer down.</strong> 100% chronological feeds. Product quality dips, availability doesn't. <code>chrono_served_rate</code> pins to 1.0, engagement guardrails sag, and model rollback is a config flag — because every model change ships behind a flag to 1% first, shadow-scored before it ever ranks a real feed.</li>
+<li><strong>Feed cache shard dies.</strong> A slice of users falls to the pull path: their next read is slow-ish, the rebuilt list is written back, done. No data lost — the cache was always a copy. I'd run Redis with a replica per shard anyway, to make this a blip instead of a regional p99 story.</li>
+<li><strong>Counter drift.</strong> Aggregation bugs accumulate silently, so a periodic reconciliation job recomputes counters from the durable like-event log and fixes drift. Approximate now, exact eventually — the "eventually" needs a mechanism, not a hope.</li>
+<li><strong>The viral post.</strong> One post read by 100M people in an hour: the post cache and CDN absorb it (immutable bodies cache perfectly), and the counter service's sharded increments absorb the like storm. The feed system itself barely notices — which is the design working.</li>
+</ul>
+
+<p>The dashboard, in priority order: feed p99 (the SLO, Chapter 2.8), feed-list cache hit rate (target ~99%; a slide means the pull path is quietly becoming the main path), fanout lag p99, <code>chrono_served_rate</code>, scorer p99, feature age, counter queue depth. <strong>At 10x:</strong> fanout scales linearly (partitions and workers — embarrassingly parallel), the feed cache goes from 2.4 TB to 24 TB of RAM (more shards behind consistent hashing — though I'd revisit entries-per-list before buying that RAM), and the real money pit is the scorer fleet, where the lever is candidate count: score 200 instead of 500 and the bill more than halves, for a quality loss the guardrails can measure. I might also drop the celebrity threshold, trading more read-time merging for less write amplification. Knowing which knob to turn first is the 10x answer.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>How Meta actually probes this design once it's on the board — every one of these has a committed answer earlier in this chapter:</p>
+<ul>
+<li>"Your fanout queue is 30 minutes behind. What does each kind of user see, and what do you shed first?"</li>
+<li>"Why not pull for everyone and skip fanout entirely?" — they want the 80M-outbox-reads-per-second math, not a vibe.</li>
+<li>"Why 1 million followers? Defend the number." — they're grading whether the threshold connects to fanout time, account population, and merge cost.</li>
+<li>"The new ranking model is 2% better on engagement but 30% slower. Ship it?" — a latency-budget question wearing an ML costume.</li>
+<li>"What exactly is inside your cursor, and what happens when a user pages while new posts arrive?"</li>
+<li>"A user follows 4,000 accounts, twelve of them celebrities. Walk the read path with numbers."</li>
+</ul>
+</div>
+
+<h2>The trade-offs I committed to</h2>
+
+<table>
+<thead><tr><th>Choice</th><th>Why</th><th>The cost I accepted</th></tr></thead>
+<tbody>
+<tr><td>Hybrid fanout, threshold 1M followers</td><td>Pure push melts on celebrities; pure pull melts on 80M outbox reads/sec</td><td>Two code paths, and a read-time merge that must stay fast forever</td></tr>
+<tr><td>Feed cache stores post IDs only</td><td>2.4 TB of RAM instead of hundreds; bodies cached once, not per-follower</td><td>Every read pays a hydration step — mitigated by the post cache</td></tr>
+<tr><td>Ranked feed with chronological fallback</td><td>Relevance drives the product; availability beats cleverness</td><td>Occasional "dumb" feeds, and a scorer dependency to budget and monitor</td></tr>
+<tr><td>Eventually consistent counters</td><td>A billion likes/day can't be synchronous row updates</td><td>Counts lag seconds and drift until reconciled; hidden by display rounding + optimistic client</td></tr>
+<tr><td>Session-snapshot cursors + seen store</td><td>Ranked order shifts between requests; offsets would duplicate</td><td>Server-side session state with a TTL, and a per-user seen set to store</td></tr>
+<tr><td>Skip fanout to 30-day-inactive followers</td><td>Cuts fanout writes massively for followers who won't look</td><td>Returning users pay one slow pull-rebuilt page</td></tr>
+<tr><td>Media via CDN, uploaded direct to blob storage</td><td>Feed servers never touch image bytes (Chapter 1.7)</td><td>An upload handshake in the API, and cache-invalidation lives with the CDN</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c05-f1">
+<p class="fey-prompt">Explain to a junior engineer, in five or six sentences, why the news feed uses push for most accounts but pull for celebrities — and why neither alone works.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Feeds are read about fifty times more often than posts are written, so we do the work at write time: when you post, we push your post's ID into each follower's cached feed list, making a feed read a single cheap lookup. That breaks for celebrities — one post from an account with 100 million followers would mean 100 million writes, tying up the whole fanout system for minutes over one tap. Doing it the other way for everyone — building each feed at read time from every followed account's recent posts — breaks too, because 200K feed reads per second times hundreds of followed accounts is tens of millions of repeated lookups every second. So we split by follower count: under a million followers, push; over it, we skip fanout and just stitch those few accounts' recent posts into your feed when you open the app. It works because almost nobody is a celebrity, and each of us follows only a handful of them — pushing is cheap for the many, pulling is cheap for the few.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Now add Stories: 24-hour-expiry posts with a per-viewer "watched" state, shown in a tray above the feed. Which parts of this chapter's machinery do you reuse, and what's genuinely new?</p></div>
+<details><summary>Answer</summary><p>Reuse almost everything: media through the same blob/CDN pipeline, the outbox pattern (a story is a post with a TTL), and the celebrity split still applies. The tray is easier than the feed — it lists <em>authors</em> with active stories, not items, so pull works fine: fetch your follow list's active-story flags, heavily cached. Genuinely new: expiry (TTL on storage and caches, plus a sweep for the durable copy) and watched-state — like the seen store but per-story-per-viewer and product-visible (the ring dims), so it must be read-your-writes for the viewer: a small write on every view, at feed-read scale. That write volume is the sneaky cost to call out.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>World Cup final. An account with 500M followers posts at the final whistle, at the same moment overall posting spikes 10x. Walk both paths and name what melts first, second, and third.</p></div>
+<details><summary>Answer</summary><p>The celebrity post never touches fanout — it lands in the author's outbox and is done; readers pull it at read time, and that outbox becomes the hottest key on the planet, absorbed by its cache and replicas. What melts first is the <em>read</em> side: everyone opens the app at once, so feed QPS spikes well past 200K — the scorer fleet hits its budget ceiling first, and <code>chrono_served_rate</code> climbing is the designed response, not a failure. Second: the counter service, as tens of millions of likes hit one post ID — sharded counters and display rounding are carrying the day. Third: fanout lag for <em>ordinary</em> posts, because the 10x posting spike multiplies through average follower counts; the queue absorbs it and posts arrive late, shedding dormant-follower pushes to catch up. Nothing is lost anywhere — the design bends in exactly the three places it was built to bend.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: a regulator (or a product pivot) demands a strictly chronological, complete feed — every post from every followed account, in order, no ranking. What gets simpler? What gets harder?</p></div>
+<details><summary>Answer</summary><p>Simpler: the scorer, feature store, and diversity layer disappear — with them the 50 ms budget, freshness monitoring, and the fallback (chrono <em>is</em> the feed now). Pagination eases too: time order pages naturally by timestamp cursor, no session snapshot. Harder, and this surprises people: <em>completeness</em> becomes testable. The ranked feed quietly forgave a lost fanout write — the scorer just showed something else, and nobody could prove a post was missing. Now every fanout write matters, trimming lists at 300 entries breaks the promise for prolific-follow users (you must page into outboxes past the cache), and there's no ranking layer to cap candidates. Ranking, it turns out, was also an error-hiding blanket.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimation drill: 1B daily actives, feed lists of 800 entries, 24 bytes per entry. How much feed-cache RAM, roughly how many shards, and what else grows that people forget?</p></div>
+<details><summary>Answer</summary><p>1B × 800 × 24 bytes ≈ 19.2 TB — call it 20 TB. At ~100 GB usable per node, ~200 shards before replicas, ~400 with one replica each: a serious fleet with real consistent-hashing weight (Chapter 1.9). The forgotten growers: the seen store (1B users × hundreds of IDs — the same order of magnitude as the feed lists), session snapshots, and fanout throughput, which scales with posts × average followers — several million list-writes per second at peak. Worth saying before buying 200 nodes: challenge the 800. If 300 entries served the product fine, that single number is 60% of the fleet.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Add "delete post." The post may already sit in up to 100M feed caches, session snapshots, and client caches. Design deletion, and say what you explicitly won't do.</p></div>
+<details><summary>Answer</summary><p>What I won't do: chase the copies. Fanning out a delete to 100M lists has the exact celebrity-write problem we built the hybrid to avoid, and it still can't reach client caches. Instead: tombstone the post in the posts DB (the single source of truth), purge the post cache entry, and let <em>hydration</em> enforce it — every read path already turns IDs into bodies through the post store, so a tombstoned ID hydrates to nothing and is silently dropped from the page. Stale IDs then age out of feed lists via trim and TTL on their own. Client caches get the same treatment on next refresh; a truly urgent takedown can also purge CDN media. The principle worth saying out loud: with many cheap copies of a reference, enforce deletion at the one choke point every read passes through, not at every copy.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>The feed is ~50 reads per write, so you precompute at write time — fanout-on-write turns a feed read into one cache lookup.</li>
+<li>The follow graph is a power law, and the celebrity tail breaks pure push: one 100M-follower post is 100 million writes, which is the number that forces the hybrid.</li>
+<li>Commit to a threshold and defend it with curves: push under ~1M followers, pull-and-merge above, because mega-accounts are rare and each user follows few of them.</li>
+<li>Store post IDs in feed caches, never bodies — 2.4 TB instead of hundreds — and hydrate pages with parallel fetches that degrade field-by-field instead of failing whole.</li>
+<li>Treat the ranking model as a service with a 50 ms budget, monitored feature freshness, and a chronological fallback — the feed gets dumber before it ever gets down.</li>
+<li>Counts are approximate now and exact eventually via a sharded counter service, while the client fakes read-your-writes for the one number users actually check: their own like.</li>
+<li>Ranked feeds break offset pagination — snapshot the ranked list per session, page by cursor, and keep a small seen store so sessions don't repeat each other.</li>
+<li>Fanout backlog means posts are late, never lost — and the author still sees their own post, because the read path injects their outbox by construction.</li>
+</ul>
+</div>

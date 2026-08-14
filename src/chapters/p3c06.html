@@ -1,0 +1,363 @@
+<p>Friday, 11pm. A stadium concert lets out and eight thousand people reach for their phones at once. Two riders — Asha and Ben — tap "Request" within the same 200 milliseconds. The nearest driver, Dev, idles two streets away. Two separate matching servers, each handling one request, query the map and find the same answer: Dev. Both send him the trip. Dev's phone shows one; the other rider watches a car icon drive toward them, then vanish. "Driver cancelled." One-star review, refund ticket, a rider who reinstalls a competitor's app.</p>
+
+<p>Now the interview version. The interviewer says: <em>"Design Uber — rider requests a ride, we find a nearby driver, they take the trip."</em> Most candidates hear a geography problem and spend forty minutes on maps. The geography matters — you do need to find nearby drivers in milliseconds out of a million moving dots — but it's the warm-up act. The question was invented to probe the moment above: <strong>two riders competing for one driver, and a system that must never give him to both</strong>. That's a concurrency problem wearing a geography costume.</p>
+
+<p>Let's walk it the way an E5 candidate should: numbers first, because one number in this problem is so violent it dictates half the architecture before we've drawn a single box.</p>
+
+<h2>Requirements: shrink it, then put numbers on it</h2>
+
+<p>"I'll scope to the core marketplace loop: rider requests, system finds nearby drivers, ranks them, matches exactly one, driver accepts, we track the trip to completion — plus a lightweight ETA and a touch of surge, since both fall out of the same data. Out of scope: payments internals, turn-by-turn routing, pool rides, food delivery — fair?"</p>
+
+<p><strong>Functional:</strong></p>
+<ul>
+<li>Driver app reports location continuously while online.</li>
+<li>Rider requests a ride; system finds nearby available drivers and offers the trip to the best one.</li>
+<li>Driver accepts or declines within a short window; declines cascade to the next candidate.</li>
+<li>Trip is tracked through pickup, ride, and completion.</li>
+<li>Rider sees an ETA before and after matching; prices can surge per area.</li>
+</ul>
+
+<p><strong>Non-functional — with numbers I'll defend:</strong></p>
+<ul>
+<li><strong>Scale:</strong> 1 million drivers online concurrently at peak, 20 million rides a day.</li>
+<li><strong>Freshness:</strong> a driver's known position is never staler than ~8 seconds (two missed pings).</li>
+<li><strong>Latency:</strong> rider sees "finding your driver" resolve to a matched driver in under 15 seconds typically; the nearby-driver query itself must run in tens of milliseconds.</li>
+<li><strong>Correctness:</strong> a driver is never dispatched to two riders at once — the non-negotiable. A slow match annoys; a double-dispatch breaks trust on both sides of the marketplace.</li>
+<li><strong>Availability over consistency for locations; consistency over availability for trips.</strong> A slightly stale driver dot is fine. A lost trip that a rider is sitting inside is not.</li>
+</ul>
+
+<p>That last bullet is the thesis of the whole design, and I'll keep returning to it: this system has two kinds of data with opposite personalities.</p>
+
+<h2>Estimation: the number that forbids a database</h2>
+
+<p>Driver location pings are the firehose. 1M online drivers, one ping every 4 seconds:</p>
+
+<p><code>1,000,000 drivers ÷ 4s = 250,000 location writes per second, sustained.</code></p>
+
+<p>Give each ping a durable database write and you're provisioning a serious sharded cluster to store values that are <em>worthless in 4 seconds</em>, when the next ping replaces them. Meanwhile the data that actually matters is tiny: latest position per driver is maybe 100 bytes (id, lat, lon, cell, status, heading, timestamp). One million drivers × 100 bytes = <strong>100 MB. The entire live map of every Uber driver on Earth fits in the RAM of a laptop.</strong></p>
+
+<p>Now the other side. 20M rides/day ≈ 230 requests per second on average — a few thousand at peak, clustered by city rush hours. That's <em>small</em>. A single Postgres could handle the trip writes for the whole planet.</p>
+
+<p>So the estimation hands us the architecture split on a plate:</p>
+<ul>
+<li><strong>Locations:</strong> torrential, tiny, disposable → live in sharded memory, never touch a durable database on the hot path.</li>
+<li><strong>Trips:</strong> rare, precious, tied to money → durable, transactional, boring storage.</li>
+</ul>
+
+<p>Matching's challenge is not throughput at 230/sec. It's correctness under concurrency. That's where the deep-dive time goes.</p>
+
+<h2>API and data model — quickly</h2>
+
+<ul>
+<li><code>POST /rides</code> — pickup, destination; an idempotency key header, because a rider on flaky stadium wifi will retry and must not create two requests (Part 2's idempotency chapter, applied).</li>
+<li><code>GET /rides/{id}</code> — state + driver position for live tracking.</li>
+<li><code>POST /drivers/location</code> — batched pings over a persistent connection.</li>
+<li><code>POST /offers/{id}/accept</code> and <code>/decline</code> — driver's response, carrying the offer token (this token becomes load-bearing later).</li>
+</ul>
+
+<p>Durable data (Postgres): <code>trips</code> (id, rider_id, driver_id, state, pickup, destination, timestamps, surge multiplier) plus riders and drivers. Ephemeral data (sharded memory): per-driver state <code>{driver_id → lat, lon, cell, status, updated_at}</code> and per-cell sets <code>{cell → set of available driver_ids}</code>. Location <em>history</em> goes to a stream — we'll get there.</p>
+
+<h2>High-level design: two machines glued in the middle</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Uber high-level architecture: ping ingestion into an in-memory geo index, and a rider request flow through trip, matching, and ETA services">
+  <rect class="dg-node" x="10" y="20" width="105" height="46" rx="8"/>
+  <text class="dg-txt" x="22" y="40">Driver app</text>
+  <text class="dg-txt-s" x="22" y="56">ping / 4s</text>
+  <rect class="dg-node" x="160" y="20" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="172" y="40">Ping gateway</text>
+  <text class="dg-txt-s" x="172" y="56">batches pings</text>
+  <rect class="dg-node" x="325" y="20" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="337" y="40">Location svc</text>
+  <text class="dg-txt-s" x="337" y="56">computes H3 cell</text>
+  <rect class="dg-node-alt" x="495" y="12" width="215" height="62" rx="8"/>
+  <text class="dg-txt" x="510" y="36">Geo index (memory)</text>
+  <text class="dg-txt-s" x="510" y="53">cell → driver set, sharded</text>
+  <text class="dg-txt-s" x="510" y="67">+ driver → state, CAS here</text>
+  <line class="dg-edge" x1="115" y1="43" x2="160" y2="43" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="280" y1="43" x2="325" y2="43" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="445" y1="43" x2="495" y2="43" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="180" y="110" width="110" height="42" rx="8"/>
+  <text class="dg-txt" x="192" y="129">Kafka</text>
+  <text class="dg-txt-s" x="192" y="145">ping history</text>
+  <rect class="dg-node" x="10" y="110" width="140" height="42" rx="8"/>
+  <text class="dg-txt" x="22" y="129">Batch store</text>
+  <text class="dg-txt-s" x="22" y="145">analytics, ETA</text>
+  <line class="dg-edge" x1="355" y1="66" x2="272" y2="110" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="180" y1="131" x2="150" y2="131" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="10" y="215" width="105" height="46" rx="8"/>
+  <text class="dg-txt" x="22" y="235">Rider app</text>
+  <text class="dg-txt-s" x="22" y="251">POST /rides</text>
+  <rect class="dg-node" x="160" y="215" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="172" y="235">Trip service</text>
+  <text class="dg-txt-s" x="172" y="251">Postgres, durable</text>
+  <rect class="dg-node-alt" x="325" y="215" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="337" y="235">Matching svc</text>
+  <text class="dg-txt-s" x="337" y="251">rank + reserve</text>
+  <rect class="dg-node" x="495" y="215" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="507" y="235">ETA service</text>
+  <text class="dg-txt-s" x="507" y="251">road-network ETA</text>
+  <line class="dg-edge" x1="115" y1="238" x2="160" y2="238" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="280" y1="238" x2="325" y2="238" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="445" y1="238" x2="495" y2="238" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="400" y1="215" x2="560" y2="74" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="480" y="165">k-ring query + CAS reserve</text>
+  <line class="dg-edge" x1="360" y1="261" x2="70" y2="300"/>
+  <text class="dg-txt-s" x="80" y="310">offer push to driver app (15s window)</text>
+</svg>
+<figcaption>Top: the location firehose stays in memory, with history tee'd to Kafka. Bottom: the rare, precious ride request goes through durable trip state, then matching queries and reserves in the geo index.</figcaption>
+</figure>
+
+<p><strong>Write path (locations):</strong> the driver app sends a ping every 4 seconds over a persistent connection. The gateway batches; the location service computes the driver's map cell and updates two in-memory structures on a sharded cluster: the driver's own state record, and the set of driver ids in that cell. Every ping is also appended to Kafka for the analytics world — the hot path never waits for that.</p>
+
+<p><strong>Read/match path (rides):</strong> the request creates a durable trip row first (state <code>REQUESTED</code>) — if everything downstream dies, we still know this rider is owed a car. Then matching: query the geo index for candidates near the pickup, rank by road ETA, <em>reserve</em> the top candidate atomically, push the offer, and on accept write the durable transition. Decline or timeout releases the reservation and cascades to candidate #2.</p>
+
+<p>Now the two deep dives that decide the interview: how the map query works, and how the reservation can't be won twice.</p>
+
+<h2>Deep dive 1: the geo index — finding 30 drivers among a million, fast</h2>
+
+<p>The naive approach: store <code>lat</code> and <code>lon</code> columns, index them, query a bounding box. Here's why the database B-tree betrays you. A B-tree is a one-dimensional sorted list. Index on <code>(lat, lon)</code> and it sorts all drivers by latitude first. Your query — "lat between 19.05 and 19.09 AND lon between 72.82 and 72.86" — uses the index for latitude only, then <em>scans every driver on Earth inside that latitude band</em>: a 4-kilometre-tall ribbon wrapped around the entire planet, through Mumbai, Jeddah, and Mexico City. Two dimensions folded into one lose their neighborliness. And the write side is worse: 250K position updates per second churning a durable B-tree. Wrong tool twice over.</p>
+
+<p>The standard fix is to chop the world into named cells and index by cell name. The question that separates candidates is <em>which cells</em>.</p>
+
+<h3>Geohash, and where it creaks</h3>
+
+<p><strong>Geohash</strong> interleaves the bits of latitude and longitude into one string (like <code>te7ud</code>); longer strings mean smaller rectangles, and cells sharing a prefix are near each other. Simple, and it works. But it has three warts. The reverse isn't guaranteed: two points a metre apart can straddle a boundary and share almost no prefix, so nearby queries must always fetch neighbor cells — and computing a rectangle's 8 neighbors is fiddly. The rectangles aren't uniform: their real-world width shrinks away from the equator, so a cell in Oslo covers less area than one in Singapore — annoying when cell statistics feed pricing. And square neighbors are unequal: 4 edge-neighbors close, 4 corner-neighbors ~40% farther, biasing any "look one ring out" logic.</p>
+
+<h3>H3: hexagons, on purpose</h3>
+
+<p>Uber built and open-sourced <strong>H3</strong>, a hierarchical hexagonal grid. Hexagons fix the square grid's warts: every hexagon has 6 neighbors, all sharing a full edge, all with centers the <em>same distance</em> away; cells at a given resolution are near-uniform in area anywhere on the planet. H3 has 16 resolutions; at resolution 8 a cell averages ~0.74 km² (edge ~460 m), at 9 ~0.1 km² (edge ~175 m). I'll commit to <strong>resolution 9 for the driver index</strong> — a cell holds tens of drivers in a dense city, not thousands — and a coarser resolution for surge statistics. Honest costs: hexagons don't nest perfectly into parents (cross-resolution containment is approximate), and the grid needs 12 pentagons to wrap a sphere — parked over oceans, ignorable here.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Cell indexing is how you already think about "near me": postal codes. To find pharmacies near your flat you don't sort every pharmacy on Earth by latitude — you check your PIN code, plus the adjacent PIN codes in case you live on the boundary. H3 is a postal system where the government drew every district as an identical honeycomb cell, so "adjacent districts" is always exactly six, in every city, at every scale. Where the analogy breaks: real postal codes follow roads and rivers; H3 cells ignore them — which is exactly why raw cell distance can lie, and why we'll re-rank by road ETA in a moment.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — why Uber drew hexagons</div>
+<p>Uber open-sourced H3 in 2018, and the engineering blog is refreshingly blunt about the motivation: it wasn't matching, it was <em>marketplace math</em>. Uber computes supply, demand, and surge pricing per cell across whole cities, and those per-cell numbers constantly get smoothed with their neighbors' numbers. On a square grid, smoothing is biased — diagonal neighbors are farther than edge neighbors, so the same algorithm behaves differently along different compass directions. On triangles it's worse (three neighbor distances). Hexagons are the only regular tiling where every neighbor is equidistant, so a gradient of surge pricing spreads evenly in all directions. Uber accepted a real cost for that property — hexagons can't perfectly subdivide into child hexagons, so H3's hierarchy is approximate, unlike quadtree-style squares that nest exactly — and judged the trade worth it. Choosing a worse hierarchy to get better neighbors is a lovely example of knowing which property your workload actually leans on. H3 now runs far beyond Uber, in mapping and analytics stacks industry-wide.</p>
+</div>
+
+<h3>The index itself, and the nearby query</h3>
+
+<p>The structure is almost embarrassingly simple: a hash map <code>cell_id → set(driver_ids)</code> plus <code>driver_id → state</code>, sharded across a memory cluster (Redis or a custom store) by consistent hashing on the key — Part 1's sharding chapter, verbatim. A ping updates in place: same cell, just overwrite lat/lon/timestamp in the driver's record — no set churn. Crossed a boundary? Remove from the old cell's set, add to the new one, atomically (a tiny Lua script on the shard). At res 9 a city driver crosses a cell about once a minute, so perhaps one ping in ten touches a set; the common case is free.</p>
+
+<p>The rider-side query: compute the pickup's cell, then fetch driver sets for that cell <strong>plus its k-ring of neighbors</strong> (k=1 is 7 cells; k=2 is 19). The ring is not optional: a rider near a cell edge may literally see a driver 80 metres away — across the line — while the nearest driver <em>in their own cell</em> is 400 metres the other way. Query only your own cell and you match the wrong car. If the ring comes back thin (3am, suburb), widen k until you have enough candidates or hit a radius cap.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="H3 k-ring query: rider near a cell boundary, nearest driver in the neighboring cell">
+  <polygon class="dg-edge" fill="none" points="410,150 385,193.3 335,193.3 310,150 335,106.7 385,106.7"/>
+  <polygon class="dg-edge" fill="none" points="410,63.4 385,106.7 335,106.7 310,63.4 335,20.1 385,20.1"/>
+  <polygon class="dg-edge" fill="none" points="410,236.6 385,279.9 335,279.9 310,236.6 335,193.3 385,193.3"/>
+  <polygon class="dg-edge" fill="none" points="335,106.7 310,150 260,150 235,106.7 260,63.4 310,63.4"/>
+  <polygon class="dg-edge" fill="none" points="335,193.3 310,236.6 260,236.6 235,193.3 260,150 310,150"/>
+  <polygon class="dg-edge" fill="none" points="485,106.7 460,150 410,150 385,106.7 410,63.4 460,63.4"/>
+  <polygon class="dg-edge" fill="none" points="485,193.3 460,236.6 410,236.6 385,193.3 410,150 460,150"/>
+  <circle class="dg-node-alt" cx="400" cy="140" r="7"/>
+  <text class="dg-txt-s" x="398" y="168">rider</text>
+  <circle class="dg-good" cx="428" cy="112" r="7"/>
+  <text class="dg-txt-s" x="440" y="100">driver A — nearest,</text>
+  <text class="dg-txt-s" x="440" y="114">next cell over</text>
+  <circle class="dg-node" cx="325" cy="172" r="7"/>
+  <text class="dg-txt-s" x="252" y="176">driver B — same</text>
+  <text class="dg-txt-s" x="252" y="190">cell, farther</text>
+  <text class="dg-txt" x="20" y="40">query = rider's cell</text>
+  <text class="dg-txt" x="20" y="60">+ k-ring(1) = 7 cells</text>
+  <text class="dg-txt-s" x="20" y="82">skip the ring and you</text>
+  <text class="dg-txt-s" x="20" y="96">match driver B, not A</text>
+  <text class="dg-txt-s" x="520" y="250">res 9: edge ≈ 175 m</text>
+</svg>
+<figcaption>Boundary correctness: the rider stands near a hex edge. Driver A is closest but lives in the neighboring cell — only the k-ring query finds him.</figcaption>
+</figure>
+
+<h3>Rank by road, not by crow</h3>
+
+<p>Straight-line ("crow-flies") distance lies in cities. A driver 200 metres away across a river or a divided highway can be 12 driving minutes away; a driver 1.5 km along your same road is 3. So the ~20 candidates from the k-ring go to an <strong>ETA service</strong> that answers "driving minutes to this pickup" from the road network and live traffic. I treat it as a black box with a contract: a batch of 20 pairs, answered in under ~100 ms, mildly stale traffic acceptable. It's genuinely a separate system — map data, routing graphs, ML on traffic — and saying "separate problem, here's the interface and my latency budget" is the right scoping move, not a dodge. The pattern: geo index narrows a million to twenty cheaply; ETA spends real compute on only those twenty. Filter cheap, rank expensive, in that order.</p>
+
+<h2>Deep dive 2: the reservation — one driver, one rider, atomically</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Ranking produced "Dev is the best driver for Asha." Meanwhile another matcher concluded "Dev is the best driver for Ben." Both conclusions are correct — that's the trap. Read-then-act is a race: both matchers <em>read</em> Dev as available, then both <em>act</em> on that stale truth. No amount of clever querying fixes this, because the query and the dispatch are separate steps with a gap between them, and at concert-surge concurrency, something always lands in the gap. The fix is the same shape as every race fix in this book: make check-and-claim a <strong>single atomic operation</strong> at one authoritative place — a per-driver compare-and-set, <code>available → reserved</code>, that exactly one matcher can win. Whoever loses doesn't retry Dev; they take their ranked list and move to candidate #2. The interview is won or lost on whether you walk this race concretely, not on whether you say the word "lock."</p>
+</div>
+
+<p>Mechanically, Dev's state record lives on exactly one shard of the memory cluster — the single authority for Dev. The reservation is one atomic operation there: "if status is <code>available</code>, set <code>reserved</code>, owner = this match attempt, expiring in 20 seconds" — in Redis terms <code>SET driver:dev reserved NX PX 20000</code>, or a small Lua script (atomic because the shard runs scripts one at a time). Two matchers race; the shard serializes them; one gets true, one gets false. The loser moves down its candidate list — no waiting, no retry storm on the same driver.</p>
+
+<p>Three details make this production-grade rather than whiteboard-grade:</p>
+
+<ul>
+<li><strong>The TTL is the crash insurance.</strong> If the matching server dies right after reserving Dev, nobody is left holding a lock: twenty seconds later the reservation evaporates and Dev is matchable again. Never take a lock without an expiry.</li>
+<li><strong>TTL &gt; offer window, slightly.</strong> Fifteen seconds to accept, twenty of reservation. The reservation must outlive the decision it protects, or Dev becomes matchable while still staring at Asha's offer — the race reopens through the back door.</li>
+<li><strong>The accept carries a fencing token.</strong> The reservation stores a match id; the offer carries it; the accept must present it. Now the ugly interleaving is safe: Dev's accept is delayed 25 seconds by bad signal, the TTL expired at 20, another matcher reserved him for Ben at 21 — the stale accept arrives bearing a token that no longer matches, and is rejected cleanly instead of double-booking him. Part 2's fencing chapter, earning its keep.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 310" role="img" aria-label="Reservation race timeline: two matchers CAS the same driver; one wins, the loser cascades to the next candidate">
+  <rect class="dg-node" x="40" y="10" width="150" height="36" rx="8"/>
+  <text class="dg-txt" x="52" y="33">Matcher (Asha)</text>
+  <rect class="dg-node-alt" x="285" y="10" width="150" height="36" rx="8"/>
+  <text class="dg-txt" x="297" y="33">Dev's shard</text>
+  <rect class="dg-node" x="530" y="10" width="150" height="36" rx="8"/>
+  <text class="dg-txt" x="542" y="33">Matcher (Ben)</text>
+  <line class="dg-edge" stroke-dasharray="4 4" x1="115" y1="46" x2="115" y2="295"/>
+  <line class="dg-edge" stroke-dasharray="4 4" x1="360" y1="46" x2="360" y2="295"/>
+  <line class="dg-edge" stroke-dasharray="4 4" x1="605" y1="46" x2="605" y2="295"/>
+  <line class="dg-edge" x1="115" y1="80" x2="360" y2="80" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="130" y="72">CAS: available→reserved, ttl 20s, token m1</text>
+  <line class="dg-edge" x1="605" y1="105" x2="360" y2="105" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="415" y="97">CAS: reserve for Ben</text>
+  <text class="dg-txt-s dg-good" x="250" y="130">→ Asha wins: OK</text>
+  <text class="dg-txt-s dg-bad" x="392" y="130">→ Ben: FAIL, already reserved</text>
+  <line class="dg-edge" x1="605" y1="155" x2="680" y2="155" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="510" y="147">try candidate #2</text>
+  <line class="dg-edge" x1="115" y1="195" x2="60" y2="195"/>
+  <text class="dg-txt-s" x="130" y="188">offer (token m1) → Dev's phone, 15s window</text>
+  <line class="dg-edge" x1="115" y1="255" x2="360" y2="255" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="130" y="247">accept(m1): token matches → trip ACCEPTED (durable)</text>
+  <text class="dg-txt-s" x="130" y="285">on decline / 15s timeout: release + cascade to next candidate</text>
+</svg>
+<figcaption>The race, serialized: Dev's shard executes both compare-and-sets in some order; exactly one succeeds. The loser never retries Dev — it cascades down its own candidate list.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>An old hotel front desk has one wooden key rack — one hook per room. Two clerks can both <em>believe</em> room 14 is free (they both glanced at the rack a second ago), but only one hand physically grabs the key; the other clerk's hand closes on an empty hook, shrugs, and reaches for room 15's key. Nobody compares notes, nobody argues — the rack is the single authority and grabbing is atomic. The 20-second TTL is the house rule that if a clerk takes a key and wanders off without checking anyone in, the manager puts the key back on the hook. Where the analogy breaks: our "rack" is sharded across machines — but each key still lives on exactly one hook on exactly one shard, which is the property that makes the grab atomic.</p>
+</div>
+
+<p>Why not do reservations as row locks in the trips database? Because the reservation spans human decision time — 15 seconds of a driver thinking — and pinning row locks across that, thousands of times a minute in a hot city, turns a database into a queue. The database records <em>outcomes</em>; the memory tier arbitrates <em>contention</em>. One nuance said aloud: Redis-style reservations are best-effort under failover — a dying shard can drop one. That's acceptable, because the blast radius is a duplicate <em>offer</em> (a driver sees two requests, accepts one; the fencing check still prevents a double <em>trip</em>). The durable transition is the true commit point. We're not building a bank on Redis; we're building a turnstile in front of a bank.</p>
+
+<h2>Deep dive 3: from match to money — the trip state machine</h2>
+
+<p>Everything so far was allowed to be fast and forgetful. That budget ends the moment Dev taps accept, because from here on, the system's memory <em>is</em> the business: who is driving whom, what will be charged, what the insurance covers. The trip is a durable state machine in Postgres:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Trip state machine from requested to completed, with cancellation paths and the ephemeral matching scratchpad">
+  <rect class="dg-zone" x="150" y="20" width="205" height="52" rx="8"/>
+  <text class="dg-txt-s" x="162" y="42">matching scratch: candidates,</text>
+  <text class="dg-txt-s" x="162" y="58">reservations — memory + TTL only</text>
+  <rect class="dg-node" x="10" y="110" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="22" y="130">REQUESTED</text>
+  <text class="dg-txt-s" x="22" y="146">durable row</text>
+  <rect class="dg-node" x="160" y="110" width="110" height="46" rx="8"/>
+  <text class="dg-txt" x="172" y="130">OFFERED</text>
+  <text class="dg-txt-s" x="172" y="146">token m1</text>
+  <rect class="dg-node-alt" x="300" y="110" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="312" y="130">ACCEPTED</text>
+  <text class="dg-txt-s" x="312" y="146">driver en route</text>
+  <rect class="dg-node" x="450" y="110" width="110" height="46" rx="8"/>
+  <text class="dg-txt" x="462" y="130">IN_TRIP</text>
+  <rect class="dg-good" x="590" y="110" width="120" height="46" rx="8"/>
+  <text class="dg-txt" x="602" y="130">COMPLETED</text>
+  <text class="dg-txt-s" x="602" y="146">→ payment</text>
+  <line class="dg-edge" x1="130" y1="133" x2="160" y2="133" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="270" y1="133" x2="300" y2="133" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="420" y1="133" x2="450" y2="133" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="560" y1="133" x2="590" y2="133" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="215" y1="110" x2="215" y2="72" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="225" y="95">decline/timeout: re-match</text>
+  <rect class="dg-bad" x="160" y="200" width="130" height="40" rx="8"/>
+  <text class="dg-txt" x="172" y="225">CANCELLED</text>
+  <line class="dg-edge" x1="70" y1="156" x2="180" y2="200" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="340" y1="156" x2="255" y2="200" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="350" y="185">rider or driver cancels</text>
+</svg>
+<figcaption>Ephemerality ends at money: matching scratch lives in memory with TTLs; every state from REQUESTED onward is a durable, idempotent transition.</figcaption>
+</figure>
+
+<p>Transitions are idempotent and validated ("accept is legal only from OFFERED with a matching token") so a retried accept or double-tapped cancel can't corrupt the story. If every candidate declines, the durable <code>REQUESTED</code> row lets us retry honestly or apologize honestly, instead of losing the rider's request into the void.</p>
+
+<p><strong>Location history</strong> rides the same split. The hot path keeps only "latest position"; every ping was also tee'd to Kafka, and consumers batch it into cheap storage. That history is where ETA models train, where "my driver took a weird route" support cases get answered, where safety features replay a trip. Streams glue the fast world to the thorough world (Part 2): the matcher never waits for analytics, and analytics never touches the matcher.</p>
+
+<p><strong>Surge</strong> falls out of data we already have. Per coarse hex cell, take the ratio of open requests to available drivers over a sliding window; it drives a price multiplier. Smooth it twice before it touches a price: over time (so one taxi-less minute doesn't spike fares) and over space (blend each cell with its six equidistant neighbors — the exact operation hexagons were chosen for), so surge is a gradient, not a cliff where crossing a street halves your fare. The multiplier is stamped onto the trip row at quote time — durable, because it's money.</p>
+
+<h2>Failure modes and operations — before you ask</h2>
+
+<p><strong>Matching server crashes mid-offer.</strong> The TTL releases Dev in 20 seconds; the trip row still says <code>OFFERED</code> with no accept, so a timeout sweep re-runs matching. Nothing human-visible except a slightly slower match.</p>
+
+<p><strong>A geo-index shard dies.</strong> That slice of drivers vanishes from the map — and reappears within one ping interval, because every driver re-announces themselves every 4 seconds. This is the elegant property of the design, worth saying explicitly in the interview: <strong>the geo index is a cache of the world, and the world keeps talking</strong>. No backups, no careful replication — the ping stream rebuilds it. Region failover works the same way: point driver connections at the surviving region and the map self-heals in seconds. Derived state that regenerates from its source is state you don't babysit.</p>
+
+<div class="box story"><div class="box-tag">War story — Uber's dispatch rewrite, and phones as a database</div>
+<p>In 2015, Uber's chief systems architect Matt Ranney gave a QCon talk on rebuilding the dispatch system ("DISCO") that is still one of the best public looks inside this problem. The geo index was sharded across dispatch nodes using Ringpop — an open-source library Uber built that combines SWIM gossip (nodes constantly whisper membership and health to each other) with consistent hashing, so any node could receive any request and forward it to the node owning that key; supply was indexed by geo cell (Google's S2 cells then — H3 came later). But the most striking idea in the talk was the failover story: rather than synchronously replicating active-trip state across datacenters, Uber leaned on a distributed store it already operated — <em>the driver phones</em>. The app kept an encrypted copy of its own trip state, refreshed with each server exchange; if a datacenter fell over, drivers reconnected to another one and their phones re-uploaded the trips the new datacenter had never seen. The fleet itself was the backup. It's the same principle as our self-healing geo index taken one level further: when the edge of your system holds the truth and keeps repeating it, the middle can afford to forget.</p>
+</div>
+
+<p><strong>What I'd monitor</strong> (the on-call dashboard, unprompted):</p>
+<ul>
+<li><strong>Match latency p50/p99</strong> — request to accepted, per city. The product's heartbeat.</li>
+<li><strong>Offer-acceptance rate</strong> — drivers declining more is a leading indicator that ranking, ETAs, or pricing went wrong before riders ever feel it.</li>
+<li><strong>Ping ingestion lag</strong> — a stale map silently degrades every match; alert when p99 position age exceeds ~10s.</li>
+<li><strong>Reservation-conflict rate</strong> — how often CAS loses. A spike means matchers piling onto the same few drivers: supply crunch, or a ranking bug herding them.</li>
+<li><strong>Unfilled-request rate per hex</strong> — the marketplace failing somewhere specific.</li>
+</ul>
+
+<p><strong>Rollout:</strong> matching changes ship in shadow mode first — the new ranker runs alongside the old, choices logged, not dispatched — then city by city behind a flag. Cities are natural blast-radius containers; no matching change should ever launch to the whole planet at once.</p>
+
+<p><strong>At 10x:</strong> 2.5M pings/sec. The index still fits in ~1 GB; the problem is throughput, so: more shards, harder batching at the gateway, and — the biggest lever — <strong>adaptive ping rates</strong>: a driver parked at the airport pings every 30 seconds, a downtown driver every 2. Matching QPS stays embarrassingly small, and per-city isolation contains the hot hours. The design bends without snapping.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This problem is a favorite because the geography lures candidates away from the concurrency. The interviewer lets you build the geo index, then aims every follow-up at the gap between "found a driver" and "dispatched a driver":</p>
+<ul>
+<li>"Two requests pick the same driver in the same millisecond. Walk me through exactly what happens — no hand-waving, message by message."</li>
+<li>"Your matching server dies after reserving a driver but before the offer goes out. Who unsticks that driver, and how long is he stuck?"</li>
+<li>"The driver's accept arrives after the offer timed out and he's been re-reserved for someone else. What stops the double-booking?"</li>
+<li>"Why is Redis losing a reservation acceptable here when losing a trip row isn't? Draw the line for me."</li>
+<li>"A whole region goes down. What's your recovery story for the driver map, and what does it cost you?"</li>
+</ul>
+<p>A passing senior answer walks the race concretely, names the atomic primitive and where it lives, knows why the TTL and token exist, points at the exact boundary where ephemeral becomes durable — and says the self-healing insight out loud instead of proposing to back up a cache.</p>
+</div>
+
+<h2>The choices, and their price tags</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Why</th><th>Cost accepted</th></tr></thead>
+<tbody>
+<tr><td>Latest locations in sharded memory, no durable write per ping</td><td>250K writes/sec of 4-second-lifetime data; whole dataset is ~100 MB</td><td>Shard loss blanks part of the map for a few seconds until pings repopulate</td></tr>
+<tr><td>H3 hexagons, res 9, over geohash</td><td>Uniform-area cells, six equidistant neighbors, clean k-ring queries and surge smoothing</td><td>Approximate parent/child nesting; a less familiar dependency than plain geohash strings</td></tr>
+<tr><td>Per-driver CAS reservation with TTL + fencing token</td><td>Makes check-and-claim atomic at one authority; crash-safe by expiry; stale accepts rejected</td><td>Best-effort under shard failover — rare duplicate offers possible (never duplicate trips)</td></tr>
+<tr><td>Sequential offer cascade (one driver at a time)</td><td>No driver ever races another for a trip he was shown; simple correctness story</td><td>Worst-case match latency stacks decline windows; mitigated by ranking well and short offer windows</td></tr>
+<tr><td>ETA service as a black box with a 100 ms batch budget</td><td>Road-network ranking without dragging routing into this design</td><td>Matching quality is hostage to another team's latency and accuracy SLOs</td></tr>
+<tr><td>Durable Postgres state machine from REQUESTED onward</td><td>Money, safety, and support all replay this record; transitions idempotent</td><td>An extra durable write before matching starts, on a path where 20 ms doesn't matter</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c06-f1">
+<p class="fey-prompt">A junior asks: "Why can't we just query the drivers table for the nearest driver and assign him? Why all this Redis-and-reservation machinery?" Explain in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Two separate reasons, and they're both about scale of a different kind. First, drivers report their positions 250,000 times a second, and each position is stale in four seconds — writing that firehose into a durable table buys you a huge database bill for data that's worthless almost immediately, when the entire live map fits in 100 MB of memory. Second, and more dangerous: "query then assign" is two steps, and in the gap between them another server can query the same driver and assign him too — now one driver has two riders. So we make claiming a driver a single atomic operation on the one shard that owns his record: check he's available and mark him reserved in one indivisible step, with a timeout so a crashed server can't leave him stuck. Whoever loses that race just moves to the next-best driver. The database still stores every trip durably — it's only the split-second contention that gets settled in memory.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Now add UberPool:</strong> riders can share a car, and the system should batch compatible riders heading the same direction. What breaks in your matching design, and what's the minimal structural change?</p></div>
+<details><summary>Answer</summary><p>Sequential greedy matching breaks: one rider's best assignment now depends on other riders' requests, so matching becomes an optimization over a <em>batch</em>. The structural change: hold requests in a short per-area window (a few seconds), then solve jointly — who shares which car, in what pickup order, under per-rider detour limits. The reservation machinery survives unchanged (the solver's output is still "claim these drivers atomically"), but latency is now traded for match quality. DoorDash's dispatch team has written about exactly this: slightly delaying dispatch to batch, and timing assignment against food prep, beat instant greedy assignment.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>10x the pings:</strong> your fleet grows to 10M concurrent drivers (2.5M pings/sec) but your memory-cluster budget only doubles. Rank your three biggest levers and justify the order.</p></div>
+<details><summary>Answer</summary><p>(1) Adaptive ping rates — the biggest lever, because most drivers at any moment are parked or cruising where 4-second freshness is waste; 30s parked / 8-10s highway cuts ingest 3-5x with near-zero matching impact. (2) Gateway batching and delta encoding — a batch of 50 pings costs little more than one, multiplying shard capacity without touching semantics. (3) Only then, more shards — it works (cells hash cleanly) but it's the expensive lever. Not on the list: durable pings or disk — the workload's nature didn't change, only its volume.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Requirement flip:</strong> product wants broadcast offers — show the request to the 5 nearest drivers at once, first to accept wins. Your CEO loves it ("faster matches!"). What does this do to your reservation design, and what do you warn about?</p></div>
+<details><summary>Answer</summary><p>The reservation relocates from before the offer to at the accept: all 5 accepts race, and the atomic CAS now arbitrates accepts — first valid token wins the trip, the other four get "already taken." Same primitive, new position, and it genuinely can cut latency. Warn about the human cost: four drivers did the work of noticing and tapping for nothing — repeated losses train drivers to ignore offers or insta-accept without judgment, degrading the marketplace. The trip row also becomes a contention point, fine at 5, not at 50. A product trade-off wearing an engineering costume; the senior answer quantifies both sides before implementing.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>What breaks if</strong> you index drivers at H3 resolution 6 (edge ~3.2 km) instead of 9? And at resolution 12 (edge ~9 m)? Name the failure mode of each extreme.</p></div>
+<details><summary>Answer</summary><p>Res 6: huge cells, so a downtown cell holds thousands of drivers — the "narrow cheaply" step stops narrowing, every query drags a giant set into ETA ranking, and busy cells become hot keys (one stadium cell = one shard eating a city's traffic). Res 12: cells smaller than a car, so nearly every ping crosses a boundary (constant set churn; update-in-place dies) and a pickup radius needs k-rings of hundreds of cells. Cell size trades query fan-out against candidate-set size and churn; res 8-9 sits where a cell holds tens of drivers and ~7-19 cells cover a sensible radius.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p><strong>Estimation drill:</strong> your surge system recomputes supply/demand per res-8 hex every 10 seconds. A big city covers ~1,000 active hexes; you operate in 500 cities. Is this computation a scaling problem? Do the math, then say what actually deserves the engineering attention.</p></div>
+<details><summary>Answer</summary><p>500 cities × ~1,000 hexes = 500K hexes, recomputed every 10s = 50K cell-updates/sec, each a trivial ratio plus 6-neighbor smoothing — comfortably one modest service. Compute isn't the problem. The attention belongs on the number's <em>behavior</em>: smoothing windows (too twitchy → price oscillation as drivers chase surge and destroy it; too smooth → surge lags the spike it exists to fix) and boundary effects. The senior instinct: when the arithmetic says "small," redirect effort to correctness and dynamics, not throughput.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Estimation splits this system in two: 250K disposable location writes/sec (memory) versus 230 precious ride requests/sec (durable) — one number forbids a database, the other forbids losing anything.</li>
+<li>Lat/lon B-trees fail because a B-tree is one-dimensional: a bounding-box query degenerates into scanning a latitude band around the planet, under a write load no durable index wants.</li>
+<li>Cell indexing (geohash or H3) turns "near me" into set lookups; H3's hexagons buy uniform area and six equidistant neighbors, which is why Uber built it for marketplace math.</li>
+<li>Always query the rider's cell plus its k-ring — the nearest driver is often across a cell boundary — then re-rank the small candidate set by road-network ETA, never crow-flies distance.</li>
+<li>The crux is atomic reservation: check-and-claim must be one CAS on the single shard that owns the driver, with a TTL for crash-release and a fencing token so stale accepts can't double-book.</li>
+<li>Ephemerality ends at money: matching scratch lives in memory with TTLs; from REQUESTED onward the trip is a durable, idempotent state machine.</li>
+<li>The geo index is derived state that self-heals from the ping stream in seconds — the elegant failover story is re-ingestion, not backup or replication.</li>
+<li>Watch match latency, offer-acceptance rate, ping lag, and reservation-conflict rate; ship matching changes in shadow mode, city by city.</li>
+</ul>
+</div>

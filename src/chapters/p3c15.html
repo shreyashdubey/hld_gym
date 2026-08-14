@@ -1,0 +1,314 @@
+<p>"Design Google Docs." The interviewer writes two names on the whiteboard: Alice and Bob. "They both have the same document open. Alice types a word into the middle of a sentence. At the same moment, Bob deletes the start of that sentence. Neither has seen the other's edit yet. What does each screen show one second later?"</p>
+
+<p>Feel the trap. If Alice's editor applies Bob's delete using the character positions Bob sent, the delete lands on the wrong characters — because Alice's insert already shifted everything over. Bob's screen has the mirror-image problem. Naive position-based edits don't just lag; they <em>corrupt the document differently on each screen</em>, and the two copies drift apart forever. This is not a scale problem — there might be exactly two users. It's a correctness problem, and it's the entire reason this question gets asked.</p>
+
+<p>This is the payoff chapter for Part 2's collaborative-editing theory. Today you don't get to say "OT or CRDT, both are valid." At the senior bar you walk both on a concrete example, commit to one, and defend the commitment with this problem's actual requirements. Let's play it as the candidate.</p>
+
+<h2>Requirements: pin down what "Docs" means</h2>
+
+<p>"I'll scope to the collaborative text editor itself. Functional requirements: multiple people edit the same document in real time and every copy converges to the identical text; live cursors and presence (who's here, where they're typing); document history with named versions and restore; lightweight comments anchored to text ranges; sharing with view/comment/edit permissions, including revoking access while someone has the doc open; and tolerance for brief disconnects — a dropped Wi-Fi blip shouldn't lose typed characters. Out of scope: rich embedded objects, spreadsheets, and full offline-first editing — I'll say something honest about long offline later. Fair?"</p>
+
+<p>Non-functional, with numbers I'll be held to:</p>
+
+<ul>
+<li><strong>Local echo is instant.</strong> Your keystroke appears in under 16 ms — one screen frame. This single number forbids any server round trip before rendering, which forces optimistic local apply and everything that follows from it.</li>
+<li><strong>Remote edits visible fast:</strong> p50 under 200 ms, p99 under 1 second in-region. Collaboration dies emotionally around a second of lag.</li>
+<li><strong>Convergence, always.</strong> When the typing stops, every replica shows byte-identical text. Not "usually."</li>
+<li><strong>No acknowledged edit is ever lost</strong> — once the client shows your edit as saved, a server crash cannot un-save it.</li>
+<li><strong>Scale shape:</strong> a billion stored documents; up to 100 simultaneous editors per doc as a product cap, typically 1–5.</li>
+<li><strong>Availability:</strong> if the doc's home server dies, editors reconnect and resume within seconds.</li>
+</ul>
+
+<h2>Estimation: many small rooms, not one big room</h2>
+
+<p>"Let me get the shape of the load, because it decides the architecture. Say 100 million docs get opened per day, with 5 million open concurrently at peak. Average live editors per open doc: about 1.2 — most open docs have one active person; multi-editor docs are usually a meeting of 2–5; a 100-editor doc is rare enough to treat as a special case."</p>
+
+<p>"Now the per-doc write rate. A fast typist produces about 5 characters per second, and clients batch keystrokes into an operation every 200 ms or so — call it at most 5 ops/sec per active typist, usually far less. Worst-case room: 100 editors × 5 ops/sec = 500 ops/sec into one doc, each fanned out to 99 others ≈ 50K small messages/sec. That's one busy but comfortable server core. A typical room does <em>under ten messages a second</em>."</p>
+
+<p>"So here's the conclusion the numbers force: <strong>no single document is ever a throughput problem.</strong> The load is millions of tiny independent rooms. That means I can — and should — route <em>all traffic for one doc to one server</em>, because per-doc load fits on a fraction of a machine, and having one machine see every edit to a doc in one place is exactly what makes the merge problem tractable. The fleet-level problem is placement and failover of millions of small rooms, not scaling any one room. Fleet math: ~6M concurrent WebSockets at 30K per box is about 200 connection servers; an open doc's in-memory state is maybe 100 KB (text plus queues), so 30K rooms per box is ~3 GB — memory is fine."</p>
+
+<p>Storage: an op is ~60 bytes; a heavily edited doc produces maybe 20K ops a day — about 1 MB. Keeping every op forever is cheap, and that will matter in a minute, because the op log is going to moonlight as the history feature.</p>
+
+<h2>API and data model — quickly</h2>
+
+<p>REST for the boring parts: <code>POST /docs</code>, <code>POST /docs/{id}/share</code>, <code>GET /docs/{id}</code> (returns latest snapshot plus the op tail since it), <code>GET /docs/{id}/history?from=seq</code>. The interesting surface is the WebSocket session:</p>
+
+<ul>
+<li>Client → server: <code>{op_id, base_seq, ops: [retain n | insert "text" | delete n]}</code> — the standard span-based edit form: "keep 4 chars, insert this, keep the rest." Plus ephemeral <code>cursor {pos}</code> messages.</li>
+<li>Server → client: <code>{seq, op, author}</code> broadcasts, <code>ack {op_id, seq}</code> for your own ops, and presence events.</li>
+</ul>
+
+<p>Two fields carry the whole design: <code>base_seq</code> — "the last server op I had seen when I made this edit" — tells the server exactly which concurrent ops to reconcile against, and <code>op_id</code> (a client-generated ID) makes resends after reconnect idempotent, straight from the idempotency chapter.</p>
+
+<p>Data model: <code>docs</code> (metadata, ACL, head_seq), <code>ops</code> (doc_id, seq, op, author, client_op_id — append-only), <code>snapshots</code> (doc_id, seq, blob), <code>comments</code> (doc_id, anchor range, thread). Notice there is no "current text" column. The text is <em>derived</em>: snapshot plus ops since. The log is the truth.</p>
+
+<h2>High-level design: one server owns each doc</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Clients connect through a directory to doc-sharded session servers backed by an op log and snapshots">
+  <rect class="dg-zone" x="10" y="30" width="150" height="240" rx="8"/>
+  <text class="dg-txt-s" x="26" y="52">Clients</text>
+  <rect class="dg-node" x="26" y="66" width="118" height="34" rx="6"/>
+  <text class="dg-txt-s" x="36" y="88">Alice (doc 7)</text>
+  <rect class="dg-node" x="26" y="110" width="118" height="34" rx="6"/>
+  <text class="dg-txt-s" x="36" y="132">Bob (doc 7)</text>
+  <rect class="dg-node" x="26" y="154" width="118" height="34" rx="6"/>
+  <text class="dg-txt-s" x="36" y="176">Dana (doc 9)</text>
+  <rect class="dg-node" x="220" y="110" width="150" height="60" rx="8"/>
+  <text class="dg-txt" x="236" y="136">Directory</text>
+  <text class="dg-txt-s" x="236" y="154">doc_id → server, epoch</text>
+  <rect class="dg-node-alt" x="440" y="40" width="180" height="80" rx="8"/>
+  <text class="dg-txt" x="456" y="66">Session server S1</text>
+  <text class="dg-txt-s" x="456" y="84">doc 7 room: order,</text>
+  <text class="dg-txt-s" x="456" y="100">transform, broadcast</text>
+  <rect class="dg-node" x="440" y="140" width="180" height="60" rx="8"/>
+  <text class="dg-txt" x="456" y="166">Session server S2</text>
+  <text class="dg-txt-s" x="456" y="184">doc 9 room</text>
+  <rect class="dg-node" x="440" y="240" width="120" height="50" rx="8"/>
+  <text class="dg-txt-s" x="452" y="262">Op log</text>
+  <text class="dg-txt-s" x="452" y="278">(append-only)</text>
+  <rect class="dg-node" x="590" y="240" width="120" height="50" rx="8"/>
+  <text class="dg-txt-s" x="602" y="262">Snapshots</text>
+  <text class="dg-txt-s" x="602" y="278">every N ops</text>
+  <line class="dg-edge" x1="160" y1="120" x2="220" y2="135" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="150" y="112">where is doc 7?</text>
+  <line class="dg-edge" x1="370" y1="120" x2="440" y2="90" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="370" y1="150" x2="440" y2="165" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="500" y1="120" x2="495" y2="240" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="508" y="222">durable before broadcast</text>
+  <line class="dg-edge" x1="600" y1="120" x2="640" y2="240" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Every connection for doc 7 lands on the same session server. That server is the serialization point: it sees every edit, gives each a sequence number, and makes the merge problem solvable.</figcaption>
+</figure>
+
+<p>"The write path: your editor applies your keystroke locally and instantly, batches it into an op, and sends it with its <code>base_seq</code> over the WebSocket to the doc's session server. The server reconciles it against any concurrent ops it has already accepted, appends it durably to the op log, assigns it the next sequence number, acks you, and broadcasts it to every other connected client, who reconcile it into their own local state. The read path: opening a doc fetches the latest snapshot plus the op tail after it, replays the tail, connects the WebSocket, and subscribes from the current sequence number."</p>
+
+<p>Say the load-bearing sentence out loud: <strong>doc-sharding the connection layer means one server totally orders each document's edits.</strong> A total order — every op gets a global sequence number 1, 2, 3… within its doc — is the one gift that turns "distributed concurrent editing" into "a single queue plus some arithmetic." We can afford this gift because estimation told us no doc outgrows one server. Systems that can't centralize (peer-to-peer, offline-first) don't get the gift, and you'll see in a moment how much machinery they must buy instead.</p>
+
+<h2>Deep dive 1: making concurrent edits converge</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Two people edit the same text at the same time; every screen must converge to the same result, and each user's own keystrokes must appear instantly, before the server has seen them. Everything else in this design — sessions, logs, snapshots — is solid Part 1–2 material. This is the part the question was invented to probe, and the interviewer wants three things: a concrete demonstration that you understand <em>why</em> naive merging fails, a working knowledge of both fixes (transform the operations, or restructure the data so merging is trivial), and a committed, defended choice between them <em>for this product</em>. Hedging here caps the interview.</p>
+</div>
+
+<p>Make it concrete. The doc says <code>the cat</code>. Both Alice and Bob are at version 0.</p>
+
+<ul>
+<li>Alice inserts <code>"fat "</code> at position 4 → her screen: <code>the fat cat</code>.</li>
+<li>Bob deletes 4 characters at position 0 (the word <code>"the "</code>) → his screen: <code>cat</code>.</li>
+</ul>
+
+<p>Now exchange the ops naively. Alice applies "delete 4 chars at 0" to <code>the fat cat</code> → <code>fat cat</code>. Fine. Bob applies "insert <code>fat </code> at 4" to <code>cat</code> → <code>cat fat</code>… wait — position 4 of a 3-character string. Best case garbage, worst case a crash, and either way Alice sees <code>fat cat</code> while Bob sees something else. The positions in an op are only meaningful against the exact document state it was made on. Concurrency broke that assumption. Two families of fixes exist.</p>
+
+<h3>Fix 1: Operational Transformation — adjust the op</h3>
+
+<p><strong>OT</strong> keeps ops position-based but <em>transforms</em> them before applying: given two ops made concurrently against the same state, a transform function rewrites each so it applies correctly <em>after</em> the other. Here: Alice's insert at 4 transformed against Bob's delete-4-at-0 becomes insert at 0 (her position slides left by the 4 deleted chars). Bob's delete at 0 transformed against Alice's insert at 4 is unchanged (his range sits entirely before her insertion point). Both screens reach <code>fat cat</code>. Draw it as a square:</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 340" role="img" aria-label="OT transform square showing concurrent edits to the cat converging on fat cat">
+  <rect class="dg-node" x="280" y="16" width="160" height="44" rx="8"/>
+  <text class="dg-txt" x="304" y="43">"the cat"  v0</text>
+  <rect class="dg-node" x="40" y="140" width="190" height="44" rx="8"/>
+  <text class="dg-txt" x="70" y="167">"the fat cat"</text>
+  <rect class="dg-node" x="500" y="140" width="150" height="44" rx="8"/>
+  <text class="dg-txt" x="552" y="167">"cat"</text>
+  <rect class="dg-node-alt" x="280" y="272" width="160" height="44" rx="8"/>
+  <text class="dg-txt" x="312" y="299">"fat cat"</text>
+  <line class="dg-edge" x1="290" y1="60" x2="160" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="52" y="100">Alice: insert(4, "fat ")</text>
+  <line class="dg-edge" x1="430" y1="60" x2="560" y2="140" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="510" y="100">Bob: delete(0, 4)</text>
+  <line class="dg-edge" x1="160" y1="184" x2="310" y2="272" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="80" y="240">Bob′: delete(0, 4) — unchanged</text>
+  <line class="dg-edge" x1="560" y1="184" x2="420" y2="272" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="452" y="240">Alice′: insert(0, "fat ")</text>
+  <text class="dg-txt-s" x="452" y="256">— shifted left by 4</text>
+</svg>
+<figcaption>The transform square: each op is rewritten to account for the other, and both paths around the square land on the same text.</figcaption>
+</figure>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A magazine's copy desk. Two proofreaders mail in corrections referencing line numbers — "fix the typo on line 12." But the first correction to arrive added a paragraph, so by the time the second letter is opened, its line numbers point at the wrong lines. The copy editor doesn't reject the late letter; she adjusts its line numbers to account for the edits already applied, then applies it. That adjustment is the transform, and the single copy desk everyone mails is the serialization point. The analogy's honest limit: real OT must also handle both letters editing the <em>same</em> line, where "adjust the numbers" needs genuinely careful rules — that's where OT's difficulty lives.</p>
+</div>
+
+<p>Here's the part candidates miss: OT's difficulty depends brutally on the topology. With no central server, any pair of concurrent ops anywhere may need transforming against any other, transforms compose along different paths, and correctness proofs get so hairy that several published peer-to-peer OT algorithms were later shown to be wrong. With a central server assigning a total order, the problem collapses: the server only ever transforms an incoming op against the ops it accepted after that op's <code>base_seq</code> — a simple loop — and each client only transforms server broadcasts against its own few unacknowledged ops. This server-ordered scheme is the Jupiter design out of Xerox PARC (1995), and it's the lineage Google Docs itself sits in. One server per doc isn't a scaling compromise. It's the move that makes OT small.</p>
+
+<h3>Fix 2: CRDTs — restructure the data so merge is trivial</h3>
+
+<p>A <strong>CRDT</strong> (conflict-free replicated data type, from Part 2) attacks the root cause instead: positions were the fragile thing, so eliminate positions. Give every character a permanent unique ID at birth — <code>(author, counter)</code> — so <code>the cat</code> becomes t₁h₂e₃␣₄c₅a₆t₇. Alice's edit is now "insert my new characters <em>after the character with ID ␣₄</em>." Bob's edit is "mark t₁h₂e₃␣₄ as deleted" — deleted characters become <strong>tombstones</strong>, hidden but kept, so other people's edits can still anchor to them. Apply these two edits in either order on any replica: the tombstoned chars vanish from display, Alice's chars sit after ␣₄'s tombstone, everyone renders <code>fat cat</code>. No transform function at all — merging is just taking the union of edits, and the data structure's rules make the result order-independent. That's why CRDTs shine exactly where OT struggles: no server, peers syncing pairwise, weeks offline. The bill: every character carries ID metadata forever, tombstones accumulate, and the document is no longer a plain string but a specialized structure you must maintain, garbage-collect, and snapshot.</p>
+
+<h3>The commitment</h3>
+
+<p>"For this product I commit to <strong>server-ordered OT</strong>, Jupiter-style. My reasons, tied to our requirements: (1) We already require a central server — permissions with mid-session revocation, durable history, and comments all need one, so OT's precondition costs us nothing extra. (2) Estimation showed every doc fits on one server, so the total order is free, and with it OT needs exactly one transform-pair for span-based text ops — a small, testable core. (3) The document stays a plain string: snapshots are just text, history is readable, memory per room is tiny — no per-character metadata or tombstone growth on billion-doc storage. (4) Our offline requirement is 'tolerate blips,' not 'edit on a plane for a week' — and blips are handled by the same transform machinery, as I'll show. I'd flip to a CRDT if the requirements flipped: offline-first, peer-to-peer, or end-to-end encryption, where no server may read — let alone transform — anyone's ops. The cost I accept: transform code must be <em>exactly</em> correct and deterministic everywhere it runs, client and server, forever — I'll treat it like crypto code: tiny, property-tested, versioned."</p>
+
+<div class="box story"><div class="box-tag">War story — Google Wave</div>
+<p>Wave (2009) was Google's attempt to generalize collaborative editing into a whole communication platform — concurrently edited rich XML documents with annotations, federation between servers, and full playback of history. Its concurrency engine was OT, extended far beyond Docs' narrow lane of server-ordered plain text. The product died within about a year, but the engineering lesson outlived it. Joseph Gentle, a former Wave engineer who then built the open-source ShareJS library to bring collaborative editing to the web, wrote candidly that implementing OT sucks: there's a maze of algorithms with different trade-offs, mostly trapped in academic papers, and they're brutally hard to implement correctly — "Wave took 2 years to write and if we rewrote it today, it would take almost as long to write a second time." Note what he was <em>not</em> saying: server-ordered text OT — the Jupiter core — is genuinely small. The complexity explosion came from leaving the narrow lane: richer data models, federation, transforming against long histories. That's the senior reading: OT is a scalpel that stays safe only if you keep the problem narrow, and Google Docs survived precisely by staying narrow where Wave sprawled.</p>
+</div>
+
+<div class="box story"><div class="box-tag">War story — Figma</div>
+<p>Figma faced the same fork and chose the other path — for reasons that make both choices look right. In the 2019 engineering post "How Figma's multiplayer technology works," co-founder Evan Wallace explained that Figma's multiplayer isn't text: a design file is a tree of objects (frames, shapes, text layers) with properties. They looked at OT and judged it more complexity than their problem deserved. Instead they built something CRDT-<em>inspired</em>: each object property is a last-writer-wins register (two people set the same rectangle's fill concurrently → latest write wins, which is perfectly acceptable for a color in a way it never would be for prose), and child ordering uses fractional indexing. Crucially, Wallace was explicit that Figma doesn't run textbook decentralized CRDTs: every document still lives on one server process that orders changes, which lets them discard much of the metadata a true peer-to-peer CRDT must carry. So even Figma kept the one-server-per-doc serialization point. The lesson to say out loud: pick merge machinery by data shape and topology. Character-level intent in linear text → transforms. Independent object properties where last-writer-wins is fine → CRDT-style registers. Neither company chose by fashion.</p>
+</div>
+
+<h2>Deep dive 2: the op pipeline and the two-queue client</h2>
+
+<p>Local echo in 16 ms means the client applies your edit before the server has seen it — optimistic apply. But then the client's document is <em>ahead</em> of the server's truth, and remote ops arriving from the server were built against a state your screen no longer shows. Every client therefore tracks its position precisely with a two-queue model. Learn it gently — it's four ideas:</p>
+
+<ul>
+<li><strong>Confirmed base:</strong> the last server sequence number you've seen, say rev 41. Everything up to here is settled truth.</li>
+<li><strong>In-flight queue:</strong> the one op you've sent (with <code>base_seq</code> 41) and not yet had acked. We allow only one in flight at a time — Docs-style — which keeps every case simple.</li>
+<li><strong>Pending buffer:</strong> local edits made since, composed together, waiting their turn.</li>
+<li><strong>Your screen</strong> = confirmed base + in-flight + pending, always.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Client state as confirmed base plus in-flight op plus pending buffer, with ack and remote-op flows">
+  <rect class="dg-node" x="20" y="40" width="170" height="60" rx="8"/>
+  <text class="dg-txt" x="36" y="66">Confirmed base</text>
+  <text class="dg-txt-s" x="36" y="84">server rev 41</text>
+  <rect class="dg-node" x="230" y="40" width="170" height="60" rx="8"/>
+  <text class="dg-txt" x="246" y="66">In-flight: 1 op</text>
+  <text class="dg-txt-s" x="246" y="84">sent, base_seq 41</text>
+  <rect class="dg-node" x="440" y="40" width="150" height="60" rx="8"/>
+  <text class="dg-txt" x="456" y="66">Pending buffer</text>
+  <text class="dg-txt-s" x="456" y="84">unsent local edits</text>
+  <rect class="dg-node-alt" x="620" y="40" width="90" height="60" rx="8"/>
+  <text class="dg-txt" x="634" y="66">Screen</text>
+  <text class="dg-txt-s" x="634" y="84">= sum</text>
+  <line class="dg-edge" x1="190" y1="70" x2="230" y2="70" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="400" y1="70" x2="440" y2="70" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="590" y1="70" x2="620" y2="70" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="20" y="150">ack(seq 42): in-flight joins the base → rev 42; send next pending op with base_seq 42</text>
+  <text class="dg-txt-s" x="20" y="180">remote op(seq 42): transform it over in-flight + pending, apply to screen;</text>
+  <text class="dg-txt-s" x="20" y="200">transform in-flight + pending over it → base becomes rev 42</text>
+  <text class="dg-txt-s" x="20" y="228">keystroke: apply to screen instantly, append to pending</text>
+</svg>
+<figcaption>The two-queue client. Every event — keystroke, ack, remote op — has one rule, and the invariant "screen = base + in-flight + pending" never breaks.</figcaption>
+</figure>
+
+<p>Three events, three rules. A <em>keystroke</em>: apply to the screen now, append to pending. An <em>ack</em> for your in-flight op: it's now part of server truth; advance the base, promote the pending buffer to in-flight, send it. A <em>remote op</em>: it was made against server history, but your screen also contains your in-flight and pending edits — so transform the remote op over both queues before applying it to the screen, and symmetrically transform both queues over the remote op (your in-flight op's ultimate landing position just moved). Same transform function as deep dive 1, reused. Meanwhile the server does the mirror job: an op arriving with <code>base_seq</code> 41 when the server is at 45 gets transformed over ops 42–45, then appended as 46, acked, and broadcast.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>Your chequebook versus your bank statement. The balance you act on is the bank's confirmed balance, plus the cheque you've mailed but the bank hasn't cleared (in-flight), plus cheques written and still in your bag (pending). When the statement arrives showing someone else's charge, you don't panic — you reconcile: adjust your running figure for the new entry while keeping your own uncashed cheques in the picture. The client does this reconciliation on every remote op, automatically, in a millisecond. Where the analogy breaks: the bank never reorders your cheques' meaning, but a remote edit really can shift where your pending edit lands — that's the transform step, and the chequebook has no equivalent.</p>
+</div>
+
+<p>And here's the cute detail interviewers love: <strong>cursors are just positions, so they transform too.</strong> When Bob's delete-4-at-0 arrives, Alice's cursor at position 8 slides to 4 by the same arithmetic that moved her ops. Presence and cursors ride a separate ephemeral message type on the same socket — never persisted, dropped on disconnect, rebroadcast on a timer — because nobody needs a durable record of where your cursor was on Tuesday. Comment anchors are the durable cousins: a comment on characters 120–134 is a stored range whose endpoints the server transforms as each op applies, so comments stay glued to their text as it moves. One transform function, four customers: ops, queues, cursors, anchors. Say that sentence in the interview.</p>
+
+<p>Permissions get checked <strong>per-op, not per-connection</strong>. Checking only at WebSocket connect means someone whose edit access was revoked mid-session keeps writing until they disconnect — days, maybe. So the session server holds the doc's ACL in memory, an ACL-change event invalidates it, every incoming op is checked against it, and revocation also proactively closes the socket. The per-op check is the guarantee; the socket close is just courtesy.</p>
+
+<h2>Deep dive 3: the log is the product</h2>
+
+<p>Every accepted op is appended to a durable, replicated op log <em>before</em> the ack and the broadcast. That ordering is a promise worth stating: <strong>nothing any collaborator has ever seen can be lost.</strong> If the session server dies a millisecond later, the op is in the log; recovery replays it. Ack-before-durable would be the lie that loses someone's paragraph.</p>
+
+<p>Replaying a year of ops to open a doc would be absurd, so every N ops (or on idle) the server writes a <strong>snapshot</strong> — the full text at sequence S. Opening a doc = latest snapshot + replay the tail. The cadence N is a knob: snapshot too often and you're writing the whole document over and over (write amplification — a 1 MB doc snapshotted every 10 ops writes 100 KB per keystroke-batch); too rarely and opening a doc replays a long tail (slow opens, slow recovery). N = 1000 ops bounds replay to a few milliseconds of CPU while keeping snapshot writes rare. Committed, and trivially tunable per doc size later.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 210" role="img" aria-label="Op log timeline with periodic snapshots and a named version tag">
+  <line class="dg-edge" x1="30" y1="90" x2="700" y2="90" marker-end="url(#arrow)"/>
+  <rect class="dg-node" x="60" y="76" width="26" height="28" rx="4"/>
+  <rect class="dg-node" x="96" y="76" width="26" height="28" rx="4"/>
+  <rect class="dg-node" x="132" y="76" width="26" height="28" rx="4"/>
+  <text class="dg-txt-s" x="60" y="66">ops 1, 2, 3 …</text>
+  <rect class="dg-node-alt" x="220" y="70" width="90" height="40" rx="6"/>
+  <text class="dg-txt-s" x="230" y="94">snap @1000</text>
+  <rect class="dg-node" x="360" y="76" width="60" height="28" rx="4"/>
+  <text class="dg-txt-s" x="364" y="94">…ops…</text>
+  <rect class="dg-node-alt" x="460" y="70" width="90" height="40" rx="6"/>
+  <text class="dg-txt-s" x="470" y="94">snap @2000</text>
+  <rect class="dg-node" x="590" y="76" width="70" height="28" rx="4"/>
+  <text class="dg-txt-s" x="594" y="94">2001–2317</text>
+  <line class="dg-edge" x1="405" y1="40" x2="405" y2="70" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="330" y="30">named version "Final draft" = tag @ seq 1500</text>
+  <text class="dg-txt-s" x="430" y="150">open doc = load snap @2000, replay 2001–2317</text>
+  <text class="dg-txt-s" x="30" y="150">history browser = replay any range of the log</text>
+  <text class="dg-txt-s" x="30" y="180">restore = new ops that rewrite forward (the log itself is never edited)</text>
+</svg>
+<figcaption>Snapshot + log. Opening, history, versions, restore, and crash recovery are all the same primitive: replay from a known point.</figcaption>
+</figure>
+
+<p>Now the feature you get free: <strong>the op log IS the history feature.</strong> "See version history" replays the log to any point. A named version — "Final draft" — is nothing but a tag on a sequence number. Per-author attribution and those colored playback views come from the author field already on every op. Restore doesn't rewind the log (append-only means append-only); it computes the diff back to the tagged state and applies it as <em>new</em> ops, so restores are themselves visible, attributable history. In most systems, history is an expensive bolted-on feature; here it fell out of the write path. That's the sign the write path was designed right.</p>
+
+<p>Offline, honestly: a brief disconnect is a non-event — the two-queue model already holds unacked ops, so the client reconnects, says "I'm at seq 2290," receives ops 2291–2317, transforms its held queue over them (the same rebase-by-transform), and resends with idempotent <code>op_id</code>s so a retry can't double-apply. That handles the metro tunnel. It degrades with absence: after a weekend offline, you're transforming hundreds of ops against thousands, and the merged result — while convergent — may no longer say anything anyone meant. The honest product answer is bounded offline: past a threshold, stop silently merging and surface a conflict UX ("your offline copy vs. current — review the differences"). Silent convergence to semantic nonsense is worse than an honest fork. If the requirement were true offline-first, that's my stated trigger to reopen the CRDT decision, not to stretch OT past its lane.</p>
+
+<h2>Failure modes and operations</h2>
+
+<p><strong>Session server dies.</strong> Thirty thousand rooms go dark. Clients detect the dropped socket, re-ask the directory, and land on a new server, which loads each doc's snapshot plus tail from the durable log — this is why durable-before-broadcast was non-negotiable — and resumes assigning sequence numbers exactly where the log ends. Each client sends its last-seen seq (gets the gap replayed) and resends unacked ops (deduped by <code>op_id</code>). Total user experience: a two-second "reconnecting" toast. Nobody loses a character.</p>
+
+<p><strong>Split-brain: two servers think they own doc 7.</strong> The directory failed over while the old server was slow, not dead — the classic zombie from the fencing chapter. If both append to doc 7's log, sequence numbers collide and clients see divergent truth: the one catastrophe this design must make impossible. So the directory issues a monotonically increasing <strong>session epoch</strong> per doc with each ownership grant, every log append carries the epoch, and the log rejects appends from any epoch older than the highest it has seen — a fencing token, exactly p2c03's medicine. The zombie's writes bounce off the log; it discovers it's dead and drops its sockets. The invariant, stated for the interviewer: correctness never depends on the directory being right, only on the log's epoch check being enforced.</p>
+
+<p><strong>What I watch</strong> (the on-call dashboard): op-apply p99 — full keystroke-batch-to-broadcast latency, the product's heartbeat; per-room transform queue depth — a doc whose incoming ops outrun processing is my hot-room early warning; reconnect success rate and time-to-resume after deploys and server loss; snapshot lag (max tail length) — a doc 50K ops past its snapshot means the snapshotter broke and recovery time is quietly growing; and WebSocket churn as a proxy for network or LB trouble.</p>
+
+<p><strong>Rollouts have a trap specific to this system:</strong> transform logic must produce identical results wherever it runs — old clients, new clients, the server. Ship a subtly changed transform to half the fleet and the same op pair reconciles differently on two screens: divergence, the unforgivable bug. So ops carry a schema version, servers hold transforms for N versions back, changes canary by doc cohort (a doc's whole room shares one code path — never mixed within a session), and a background checker replays samples of the log comparing state hashes across versions before anything ramps.</p>
+
+<p><strong>What breaks at 10x?</strong> Ten times the docs is the boring axis — 2,000 session servers instead of 200; doc-sharding scales linearly and the directory barely notices. The interesting 10x is <em>audience per doc</em>: a company all-hands doc with 20 editors and 10,000 viewers. Viewers don't need OT — they hold no pending edits, so they need only the ordered broadcast stream. I'd keep editors on the session server and hang viewers off a read-only fan-out tier of relays that tail the doc's op stream — same shape as a chat fan-out from Part 2 — so a viral doc never competes with its own editors for the serialization point.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>This problem is a depth probe wearing a product costume. Interviewers report the same follow-up ladder almost verbatim:</p>
+<ul>
+<li>"Walk me through two concurrent edits — concretely, with real positions. What exactly does each client apply?" (If you can't run "the cat" by hand, the OT/CRDT vocabulary counts for nothing.)</li>
+<li>"Why does everyone route a doc's traffic to one server? What breaks if I put a doc's editors on two servers?" (They want: total order makes transforms tractable; splitting it reintroduces distributed OT — or forces CRDTs.)</li>
+<li>"Your session server dies mid-keystroke. Trace recovery. When exactly is an edit safe?" (Durable-before-broadcast, replay from last-acked seq, idempotent resend.)</li>
+<li>"User goes offline for an hour and comes back — show me the reconciliation." (Rebase-by-transform, and the honest bounded-offline line.)</li>
+<li>"When would you have chosen a CRDT?" (A trap for dogmatists: the answer is a requirements flip — offline-first, P2P, E2E encryption — not "never" or "CRDTs are newer.")</li>
+</ul>
+</div>
+
+<h2>The choices and their price tags</h2>
+
+<table>
+<thead><tr><th>Committed choice</th><th>Why</th><th>Cost accepted</th></tr></thead>
+<tbody>
+<tr><td>Server-ordered OT (Jupiter lineage)</td><td>Central server already required; total order per doc is free; doc stays a plain string; small transform core</td><td>Transform code is correctness-critical and version-locked; long offline degrades; useless for P2P/E2E</td></tr>
+<tr><td>All of a doc's traffic on one session server</td><td>The serialization point that makes OT small; per-doc load is provably tiny</td><td>Server death interrupts its rooms (seconds); needs directory + epoch fencing; giant-audience docs need a viewer tier</td></tr>
+<tr><td>Durable log append before ack/broadcast</td><td>"Seen implies saved" — survives any crash</td><td>Log write sits on the latency path; the log store must be fast and replicated</td></tr>
+<tr><td>Snapshot every ~1000 ops + replay tail</td><td>Fast opens and recovery without rewriting the doc constantly</td><td>Tunable but real write amplification; a broken snapshotter silently inflates recovery time — must be monitored</td></tr>
+<tr><td>Op log doubles as history; named versions = tags</td><td>A headline feature for zero marginal design</td><td>Log retained forever (cheap but real); restore must append, never rewrite</td></tr>
+<tr><td>Per-op permission checks</td><td>Revocation takes effect mid-session</td><td>ACL cached in room memory + invalidation event — one more cache to keep honest</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c15-f1">
+<p class="fey-prompt">A junior asks: "Why can't Google Docs just apply everyone's edits in the order they arrive at the server?" Explain the problem and the fix in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Because an edit says "insert at position 4," and position 4 only means something in the exact document the editor was looking at when they typed. Your screen applies your own edits instantly — before the server sees them — so by the time someone else's edit reaches you, your document has shifted and their positions point at the wrong characters; applied blindly, every screen corrupts differently and they never agree again. The fix is transformation: before applying a concurrent edit, adjust its positions to account for the edits it hasn't seen — if you deleted four characters at the start, an incoming "insert at 4" becomes "insert at 0." To keep this manageable, all edits for a doc flow through one server that puts them in a single numbered order, so everyone adjusts against the same short list of recent edits. Every client's screen is just "last confirmed server state, plus my few unconfirmed edits," and every arriving edit gets reconciled through that little queue. That's why all screens end up with the identical text even though everyone typed at once.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: documents must be end-to-end encrypted — the server can never read content. Which parts of this design survive, which die, and what replaces them?</p></div>
+<details><summary>Answer</summary><p>The killer: a server that can't read ops can't transform them, so server-side OT dies — and so do server-transformed comment anchors and any server-computed snapshot. What survives: the session server still assigns a total order to opaque encrypted blobs, still fences with epochs, still appends durably — ordering and storage don't require reading. Merge logic must move entirely to clients, and since clients may reconcile in different orders relative to their own pending edits, order-independent merging becomes the safe bet: this flip is precisely the stated trigger to switch to a CRDT, with per-character IDs living inside the encrypted payload. Snapshots become client-produced encrypted checkpoints. This is a great interview answer in miniature: the requirement change flips the crux decision, and you can say exactly why.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>10x one room: a livestreamed lecture doc has 5 editors and 100,000 read-only viewers. The session server melts trying to broadcast. Sketch the viewer tier: what do relays subscribe to, what happens when a relay dies, and why don't viewers need OT?</p></div>
+<details><summary>Answer</summary><p>Viewers hold no pending local edits, so their state is exactly "snapshot + ordered ops" — pure replay, no transformation, no two-queue model. Build a relay tree: the session server publishes each sequenced op once to a handful of tier-1 relays; each relay fans out to ~10K viewer sockets (100K viewers ≈ 10–15 relays, or two tiers at 1M). New viewers fetch snapshot + tail from storage, then subscribe at a relay from their current seq. A dying relay is a non-event: its viewers reconnect to a sibling and request the gap since their last seq — the same replay-from-seq recovery editors use. Editors stay pinned to the session server; the write path never learns the audience exists. One extra credit line: demote a viewer→editor transition to "reconnect to the session server as an editor," keeping the tiers clean.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Estimation drill: a busy doc takes 400 ops/sec in a worst-case burst. Snapshots cost a full 2 MB document write; replaying one op costs ~10 µs. Compare snapshot-every-100-ops vs every-10,000: steady-state write amplification and worst-case open/recovery replay time. Then commit to a policy.</p></div>
+<details><summary>Answer</summary><p>Every 100 ops at 400 ops/sec = 4 snapshots/sec = 8 MB/sec of snapshot writes for one doc — pure amplification (the ops themselves are ~24 KB/sec). Worst-case replay: 100 ops × 10 µs = 1 ms. Every 10,000 ops: a snapshot every 25 sec (~80 KB/sec amortized — fine), but worst-case replay 10,000 × 10 µs = 100 ms — noticeable at open, painful when a server recovering 30K rooms multiplies it. The senior move is refusing the fixed constant: snapshot on ops-since-snapshot ≥ 1000 <em>or</em> doc idle for 30 sec, whichever first. Bursty docs bound their tail at ~10 ms replay; the idle rule means the common case (someone stopped typing) recovers from a snapshot that's seconds fresh, nearly free. Costs stay trivial against the numbers, which is the point of running them.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Now add "suggesting" mode (tracked changes): edits appear as proposals that a reviewer accepts or rejects later. What does a suggestion become in this machinery, and where's the subtle bug lurking?</p></div>
+<details><summary>Answer</summary><p>A suggestion is an op tagged <code>suggested_by</code> that renders as markup instead of applying plainly — an insert shows as underlined proposed text (it does occupy positions), while a suggested deletion must NOT remove characters yet: it becomes an annotation range over the doomed text, transforming with ops exactly like a comment anchor. Accepting emits a new real op (the deletion, attributed to the accepter); rejecting emits an op removing the proposal markup. The log stays append-only and the review trail is itself history. The subtle bug: concurrent edits <em>inside</em> a pending suggested-deletion range — someone edits text that a pending suggestion wants to remove. Your anchor-transform rules must decide (grow the range? split it? invalidate the suggestion?), and whichever rule you pick must be identical on every client and the server, or screens will render different suggestions from the same log — divergence through the back door of the annotation layer.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>What breaks if the directory grants doc 7 to server B while slow-but-alive server A still holds sockets and buffered ops — and a client is connected to each? Walk the exact save that prevents divergence.</p></div>
+<details><summary>Answer</summary><p>Both servers accept ops and try to append at seq 2318 — without protection, whichever storage node each talks to might accept, and two clients now see different "truths": permanent divergence. The save is the epoch fence: B's grant came with epoch 8; A holds epoch 7; the log's append path atomically checks epoch ≥ highest-seen and A's append is rejected the moment B (epoch 8) writes anything. A's client's op is thus never durable and never acked — the client still shows it pending, reconnects (A drops sockets on seeing the rejection), lands on B, replays the gap from its last-acked seq, transforms its pending op over the missed ops, and resends with the same op_id. Every promise holds: nothing acked was lost, nothing applies twice, one order exists. The sentence that earns the point: the directory is allowed to be wrong; the log's fence is what's not allowed to be wrong.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Collaborative editing is a correctness problem, not a scale problem: naive position-based merging corrupts each replica differently even with two users.</li>
+<li>Estimation reveals the shape — millions of tiny rooms, no doc ever outgrowing one server — which licenses the key move: all of a doc's traffic through one session server, whose total order makes OT small and tractable.</li>
+<li>OT transforms concurrent ops to account for each other (Google Docs' server-ordered lineage); CRDTs restructure data with permanent IDs and tombstones so merges commute — choose by topology and data shape: central-server linear text → OT; offline-first, P2P, or E2E → CRDT, as Figma's object-property design and Wave's complexity lessons both illustrate from opposite directions.</li>
+<li>The client is a two-queue machine — screen = confirmed base + in-flight + pending — and one transform function serves ops, queues, cursors, and comment anchors alike.</li>
+<li>Append the op durably before ack or broadcast: "anyone has seen it" must imply "it can never be lost." Snapshots exist only to bound replay, and the op log doubles as the entire history/versions feature.</li>
+<li>Permissions are enforced per-op so revocation bites mid-session; closing the socket is courtesy, the per-op check is the guarantee.</li>
+<li>Failover is replay-from-seq plus idempotent resend; split-brain is killed by epoch fencing at the log, so correctness never rests on the directory being right.</li>
+<li>Watch op-apply p99, transform queue depth, reconnect success, and snapshot lag — and treat transform-code rollouts like consensus-code rollouts: versioned, cohort-canaried, verified by replay, because divergence is the one unforgivable bug.</li>
+</ul>
+</div>

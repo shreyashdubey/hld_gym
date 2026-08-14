@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c14",
+  "items": [
+    {
+      "id": "p3c14-q01", "level": 1, "type": "mcq", "tag": "money-representation",
+      "q": "How should a payment system store the amount $49.99?",
+      "options": [
+        {"t": "As the float 49.99 with the currency code", "correct": false,
+         "why": "Floating point can't represent 0.1 exactly — sum millions of float payments and cents evaporate. Money in floats is an instant interview red flag."},
+        {"t": "As the integer 4999 (minor units) with the currency code", "correct": true,
+         "why": "Right. Money is an integer count of the smallest currency unit — 4999 cents. The currency code's exponent tells you yen have no decimals. Integers add exactly; floats don't."},
+        {"t": "As the string \"49.99\" to preserve formatting", "correct": false,
+         "why": "Strings dodge float rounding but you can't do arithmetic or enforce sums in the database. Formatting is a display concern; storage wants exact integers."},
+        {"t": "As two columns: dollars and cents", "correct": false,
+         "why": "Workable but clumsy — every sum and comparison needs carry logic, and it breaks for zero-decimal currencies like JPY. One integer of minor units does everything cleanly."}
+      ]
+    },
+    {
+      "id": "p3c14-q02", "level": 1, "type": "mcq", "tag": "idempotency",
+      "q": "A retry arrives with an idempotency key you've seen before, and the request hash matches. What does the server do?",
+      "options": [
+        {"t": "Re-runs the charge but tells the PSP to dedupe it", "correct": false,
+         "why": "Re-execution is exactly what the key exists to prevent. The PSP-side key is a second safety layer, not permission to re-run your own logic."},
+        {"t": "Returns 409 Conflict", "correct": false,
+         "why": "409 is for same key with a DIFFERENT request hash — a confused client. Same key, same hash is the normal retry case and gets the stored response."},
+        {"t": "Replays the stored response without re-executing anything", "correct": true,
+         "why": "Yes — byte for byte, whether the original succeeded or failed. A retry must be indistinguishable from its original; that's what makes 'just retry' a safe instruction."},
+        {"t": "Creates a second payment intent linked to the first", "correct": false,
+         "why": "That's a sibling charge — the double-charge bug wearing a bookkeeping costume. One key maps to one execution, forever."}
+      ]
+    },
+    {
+      "id": "p3c14-q03", "level": 1, "type": "mcq", "tag": "idempotency",
+      "q": "Same idempotency key arrives, but the request body hashes differently than the stored one. Response?",
+      "options": [
+        {"t": "409 — the client is confused; refuse to guess", "correct": true,
+         "why": "Right. Same key with different content means the client reused a key for a different request. Executing either interpretation risks losing or double-moving money, so you reject loudly."},
+        {"t": "Process the new body — the client clearly updated the order", "correct": false,
+         "why": "You have no idea which version the user meant to pay. 'Clearly' is a guess, and guessing is how money gets lost. The contract is one key = one exact request."},
+        {"t": "Replay the stored response anyway", "correct": false,
+         "why": "Now the client thinks their NEW request succeeded when something different executed. Silent mismatches are worse than errors — the client can't even detect the bug."},
+        {"t": "Merge the two requests and charge the larger amount", "correct": false,
+         "why": "Inventing money semantics the client never asked for. There is no world where the server picks an amount on its own."}
+      ]
+    },
+    {
+      "id": "p3c14-q04", "level": 1, "type": "mcq", "tag": "ledger",
+      "q": "In a double-entry ledger, what must be true of every transaction's entries?",
+      "options": [
+        {"t": "They all touch the same account", "correct": false,
+         "why": "Opposite — double-entry means money MOVES between accounts, so a transaction touches at least two: a debit somewhere, a credit somewhere else."},
+        {"t": "Their amounts sum to zero", "correct": true,
+         "why": "Exactly. Every cent that leaves one account lands in another; money is never created or destroyed inside the ledger. That zero-sum invariant is what makes bugs structurally detectable."},
+        {"t": "They're written by a single dedicated service", "correct": false,
+         "why": "An org choice, not a ledger property. The defining rule is arithmetic: debits and credits balance to zero, whoever writes them."},
+        {"t": "Each entry is positive", "correct": false,
+         "why": "Then nothing could balance. Entries carry sign — the debit/credit pair — and it's exactly the mix of + and − that must cancel out."}
+      ]
+    },
+    {
+      "id": "p3c14-q05", "level": 1, "type": "mcq", "tag": "ledger",
+      "q": "You discover a ledger transaction recorded a $5 fee that should have been $4. The correct fix is:",
+      "options": [
+        {"t": "UPDATE the fee entry from 500 to 400", "correct": false,
+         "why": "Append-only means never updated, never deleted — the application role shouldn't even have the UPDATE grant. An edited ledger can silently rewrite history, which destroys its audit value."},
+        {"t": "Delete the bad transaction and re-insert it correctly", "correct": false,
+         "why": "Deletion is the same sin as update: the record now lies about the past. Auditors — and 3 a.m. debuggers — need the error AND its correction visible."},
+        {"t": "Append a reversing transaction, then the correct one", "correct": true,
+         "why": "Right. Corrections are new entries that visibly undo the mistake. The error and its fix both stay in the record forever — that's what makes the ledger a flight recorder instead of a whiteboard."},
+        {"t": "Adjust the merchant's cached balance to compensate", "correct": false,
+         "why": "The cached balance is a derived view — touching it directly moves money outside the ledger discipline, and the nightly recompute-and-compare job will page someone about exactly this."}
+      ]
+    },
+    {
+      "id": "p3c14-q06", "level": 1, "type": "mcq", "tag": "ledger",
+      "q": "Where does a merchant's balance authoritatively live?",
+      "options": [
+        {"t": "In a balance column, updated on each payment", "correct": false,
+         "why": "A mutable balance column is a sticky note saying 'about 40 beads' — when it's wrong there's nothing to check it against. It can exist only as a cache of the real answer."},
+        {"t": "It's SUM(ledger entries) for their account; any stored balance is a cached view", "correct": true,
+         "why": "Yes. Balances are derived, never authoritative. Cache for speed, recompute nightly for truth, page on divergence — the invariant check is part of the design."},
+        {"t": "At the PSP — they hold the money", "correct": false,
+         "why": "The PSP knows what it owes you in aggregate, not each merchant's share of your platform. Your ledger is the source of truth for internal accounting; reconciliation checks it against the PSP."},
+        {"t": "In the payouts table", "correct": false,
+         "why": "Payouts record money leaving — one kind of movement. The balance is the sum of ALL movements through the merchant's ledger account."}
+      ]
+    },
+    {
+      "id": "p3c14-q07", "level": 1, "type": "mcq", "tag": "timeout",
+      "q": "Your charge call to the PSP times out. What's the one legal next move?",
+      "options": [
+        {"t": "Query the PSP by your idempotency key to learn what actually happened", "correct": true,
+         "why": "Right. A timeout puts you in one of three unknowable worlds — never arrived, charged, or still processing. Ambiguity is resolved by asking, never by re-doing."},
+        {"t": "Retry immediately — timeouts usually mean the request was lost", "correct": false,
+         "why": "'Usually' is the trap. In the world where the charge landed and only the response died, a blind retry is a second charge. This exact move is how double-charge incidents are born."},
+        {"t": "Mark the payment failed and refund defensively", "correct": false,
+         "why": "You can't refund a charge you're not sure exists, and marking failed when money moved creates a phantom the customer will find on their statement. Query first; act on facts."},
+        {"t": "Wait for the webhook to tell you", "correct": false,
+         "why": "Webhooks are the backstop, not the only path — they can be delayed or lost, leaving the intent stuck for hours. The sweeper actively queries by key within minutes."}
+      ]
+    },
+    {
+      "id": "p3c14-q08", "level": 1, "type": "mcq", "tag": "webhooks",
+      "q": "What delivery contract should you assume for PSP webhooks?",
+      "options": [
+        {"t": "Exactly once, in order — PSPs are payment-grade infrastructure", "correct": false,
+         "why": "No network delivers exactly-once-in-order to an external endpoint. Payment-grade means they retry aggressively — which guarantees you duplicates and reordering."},
+        {"t": "At least once, in any order", "correct": true,
+         "why": "Yes — you WILL get duplicates and you WILL see refund.succeeded before its payment.succeeded. So: dedupe on event id, apply through the state machine with a version check."},
+        {"t": "At most once — some events just won't arrive", "correct": false,
+         "why": "Half right: individual deliveries can fail, but PSPs redeliver until acknowledged. The practical contract is at-least-once — and events CAN still be lost past the retry horizon, which is why reconciliation exists."},
+        {"t": "Best effort, so poll instead and ignore webhooks", "correct": false,
+         "why": "Webhooks are the low-latency happy path; polling everything is wasteful and slow. The design uses webhooks + sweeper + reconciliation as layered nets, not either/or."}
+      ]
+    },
+    {
+      "id": "p3c14-q09", "level": 1, "type": "mcq", "tag": "pci",
+      "q": "How does the design keep raw card numbers off your servers?",
+      "options": [
+        {"t": "Encrypt card numbers before storing them in Postgres", "correct": false,
+         "why": "Encrypted PANs on your servers still put you in full PCI scope — the fortress-with-quarterly-audits regime. The goal is for card data to never touch your infrastructure at all."},
+        {"t": "Hash the card number and store the hash", "correct": false,
+         "why": "A hash can't be used to charge the card later, and the raw number still transited your servers to be hashed. Neither problem is solved."},
+        {"t": "Only accept payments through mobile wallets", "correct": false,
+         "why": "Narrows the product, not the compliance answer. Tokenization via the PSP works for plain card entry too."},
+        {"t": "PSP-hosted fields: the card number goes browser → PSP directly; you receive and store a token", "correct": true,
+         "why": "Right — same shape as presigned-URL uploads: the sensitive payload skips your servers, you handle only a reference. PCI scope collapses to a questionnaire, and a database breach leaks no card numbers."}
+      ]
+    },
+    {
+      "id": "p3c14-q10", "level": 2, "type": "mcq", "tag": "concurrency",
+      "q": "Two identical pay requests (same idempotency key) hit two different app servers in the same millisecond. Trace the outcome.",
+      "options": [
+        {"t": "Both insert the key, both charge; the PSP's dedupe collapses them to one", "correct": false,
+         "why": "Outsourcing your race condition to the PSP. Their key is the second net, not the first — your unique constraint must prevent two executions from ever starting."},
+        {"t": "Both try to insert the key; the unique constraint lets one win, the other blocks on the row lock, then replays or gets 202", "correct": true,
+         "why": "Exactly. One inserts and proceeds; the loser wakes on the lock, sees the key exists, and either replays the finished response or returns 202-in-flight. At no point do two executions run."},
+        {"t": "A distributed lock service serializes them before the database", "correct": false,
+         "why": "A whole new infrastructure dependency to solve what a unique constraint plus row lock already solves inside the transaction you needed anyway. Over-engineering with a straight face."},
+        {"t": "Last-write-wins on the intent row resolves it", "correct": false,
+         "why": "LWW means both executed and one result got silently discarded — with a real charge possibly behind each. Payments need mutual exclusion before execution, not conflict resolution after."}
+      ]
+    },
+    {
+      "id": "p3c14-q11", "level": 2, "type": "mcq", "tag": "dual-write",
+      "q": "Why not wrap the PSP charge call inside the database transaction, so intent and charge commit or abort together?",
+      "options": [
+        {"t": "It's actually fine if the transaction timeout exceeds the HTTP timeout", "correct": false,
+         "why": "Timeouts don't fix it — the problem is rollback, not timing. No timeout setting makes an external charge reversible by your database."},
+        {"t": "Because an HTTP call can't be rolled back: if the txn aborts after the PSP said yes, money moved and your DB remembers nothing", "correct": true,
+         "why": "The dual-write trap in one sentence. External side effects don't obey your transaction. Hence intent-first + outbox: commit what you're about to do, then act, then record the result."},
+        {"t": "Because the PSP forbids being called from inside transactions", "correct": false,
+         "why": "The PSP can't see your transactions. The impossibility is structural — two systems, no shared commit — not a vendor policy."},
+        {"t": "It works but holds locks too long, so it's a performance issue", "correct": false,
+         "why": "The connection-pool starvation is real but it's the minor charge. The felony is correctness: a rollback after an external success loses track of moved money."}
+      ]
+    },
+    {
+      "id": "p3c14-q12", "level": 2, "type": "mcq", "tag": "outbox",
+      "q": "Your worker crashes after calling the PSP but before recording the outcome. How does the system heal?",
+      "options": [
+        {"t": "The intent sits in processing past its deadline; the sweeper queries the PSP with the deterministic key and writes what actually happened", "correct": true,
+         "why": "Yes — every crash window has a recovery story because intent precedes action. The sweeper resolves the ambiguity by asking, and the deterministic key (intent_id + attempt) makes the question answerable."},
+        {"t": "The database transaction rolls back, undoing the charge", "correct": false,
+         "why": "There's no transaction spanning the PSP — that's the whole dual-write problem. The charge may be real; only a query reveals it."},
+        {"t": "The sweeper re-sends the charge; the amounts are reconciled later", "correct": false,
+         "why": "Close but backwards on the crucial step: the sweeper may re-send WITH the same PSP key (safe — they dedupe), but the correct primitive is query-first. 'Charge again and reconcile' as a strategy normalizes creating duplicates."},
+        {"t": "The next user retry recreates the intent and starts over", "correct": false,
+         "why": "The retry replays against the existing key — it can't recreate anything, by design. And healing can't depend on the user coming back; the sweeper runs regardless."}
+      ]
+    },
+    {
+      "id": "p3c14-q13", "level": 2, "type": "mcq", "tag": "webhooks",
+      "q": "A refund.succeeded webhook arrives for intent p_777, but your DB shows p_777 still in processing. Your handler should:",
+      "options": [
+        {"t": "Apply it — the PSP is the source of truth for payment outcomes", "correct": false,
+         "why": "Jumping processing → refunded skips succeeded, so settlement ledger entries were never written — the refund now reverses money the ledger never recorded receiving. The state machine exists precisely to block this."},
+        {"t": "Discard it as invalid", "correct": false,
+         "why": "It's almost certainly a real event arriving out of order — its sibling payment.succeeded is in flight behind it. Dropping it means the refund never lands. Park, don't discard."},
+        {"t": "Refuse the transition; park the event for retry and refetch the intent's current truth from the PSP API", "correct": true,
+         "why": "Right. Illegal transitions are rejected, not forced. Out-of-order delivery resolves in minutes via the parked retry or the refetch, which walks the intent through succeeded-then-refunded with audit events for both."},
+        {"t": "Force the state to refunded but log a warning", "correct": false,
+         "why": "A warning log doesn't balance a ledger. Skipped states mean skipped ledger writes — you'd find the hole at reconciliation, the hard way."}
+      ]
+    },
+    {
+      "id": "p3c14-q14", "level": 2, "type": "mcq", "tag": "ledger",
+      "q": "A $50 payment settled earlier as: psp_receivable +5000, merchant_payable −4500, platform_revenue −500. Now refund $20 to the customer (merchant bears it). Which entries are right?",
+      "options": [
+        {"t": "merchant_payable +2000, psp_receivable −2000", "correct": true,
+         "why": "Sums to zero and reverses direction: the merchant's payable shrinks by $20 and the PSP-side receivable drops by the $20 going back to the card. A mirror of (part of) the original flow."},
+        {"t": "psp_receivable −2000", "correct": false,
+         "why": "One-sided — sums to −2000, not zero. Money left the ledger without a source. The zero-sum write check would reject this transaction outright."},
+        {"t": "UPDATE the original transaction's amounts down by 2000", "correct": false,
+         "why": "Never update. The original transaction happened; the refund is a NEW movement, appended, that the settlement file will independently confirm."},
+        {"t": "refunds_expense +2000, platform_revenue −2000", "correct": false,
+         "why": "Balances to zero, but moves the wrong money: this books the refund against YOUR revenue while the merchant keeps their $45. The entries must trace where the $20 actually comes from — the merchant's payable."}
+      ]
+    },
+    {
+      "id": "p3c14-q15", "level": 2, "type": "mcq", "tag": "reconciliation",
+      "q": "The daily settlement file contains charge ch_109 for $7.00 — your ledger has no such entry. First move?",
+      "options": [
+        {"t": "Write a ledger entry for $7.00 so the books match", "correct": false,
+         "why": "Booking money you can't explain hides the bug that lost it. The entry must be produced BY the state machine processing a real object, not typed in to make a report go green."},
+        {"t": "Dispute the line with the PSP — you have no record, so it isn't yours", "correct": false,
+         "why": "Your missing record is evidence about YOUR system, not about reality. Real money moved; a lost webhook or a dashboard-made charge is far likelier than PSP fabrication."},
+        {"t": "Auto-heal: fetch the charge from the PSP API and drive it through the normal state machine; human queue only if that can't explain it", "correct": true,
+         "why": "Right — orphans are usually lost webhooks or dashboard actions, and the fetch-and-replay path heals them with full audit events. Humans see only the residue machines can't explain."},
+        {"t": "Wait a few days — settlement files sometimes contain next-day items", "correct": false,
+         "why": "Backwards: the lag-window grace applies to the OTHER bucket (in your ledger, not yet in the file). Money in the file with no ledger trace is real and unexplained today."}
+      ]
+    },
+    {
+      "id": "p3c14-q16", "level": 2, "type": "mcq", "tag": "psp-outage",
+      "q": "Your PSP goes hard-down for 30 minutes during normal traffic. With the intent-first design, what actually happens?",
+      "options": [
+        {"t": "Checkout returns 503 until the PSP recovers — there's nothing to do without them", "correct": false,
+         "why": "The whole point of intent-first is that accepting the order and charging the card are decoupled. Blanket 503s throw away sales the architecture already knows how to save."},
+        {"t": "Requests fail over to a second PSP automatically", "correct": false,
+         "why": "Not in this design, deliberately: per-PSP tokenization, a second webhook dialect, doubled reconciliation — a quarter's work bought against a few hours a year. The trigger for revisiting was named; it hasn't fired."},
+        {"t": "Intents keep committing; the circuit breaker stops the hammering; the queue drains on recovery — with honest UX about pending payment", "correct": false,
+         "why": "So close — but this is only right for goods where delayed confirmation is acceptable. Missing the second half: for instant digital delivery you fail fast and say so. Grade the full answer."},
+        {"t": "Physical goods: queue intents and confirm by email later. Instant digital goods: fail fast honestly. Circuit breaker open either way", "correct": true,
+         "why": "Yes — the architecture buys you the queue, and the product decides per-flow whether 'processing, we'll confirm' is honest or whether only fail-fast is. Pretending success you can't verify is how trust dies."}
+      ]
+    },
+    {
+      "id": "p3c14-q17", "level": 2, "type": "mcq", "tag": "psp-keys",
+      "q": "A charge attempt failed: card declined. The user enters a different card and pays. What happens to the idempotency keys?",
+      "options": [
+        {"t": "Reuse everything — same purchase, same keys", "correct": false,
+         "why": "Reusing the stored-response machinery would replay the DECLINE. And sending the same PSP key would make the PSP dedupe the new charge into the old failure. New attempt, new PSP key — on purpose."},
+        {"t": "The attempt counter increments, so the PSP key becomes intent_id:2 — a deliberately new charge; the client sends a fresh idempotency key for the new request", "correct": true,
+         "why": "Right. The deterministic PSP key is per-attempt precisely so that retries of one attempt dedupe while a genuinely new attempt (new card, user intent) charges cleanly. Duplicates by accident: impossible. New charges on purpose: easy."},
+        {"t": "Idempotency keys are only for network retries — a new card doesn't involve them", "correct": false,
+         "why": "The new request still needs its own key, because ITS timeouts and double-taps need protection too. Every mutating request carries a key; what changes is that this one is fresh."},
+        {"t": "Block the second attempt until the first key expires", "correct": false,
+         "why": "Punishing the user with a waiting period for your bookkeeping. Keys scope to a request, not to the order — a new attempt is a new request, available immediately."}
+      ]
+    },
+    {
+      "id": "p3c14-q18", "level": 2, "type": "mcq", "tag": "monitoring",
+      "q": "Auth success rate drops from 92% to 71% over ten minutes. Which explanations should be on your mental list?",
+      "options": [
+        {"t": "A PSP or card-issuer incident, or your own bad deploy — it's the most information-dense payments metric precisely because it catches all three", "correct": true,
+         "why": "Yes. A cliff in auth success is upstream trouble (PSP, issuer outage) or self-inflicted (malformed requests from a deploy). Check your deploy timeline first — it's the one you can roll back."},
+        {"t": "Normal nightly variance — auth rates swing with time of day", "correct": false,
+         "why": "Auth rates do drift by hour and geography, but 21 points in ten minutes is a cliff, not a tide. Cliffs have causes."},
+        {"t": "Users suddenly having worse cards", "correct": false,
+         "why": "Card quality of your user base changes over months, not minutes. Population explanations can't move a metric this fast."},
+        {"t": "The reconciliation job is behind", "correct": false,
+         "why": "Reconciliation is a daily batch comparing settled history — it has no path to affect live authorization outcomes. Different layer entirely."}
+      ]
+    },
+    {
+      "id": "p3c14-q19", "level": 3, "type": "mcq", "tag": "crux-spotting",
+      "q": "Thirty seconds into 'design a payment system,' which sentence proves you've found the crux?",
+      "options": [
+        {"t": "\"The hard part is that my database and the PSP can't share a transaction — every payment is a dual-write across a network that can fail after the money moved. I'll spend most of my time on that seam.\"", "correct": true,
+         "why": "That's the fire. Idempotency keys, intent-first writes, the poller, reconciliation — everything distinctive about payments exists because of this one seam. Naming it and steering there is the interview."},
+        {"t": "\"Payments spike on Black Friday, so the hard part is elastic scaling of the charge path.\"", "correct": false,
+         "why": "Even 10x Black Friday is ~1.2K/sec — one Postgres. Leading with scale on a small-QPS correctness problem tells the interviewer you haven't done the estimate."},
+        {"t": "\"The hard part is fraud detection — most payment engineering is fighting fraud.\"", "correct": false,
+         "why": "True of the industry, but you scoped fraud to the PSP in minute one. Naming an out-of-scope crux means the scoping and the agenda disagree."},
+        {"t": "\"The hard part is global consistency — we'll need multi-region consensus for the ledger.\"", "correct": false,
+         "why": "The ledger is CP with one writer — deliberately boring. Multi-region consensus is imported difficulty; the native difficulty is the PSP boundary under retries."}
+      ]
+    },
+    {
+      "id": "p3c14-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "The interviewer asks: 'Would you add a second PSP for resilience?' The senior-calibrated answer is:",
+      "options": [
+        {"t": "\"Yes — never depend on a single vendor for something this critical.\"", "correct": false,
+         "why": "A principle where a cost-benefit should be. Instant multi-PSP without naming dual-vaulting, a second webhook dialect, and doubled reconciliation reads as never having priced it."},
+        {"t": "\"No — it's too complicated.\"", "correct": false,
+         "why": "Right conclusion, no reasoning shown, and no condition under which it flips. Unjustified simplicity grades barely better than unjustified complexity."},
+        {"t": "\"Not in v1: tokens are vaulted per-PSP, so failover means dual-vaulting, a second webhook dialect, and doubled reconciliation — a quarter's work against a few hours of downtime a year that queue-and-drain already covers. Trigger to revisit: repeated SLO breaches or instant-delivery goods.\"", "correct": true,
+         "why": "Commit, cost the alternative honestly, show the current design covers the realistic failure, and name the trigger that changes the answer. This question is a trap for over-engineers, and this is the exit."},
+        {"t": "\"I'd design an abstraction layer over both PSPs now so we can add the second one later cheaply.\"", "correct": false,
+         "why": "The abstraction IS most of the cost — normalizing two webhook dialects and two settlement formats — paid now, against a need that may never arrive. Speculative generality wearing a prudence costume."}
+      ]
+    },
+    {
+      "id": "p3c14-q21", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A candidate opens with: '10M payments/day, so I'll shard the payments DB by user_id across 16 nodes for write throughput.' What should they have said?",
+      "options": [
+        {"t": "Sharding is right, but by merchant_id — payment queries group by merchant", "correct": false,
+         "why": "Debating the shard key concedes the premise. The premise is wrong: there's no write-throughput problem to shard away."},
+        {"t": "\"10M/day is ~115/sec, ~1.2K peak — one well-run Postgres with headroom. I'll spend the time on idempotency, the ledger, and reconciliation instead.\"", "correct": true,
+         "why": "The estimate produces the conclusion, and the conclusion redirects the interview to where the fire is. Saying 'this is small' out loud is the senior filter on this problem."},
+        {"t": "Sharding is premature, but plan the shard key now to avoid a painful migration later", "correct": false,
+         "why": "Milder over-engineering, same disease: designing against imaginary load. If payments ever needs sharding you'll migrate with years of warning — meanwhile a partitioned single writer keeps transactions simple, which correctness needs today."},
+        {"t": "Correct instinct — payments must never be down, and sharding adds resilience", "correct": false,
+         "why": "Sharding is a throughput tool, not a resilience tool — it multiplies failure surface. Resilience here comes from the synchronous replica and the intent-first recovery story."}
+      ]
+    },
+    {
+      "id": "p3c14-q22", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Your idempotency stack has four independent dedupe layers. Why still run a duplicate-charge alarm over PSP-side data?",
+      "options": [
+        {"t": "You shouldn't — alerting on impossible events trains the on-call to ignore alarms", "correct": false,
+         "why": "Alarm fatigue is real for NOISY alarms. This one fires approximately never — and the day it does, it's the most important page of the year. Silence is its normal state, not its failure mode."},
+        {"t": "Because the layers share failure modes, so four layers is really one", "correct": false,
+         "why": "They're genuinely independent — client key, unique constraint, deterministic PSP key, PSP-side dedupe live in different systems. The alarm isn't there because the layers are weak; it's there because 'impossible' is a claim about code you control."},
+        {"t": "Because 'structurally impossible' is a claim about your code — and duplicates can be minted below it, on the rails themselves. An invariant without a detector is a belief", "correct": true,
+         "why": "Coinbase 2018: their code double-charged no one; the card networks reprocessed a million transactions and duplicates appeared anyway. The alarm converts your invariant from belief into monitored fact, for the cost of one query."},
+        {"t": "For compliance — auditors require duplicate detection controls", "correct": false,
+         "why": "Auditors do like controls, but this reasoning outsources your judgment to them. You'd run this alarm with no auditor on earth — because the alternative is learning about duplicates from Reddit."}
+      ]
+    },
+    {
+      "id": "p3c14-q23", "level": 3, "type": "mcq", "tag": "consistency",
+      "q": "Commit a consistency stance for this system. Which one is right, and why?",
+      "options": [
+        {"t": "Everything strongly consistent — it's money; eventual consistency is never acceptable", "correct": false,
+         "why": "Overpaying: forcing the order-status page through the CP write path buys nothing (a 2-second-stale 'processing' is invisible) and costs availability everywhere. Blanket strong consistency reads as not knowing where the invariants live."},
+        {"t": "Ledger and intents are CP — brief write pause on failover rather than ever forking the money truth. Product surfaces read eventually consistent replicas", "correct": true,
+         "why": "Consistency where invariants live, availability where users look. A forked ledger is unforgivable; a stale status page is invisible. Committing to the split — and to the failover pause — is the senior stance."},
+        {"t": "AP everywhere with CRDTs merging concurrent ledger writes", "correct": false,
+         "why": "CRDTs merge by making concurrent updates commute — but 'charge if and only if not already charged' is exactly the non-commutative decision. Money invariants need serialization, not merge functions."},
+        {"t": "Consistency level per-request, chosen by the calling service", "correct": false,
+         "why": "Tunable consistency on a ledger means the least careful caller defines your guarantees. The stance must be structural — enforced by the architecture, not by convention."}
+      ]
+    },
+    {
+      "id": "p3c14-q24", "level": 3, "type": "mcq", "tag": "what-breaks",
+      "q": "'Now 10x the volume.' What actually strains first in this design?",
+      "options": [
+        {"t": "Postgres write throughput — time to shard", "correct": false,
+         "why": "12K/sec on an append-mostly table is still a beefy single-writer with partitioning. Reaching for sharding at 10x repeats the mistake the estimate was supposed to prevent."},
+        {"t": "The humans: a review queue growing linearly with volume is a slow-motion outage — the metric to invest in is the auto-heal rate", "correct": true,
+         "why": "Right. The machines scale by config; the reconciliation break queue scales by headcount unless the machine-resolved fraction climbs. That's where the next engineer-year goes — an ops-maturity answer interviewers rarely hear."},
+        {"t": "The idempotency key table becomes the bottleneck", "correct": false,
+         "why": "One indexed insert per payment at 12K/sec, with old keys archived past the retry horizon — Postgres shrugs. Plausible-sounding, numerically empty."},
+        {"t": "Webhook ingestion needs a Kafka buffer at that volume", "correct": false,
+         "why": "~2-3 webhook events per payment is ~30K/sec of tiny inserts at peak — within reach of the existing stack, and the webhook path is already async by nature. Adding Kafka here is a reflex, not a need."}
+      ]
+    },
+    {
+      "id": "p3c14-q25", "level": 3, "type": "mcq", "tag": "probe-response",
+      "q": "Interviewer: 'Your PSP call times out. Walk me through exactly what happens next.' Which walkthrough passes at E5?",
+      "options": [
+        {"t": "\"The intent's already committed as processing with its key. The worker's timeout fires; the sweeper later finds the overdue row, queries the PSP by intent_id:attempt, and writes whichever truth comes back — charged means proceed to succeeded and ledger entries; not-found means safe re-send with the same key. The user's retry meanwhile replays against the stored key — no second execution.\"", "correct": true,
+         "why": "Every table, every state, both the machine's path and the user's path, and no step guesses. This level of specificity — mechanism, not vibes — is exactly what the probe is fishing for."},
+        {"t": "\"We retry with exponential backoff and jitter, capped at three attempts.\"", "correct": false,
+         "why": "Backoff is a rate policy, not a correctness answer. Without the idempotency key and query-first mechanics, three polite retries can still mean three charges."},
+        {"t": "\"We return an error and let the user try again — their retry is idempotency-protected.\"", "correct": false,
+         "why": "Half a system: the user path is safe, but the original charge is still in an unknown state, and nothing here resolves it. The sweeper-and-query half is the part that was actually being probed."},
+        {"t": "\"Timeouts are rare with a tier-one PSP; we'd alert and investigate manually.\"", "correct": false,
+         "why": "Timeouts are a WHEN on every network. 'Rare, so manual' means every incident is an engineer spelunking in production — the design was supposed to make this boring and automatic."}
+      ]
+    }
+  ]
+}

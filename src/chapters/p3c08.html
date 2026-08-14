@@ -1,0 +1,357 @@
+<p>Friday, 10:00am. Coldplay announces one stadium show. Tickets go live at noon. By 11:55, ten million people are hammering refresh. At 12:00:00, the seat map opens — and somewhere in that crowd, four thousand people tap the same seat, 14B, within the same second. Exactly one of them can have it.</p>
+
+<p>Now the interview version. The interviewer says: <em>"Design Ticketmaster."</em> Most candidates hear "huge traffic" and reach for the scaling toolbox — autoscaling groups, sharding, CDNs. Twenty minutes later they've built a system that can serve the seat map to a hundred million people and still sells seat 14B twice. The interviewer was never worried about traffic. Traffic is the decoy.</p>
+
+<p>Selling one seat twice isn't a latency blip. It's two humans at a stadium gate holding tickets for the same chair — refunds, press coverage, and in one real case we'll get to, a government agency calling your architecture "a very elegant way to oversell." This walkthrough is built around the deep dive that decides your level: letting thousands race for the same database row and guaranteeing exactly one winner.</p>
+
+<h2>Requirements: pin the invariant first</h2>
+
+<p>I'd scope this out loud in the first two minutes. Functional requirements, committed:</p>
+
+<ul>
+<li><strong>Browse events</strong> and view a venue's <strong>seat map</strong> with live-ish availability.</li>
+<li><strong>Hold seats</strong>: a user selects seats and gets them reserved for a short window while they pay.</li>
+<li><strong>Pay and confirm</strong>: complete payment, receive a ticket.</li>
+<li><strong>Virtual waiting room</strong> for high-demand on-sales — the Coldplay drop is a stated requirement, not an edge case.</li>
+</ul>
+
+<p>Out of scope, said explicitly: resale marketplace, dynamic pricing, venue entry scanning, search. "Fair?" — and the interviewer nods.</p>
+
+<p>Non-functional requirements, with numbers I'll defend:</p>
+
+<ul>
+<li><strong>Never sell the same seat twice.</strong> An invariant, not a target — I'd rather show an error than oversell. This one sentence shapes the whole design.</li>
+<li><strong>Hold window: 10 minutes.</strong> Long enough to type a card number, short enough that abandoned carts don't strangle inventory.</li>
+<li><strong>Drop shape:</strong> 10 million users in the first minutes for roughly 50,000 seats. Degrade gracefully, never collapse.</li>
+<li><strong>Browse can be seconds stale; purchase must be strongly consistent.</strong> Different consistency per component — the Part 1 CAP lesson paying rent.</li>
+<li><strong>Fairness and bot resistance.</strong> A drop where scripts get every seat is a product failure even if the database was perfectly correct.</li>
+</ul>
+
+<h2>Estimation: the ratio that redesigns the system</h2>
+
+<p>The numbers here don't size a fleet — they change the shape of the machine. Watch what falls out.</p>
+
+<p><strong>10 million buyers, 50,000 seats.</strong> That's a 200:1 ratio: 99.5% of my "traffic" cannot result in a sale <em>no matter how well the system works</em>. Scaling the purchase path to 10M concurrent users means scaling to process 9.95M guaranteed failures. The number screams a conclusion: <strong>don't autoscale the store — control admission to it.</strong> Trickle users into the buying flow; let everyone else wait in a queue that costs almost nothing to hold.</p>
+
+<p><strong>Write volume is tiny.</strong> A 30-minute sellout is 50K sold seats in 1,800 seconds — about 28 purchases per second. Add expiring and retried holds, call it a few hundred inventory writes per second. One decent Postgres does this without breathing hard; sharding the inventory solves a problem I don't have. The fire isn't write <em>throughput</em> — it's write <em>contention</em>: thousands of those writes aim at the same few rows in the same second.</p>
+
+<p><strong>The seat map is small.</strong> 50K seats × ~100 bytes of state ≈ 5 MB. The entire inventory of the hottest event on Earth fits in one cache node's spare change. But if 10M waiting users each poll the map every 5 seconds, that's 2M reads/sec — so the map must be served from cache/CDN as a slightly stale snapshot, and only <em>admitted</em> users get the fresher view.</p>
+
+<p>Three numbers, three decisions: admission control instead of autoscaling, one strong database instead of a sharded fleet, cached-stale reads instead of live ones. That's estimation doing its job.</p>
+
+<h2>API and data model: quick, then get out</h2>
+
+<pre><code>GET  /events/{id}
+GET  /events/{id}/seatmap          → cached snapshot, seconds stale
+POST /events/{id}/holds            {seat_ids: [...]}       → hold_id, expires_at
+POST /holds/{hold_id}/purchase     Idempotency-Key: &lt;uuid&gt;  → order
+DELETE /holds/{hold_id}            (user changed their mind)</code></pre>
+
+<p>Core tables. <code>events</code> and <code>orders</code> are routine. The interesting one is <code>seats</code> — one row per physical seat per event:</p>
+
+<pre><code>seats(event_id, seat_id,
+      status,          -- free | held | sold
+      holder_user_id,
+      hold_expires_at,
+      order_id)</code></pre>
+
+<p>Every hard problem in this chapter is a fight over who gets to flip <code>status</code> on one of these rows. The hold endpoint returns an explicit <code>expires_at</code> so the client can show a countdown — honest UX comes free when the data model is honest.</p>
+
+<h2>High-level design: the complete machine</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 330" role="img" aria-label="Architecture: waiting room admits users into the store; browse reads hit a cache; purchase writes hit a strongly consistent inventory database; payment service talks to the provider; a queue issues tickets">
+  <rect class="dg-node" x="10" y="120" width="100" height="52" rx="8"/>
+  <text class="dg-txt" x="26" y="142">10M users</text>
+  <text class="dg-txt-s" x="26" y="159">the drop</text>
+  <rect class="dg-node-alt" x="150" y="120" width="130" height="52" rx="8"/>
+  <text class="dg-txt" x="162" y="142">Waiting room</text>
+  <text class="dg-txt-s" x="162" y="159">admits N/min</text>
+  <rect class="dg-node" x="330" y="120" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="346" y="142">Store app</text>
+  <text class="dg-txt-s" x="346" y="159">hold + buy</text>
+  <rect class="dg-zone" x="480" y="20" width="230" height="130" rx="8"/>
+  <text class="dg-txt-s" x="492" y="40">AP zone — stale is fine</text>
+  <rect class="dg-node" x="500" y="52" width="190" height="44" rx="8"/>
+  <text class="dg-txt" x="514" y="79">Seat-map cache / CDN</text>
+  <text class="dg-txt-s" x="500" y="122">snapshot every few seconds</text>
+  <rect class="dg-zone" x="480" y="170" width="230" height="90" rx="8"/>
+  <text class="dg-txt-s" x="492" y="190">CP island — the truth</text>
+  <rect class="dg-node-alt" x="500" y="200" width="190" height="44" rx="8"/>
+  <text class="dg-txt" x="514" y="227">Inventory DB (Postgres)</text>
+  <rect class="dg-node" x="330" y="250" width="110" height="44" rx="8"/>
+  <text class="dg-txt" x="344" y="277">Payments</text>
+  <rect class="dg-node" x="150" y="250" width="120" height="44" rx="8"/>
+  <text class="dg-txt" x="164" y="277">Ticket queue</text>
+  <line class="dg-edge" x1="110" y1="146" x2="150" y2="146" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="280" y1="146" x2="330" y2="146" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="440" y1="132" x2="500" y2="86" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="440" y1="160" x2="500" y2="212" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="385" y1="172" x2="385" y2="250" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="330" y1="272" x2="270" y2="272" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="292" y="196">saga</text>
+  <text class="dg-txt-s" x="452" y="120">reads</text>
+  <text class="dg-txt-s" x="448" y="188">writes</text>
+</svg>
+<figcaption>The machine. Demand is throttled at the waiting room; browse reads live in the stale-friendly AP zone; every hold and sale goes through one strongly consistent inventory island.</figcaption>
+</figure>
+
+<p><strong>Read path:</strong> a user (queued or admitted) fetches the seat map from cache. The snapshot is rebuilt from the inventory DB every couple of seconds and shows <code>held</code> seats as a best-effort overlay. It is deliberately, honestly stale — more on why that's fine below.</p>
+
+<p><strong>Write path:</strong> an admitted user picks seats → <code>POST /holds</code> → one atomic conditional write flips the rows to <code>held</code> with a 10-minute expiry → user pays → success flips <code>held → sold</code>, writes the order, and drops a message on the ticket queue for issuance and email. Payment failure releases the hold. The loop is closed: thumb to ticket, and every arrow has a failure story we'll cover.</p>
+
+<h3>One strongly consistent island in a stale sea</h3>
+
+<p>The consistency commitment, stated as I'd state it at the whiteboard: <strong>the inventory database is the single source of truth and it is CP</strong> — one Postgres primary with synchronous replica failover; if it's briefly unavailable, purchases fail loudly and safely. Everything else — event pages, seat maps, queue positions — is AP: cached, seconds stale, because a wrong answer there costs a click, not a double-sold seat.</p>
+
+<p>Why is a stale seat map acceptable? Because <em>even a perfectly live map is stale by the time you act on it</em>. The map says 14B is free; 300 milliseconds later, when your tap arrives, someone else took it. The map was always a hint; the conditional write is the truth. The "seat taken, pick another" experience exists at every staleness level, so I'll pay a few seconds of staleness to take 2M reads/sec off the database doing the one job that must not fail.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>The seat map is the "seats available" sign outside a cinema hall; the inventory DB is the clerk at the counter. The sign might lag by a minute, and nobody considers that lying — you still have to ask the clerk, and the clerk's answer is final. Trouble only starts if you let people buy tickets <em>from the sign</em>. Where the analogy breaks: our clerk must survive four thousand people asking for the same seat in one second, which no human counter has ever faced.</p>
+</div>
+
+<h2>Deep dive 1: the race for seat 14B</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>Thousands of requests will try to buy the <em>same seat</em> in the same second, and exactly one may win. This is not a traffic problem — it's a concurrency-correctness problem on a handful of burning-hot database rows. Every naive design has a read-then-write gap where two buyers both see "free" and both pay. The interviewer invented this question to watch you find that gap, close it with an atomic operation, and then handle the ugly edge it creates: what happens when a hold expires while its owner's payment is mid-flight. Spend your deep-dive time here.</p>
+</div>
+
+<p>Walk the naive version concretely, because the bug hides in code that looks obviously correct:</p>
+
+<pre><code>row = SELECT status FROM seats WHERE seat_id='14B'   -- says 'free'
+if row.status == 'free':
+    UPDATE seats SET status='sold', ...              -- so we sell it</code></pre>
+
+<p>Request A reads at 12:00:00.100 — free. Request B reads at 12:00:00.103 — also free, because A hasn't written yet. A writes <code>sold</code>. B writes <code>sold</code>. Both commit. Both users get charged, both get confirmation emails, and your invariant is dead. Under read-committed isolation — the default in Postgres, the one your ORM gives you — <em>nothing</em> stops this. The check and the write are two separate operations, and the whole race lives in the gap between them. This is the p1c03 isolation lesson wearing a concert t-shirt.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 290" role="img" aria-label="Two requests both read seat as free, then both write sold, producing a double sell">
+  <line class="dg-edge" x1="140" y1="50" x2="140" y2="240"/>
+  <line class="dg-edge" x1="360" y1="50" x2="360" y2="240"/>
+  <line class="dg-edge" x1="580" y1="50" x2="580" y2="240"/>
+  <rect class="dg-node" x="90" y="14" width="100" height="30" rx="6"/>
+  <text class="dg-txt" x="103" y="34">Request A</text>
+  <rect class="dg-node" x="310" y="14" width="100" height="30" rx="6"/>
+  <text class="dg-txt" x="323" y="34">Database</text>
+  <rect class="dg-node" x="530" y="14" width="100" height="30" rx="6"/>
+  <text class="dg-txt" x="543" y="34">Request B</text>
+  <line class="dg-edge" x1="140" y1="70" x2="360" y2="70" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="160" y="63">read 14B → "free"</text>
+  <line class="dg-edge" x1="580" y1="100" x2="360" y2="100" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="400" y="93">read 14B → "free"</text>
+  <line class="dg-edge" x1="140" y1="150" x2="360" y2="150" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="160" y="143">write sold ✓ commits</text>
+  <line class="dg-bad" x1="580" y1="190" x2="360" y2="190" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="392" y="183">write sold ✓ also commits</text>
+  <rect class="dg-bad" x="220" y="230" width="290" height="40" rx="8" fill="none"/>
+  <text class="dg-txt" x="238" y="255">Seat 14B sold twice</text>
+</svg>
+<figcaption>The check-then-book race. Both requests pass the check because the check and the write are separate steps. The gap between them is the entire bug.</figcaption>
+</figure>
+
+<h3>The fix ladder — and where I stop</h3>
+
+<p><strong>Rung 1: pessimistic locking.</strong> <code>SELECT ... FOR UPDATE</code> takes a row lock while reading, so B's read blocks until A's transaction finishes, then sees <code>sold</code> and gives up. Correct — and a fine answer for a normal booking site. But feel the drop-day mechanics: four thousand transactions queue on 14B's row lock, each waiter pinning a database connection, and the pool has maybe 200. Lock queues back up into connection starvation, and now requests for <em>other</em> seats can't get a connection either. Pessimistic locking has a contention ceiling, and this problem lives above it.</p>
+
+<p><strong>Rung 2: optimistic concurrency.</strong> Add a version column; write with <code>UPDATE ... WHERE version = 7</code>; zero rows matched means someone beat you — re-read and retry. Beautiful at low contention, and the right tool elsewhere in this book. Here it's actively wrong, and saying <em>why</em> is the senior move: optimistic concurrency assumes conflicts are rare, and ours are the whole point. 4,000 contenders race; 1 wins; 3,999 retry against a seat that's already gone — or onto the <em>next</em> hot seat, and lose again. One spike becomes a retry storm several times its size, aimed at your hottest rows. Optimistic locking under maximal contention is a load amplifier.</p>
+
+<p><strong>Rung 3 — my commitment: reservation with TTL via one atomic conditional write.</strong> Don't read then write. Make the claim itself the atomic operation:</p>
+
+<pre><code>UPDATE seats
+SET status='held', holder_user_id=:u,
+    hold_expires_at = now() + interval '10 minutes'
+WHERE event_id=:e AND seat_id='14B'
+  AND (status='free'
+       OR (status='held' AND hold_expires_at &lt; now()))</code></pre>
+
+<p>One statement. The database checks the condition and applies the write as a single atomic action — no gap for a rival to slip through. Rows affected = 1: the seat is yours, come pay. Rows affected = 0: seat's gone, fail <em>instantly</em> — no retry storm, losers cost one cheap statement. The same trick works as a Redis <code>SET NX PX</code> or a DynamoDB conditional put; I'm committing to Postgres because the money path deserves real durability and transactions, and our write volume is a rounding error for it.</p>
+
+<p>Notice the second clause: an expired hold counts as free. That's <strong>lazy expiry</strong> — the next claimant reclaims a dead hold in the same atomic write, no janitor required for correctness. I'd still run a background sweeper flipping long-expired holds back to <code>free</code> so the cached seat map doesn't show ghosts, but the sweeper is cosmetic; the conditional write is the law.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A hold is a fitting room. You take the shirt in, and for ten minutes it is off the rack — nobody else can grab it, and the store didn't have to decide whether you'll actually buy it. Dawdle past your time and staff quietly put it back on the rack for the next person. The one rule that makes the whole shop work: <em>taking the shirt off the rack must be a single grab</em>. If checking-the-rack and taking-the-shirt are two separate motions, two shoppers end up holding one sleeve each.</p>
+</div>
+
+<h3>The edge that separates levels: expiry during payment</h3>
+
+<p>Now the timeline the interviewer is waiting for someone to notice. A user holds 14B at 12:00 and hits "pay" at 12:09:30. The provider is slow today. At 12:10:00 the hold expires — and lazy expiry means someone else can now legitimately claim 14B. At 12:10:40 the original payment succeeds. Two people have paid for one seat, and every component behaved exactly as designed.</p>
+
+<p>I resolve this explicitly, in two layers, and I commit to both:</p>
+
+<ul>
+<li><strong>Extend-on-payment-start.</strong> The moment the user initiates payment, atomically transition the hold <code>held → pending_payment</code> (conditional write again: only if it's still their unexpired hold) and extend the expiry by the payment timeout plus margin — say 3 minutes. A <code>pending_payment</code> seat is not reclaimable. This closes the window for every payment that finishes inside the timeout, which is nearly all of them.</li>
+<li><strong>Reconcile the stragglers.</strong> Payments can still return after even the extended window — a provider retry, a webhook that arrives ten minutes late. Rule, decided now, not at 3am: <strong>the seat state wins</strong>. If a success arrives for a hold that no longer exists, we do not claw the seat back from its new owner — we auto-refund the late payment and apologize. Money is reversible; a seat handed to someone else is not. This asymmetry is why the reconciliation direction is refund-the-payment, never un-sell-the-seat.</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Seat state machine: free to held via conditional write, held to pending payment to sold, with expiry paths back to free">
+  <rect class="dg-node" x="20" y="100" width="110" height="48" rx="8"/>
+  <text class="dg-txt" x="52" y="128">FREE</text>
+  <rect class="dg-node-alt" x="210" y="100" width="130" height="48" rx="8"/>
+  <text class="dg-txt" x="240" y="122">HELD</text>
+  <text class="dg-txt-s" x="222" y="139">user, expires_at</text>
+  <rect class="dg-node-alt" x="420" y="100" width="130" height="48" rx="8"/>
+  <text class="dg-txt" x="432" y="122">PENDING_PAY</text>
+  <text class="dg-txt-s" x="432" y="139">expiry extended</text>
+  <rect class="dg-node" x="620" y="100" width="86" height="48" rx="8"/>
+  <text class="dg-txt" x="640" y="128">SOLD</text>
+  <line class="dg-edge" x1="130" y1="118" x2="210" y2="118" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="134" y="108">atomic claim</text>
+  <line class="dg-edge" x1="340" y1="118" x2="420" y2="118" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="346" y="108">pay starts</text>
+  <line class="dg-edge" x1="550" y1="118" x2="620" y2="118" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="556" y="108">pay ok</text>
+  <path class="dg-edge" d="M 250 148 Q 190 210 132 148" fill="none" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="146" y="196">TTL expires / cancel</text>
+  <path class="dg-edge" d="M 460 148 Q 330 240 120 148" fill="none" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="288" y="216">pay fails → release (saga undo)</text>
+  <text class="dg-txt-s" x="20" y="40">Late payment success after release → refund the money, never un-sell the seat.</text>
+</svg>
+<figcaption>The reservation state machine. Every arrow is a conditional write; PENDING_PAY exists purely to close the expiry-during-payment window.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — Bad Bunny at Estadio Azteca, December 2022</div>
+<p>On December 9, 2022, Bad Bunny played the 87,000-capacity Estadio Azteca in Mexico City — and hundreds of fans with tickets bought through Ticketmaster Mexico were turned away at the gates, their tickets scanned as invalid or duplicates. Ticketmaster's first explanation: counterfeits. Mexico's consumer-protection agency Profeco investigated and concluded otherwise — the tickets were legitimate and the system had effectively oversold; the agency's chief memorably called it "a very elegant way to oversell." Profeco threatened fines of up to 10% of annual sales; Ticketmaster ended up refunding 2,155 affected customers 100% of the ticket price <em>plus 20% compensation</em> — nearly 18.2 million pesos, about a million US dollars. Notice the shape of the failure: not a crashed website, but duplicate valid-looking tickets for the same physical seats — the invariant this whole chapter defends. And the resolution matched our reconciliation rule: once overselling reaches humans, all you can do is refund with interest and eat the reputational bill. The database guard is cheaper.</p>
+</div>
+
+<h2>Deep dive 2: the waiting room — admission control as architecture</h2>
+
+<p>Back to the 200:1 ratio. The inventory island and the store servers can comfortably serve a few thousand active shoppers. Ten million people are outside. The waiting room's job is to turn an uncontrolled stampede into a controlled drip, and to be <em>fair and honest</em> while doing it.</p>
+
+<p>Mechanics I'd commit to: when the drop opens, arrivals land on a lightweight queue page — static assets from the CDN, one tiny API call to register presence. Admission into the store is a <strong>token bucket</strong>: the store publishes how many new shoppers per minute it can absorb (a dial, not a constant — say 2,000/min to start), and the queue service issues that many <strong>signed admission tokens</strong> per minute. The store's load balancer admits only requests bearing a valid token — signed (an HMAC, a keyed signature verifiable statelessly) so nobody can forge their way in, short-lived so tokens can't be stockpiled or resold.</p>
+
+<p>Now the fairness question, a real design decision: <strong>who gets admitted first?</strong> Strict FIFO by arrival time sounds fair and isn't — it rewards whoever clicked fastest at 11:59:59.9, which in practice means bots and the best connections. I'll commit to the standard industry answer: everyone arriving within the opening window (say the first 5 minutes) is placed in <strong>randomized order</strong> — a lottery over the surge — and later arrivals join FIFO behind them. Then be honest in the UX: show real position and a real estimate ("~41,000 ahead of you, roughly 24 minutes"), never silently reshuffle. A queue people trust is one they'll wait in; one that looks rigged generates its own DDoS of rage-refreshing — and refreshing must never change your position, which the signed token also guarantees.</p>
+
+<p>The waiting room is also the bot chokepoint. Rate-limit queue joins per account, per payment method, per IP, and per device fingerprint (a hash of browser characteristics — imperfect, but it raises the cost of pretending to be 500 users). For monster drops, add pre-registration: verify humans <em>days before</em>, with no time pressure, and admit only pre-verified accounts. That's Ticketmaster's Verified Fan program — which brings us to the day it wasn't enough.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 250" role="img" aria-label="Waiting room flow: surge arrivals are randomized into a queue, token bucket admits a fixed rate into the store, bots filtered at the edge">
+  <rect class="dg-node" x="14" y="90" width="110" height="52" rx="8"/>
+  <text class="dg-txt" x="30" y="112">10M arrivals</text>
+  <text class="dg-txt-s" x="30" y="129">first minutes</text>
+  <rect class="dg-node" x="180" y="90" width="150" height="52" rx="8"/>
+  <text class="dg-txt" x="194" y="112">Queue service</text>
+  <text class="dg-txt-s" x="194" y="129">randomize window</text>
+  <rect class="dg-node-alt" x="390" y="90" width="140" height="52" rx="8"/>
+  <text class="dg-txt" x="404" y="112">Token bucket</text>
+  <text class="dg-txt-s" x="404" y="129">2K tokens/min</text>
+  <rect class="dg-node" x="590" y="90" width="116" height="52" rx="8"/>
+  <text class="dg-txt" x="620" y="112">Store</text>
+  <text class="dg-txt-s" x="604" y="129">~5K active</text>
+  <line class="dg-edge" x1="124" y1="116" x2="180" y2="116" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="330" y1="116" x2="390" y2="116" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="530" y1="116" x2="590" y2="116" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="536" y="106">signed</text>
+  <text class="dg-txt-s" x="536" y="146">token</text>
+  <rect class="dg-bad" x="180" y="190" width="150" height="42" rx="8" fill="none"/>
+  <text class="dg-txt" x="220" y="216">Bots out</text>
+  <line class="dg-bad" x1="255" y1="142" x2="255" y2="190" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="264" y="172">rate limits + fingerprint</text>
+  <text class="dg-txt-s" x="390" y="60">admission rate is a live dial, tied to store health</text>
+  <line class="dg-edge" x1="470" y1="66" x2="460" y2="88" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Admission control. Demand and capacity are decoupled: the store never sees more shoppers than the token bucket releases, no matter how many millions arrive.</figcaption>
+</figure>
+
+<div class="box story"><div class="box-tag">War story — Taylor Swift's Eras Tour presale, November 2022</div>
+<p>On November 15, 2022, Ticketmaster opened the Verified Fan presale for the Eras Tour. The plan was textbook admission control: 3.5 million fans pre-registered, about 1.5 million got invite codes sized to what the system could handle. What showed up, by Ticketmaster's own account, was around 14 million — code-holders, code-less hopefuls, and a "staggering number of bot attacks" — generating a record 3.5 <em>billion</em> system requests that day, roughly four times their previous record. The site crashed repeatedly, sales were paused mid-drop, fans queued for hours, and days later Ticketmaster canceled the general public sale outright, citing insufficient remaining inventory. Taylor Swift called watching it "excruciating"; the US Senate held hearings. The architecture lesson is precise: the admission plan was sized to <em>invited</em> demand, but admission wasn't fully enforced at the edge — uninvited users and bots still reached the real infrastructure. A waiting room only works as the <em>only</em> door, standing in front of everything, with the cheap static queue page absorbing the millions who will never get in.</p>
+</div>
+
+<h2>Deep dive 3: taking money without taking it twice</h2>
+
+<p>Purchase is a multi-step operation across two systems that can each fail independently: our inventory and an external payment provider. That's a saga — a sequence of local steps, each with a compensating undo — because I can't wrap Stripe in my database transaction (p2c01's whole point).</p>
+
+<ol>
+<li>Hold flips to <code>pending_payment</code> (conditional write, expiry extended).</li>
+<li>Charge the card, sending an <strong>idempotency key</strong> derived from the hold — so if the user double-clicks, or our retry fires after a timeout, the provider recognizes the repeat and charges exactly once (p2c02 paying rent).</li>
+<li>On success: <code>pending_payment → sold</code>, write the order, drop a message on the ticket queue.</li>
+<li>On failure: <strong>compensate</strong> — release the seat back to <code>free</code>, tell the user. The seat re-enters inventory within seconds, not after a 10-minute TTL funeral.</li>
+</ol>
+
+<p>The failure that matters isn't "card declined" — that's a clean <em>no</em>: compensate, done. It's the <strong>timeout</strong>: we asked the provider to charge and heard nothing. Did it happen? Unknown, and guessing in either direction is the error. The idempotency key makes it safe to <em>ask again</em> — retry the identical request or query status; the answer is deterministic. Until we know, the seat stays <code>pending_payment</code>. If the provider stays dark past our window, we fail the purchase, release the seat, and let reconciliation refund any charge that later turns out to have succeeded — same rule: refund money, never un-sell seats.</p>
+
+<p>And the systemic version: the provider doesn't die, it gets <em>slow</em> — 30-second responses on drop day. Every in-flight purchase now pins a <code>pending_payment</code> seat for minutes. Pending seats pile up, the map fills with unbuyable seats, conversion craters — while the queue keeps admitting shoppers into an empty-shelved store. Defenses, in order: aggressive payment timeouts (fail at 10s, not 60s), a <strong>circuit breaker</strong> (p2c07) that stops feeding a drowning provider and fails fast, and — the underrated one — <strong>turn the admission dial down</strong> when conversion drops. The waiting room isn't just an entry gate; it's the system's backpressure valve. Admit fewer shoppers while payments are sick, and the queue absorbs the pain invisibly.</p>
+
+<h2>Failure modes and operations</h2>
+
+<p>What I'd watch on a dashboard during a drop, unprompted:</p>
+
+<ul>
+<li><strong>Double-sell alarm.</strong> A reconciliation job continuously cross-checks <code>sold</code> seats against orders and payments: every sold seat has exactly one order, every order one successful charge, no seat twice. Expected result: zero, forever. Any nonzero pages a human immediately — the invariant's smoke detector, which also catches money-side ghosts (charges with no seat → auto-refund queue).</li>
+<li><strong>Hold-to-purchase conversion.</strong> Normally 70–80% of holds become sales. A crash here is my earliest signal that payments are sick or bots are hoarding holds — it moves minutes before error-rate graphs do.</li>
+<li><strong>Queue depth and admission rate.</strong> Depth tells the PR team what to tweet; admission rate is the live operational throttle, tied to store health.</li>
+<li><strong>Inventory DB vitals:</strong> lock waits, connection pool utilization, p99 write latency. If lock waits climb, contention is escaping the conditional-write design somewhere.</li>
+<li><strong>Payment provider p99 and breaker state.</strong></li>
+</ul>
+
+<p><strong>Rollout:</strong> never let a real drop be the first test. Replay a synthetic drop — millions of simulated queue joiners, scripted contention on the same hot seats — against production infrastructure before every major on-sale. Ship changes behind flags, canaried on small-venue events (a Tuesday comedy club sale, not Coldplay). Admission starts conservative and ramps: you can always speed a queue up; over-admitting then slowing down means users watching checkouts time out, which is how trust dies.</p>
+
+<p><strong>What breaks at 10x?</strong> Say 100M users show up, same 50K seats. Here's the payoff of admission control: the store, inventory island, and payment path see <em>exactly the same load as before</em> — the token bucket doesn't care how long the line is. What must scale 10x is only the cheap part: the CDN-served queue page and the queue service (an append-only list plus a counter — Redis does this in its sleep, and it shards trivially because queue position doesn't need global precision). The part that's hard to scale was made load-independent; the part that must absorb arbitrary load was made trivially scalable. If the interviewer 10x's the <em>seats</em> instead, the seat-row model still holds — it's when seats become indistinguishable (general admission) that the model should change, and that's an exercise below.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>The interviewer will let you talk traffic for a while, then aim every probe at the invariant and its edges:</p>
+<ul>
+<li>"Walk me through two users clicking the same seat in the same millisecond. Show me exactly where your design decides the winner." — they want the atomic operation named, not vibes about locking.</li>
+<li>"Why not optimistic locking with retries here?" — testing whether you know it's the right tool at low contention and a retry-storm generator at high contention.</li>
+<li>"A hold expires while its owner's payment is in flight and succeeds 40 seconds later. What happens?" — the edge that separates a working design from a complete one; they want a committed rule, either extend-on-payment-start or refund-late-success, ideally both.</li>
+<li>"Your payment provider's latency goes to 30 seconds during the drop. What breaks first, and what do you turn down?" — cascade thinking: pending-seat pileup, conversion collapse, admission dial.</li>
+<li>"How do you <em>know</em> you've never oversold?" — monitoring as proof: the reconciliation job whose only acceptable output is zero.</li>
+<li>"Now make it fair — how do you stop bots from taking every seat?" — waiting room design, randomized entry, verification before drop day.</li>
+</ul>
+</div>
+
+<h2>The trade-offs I committed to</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Chosen over</th><th>What it costs me</th></tr></thead>
+<tbody>
+<tr><td>Atomic conditional write for holds</td><td>Row locks / optimistic retries</td><td>Losers get a hard "seat gone" instead of waiting for a maybe; every state change must be written as a guarded update, which is easy to get subtly wrong in review</td></tr>
+<tr><td>Hold-with-TTL before payment</td><td>Direct buy (lock at purchase)</td><td>Inventory sits unavailable inside hold windows; abandoned carts delay resale of hot seats by up to 10 minutes</td></tr>
+<tr><td>One CP inventory island (single Postgres)</td><td>Sharded / multi-leader inventory</td><td>A hard write-throughput ceiling and a real failover story to operate; fine at hundreds of writes/sec, revisit if an event ever needs 100x that</td></tr>
+<tr><td>Stale cached seat map (seconds)</td><td>Live map per user</td><td>Users sometimes click seats that are already gone and see "seat taken" — a UX papercut accepted to shed ~2M reads/sec</td></tr>
+<tr><td>Waiting room with randomized-window entry</td><td>Autoscaling the store; strict FIFO</td><td>People wait visibly, and randomization means arriving first in the surge guarantees nothing — honesty in the UI is the mitigation</td></tr>
+<tr><td>Extend-on-payment-start + refund-late-success</td><td>Strict expiry (seat always reclaimable at TTL)</td><td>A slow payment can pin a seat a few extra minutes; rare double-payments become refunds and apology emails instead of double-sold seats</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c08-f1">
+<p class="fey-prompt">A junior teammate asks: "We check if the seat is free before we sell it — how can it possibly sell twice?" Explain the race and the fix in five or six sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Your check and your write are two separate trips to the database, and the world can change between them. If two requests both run the check while the seat is still free, both pass, then both write — the seat sells twice, and no default database setting stops it, because each request was individually valid. The fix is to stop checking first: one single statement that says "set this seat to held <em>only if</em> it is still free," so the database evaluates the condition and applies the write as one atomic action. Now there is no gap: the first statement wins, everyone else's matches zero rows and instantly knows it lost. The winner gets a 10-minute hold to pay, with an expiry so an abandoned cart returns the seat automatically. One subtlety: if a hold would expire while its owner's payment is processing, we extend it when payment starts — and if money and seats still disagree, we refund the money, because you can reverse a charge but not a seat someone else now owns.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>New requirement: "best available" — the user asks for 3 adjacent seats and the system picks them. Your conditional write claims one row at a time. What goes wrong, and how do you extend the design?</p></div>
+<details><summary>Answer</summary><p>Three independent conditional writes can partially succeed — you win 12C and 12D but lose 12E — leaving a broken pair you must release (a mini-saga) and retry elsewhere. Two clean fixes. One: wrap the three guarded updates in a single database transaction — all three match or roll back; easy in Postgres since every row lives in one place (a quiet payoff of the unsharded CP island). Two, cuter: precompute adjacency groups and claim a <em>group row</em> atomically, materializing the seat holds under it. Either way, retry alternative groups server-side, and mind fragmentation: greedy best-available allocation strands single seats between sold pairs — an inventory-yield problem venues genuinely care about.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Flip a requirement: the event is general admission — 50,000 identical tickets, no seats. Does the per-seat design survive? What would you change?</p></div>
+<details><summary>Answer</summary><p>The per-row model collapses into one row: a counter at 50,000, and every buyer contends on it — the ultimate hot partition (p2c06). The conditional write still works (<code>UPDATE ... SET remaining = remaining - 1 WHERE remaining &gt; 0</code>) but serializes all sales through one row's lock. Fix: split the counter into ~20 shards of 2,500; a buyer decrements a random shard, retrying another on zero — contention drops 20x, correctness holds because each shard is independently guarded. Alternatively, pre-generate 50K ticket IDs in a queue and pop one per admitted buyer — a pop is atomic by construction. Deeper lesson: with no scarce specific seat to protect while a human deliberates, holds matter less — you can collapse hold+buy into one step.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your payment provider offers no status-query API and no webhooks — you send a charge, and if it times out you simply cannot ask what happened. Redesign the money path to stay safe.</p></div>
+<details><summary>Answer</summary><p>You've lost the "ask again" escape hatch, so unknown outcomes must be resolved by <em>structure</em>. In order of preference: (1) refuse the constraint in real life — a provider without idempotent retry or status query is unfit for this system, and saying so is a legitimate senior answer; (2) two-phase money: authorize first, capture only after the seat flips to sold — an uncaptured authorization expires harmlessly, so an ambiguous timeout defaults to "customer not charged," the safe direction; (3) failing that, treat every timeout as failed, release the seat, and reconcile daily against the provider's settlement file, refunding any charge that snuck through. The ranking guiding all three: never oversell &gt; never silently keep money &gt; never make the customer retry unnecessarily.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Design the reconciliation job from the ops section concretely: what does it compare, how often does it run, and what does it do on each kind of mismatch?</p></div>
+<details><summary>Answer</summary><p>Three datasets: seats (status + order_id), orders, and the provider's charge records. Invariants: every <code>sold</code> seat → exactly one order → exactly one successful charge; no seat in two orders; no charge without an order. Run a fast in-DB pass every few minutes during a drop (seats vs orders — one join over 50K rows) and a full three-way pass hourly plus end-of-day, since webhooks arrive late. On mismatch: seat sold twice → page immediately, freeze the pair, resolve before gates open — the never-event; charge without seat → auto-refund with apology, no human needed; order without charge → re-query via idempotency key, then mark paid or release. Log every auto-action to an append-only audit table — when a Profeco-shaped regulator comes asking, that trail is your defense.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Ticket booking is a concurrency-correctness problem disguised as a traffic problem: the crux is thousands of buyers racing for one seat, and "never sell a seat twice" is an invariant, not a target.</li>
+<li>The 200:1 buyers-to-seats ratio means almost no traffic can convert — control admission with a waiting room instead of autoscaling the store, and the purchase path becomes load-independent.</li>
+<li>Check-then-book always races: the gap between reading "free" and writing "sold" lets two buyers win; the fix is a single atomic conditional write, not a bigger cluster.</li>
+<li>Know the fix ladder and where you stop: row locks are correct but queue connections at high contention; optimistic retries amplify load exactly when conflicts peak; the conditional-write hold with a TTL fails losers fast and cheap.</li>
+<li>Decide the expiry-during-payment edge in advance: extend the hold when payment starts, and when money and seats still disagree, refund the money — never un-sell a seat.</li>
+<li>Split consistency per component: one small CP inventory island holds the truth; maps, queues, and event pages are cached and honestly stale, because even a live seat map is stale by the time you click.</li>
+<li>Payments are a saga with compensation: idempotency keys make retries safe, timeouts are the dangerous unknown, and a slow provider means circuit breakers plus turning the admission dial down.</li>
+<li>Prove the invariant operationally: a reconciliation job whose only acceptable output is zero, hold-to-purchase conversion as the early-warning light, synthetic drops before real ones.</li>
+</ul>
+</div>

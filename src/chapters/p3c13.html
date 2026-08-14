@@ -1,0 +1,299 @@
+<p>"Design a system that counts ad clicks." The interviewer says it flatly, almost bored. You feel a flicker of déjà vu — didn't you just build a click counter in the Top-K chapter? Count things on a stream, sketch a count-min sketch, done in twenty minutes?</p>
+
+<p>Then the interviewer adds one sentence, and the whole problem changes shape: "The counts are what we bill advertisers." Sit with that. In the trending chapter, if the #7 video was really #9, nobody on Earth noticed. Here, every count is a line item on an invoice. If you count a click twice, you charged a customer for something that didn't happen — at scale, that's not a bug, it's a lawsuit. If you drop clicks, your own company quietly loses revenue and never knows. Approximate answers, the entire toolkit that made Top-K easy, just became inadmissible on one of your two paths.</p>
+
+<p>That's the game of this chapter: the same infinite stream of events, but with money-grade correctness on one side and real-time dashboards on the other — and those two requirements pull the architecture in opposite directions. The senior move is to notice, out loud, that they're different requirements and refuse to serve both from one machine.</p>
+
+<h2>Requirements: two customers, two bars</h2>
+
+<p>Scope it out loud: "I'll build the pipeline from a click landing on our servers to (a) an advertiser dashboard and (b) a billing record. Serving the ad, ad auctions, and the ML fraud models themselves are out of scope — I'll leave a slot where fraud verdicts plug in. Fair?"</p>
+
+<p>Functional requirements:</p>
+
+<ul>
+<li><strong>Count clicks per ad, per time window</strong> — the atom everything else is built from.</li>
+<li><strong>Real-time advertiser dashboards:</strong> "how is my campaign doing in the last 5 minutes / hour / today," scoped to each advertiser's own ads.</li>
+<li><strong>Billing:</strong> exact, deduplicated, fraud-filtered click counts per ad, feeding invoices.</li>
+<li><strong>Deduplication:</strong> network retries and double-taps must not become double charges.</li>
+<li><strong>Late events:</strong> clicks from offline devices and buffered mobile SDKs arrive minutes or hours after they happened. They still count.</li>
+<li><strong>Auditability:</strong> when an advertiser disputes an invoice, we can prove every click on it. This is a real requirement, not paranoia — it has been litigated.</li>
+</ul>
+
+<p>Non-functional, with committed numbers:</p>
+
+<ul>
+<li><strong>Scale:</strong> 1 billion clicks/day across 2 million active ads. Average ~12K clicks/sec, plan for a 50K/sec global peak. One viral ad can spike to thousands of clicks per second on its own — remember that, it comes back to bite.</li>
+<li><strong>Dashboard bar:</strong> fresh within ~2 minutes, queries under a second. Small errors tolerable and correctable.</li>
+<li><strong>Billing bar:</strong> the invoice must be exact with respect to deduped, valid clicks. Not "usually right." Exact.</li>
+<li><strong>Ingest availability:</strong> effectively always up. A dropped click is un-billable revenue, silently gone.</li>
+<li><strong>Retention:</strong> raw click log kept 13 months for audit and reprocessing.</li>
+</ul>
+
+<h2>Estimation: put a dollar sign on the error bar</h2>
+
+<p>The throughput math first, because it's about to tell us something surprising. A click event — click ID, ad ID, timestamp, user context — is roughly 200 bytes. At the 50K/sec peak that's 10 MB/sec into the pipeline. Kafka does that on one modest broker. Raw storage: 1B/day × 200 bytes = 200 GB/day, call it 70 TB/year, and it compresses several-fold in object storage. Say the conclusion: <strong>"Throughput and storage are non-problems here. This is not a scale question wearing a disguise — it's a correctness question. My deep dives will be about guarantees, not throughput."</strong></p>
+
+<p>Now the estimate that actually sets the bar. Suppose the average cost-per-click is 50 cents. One billion clicks a day means roughly <strong>$500 million a day</strong> flowing through these counters. A 0.1% counting error — a rounding error by Top-K standards — is $500,000 a day, $180 million a year, either stolen from advertisers or leaked from your own revenue. That single line is why this chapter exists separately from the trending chapter: the acceptable error on the billing path is not "small," it's <em>zero, and provable</em>. Meanwhile the dashboard path genuinely doesn't need that — an advertiser watching a live graph cannot perceive 0.1%. Two bars, so two paths. The architecture writes itself from this paragraph.</p>
+
+<div class="box story"><div class="box-tag">War story — Facebook's $40 million metrics bug</div>
+<p>In 2016 the Wall Street Journal revealed that Facebook had been overstating the "average time spent watching video ads" metric for about two years. The bug was a definition error in the aggregation: views shorter than 3 seconds were excluded from the denominator but the numerator kept the long views, so the average was inflated — Facebook initially estimated by 60–80%, while the advertisers' lawsuit later alleged some figures were inflated far more. Facebook maintained the metric never fed billing and called the suit meritless, but in 2019 it still agreed to pay $40 million to settle with advertisers who argued they had bought video ads based on numbers that were wrong. Notice what the incident actually was: not an outage, not data loss — one aggregation formula, slightly wrong, running quietly at scale for two years. That's the failure shape of counting systems: they don't crash, they drift, and nobody sees it without an independent check. Hold that thought for the reconciliation section.</p>
+</div>
+
+<h2>API and data model: quick, then move</h2>
+
+<ul>
+<li><code>POST /v1/clicks</code> — body <code>{click_id, ad_id, event_ts, device_ctx}</code>, returns <code>202</code> immediately. The <code>click_id</code> is a UUID minted by the client SDK at click time; a retry resends the <em>same</em> ID. That one field is the foundation of dedup (chapter 2.2's idempotency-key habit, applied at the front door).</li>
+<li><code>GET /v1/ads/{ad_id}/stats?from&amp;to&amp;granularity=minute|hour|day</code> — dashboard reads, auth-scoped so an advertiser sees only their own ads.</li>
+<li>Internal: the settlement job's output tables and an audit endpoint that returns the evidence for any billed period.</li>
+</ul>
+
+<p>Three kinds of data, and keeping them separate is half the design: the <strong>raw click log</strong> (immutable, append-only, in object storage — the legal ground truth), <strong>minute aggregates</strong> <code>(window_start, ad_id) → {valid_clicks, filtered_clicks, cost}</code>, and <strong>billing/settlement rows</strong> derived from them. The minute is my billing atom: small enough that any dashboard granularity or invoice period is a sum of atoms, big enough that row counts stay sane. With 2M ads, most idle in most minutes, expect a few hundred million minute rows a day — a volume that matters when we pick stores.</p>
+
+<h2>The high-level machine</h2>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 400" role="img" aria-label="Ad click pipeline with Kafka, Flink, and two sinks: OLAP for dashboards and a transactional billing store, plus raw archive and settlement job">
+  <rect class="dg-node" x="8" y="150" width="86" height="52" rx="8"/>
+  <text class="dg-txt" x="22" y="172">Client</text>
+  <text class="dg-txt-s" x="22" y="189">click_id</text>
+  <rect class="dg-node" x="128" y="150" width="104" height="52" rx="8"/>
+  <text class="dg-txt" x="142" y="172">Ingest</text>
+  <text class="dg-txt-s" x="142" y="189">validate, 202</text>
+  <rect class="dg-node" x="268" y="144" width="122" height="64" rx="8"/>
+  <text class="dg-txt" x="282" y="168">Kafka</text>
+  <text class="dg-txt-s" x="282" y="185">clicks topic</text>
+  <text class="dg-txt-s" x="282" y="200">partition: ad_id</text>
+  <rect class="dg-node-alt" x="428" y="138" width="140" height="76" rx="8"/>
+  <text class="dg-txt" x="442" y="162">Flink job</text>
+  <text class="dg-txt-s" x="442" y="179">dedup + fraud flag</text>
+  <text class="dg-txt-s" x="442" y="194">1-min windows</text>
+  <text class="dg-txt-s" x="442" y="209">by ad_id</text>
+  <rect class="dg-node" x="612" y="48" width="100" height="60" rx="8"/>
+  <text class="dg-txt" x="626" y="72">ClickHouse</text>
+  <text class="dg-txt-s" x="626" y="89">dashboards</text>
+  <rect class="dg-node" x="612" y="252" width="100" height="60" rx="8"/>
+  <text class="dg-txt" x="626" y="276">Postgres</text>
+  <text class="dg-txt-s" x="626" y="293">billing, exact</text>
+  <rect class="dg-node" x="268" y="316" width="122" height="56" rx="8"/>
+  <text class="dg-txt" x="282" y="338">S3 raw log</text>
+  <text class="dg-txt-s" x="282" y="355">immutable, 13 mo</text>
+  <rect class="dg-node" x="438" y="316" width="120" height="56" rx="8"/>
+  <text class="dg-txt" x="452" y="338">Settle job</text>
+  <text class="dg-txt-s" x="452" y="355">T+1 batch</text>
+  <line class="dg-edge" x1="94" y1="176" x2="128" y2="176" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="232" y1="176" x2="268" y2="176" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="176" x2="428" y2="176" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="568" y1="152" x2="612" y2="88" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="568" y1="200" x2="612" y2="272" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="329" y1="208" x2="329" y2="316" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="390" y1="344" x2="438" y2="344" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="558" y1="330" x2="620" y2="312" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="576" y="116">append rows</text>
+  <text class="dg-txt-s" x="558" y="248">upsert (min, ad)</text>
+  <text class="dg-txt-s" x="336" y="266">archiver</text>
+  <text class="dg-txt-s" x="560" y="360">settled truth</text>
+</svg>
+<figcaption>The dual-sink pipeline. One stream, two exits with different guarantees — and the raw log underneath feeds the batch job that produces the numbers you actually bill from.</figcaption>
+</figure>
+
+<p><strong>Write path:</strong> the click hits the ingest service, which validates the shape, stamps an arrival time, and produces it to a Kafka topic — then returns <code>202</code>. Nothing synchronous happens beyond "it's durably in Kafka." <strong>I'm partitioning the topic by <code>ad_id</code>, and this choice is load-bearing, so I'll justify it:</strong> hashing on ad ID means every event for a given ad lands on the same partition, which means one Flink task owns all of that ad's state — its window counts, its seen-click-IDs — with <em>no shuffle step</em> between reading and aggregating. It also means a retried click (same <code>click_id</code>, same <code>ad_id</code>) lands on the same partition as the original, so dedup state can be local instead of global. The cost, and I'll name it before the interviewer does: a viral ad makes a hot partition. That's a deep dive.</p>
+
+<p>The Flink job consumes, flags fraud (a cheap rule-based pass inline — datacenter IP lists, absurd per-device click velocity; the heavyweight ML scoring runs offline and adjusts at settlement), dedups by <code>click_id</code>, and counts into <strong>tumbling one-minute windows keyed by ad_id</strong>. Each closed window emits one row to two sinks: ClickHouse for dashboards — columnar, brutal at time-range aggregation, with materialized rollups minute→hour→day so a 30-day dashboard reads 30 rows, not 43,200 — and Postgres for billing. A separate dumb archiver copies the raw topic to S3 untouched.</p>
+
+<p><strong>Read path:</strong> the dashboard API hits ClickHouse rollups, filtered by the advertiser's own IDs (the table is ordered by <code>advertiser_id, ad_id, window_start</code> precisely because every real query starts with "my ads"). Billing reads Postgres — but only the <em>settled</em> rows, and what "settled" means is the second deep dive.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>A busy shop runs two sets of numbers from the same receipt tape. On the wall there's a live sales counter — updated instantly, glanced at all day, and if it's off by a coffee or two, nobody cares. In the back, the accountant works from the receipt tape itself, slowly, and produces the books that the tax office sees. Same events, two consumers, two bars. The rookie mistake is making the wall counter accountant-grade (you'll rebuild the shop around a scoreboard) or letting the accountant copy from the wall counter (you'll go to jail). Keep the tape; feed both from it; never confuse which one you're reading.</p>
+</div>
+
+<p>Clock check: the loop is closed end to end. Now I announce the agenda instead of waiting for one: "The two problems this question exists to probe are how counts get into the billing store without ever double-counting across failures, and what happens to clicks that show up late. Delivery guarantees first."</p>
+
+<h2>Deep dive 1: the delivery guarantee into the billing store</h2>
+
+<div class="box crux"><div class="box-tag">The crux</div>
+<p>This is the hardest part, and it's the payoff of chapter 2.9. Every component in this pipeline retries: the SDK retries the upload, the ingest producer retries the Kafka write, Flink replays from checkpoints after a crash, the sink retries failed batches. Retries mean duplicates, and a duplicate on this path is a customer charged twice. "Exactly-once" is the most oversold phrase in streaming — no network can deliver a message exactly once — so the real question the interviewer is asking is: <em>through crashes and retries at every hop, how does the effect on the billing table happen exactly once?</em> You must be able to walk a crash, step by step, and show where the duplicate dies.</p>
+</div>
+
+<p>Recap the machinery in three sentences (chapter 2.9 has the full story). Flink periodically checkpoints its state — every window's running counts, every operator's Kafka read position — as one consistent snapshot. On crash, it restores the last checkpoint and rewinds Kafka to the positions stored <em>in that same snapshot</em>, so state and input position always agree: internally, it's as if the failure never happened. The problem is the edge of the system: anything the job <em>emitted</em> between the last checkpoint and the crash has already left the building, and after restore it will be computed and emitted <em>again</em>.</p>
+
+<p>Two honest ways to kill that duplicate at the billing sink:</p>
+
+<ul>
+<li><strong>Transactional (two-phase-commit) sink.</strong> The sink writes each batch inside a database transaction tied to a checkpoint: pre-commit when the checkpoint starts, commit only when Flink confirms the checkpoint completed everywhere. Emissions after the last completed checkpoint were never committed, so the replay simply rewrites them. This is chapter 2.1's 2PC, reborn at the stream edge — Flink ships it as a two-phase-commit sink base class, and Kafka itself gained transactions in version 0.11 (2017) for exactly this end-to-end story. Costs: results are invisible until the next checkpoint commits (latency = checkpoint interval), a coordinator lives in your hot path, and a sink stuck in pre-commit can wedge checkpointing for the whole job.</li>
+<li><strong>At-least-once delivery + idempotent upsert.</strong> Let duplicates happen, and make them harmless: the sink does <code>UPSERT ... (window_start, ad_id)</code>. Replayed emission, same key, same recomputed value — writing it twice changes nothing. This works here for a specific reason worth saying out loud: the natural key is stable and the value is deterministic. After restore, Flink recomputes the same windows from the same rewound input and produces the same rows. The duplicate doesn't sneak past the guard; it arrives and is absorbed.</li>
+</ul>
+
+<p><strong>I'll commit to the idempotent upsert, and here's the reasoning.</strong> Exactly-once is an end-to-end property, and the cheapest place to buy it is the last hop — the same lesson as Stripe's idempotency keys in chapter 2.2. The upsert version has no coordinator, no transaction timeouts to tune, no wedged-checkpoint failure mode, and it works with any store that can upsert. The 2PC sink earns its complexity when the target <em>can't</em> upsert (an append-only ledger, a Kafka output topic where consumers must never observe uncommitted results) — that's a real case, it's just not this one. And there's a second net under the whole act, which is the next deep dive: the bill doesn't come straight from the stream anyway. The sink writes in checkpoint-aligned batches — a few tens of thousands of rows bulk-upserted every ten seconds, comfortably inside one well-kept Postgres — not row-at-a-time dribbles.</p>
+
+<p>Now walk the crash, because the interviewer will ask: checkpoint 41 completes with Kafka offset 9,000,000 and the 12:04 windows mid-count. At 12:05:07 the job emits the 12:04 rows to both sinks. At 12:05:09 a task manager dies — <em>after</em> the upserts landed. Flink restores checkpoint 41, rewinds to offset 9,000,000, recounts 12:04 from the same events, emits the same rows again. Postgres upserts them: same key, same values, zero net effect. No double-billing, and I can say precisely why: replay determinism plus keyed idempotent writes. That two-clause sentence is the whole deep dive compressed; own it.</p>
+
+<h2>Deep dive 2: late clicks, watermarks, and where the bill really comes from</h2>
+
+<p>A user on the metro taps an ad at 09:12, event queued in the SDK; connectivity returns at 09:47 and the click arrives 35 minutes old. Which minute does it belong to? Its <em>event time</em> — 09:12, when it happened — not its <em>processing time</em>, when we saw it. Billing on processing time would make invoices depend on our queue lag and the user's subway schedule, which no advertiser would accept. So windows are event-time windows, and that creates the question that haunts all of chapter 2.9: how long do you hold the 09:12 window open, waiting for stragglers, before you dare emit a number?</p>
+
+<p>The watermark is the pipeline's working answer: a moving claim that says "I believe I've now seen everything with event time before T," computed as the max event time observed minus a bound (I'll commit to 60 seconds). When the watermark passes the end of a window, the window fires and emits its count. For the stragglers behind even that, I'll allow <strong>15 minutes of lateness</strong>: a late click inside that grace updates the already-emitted window, and the new, more complete row flows to both sinks — the upsert overwrites, which is exactly why the upsert design also solves late updates for free. Beyond 15 minutes, the click is diverted to a <strong>side output</strong> — a separate late-events stream, archived to S3. Not dropped. Never dropped. Just excluded from the real-time answer.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 300" role="img" aria-label="Three clicks with the same event-time window arriving at different times: on time, within allowed lateness, and beyond it to a side output">
+  <line class="dg-edge" x1="30" y1="70" x2="690" y2="70"/>
+  <text class="dg-txt-s" x="30" y="52">arrival (processing) time</text>
+  <text class="dg-txt-s" x="96" y="92">09:13</text>
+  <text class="dg-txt-s" x="330" y="92">09:24</text>
+  <text class="dg-txt-s" x="540" y="92">09:47</text>
+  <circle class="dg-good" cx="110" cy="70" r="7"/>
+  <circle class="dg-node-alt" cx="344" cy="70" r="7"/>
+  <circle class="dg-bad" cx="554" cy="70" r="7"/>
+  <text class="dg-txt-s" x="60" y="30">all three clicked in the 09:12 window</text>
+  <rect class="dg-zone" x="40" y="120" width="640" height="60" rx="8"/>
+  <text class="dg-txt" x="56" y="145">A: arrives before watermark passes 09:13</text>
+  <text class="dg-txt-s" x="56" y="164">counted in the window's first result</text>
+  <rect class="dg-zone" x="40" y="192" width="640" height="44" rx="8"/>
+  <text class="dg-txt" x="56" y="212">B: 11 min late, inside 15-min grace → window refires, upsert overwrites row</text>
+  <rect class="dg-zone" x="40" y="248" width="640" height="44" rx="8"/>
+  <text class="dg-txt" x="56" y="268">C: 35 min late → side output → S3 → counted at settlement, never lost</text>
+  <line class="dg-edge" x1="110" y1="77" x2="110" y2="120" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="344" y1="77" x2="344" y2="192" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="554" y1="77" x2="554" y2="248" marker-end="url(#arrow)"/>
+</svg>
+<figcaption>Same event-time window, three fates. Nothing is dropped — lateness only decides <em>which path</em> counts a click, not <em>whether</em> it counts.</figcaption>
+</figure>
+
+<p>So the streaming numbers are honest but incomplete: they're missing whatever landed in the side output, plus whatever a bug miscounted. Which brings us to the sentence that resolves this whole chapter's tension, the one to say slowly at the whiteboard: <strong>the stream serves, the batch settles — and you bill from settled.</strong> Every night, a batch job (T+1: today it processes yesterday) reads the raw S3 archive — which contains <em>everything</em>, including every late arrival and every side-output refugee — dedups globally by <code>click_id</code>, applies the final fraud verdicts, recounts every <code>(minute, ad)</code> atom from scratch, and writes settled rows. The invoice is generated from settled rows only. The dashboard keeps serving streaming rows, clearly labeled provisional, because that's the path where two minutes of freshness matters and 0.1% doesn't.</p>
+
+<p>The settle pass costs one job over 200 GB and buys three things: a hard ceiling on how wrong billing can ever be (one day, then truth reasserts itself), a second, <em>independently computed</em> opinion to compare against the stream — the drift detector Facebook's metrics bug lacked for two years — and the audit answer: every settled row is a deterministic recount of an immutable log we still have. When the two opinions diverge beyond 0.1% for any ad-day, a human gets paged <em>before</em> an advertiser does the math for us.</p>
+
+<div class="box analogy"><div class="box-tag">Analogy</div>
+<p>This is exactly how elections work. On election night you get live results — fast, updated every minute, accurate enough to call most races, and nobody treats them as final. Mail-in ballots postmarked on time (event time!) keep trickling in for days and are counted if they arrive within the legal grace period — arrivals after that aren't shredded, they're logged and handled by a separate process. Weeks later comes the certified count: slower, recounted from the physical ballots, and <em>that</em> is the one with legal force. Election night = your dashboard. Certification = your settlement job. A country that certified from the TV ticker would be insane; so is a billing system that invoices from the stream.</p>
+</div>
+
+<h2>Deep dive 3: dedup and the fraud stage</h2>
+
+<p>Duplicates arrive two ways: innocently (the SDK retried an upload that had actually succeeded; a user double-tapped) and maliciously (a bot farm hammering a competitor's ad to drain their budget). The innocent kind is solved by the <code>click_id</code>: the Flink job keeps, per ad, a set of click IDs seen in the last 24 hours in its keyed RocksDB state, with a TTL. A duplicate finds its ID present and is dropped before counting. Because we partitioned by <code>ad_id</code>, the retry provably lands on the same task as the original — the state lookup is local, no distributed set needed. A Bloom filter (chapter 2.10) could shrink that state, but its false positives would drop <em>real</em> clicks — a silent undercount on a money path — and RocksDB state is disk-backed and cheap, so exact wins here. And once more, defense in depth: the settle job dedups globally by <code>click_id</code> anyway, so anything that slips the streaming dedup dies at settlement.</p>
+
+<p>The malicious kind is a different discipline — fraud detection is its own team at any ad company — so architect for it rather than solving it: an enrichment stage flags each click <code>valid</code> or <code>filtered</code> using cheap online signals (datacenter IP ranges, impossible click velocity per device, missing interaction signatures), and crucially it <em>flags rather than drops</em>. Filtered clicks flow through the whole pipeline and the raw log, excluded only from billable counts. That means the fraud model can be re-run retroactively at settlement with heavier offline ML, verdicts can be audited, and advertisers can be credited after the fact when detection improves. Never delete evidence in a system whose job is producing evidence.</p>
+
+<div class="box story"><div class="box-tag">War story — Google, click fraud, and the $90 million audit</div>
+<p>In 2005, Lane's Gifts &amp; Collectibles — an Arkansas retailer — led a class action claiming Google billed advertisers for fraudulent clicks. Google settled in 2006 for up to $90 million in advertising credits, but the technically interesting part is what the settlement required: an independent expert, NYU professor Alexander Tuzhilin, was brought in to examine Google's invalid-click detection from the inside. His report concluded Google's efforts were reasonable — and it publicly documented the architecture: layered filters, most fraudulent clicks discarded <em>proactively</em> by automated real-time filters before they ever reached a bill, backed by offline analysis and manual investigation, with credits issued retroactively for whatever got through. Two lessons for your whiteboard. First, "dedup and fraud filtering" isn't gold-plating — it's the difference between an invoice and a legal liability, and a court once made a professor audit exactly this pipeline. Second, notice the shape Tuzhilin described is the shape we just drew: cheap online filters inline, expensive offline judgment at settlement, money corrected after the fact. The industry converged there because billing wrong is worse than billing late.</p>
+</div>
+
+<h2>Backfill: when the logic itself was wrong</h2>
+
+<p>A month in, you discover the dedup TTL had a bug and some region overcounted by 0.3% for nine days. The fix for the future is a deploy; the fix for the <em>past</em> is chapter 2.11's playbook, and this system was built for it. The raw log is immutable and complete, so: stand up the corrected job as a second reader over the S3 archive (Kafka's retention window will be long gone — that's why the archive exists), replay the nine days into <strong>shadow tables</strong>, diff shadow against live settled rows, eyeball the diffs until they're explainable, then swap in a verified transaction and issue credits for the deltas. Nothing is edited in place; the old wrong numbers remain on record next to the correction, because an audit trail that can be quietly rewritten isn't an audit trail. Announce this unprompted in the interview — reprocessing is the question interviewers hold in reserve, and answering it before it's asked is a senior tell.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 720 260" role="img" aria-label="Reconciliation loop: stream path produces provisional rows, batch path recomputes settled rows from the raw log, a comparator alarms on divergence and invoices come from settled">
+  <rect class="dg-node" x="10" y="30" width="110" height="48" rx="8"/>
+  <text class="dg-txt" x="24" y="59">Kafka</text>
+  <rect class="dg-node" x="160" y="30" width="110" height="48" rx="8"/>
+  <text class="dg-txt" x="174" y="59">Flink</text>
+  <rect class="dg-node" x="310" y="30" width="150" height="48" rx="8"/>
+  <text class="dg-txt" x="324" y="52">provisional rows</text>
+  <text class="dg-txt-s" x="324" y="68">dashboards read</text>
+  <rect class="dg-node" x="10" y="160" width="110" height="48" rx="8"/>
+  <text class="dg-txt" x="24" y="182">S3 raw log</text>
+  <text class="dg-txt-s" x="24" y="198">+ side output</text>
+  <rect class="dg-node" x="160" y="160" width="110" height="48" rx="8"/>
+  <text class="dg-txt" x="174" y="182">T+1 batch</text>
+  <text class="dg-txt-s" x="174" y="198">global dedup</text>
+  <rect class="dg-node-alt" x="310" y="160" width="150" height="48" rx="8"/>
+  <text class="dg-txt" x="324" y="182">settled rows</text>
+  <text class="dg-txt-s" x="324" y="198">invoices read</text>
+  <rect class="dg-node" x="520" y="95" width="120" height="52" rx="8"/>
+  <text class="dg-txt" x="534" y="117">compare</text>
+  <text class="dg-txt-s" x="534" y="134">Δ &gt; 0.1%? page</text>
+  <line class="dg-edge" x1="120" y1="54" x2="160" y2="54" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="270" y1="54" x2="310" y2="54" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="120" y1="184" x2="160" y2="184" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="270" y1="184" x2="310" y2="184" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="460" y1="54" x2="530" y2="98" marker-end="url(#arrow)"/>
+  <line class="dg-edge" x1="460" y1="184" x2="530" y2="144" marker-end="url(#arrow)"/>
+  <text class="dg-txt-s" x="480" y="40">stream opinion</text>
+  <text class="dg-txt-s" x="474" y="212">batch opinion</text>
+</svg>
+<figcaption>Two independent computations of the same truth, compared daily. The stream serves; the batch settles; the diff is your drift alarm.</figcaption>
+</figure>
+
+<h2>Failure modes and operations</h2>
+
+<p><strong>Flink job crashes.</strong> Covered in the crux walk: restore checkpoint, rewind Kafka, recount, idempotent upserts absorb the re-emissions. The user-visible symptom is dashboards going stale for the recovery minutes — annoying, not costly. The metric that matters is <em>watermark lag</em>: how far event-time progress trails the wall clock. It's the single best health signal for the whole pipeline, because everything downstream — window firing, dashboard freshness — keys off the watermark. One subtle trap from chapter 2.9: the watermark is the <em>minimum</em> across partitions, so one idle partition (an ad topic partition with no traffic) can silently hold back every window in the job. Configure an idleness timeout so quiet partitions are excluded, and alert when watermark lag exceeds a couple of minutes.</p>
+
+<p><strong>The viral ad.</strong> Partitioning by <code>ad_id</code> put all of one ad's traffic on one partition — hot-partition roulette, straight from chapter 2.6. A Super Bowl campaign doing 50K clicks/sec alone would swamp a single Flink subtask while its neighbors idle. The standard fix, and I'd build it behind a hot-key detector rather than for every ad: <strong>salt the key</strong> — split <code>ad_777</code> into <code>ad_777#0…#15</code> spread across partitions, each subtask counting a partial sum, with a tiny second-stage task merging the 16 partials per minute into one row. Counting is the best possible case for salting because sums merge exactly — no top-K merge headaches, no sketch error. Cost: an extra hop and a merge operator, paid only by hot keys.</p>
+
+<p><strong>Sink trouble.</strong> If Postgres slows or a bulk upsert fails, the sink retries and backpressure propagates up the job — Kafka absorbs the backlog (that's what it's for; chapter 2.7's lesson that the queue is your shock absorber). Alert on consumer lag and checkpoint duration; a checkpoint that used to take 5 seconds taking 90 is your earliest warning that state or a sink is sick.</p>
+
+<p><strong>Silent wrongness.</strong> The scariest failure in a counting system is the one with no error log — a fraud rule misfiring, a dedup TTL bug, a timezone slip in windowing. Two independent detectors: the daily stream-vs-settled diff (already built), and <em>canary clicks</em> — synthetic clicks with known IDs injected continuously at the front door, then verified to appear exactly once in both sinks at the right minute. LinkedIn ran essentially this idea as its Kafka audit system: count events per stage per time bucket, compare stage against stage, alarm on loss. End-to-end counting checks catch entire categories of bugs that per-component health checks can't see.</p>
+
+<p><strong>At 10x</strong> (10B clicks/day, 500K/sec peaks): Kafka and the archiver scale by partitions — so over-provision partition count on day one (say 256), because repartitioning later breaks the ad→partition stickiness the dedup design leans on. Flink scales with partitions; RocksDB state grows linearly and checkpoints must go incremental. ClickHouse ingest of a few thousand row-batches per second doesn't blink. The settle job is embarrassingly parallel over S3 files. Nothing structural changes — which is the mark of a design whose hard parts were guarantees, not throughput, all along.</p>
+
+<div class="box lens"><div class="box-tag">At the whiteboard</div>
+<p>What the interviewer probes next, nearly verbatim:</p>
+<ul>
+<li>"Your Flink job dies <em>after</em> writing the 12:04 rows but <em>before</em> the next checkpoint. Walk me through exactly why the advertiser isn't billed twice." — They want the restore→rewind→recount→idempotent-upsert chain, step by step, no hand-waving at "exactly-once."</li>
+<li>"A click arrives three hours late. Trace it. Does it get billed?" — Side output → S3 → settlement recount → yes, on the corrected invoice. If your answer drops it, you just failed a candidate advertisers would sue.</li>
+<li>"Why partition by ad_id instead of round-robin?" — State locality: aggregation without a shuffle, dedup without a distributed set. Then name the hot-partition cost yourself and give the salting fix.</li>
+<li>"Stream and batch disagree by 0.4% for one advertiser yesterday. Which is right, and what do you do?" — Batch, by construction (complete input, global dedup). Bill from settled, alarm fired, now root-cause the stream: usually late-event volume or a fraud-rule change.</li>
+<li>"Prove last March's invoice to an angry advertiser's auditor." — Immutable raw log, deterministic settle job, replayable: re-run the recount in front of them. If your design can't answer this, it has a compliance-shaped hole.</li>
+</ul>
+</div>
+
+<h2>The committed choices, priced</h2>
+
+<table>
+<thead><tr><th>Decision</th><th>Why</th><th>What it costs</th></tr></thead>
+<tbody>
+<tr><td>Partition Kafka by <code>ad_id</code></td><td>Stateful aggregation and dedup with no shuffle; retries land where the state lives</td><td>Viral ads create hot partitions — needs detection + key salting with a merge stage</td></tr>
+<tr><td>At-least-once + idempotent upsert on <code>(minute, ad)</code>, not a 2PC sink</td><td>Same effectively-once outcome with no coordinator, no wedged-transaction failure modes; late updates come free</td><td>Only works because the key is stable and recomputation is deterministic; an append-only sink would force 2PC back in</td></tr>
+<tr><td>Event-time windows, 60s watermark, 15-min allowed lateness</td><td>Bills reflect when clicks happened, not our queue lag</td><td>Results are provisional and can revise for 15 minutes; watermark lag becomes a metric you must watch</td></tr>
+<tr><td>Bill from T+1 batch settlement, not the stream</td><td>Complete input (all late events), global dedup, independent check on the stream, replayable proof</td><td>Invoices trail reality by a day; you run and own a second compute path</td></tr>
+<tr><td>Tumbling 1-minute atoms</td><td>Any dashboard granularity or invoice period is a sum of atoms</td><td>Hundreds of millions of rows/day — forces rollups on the OLAP side</td></tr>
+<tr><td>Fraud <em>flags</em>, never deletes</td><td>Retroactive re-scoring, auditable verdicts, advertiser credits possible</td><td>Filtered traffic flows through and is stored — you pay to keep what you don't bill</td></tr>
+<tr><td>Immutable raw log, 13 months</td><td>The audit answer and the backfill fuel; corrections are append-only</td><td>~70 TB/year raw (much less compressed) — cheap, but someone owns lifecycle and access control</td></tr>
+</tbody>
+</table>
+
+<div class="feynman" data-key="p3c13-f1">
+<p class="fey-prompt">A junior asks: "We have a real-time pipeline that's 99.9% accurate. Why do we bill from a slow overnight batch job instead?" Answer in five sentences.</p>
+<details class="fey-model"><summary>Compare with a model answer</summary>
+<p>Because 99.9% accurate on half a billion dollars a day is half a million dollars of wrong bills every day. The stream has to answer <em>now</em>, so it must guess about clicks that haven't arrived yet — phones come back online hours later — and a guess is fine for a dashboard but not for an invoice. The batch job runs a day later over the complete raw log, so it has every late click, can dedup globally, and computes the same number every time you run it — which also means we can re-run it in front of an auditor to prove a bill. It's also our alarm system: two independent computations of the same counts, compared daily, catch silent bugs that neither would catch alone. So the stream serves the dashboard, the batch settles the money — fast where fast matters, exact where exact matters.</p>
+</details>
+</div>
+
+<h2>Exercises</h2>
+
+<div class="exercise">
+<div class="ex-q"><p>Add budget pacing: an ad must stop being served once its daily budget is spent. What does this new consumer of your counts need, and why does neither of your existing paths serve it well?</p></div>
+<details><summary>Answer</summary><p>Pacing needs a <em>low-latency, always-available, approximately-right</em> running spend per ad — seconds fresh, because at 1K clicks/sec a viral ad burns budget between dashboard refreshes. Settled data is a day late (useless); even the streaming sink trails by the window + watermark delay. So add a third, deliberately cheap consumer: a lightweight aggregator (or the Flink job itself) pushing running spend into Redis with sub-second freshness and no exactness guarantee, and stop serving at ~95% of budget to leave a safety margin for in-flight clicks. Overspend beyond what you can bill is eaten by the platform as over-delivery credit — which is exactly how real ad platforms handle it. The senior insight: a third consumer with a third freshness/accuracy contract gets a third path; don't torture the billing path into being fast or the dashboard path into being exact.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Super Bowl: one ad spikes to 100x its normal rate for 20 minutes while global traffic is 3x. List, in order, the first three things that degrade and your mitigation for each.</p></div>
+<details><summary>Answer</summary><p>(1) The hot ad's Kafka partition and its Flink subtask saturate first — one key's traffic can't spread by adding machines. Mitigation: hot-key detection flips the ad to salted sub-keys (<code>ad#0…#15</code>) with a second-stage merge; sums merge exactly, so this is safe for money. (2) Checkpoint duration balloons as that subtask's state and in-flight backlog grow, delaying sink batches — alert on checkpoint time, use incremental checkpoints, and let Kafka absorb lag rather than shedding events (never shed on a money path). (3) Watermark lag rises as the backlog delays processing, so dashboards go stale for everyone — communicate staleness in the UI ("data delayed ~4 min") rather than pretending. Note what does <em>not</em> break: billing correctness. Backlog delays settlement inputs by minutes, and T+1 settlement doesn't care.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Requirement flip: the CFO demands that dashboards always exactly match what will be invoiced. What are your options, and what does each cost?</p></div>
+<details><summary>Answer</summary><p>Option A: dashboards read only settled data — exact match achieved, but everything is a day stale, which kills the "how is my campaign doing right now" use case. Option B: show both numbers, labeled — "live (provisional)" and "billable (settled through yesterday)" — which is what mature ad platforms actually do; costs only UI honesty. Option C: make the stream invoice-grade in real time — and here you must say the hard truth: it's impossible without changing the definition of a click, because a click that hasn't arrived yet (offline device) cannot be in any real-time number. You'd have to bill on processing time, making invoices depend on queue lag — advertisers would rightly refuse. The senior answer is B plus educating the CFO that the mismatch isn't sloppiness; it's the physics of late-arriving data made visible.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>An advertiser disputes their invoice for the 3rd of last month, claiming they were billed for ~2% more clicks than their own analytics show. Walk the audit path end to end.</p></div>
+<details><summary>Answer</summary><p>Pull the settled rows for their ads for that day, then the raw events behind them from the S3 archive — every billed click with its <code>click_id</code>, timestamp, and fraud verdict. Re-run the settlement recount for that ad-day and show it reproduces the invoice exactly (determinism is the point of settling from an immutable log). Then reconcile definitions against their analytics: the usual suspects are their client-side tracker missing clicks that bounced before their page's JS loaded, our fraud filtering (we bill <em>fewer</em> than raw), and timezone or attribution-window mismatches. If a real discrepancy remains — say our dedup missed a duplicate class — the raw log proves it, you credit the delta, fix the job, and backfill via shadow tables. The design's whole audit story is one sentence: we can recompute any bill from evidence we never edit.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>A dedup bug shipped Monday and was found Thursday: one SDK version's retries used fresh <code>click_id</code>s, so its duplicates were billed. Kafka retention is 7 days. Plan the correction.</p></div>
+<details><summary>Answer</summary><p>First, stop the bleeding: hotfix the SDK signature server-side (fingerprint dedup on <code>ad_id + device + timestamp</code> bucket for that SDK version as a stopgap). Correction: you don't need Kafka at all — the raw S3 archive has the affected days (this is why the archive, not Kafka retention, is the system of record for replay). Write the corrected dedup as a batch job over Mon–Thu raw data into shadow settled tables, diff against live settled rows to size the damage per advertiser, review, then swap and append credit line items — never edit the original rows. Publish the incident to affected advertisers with the credits. Postscript for the interview: this is chapter 2.11's shadow-table migration applied to data instead of schema, and the reason "raw log retained 13 months" was a requirement, not a nice-to-have.</p></details>
+</div>
+
+<div class="takeaways"><div class="box-tag">Takeaways</div>
+<ul>
+<li>Billing and dashboards are different customers with different bars — exact-and-auditable versus fresh-and-approximate — and the core architectural act is refusing to serve both from one path.</li>
+<li>Estimation's job here is pricing the error bar: at $500M/day flowing through the counters, 0.1% is $180M/year, which is why the toolkit that worked for Top-K is inadmissible for billing.</li>
+<li>Partitioning the stream by <code>ad_id</code> co-locates each ad's aggregation and dedup state so no shuffle or distributed set is needed — at the priced-in cost of hot partitions, fixed by key salting with an exact merge.</li>
+<li>Effectively-once into the billing store = Flink's checkpoint-and-rewind replay plus an idempotent upsert keyed by <code>(window, ad)</code>; the 2PC transactional sink is the honest alternative you reach for only when the sink can't upsert.</li>
+<li>Count in event time with watermarks and bounded lateness; late-beyond-grace events go to a side output, not the floor.</li>
+<li>The stream serves, the batch settles, and you bill from settled: a T+1 recount over the immutable raw log gives complete input, global dedup, an independent drift alarm, and a reproducible answer for auditors.</li>
+<li>Fraud filtering flags and never deletes, so verdicts stay auditable and money can be corrected retroactively — the shape a court-appointed auditor found inside Google.</li>
+<li>The scariest failure is silent wrongness; build the detectors that catch it — stream-vs-batch divergence alarms and end-to-end canary clicks — because counting systems drift, they don't crash.</li>
+</ul>
+</div>

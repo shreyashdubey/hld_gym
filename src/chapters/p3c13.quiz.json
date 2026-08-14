@@ -1,0 +1,397 @@
+{
+  "chapter": "p3c13",
+  "items": [
+    {
+      "id": "p3c13-q01", "level": 1, "type": "mcq", "tag": "architecture",
+      "q": "Why does the ad click pipeline split into two sinks — an OLAP store for dashboards and a transactional store for billing?",
+      "options": [
+        {"t": "The two consumers have incompatible bars: fresh-and-approximate versus exact-and-auditable", "correct": true,
+         "why": "Right. An advertiser watching a live graph can't perceive 0.1% error but needs two-minute freshness; an invoice must be exact and provable but can trail by a day. Different contracts, different stores, different paths."},
+        {"t": "OLAP databases can't store money amounts", "correct": false,
+         "why": "They can — ClickHouse handles decimals fine. The split isn't about data types; it's about guarantees. The OLAP path tolerates approximation and revision; the billing path doesn't."},
+        {"t": "A single store can't absorb a billion click writes per day, so the load has to be divided between two databases before either falls over", "correct": false,
+         "why": "The estimation showed the opposite: the stream aggregates into minute rows, and the resulting write volume is modest for one store. This problem is a correctness question, not a scale question — that's the whole point of the chapter."},
+        {"t": "Regulations require ad data to be stored twice", "correct": false,
+         "why": "No such regulation. Auditability does require an immutable raw log, but the dual sinks exist because two consumers have incompatible freshness/accuracy needs."}
+      ]
+    },
+    {
+      "id": "p3c13-q02", "level": 1, "type": "mcq", "tag": "partitioning",
+      "q": "Why partition the Kafka clicks topic by ad_id?",
+      "options": [
+        {"t": "It makes the topic consume less disk space", "correct": false,
+         "why": "Partitioning changes where events land, not how much space they take. Storage is identical under any key."},
+        {"t": "Every event for an ad lands on one partition, so one Flink task owns that ad's state with no shuffle", "correct": true,
+         "why": "Exactly. State locality is the payoff: aggregation happens where the events arrive, and a retried click lands on the same task that saw the original, so dedup is a local lookup instead of a distributed set."},
+        {"t": "Kafka requires a partition key for every topic", "correct": false,
+         "why": "Kafka happily accepts keyless (round-robin) production. Choosing ad_id is a deliberate design decision for stateful aggregation, not a Kafka requirement."},
+        {"t": "It guarantees clicks are processed in exactly the order users made them, which billing needs so budgets are debited chronologically", "correct": false,
+         "why": "Kafka only orders within a partition, so at best you get per-ad arrival order — and counting into windows doesn't need ordering at all. Sums don't care what order the addends arrive in."}
+      ]
+    },
+    {
+      "id": "p3c13-q03", "level": 1, "type": "mcq", "tag": "event-time",
+      "q": "A click happens at 09:12 but arrives at 09:47 because the phone was on the metro. Which window should count it, and what is that timestamp called?",
+      "options": [
+        {"t": "The 09:47 window — processing time, because that's when the system actually saw it", "correct": false,
+         "why": "That's processing time, and billing on it would make invoices depend on queue lag and subway schedules. No advertiser would accept a bill shaped by your infrastructure's mood."},
+        {"t": "Whichever window happens to still be open when it finally arrives, since reopening closed windows is expensive", "correct": false,
+         "why": "That's just processing time with extra steps — the assignment would depend on watermark timing, not on when the click happened. Windows are assigned by the event's own timestamp."},
+        {"t": "The 09:12 window — event time, when the click actually happened", "correct": true,
+         "why": "Right. Windows are event-time windows: the click belongs to the minute it occurred. The whole watermark/lateness machinery exists to make this possible on a stream where arrival order lies."},
+        {"t": "Both windows, to be safe", "correct": false,
+         "why": "Counting one click in two windows is double-billing — the exact sin this system is built to prevent. Each click belongs to exactly one event-time window."}
+      ]
+    },
+    {
+      "id": "p3c13-q04", "level": 1, "type": "mcq", "tag": "watermarks",
+      "q": "What does a watermark at time T actually claim?",
+      "options": [
+        {"t": "\"I believe I've now seen everything with event time before T\" — so windows ending before T can fire", "correct": true,
+         "why": "Yes. It's a moving, heuristic claim of completeness, computed as max observed event time minus a bound. When it passes a window's end, the window emits its count."},
+        {"t": "Every event with timestamp before T has been durably committed to both sinks, so any downstream query at T reads final numbers", "correct": false,
+         "why": "The watermark is about input completeness, not output durability. Sink commits are a separate concern handled by checkpoints and idempotent writes — and even fired windows can still revise within allowed lateness."},
+        {"t": "Events with event time before T will be rejected from now on", "correct": false,
+         "why": "Not rejected — late events inside the allowed-lateness grace still update windows, and events beyond that go to the side output. The watermark fires windows; it doesn't drop data."},
+        {"t": "The system clock across all machines is synchronized to T", "correct": false,
+         "why": "Watermarks are derived from event timestamps in the data, not from machine clocks. They deliberately avoid depending on clock synchronization."}
+      ]
+    },
+    {
+      "id": "p3c13-q05", "level": 1, "type": "mcq", "tag": "late-events",
+      "q": "A click arrives 35 minutes late — beyond the 15-minute allowed lateness. What happens to it?",
+      "options": [
+        {"t": "It's dropped — windows can't stay open forever — and the daily reconciliation job statistically estimates how many late clicks were lost so advertisers can be credited", "correct": false,
+         "why": "Never dropped — a dropped click is un-billable revenue silently gone. And no estimation is needed: the side output preserves the actual event, so settlement counts it exactly, not statistically."},
+        {"t": "It goes to a side output, lands in the raw archive, and gets counted by the settlement job", "correct": true,
+         "why": "Right. Lateness decides which path counts a click, not whether it counts. The T+1 batch recount over the complete archive picks it up, and the corrected invoice includes it."},
+        {"t": "The window reopens and re-emits an updated count immediately", "correct": false,
+         "why": "That's what happens within the 15-minute grace. Beyond it, the streaming state for that window is gone — holding every window open forever would grow state without bound."},
+        {"t": "It's counted in the current minute's window instead", "correct": false,
+         "why": "That would misattribute the click to the wrong minute — a corrupted billing atom. Event-time assignment is never bent to fit arrival time."}
+      ]
+    },
+    {
+      "id": "p3c13-q06", "level": 1, "type": "mcq", "tag": "settlement",
+      "q": "\"The stream serves, the batch settles.\" What does the system actually generate invoices from?",
+      "options": [
+        {"t": "The streaming rows — the whole point of building effectively-once delivery was to make the real-time counts trustworthy enough to invoice from", "correct": false,
+         "why": "Effectively-once fixed duplicates, not completeness. The streaming rows are missing side-output stragglers and carry only provisional fraud verdicts — they serve dashboards, not money."},
+        {"t": "An average of the stream and batch numbers", "correct": false,
+         "why": "Averaging a complete answer with an incomplete one just produces a differently-wrong number. When one path is correct by construction, you use it, not a blend."},
+        {"t": "The raw Kafka topic directly", "correct": false,
+         "why": "Raw events aren't deduped or fraud-filtered — billing from them would charge for retries and bots. The raw log is evidence, not the invoice."},
+        {"t": "The settled rows written by the T+1 batch recount over the raw archive", "correct": true,
+         "why": "Yes. The batch has complete input (all late events), dedups globally, applies final fraud verdicts, and is deterministic — so the bill is reproducible on demand. Bill from settled, always."}
+      ]
+    },
+    {
+      "id": "p3c13-q07", "level": 1, "type": "mcq", "tag": "dedup",
+      "q": "What makes the client-minted click_id the foundation of deduplication?",
+      "options": [
+        {"t": "A retry carries the same ID, so the pipeline recognizes a click it has already counted and drops it", "correct": true,
+         "why": "Right — it's the idempotency-key pattern at the front door. Same click, same ID, no matter how many times the network makes it arrive. Without a stable ID, a retry is indistinguishable from a new click."},
+        {"t": "It encrypts the click so bots can't forge it", "correct": false,
+         "why": "A UUID carries no cryptographic proof of legitimacy — bots mint them too. Fraud is handled by the separate enrichment stage; the click_id only solves duplicate delivery."},
+        {"t": "Kafka's broker-side deduplication uses it to reject any message whose ID it has already stored, so duplicates never reach the consumer", "correct": false,
+         "why": "Kafka doesn't inspect payloads for duplicates — its idempotent producer dedups on internal sequence numbers within one producer session only. The click_id dedup happens in the Flink job's keyed state, and again globally at settlement."},
+        {"t": "It makes clicks sortable by time", "correct": false,
+         "why": "Ordering comes from the event timestamp, a separate field. The click_id's only job is identity — 'this is the same click you already saw.'"}
+      ]
+    },
+    {
+      "id": "p3c13-q08", "level": 1, "type": "mcq", "tag": "fraud",
+      "q": "Why does the fraud stage flag suspicious clicks rather than delete them?",
+      "options": [
+        {"t": "Deleting is too slow at streaming rates", "correct": false,
+         "why": "Dropping an event is actually cheaper than carrying it. The reason to keep filtered clicks is evidential, not performance."},
+        {"t": "Flags keep the evidence: verdicts stay auditable, better models can re-score later, and advertisers can be credited retroactively", "correct": true,
+         "why": "Exactly. A system whose job is producing evidence must never delete evidence. Google's court-appointed auditor documented this same shape: filter from the bill, keep the record, credit after the fact."},
+        {"t": "Advertisers pay a discounted rate for fraudulent clicks", "correct": false,
+         "why": "Filtered clicks are excluded from billing entirely — nobody pays for them. They're retained for audit and re-scoring, not for discounted billing."},
+        {"t": "Deleting events mid-stream would corrupt Kafka's offset bookkeeping and break every downstream consumer's position tracking", "correct": false,
+         "why": "Consumers skip records freely without harming offsets — Kafka wouldn't notice or care. The constraint is auditability, not Kafka mechanics."}
+      ]
+    },
+    {
+      "id": "p3c13-q09", "level": 1, "type": "mcq", "tag": "estimation",
+      "q": "The chapter's estimation concludes this is 'not a scale question wearing a disguise.' What number drives that conclusion?",
+      "options": [
+        {"t": "1 billion clicks/day is only ~12K/sec average (~50K/sec peak) at ~200 bytes each — one modest Kafka broker's workload", "correct": true,
+         "why": "Right. 10 MB/sec peak ingest and 200 GB/day of raw data are non-problems for this stack. The math redirects the deep dives to where the hard part actually is: guarantees, not throughput."},
+        {"t": "2 million ads fit in a single database table", "correct": false,
+         "why": "True but not the driver — ad metadata was never the concern. The throughput and storage math on the click stream itself is what dismisses scale."},
+        {"t": "ClickHouse can handle any volume", "correct": false,
+         "why": "No tool handles 'any' volume, and leaning on a product name instead of arithmetic is exactly what estimation exists to replace."},
+        {"t": "Clicks compress several-fold in object storage, so retention costs stay manageable even at thirteen months", "correct": false,
+         "why": "Compression helps the storage bill but isn't the argument. The core numbers — events/sec and bytes/sec — are small enough that scale was never the crux."}
+      ]
+    },
+    {
+      "id": "p3c13-q10", "level": 1, "type": "mcq", "tag": "audit",
+      "q": "What is the immutable raw click log in S3 actually for?",
+      "options": [
+        {"t": "A disaster-recovery backup: if Kafka ever loses acknowledged events in a broker failure, the stream can be replayed from S3 instead", "correct": false,
+         "why": "Kafka replication already protects against broker loss. The archive's value is being complete, immutable, and retained for 13 months — long after Kafka's retention window expires."},
+        {"t": "Faster dashboard queries on historical data", "correct": false,
+         "why": "Dashboards read pre-aggregated ClickHouse rollups; scanning raw events for a dashboard would be the slowest possible path."},
+        {"t": "It's the legal ground truth: settlement recounts from it, disputes are proven from it, backfills replay from it", "correct": true,
+         "why": "Yes — three jobs in one artifact. Every settled row is a deterministic recount of this log, an auditor can watch you re-run it, and when logic is wrong the archive is the fuel for shadow-table reprocessing."},
+        {"t": "Training data for the ad-ranking models", "correct": false,
+         "why": "ML teams may well read it, but that's incidental. In this design the archive exists to make billing provable and reprocessable."}
+      ]
+    },
+    {
+      "id": "p3c13-q11", "level": 2, "type": "mcq", "tag": "effectively-once",
+      "q": "Checkpoint 41 completes at Kafka offset 9M. The job emits the 12:04 window rows to Postgres, then crashes before checkpoint 42. After restore, why isn't the advertiser billed twice?",
+      "options": [
+        {"t": "Postgres detects and rejects duplicate transactions automatically", "correct": false,
+         "why": "Postgres has no idea two INSERTs are 'the same click count' unless you tell it. The upsert key (window_start, ad_id) is what tells it — that's a design choice, not a database feature that comes for free."},
+        {"t": "Flink rewinds to offset 9M, recomputes the identical 12:04 rows, and the upsert on (window_start, ad_id) overwrites same-key-same-value — zero net effect", "correct": true,
+         "why": "That's the chain: restore → rewind → deterministic recount → idempotent upsert. The duplicate emission isn't prevented; it arrives and is absorbed. Replay determinism plus keyed idempotent writes is the whole answer in one clause."},
+        {"t": "Flink's exactly-once mode guarantees each message is delivered to the sink only once, so the duplicate emission never happens in the first place", "correct": false,
+         "why": "This is the oversold phrase the crux warns about. No network delivers a message exactly once — Flink's guarantee is about consistent internal state, and the sink edge must be handled with transactions or idempotence. Saying 'Flink guarantees it' without the mechanism fails the follow-up."},
+        {"t": "The rows written after checkpoint 41 are rolled back during recovery, because the sink transaction they belonged to never committed", "correct": false,
+         "why": "That describes the 2PC transactional sink, which this design deliberately didn't choose. In the upsert design the rows genuinely land before the crash — and that's fine, because the replay rewrites them harmlessly."}
+      ]
+    },
+    {
+      "id": "p3c13-q12", "level": 2, "type": "mcq", "tag": "hot-partition",
+      "q": "A Super Bowl ad hits 50K clicks/sec on its own. One Kafka partition and one Flink subtask saturate while neighbors idle. The fix?",
+      "options": [
+        {"t": "Add more Flink task managers", "correct": false,
+         "why": "One key's traffic lives on one partition regardless of cluster size — this is the defining property of a hot partition. New machines would sit as idle as the current neighbors."},
+        {"t": "Repartition the topic round-robin so the hot ad's clicks spread across all consumers, then add a shuffle before the windowing stage to bring each ad's events back together", "correct": false,
+         "why": "That rebuilds, expensively, what key partitioning gave for free — now every ad pays a network shuffle and the dedup state has to move too. You'd fix one viral ad by taxing all two million."},
+        {"t": "Salt the hot key into ad_777#0…#15, each subtask counts a partial sum, and a small merge stage combines partials per minute", "correct": true,
+         "why": "Right — and counting is the best case for salting because sums merge exactly, no sketch error, no ordering headaches. Build it behind a hot-key detector so only viral ads pay the extra hop."},
+        {"t": "Rate-limit clicks on the hot ad", "correct": false,
+         "why": "Those are real, billable clicks from real users — shedding them is throwing away the revenue the system exists to count. Never shed on a money path; absorb and spread instead."}
+      ]
+    },
+    {
+      "id": "p3c13-q13", "level": 2, "type": "mcq", "tag": "watermarks",
+      "q": "Dashboards freeze: no windows have fired for 10 minutes, though most partitions show traffic. The likely cause?",
+      "options": [
+        {"t": "An idle partition is holding back the watermark, which is the minimum across all partitions", "correct": true,
+         "why": "Yes — the classic trap. One quiet partition emits no events, so its watermark never advances, and the job-wide minimum stalls every window. The fix is an idleness timeout that excludes quiet partitions, plus an alert on watermark lag."},
+        {"t": "ClickHouse is rejecting inserts, and the resulting backpressure has frozen the whole job including window evaluation", "correct": false,
+         "why": "Sink trouble shows up as consumer lag and stretched checkpoints, and it slows everything gradually — it doesn't cleanly stop window firing while traffic still flows. The all-windows-stalled symptom is the watermark's signature."},
+        {"t": "The dedup state is full", "correct": false,
+         "why": "RocksDB state is disk-backed and TTL'd; filling it would degrade throughput gradually, not freeze window firing cleanly. The all-windows-stalled symptom is the watermark's signature."},
+        {"t": "Too many late events arrived at once", "correct": false,
+         "why": "Late events update already-fired windows or divert to the side output — they never prevent new windows from firing. Only a stalled watermark does that."}
+      ]
+    },
+    {
+      "id": "p3c13-q14", "level": 2, "type": "mcq", "tag": "reconciliation",
+      "q": "The daily comparator finds stream and batch counts diverging 0.4% for one advertiser yesterday. What do you trust, and what do you do?",
+      "options": [
+        {"t": "Trust the stream — it saw the events first, closest to the source", "correct": false,
+         "why": "Seeing events first means seeing an incomplete set — the stream by construction misses side-output stragglers. Recency of observation is not correctness."},
+        {"t": "Trust the batch — complete input, global dedup. The invoice is already safe; root-cause the stream, starting with late-event volume and recent fraud-rule changes", "correct": true,
+         "why": "Right. The batch is correct by construction, and billing from settled means this alarm signals a stream-side quality issue, not a billing emergency. Investigate calmly — the money was never at risk."},
+        {"t": "Re-run both paths from scratch and bill from whichever number two independent runs agree on — majority vote establishes the truth", "correct": false,
+         "why": "The batch already reproduces itself — it's deterministic over an immutable log. Voting between paths with different input completeness is noise, not verification."},
+        {"t": "Split the difference and credit the advertiser half the delta", "correct": false,
+         "why": "There's nothing to credit — the invoice comes from the settled numbers, which are right. Paying out against your own dashboard's incompleteness would be inventing a liability."}
+      ]
+    },
+    {
+      "id": "p3c13-q15", "level": 2, "type": "mcq", "tag": "dedup",
+      "q": "A teammate proposes replacing the RocksDB seen-click-ID state with a Bloom filter to save space. Why does the chapter reject this?",
+      "options": [
+        {"t": "Bloom filters support no deletes, so the seen-set grows until the filter saturates and its error rate climbs toward uselessness", "correct": false,
+         "why": "Solvable — rotating a filter per time bucket gives cheap expiry. The disqualifier is the direction of the error, not TTL mechanics."},
+        {"t": "Bloom filters are slower than RocksDB", "correct": false,
+         "why": "Backwards — an in-memory Bloom filter is much faster than a disk-backed store. Speed is the one thing it clearly wins; correctness is where it loses."},
+        {"t": "False positives would silently drop real, billable clicks — an undercount on a money path — while RocksDB is exact and cheap enough", "correct": true,
+         "why": "Right. A Bloom 'maybe seen' on a never-seen click_id deletes a legitimate click with no error log. Approximation that was fine in Top-K is inadmissible where every event is money, and the exact alternative costs little here."},
+        {"t": "Bloom filters don't work with keyed streams", "correct": false,
+         "why": "They'd slot into keyed state fine — one filter per key is a common pattern. The rejection is about false positives silently deleting revenue."}
+      ]
+    },
+    {
+      "id": "p3c13-q16", "level": 2, "type": "mcq", "tag": "backpressure",
+      "q": "Postgres slows down and sink upserts start failing. What happens to in-flight clicks, and what's your earliest warning signal?",
+      "options": [
+        {"t": "Backpressure propagates up the job, Kafka absorbs the backlog; checkpoint duration stretching from 5s to 90s is the early warning", "correct": true,
+         "why": "Yes. The queue is the shock absorber — nothing is lost, dashboards just go stale while the backlog drains. Checkpoint duration inflates before anything user-visible breaks, which is exactly what makes it the alarm worth paging on."},
+        {"t": "Flink drops events to protect the sink", "correct": false,
+         "why": "Load shedding is for systems where staleness beats loss. Here loss is unbillable revenue — the design deliberately absorbs backlog rather than shedding on a money path."},
+        {"t": "The clicks are rerouted to the side output", "correct": false,
+         "why": "The side output is for late events, decided by event time versus the watermark. Sink slowness is a delivery problem, handled by retries and backpressure, not by the lateness machinery."},
+        {"t": "Kafka applies backpressure to the ingest producers, pausing acceptance of new clicks until the consumers catch up — ingest availability is the casualty", "correct": false,
+         "why": "Producers and consumers are decoupled — that's the point of the log. Slow consumption grows lag; ingest keeps accepting at full speed, which is precisely why the front door stays up while the back office struggles."}
+      ]
+    },
+    {
+      "id": "p3c13-q17", "level": 2, "type": "mcq", "tag": "olap",
+      "q": "An advertiser's 30-day dashboard loads in under a second despite hundreds of millions of minute rows per day. What two design choices make that query cheap?",
+      "options": [
+        {"t": "Rollups (minute→hour→day) plus table ordering by (advertiser_id, ad_id, window_start)", "correct": true,
+         "why": "Right. Pre-aggregation shrinks the rows touched from 43,200 minutes to ~30 day-rows, and physically clustering by advertiser matches the 'my ads only' access pattern so the scan is one tight range."},
+        {"t": "A Redis cache in front of ClickHouse holding every advertiser's most recent dashboard, invalidated whenever new minute rows land", "correct": false,
+         "why": "A cache can hide a slow query, but this design doesn't need one — the storage layout makes the query fast at the source. Adding Redis here would be a bandage on a problem the rollups already solved."},
+        {"t": "Sharding ClickHouse by date", "correct": false,
+         "why": "Date partitioning helps prune old data but doesn't address the two real costs: aggregating tens of thousands of minute rows and filtering to one advertiser's ads. Rollups and ordering do."},
+        {"t": "Querying the smaller Postgres billing tables for anything older than today", "correct": false,
+         "why": "The billing store is sized and tuned for settlement writes and invoice reads, not interactive analytics from every advertiser. Sending dashboard load there endangers the money path to save the analytics one."}
+      ]
+    },
+    {
+      "id": "p3c13-q18", "level": 2, "type": "mcq", "tag": "capacity",
+      "q": "Why does the design over-provision Kafka partitions (say 256) on day one, rather than adding partitions when traffic grows?",
+      "options": [
+        {"t": "Kafka charges per partition-change operation", "correct": false,
+         "why": "Repartitioning is free in dollars; the cost is behavioral. What breaks is the key-to-partition mapping that the stateful design depends on."},
+        {"t": "Adding partitions later changes where each ad_id hashes, breaking the ad-to-task stickiness that dedup and window state rely on", "correct": true,
+         "why": "Right. After a partition-count change, an ad's retries and events can land on a task that doesn't hold its history. Partitions are cheap to over-provision and disruptive to add later — so buy headroom up front."},
+        {"t": "Spreading the same traffic across more partitions keeps each partition's segment files smaller, which speeds up broker recovery after a crash", "correct": false,
+         "why": "A real but minor operational effect, and not why this design cares. The load-bearing reason is hash routing: changing partition count reshuffles which partition every key maps to."},
+        {"t": "Flink requires the partition count to be fixed at compile time", "correct": false,
+         "why": "Flink discovers partitions dynamically. The rigidity comes from hash routing semantics, not from any tool's configuration model."}
+      ]
+    },
+    {
+      "id": "p3c13-q19", "level": 2, "type": "mcq", "tag": "monitoring",
+      "q": "What class of bug do canary clicks (synthetic clicks with known IDs, verified to appear exactly once in both sinks) catch that per-component health checks cannot?",
+      "options": [
+        {"t": "Kafka broker crashes", "correct": false,
+         "why": "Broker health is visible to ordinary infrastructure monitoring — no canary needed. Canaries earn their keep on failures that leave every component looking healthy."},
+        {"t": "Slow dashboard queries", "correct": false,
+         "why": "Latency is directly measurable from the serving path. Canaries verify correctness of the counts, not speed of the reads."},
+        {"t": "Silent wrongness — every component green while the counts drift", "correct": true,
+         "why": "Yes. Counting systems drift, they don't crash — Facebook's metrics bug ran quietly for two years. An end-to-end 'did this exact click come out exactly once, in the right minute' check catches misfiring fraud rules, dedup TTL bugs, and timezone slips that no component-level probe can see. LinkedIn's Kafka audit system was built on this idea."},
+        {"t": "Coordinated fraud campaigns that slip past the online filters — synthetic traffic is exactly what canaries are simulating", "correct": false,
+         "why": "Canaries are your own clicks with known IDs, testing the pipeline's honesty about traffic it receives. Detecting hostile traffic is the fraud stage's job, using signals in the traffic itself."}
+      ]
+    },
+    {
+      "id": "p3c13-q20", "level": 2, "type": "mcq", "tag": "late-events",
+      "q": "A click arrives 11 minutes after its window's watermark passed — inside the 15-minute allowed lateness. What does the pipeline do?",
+      "options": [
+        {"t": "Diverts it to the side output for settlement", "correct": false,
+         "why": "The side output is only for events beyond allowed lateness. Inside the grace window, the streaming path itself still handles the correction."},
+        {"t": "The window refires with the updated count and the upsert overwrites the earlier row", "correct": true,
+         "why": "Right — and notice the elegance: the idempotent upsert chosen for crash-replay absorbs late refinements for free. Same key, newer and more complete value, row overwritten in both sinks."},
+        {"t": "Discards it, since the window already emitted", "correct": false,
+         "why": "Emitting isn't final — windows keep their state through the allowed-lateness period precisely so stragglers can refine the result. Nothing is discarded anywhere in this design."},
+        {"t": "Buffers it until the nightly settlement job runs, since a window that has already emitted can only be corrected in batch", "correct": false,
+         "why": "Waiting a day is only necessary beyond the grace period. Within it, the stream corrects itself in seconds — that's exactly what allowed lateness buys."}
+      ]
+    },
+    {
+      "id": "p3c13-q21", "level": 3, "type": "mcq", "tag": "crux",
+      "q": "Interviewer: 'Design ad click aggregation.' Which opening observation shows you've found this problem's crux?",
+      "options": [
+        {"t": "\"A billion clicks a day will need serious horizontal scale, so let me start with the sharding strategy\"", "correct": false,
+         "why": "The estimation says the opposite — 12K/sec average is a non-problem. Leading with scale on a correctness question signals the numbers never ran, which is the crux-miss this chapter exists to train away."},
+        {"t": "\"These counts are money, so the hard part is the delivery guarantee: every hop retries, and one duplicate reaching billing is a double charge. My depth goes there and on late events\"", "correct": true,
+         "why": "That's the fire. Throughput is routine; effectively-once into the billing store across crashes and retries — plus what 'complete' means on an infinite stream — is what the question was invented to probe. Announcing it and steering there is the senior pattern."},
+        {"t": "\"The interesting challenge is choosing between ClickHouse, Druid, and Pinot for the analytics store — that choice shapes everything downstream\"", "correct": false,
+         "why": "Store selection is a solvable, low-stakes choice here — any columnar OLAP store works, and nothing downstream hinges on which. Treating a product comparison as the crux confuses tool trivia with design difficulty."},
+        {"t": "\"We should design the fraud-detection ML models first, since fraud determines what's billable — nothing else matters if bots pollute the counts\"", "correct": false,
+         "why": "Fraud detection is a separate discipline to architect around (flag, don't drop; re-score at settlement), not to solve in this round. Diving into ML models abandons the pipeline the question is actually about."}
+      ]
+    },
+    {
+      "id": "p3c13-q22", "level": 3, "type": "mcq", "tag": "commit",
+      "q": "The interviewer asks you to commit: 2PC transactional sink or at-least-once with idempotent upserts, for the billing store? The strongest answer:",
+      "options": [
+        {"t": "\"Upsert keyed by (window, ad): replay recomputes identical rows, so duplicates are absorbed — no coordinator, no wedged transactions. I'd reach for 2PC only if the sink couldn't upsert\"", "correct": true,
+         "why": "Commitment, the mechanism that makes it safe (stable key + deterministic recompute), the operational reason to prefer it, and a named boundary where the alternative wins — append-only ledgers and Kafka output topics genuinely need the transactional sink. The full senior package."},
+        {"t": "\"The 2PC sink — it's the only true exactly-once, and a billing pipeline deserves the strongest guarantee that money can buy\"", "correct": false,
+         "why": "'Strongest available' isn't a reason when a simpler mechanism achieves the same end effect. The 2PC sink adds a coordinator in the hot path, commit-latency coupling to checkpoints, and a stuck-pre-commit failure mode — costs paid for no additional correctness here."},
+        {"t": "\"Either works — both achieve effectively-once, so it comes down to team preference\"", "correct": false,
+         "why": "True premise, failed conclusion. They differ sharply in operational complexity and failure modes, and 'team preference' on a billing pipeline is the option-listing hedge that reads as no judgment."},
+        {"t": "\"Both, layered — run the transactional sink and the idempotent upserts together, so billing has defense in depth at every hop of the pipeline\"", "correct": false,
+         "why": "Sounds rigorous, stacks redundant machinery: once upserts absorb replays, the transaction coordinator protects against nothing while still adding its failure modes. Real defense in depth here is the settlement recount — an independent path, not a duplicated guard."}
+      ]
+    },
+    {
+      "id": "p3c13-q23", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A teammate argues: 'Our streaming path is effectively-once now — let's bill straight from the Flink sink and delete the batch settlement job.' The senior response?",
+      "options": [
+        {"t": "Agree — running two compute paths that produce the same number is classic over-engineering, and the simplification pays for itself in on-call load alone", "correct": false,
+         "why": "The two paths aren't redundant; they have different inputs. The stream's input is structurally incomplete (side-output late events never entered it), so this isn't duplication to trim — it's the difference between provisional and settled."},
+        {"t": "Agree, but keep the batch job dormant for disaster recovery", "correct": false,
+         "why": "A dormant job rots — and while it sleeps, you've lost the daily independent check. The comparator only detects drift if the second opinion is actually computed every day."},
+        {"t": "Compromise: bill from the stream but sample-audit 1% of ad-days with the batch recount, escalating to a full audit whenever the sample disagrees", "correct": false,
+         "why": "Sampling catches broad drift but misses the concentrated errors that trigger disputes — one SDK's retry bug hitting one advertiser. And a sampled audit can't answer 'reproduce my invoice' for the unsampled 99%."},
+        {"t": "Refuse: effectively-once fixes duplicates, not completeness — late clicks beyond grace never entered the stream's numbers. Settlement is also the drift alarm and the auditor's answer", "correct": true,
+         "why": "Right — the conflated guarantee is the tell. Effectively-once means no double-counting of what arrived; it says nothing about what hasn't arrived yet. Plus the Facebook lesson: without an independently computed second opinion, a quiet aggregation bug runs for years."}
+      ]
+    },
+    {
+      "id": "p3c13-q24", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Why does this chapter set a different correctness bar than Top-K/Trending (p3c12), when both count events on a stream?",
+      "options": [
+        {"t": "Ad clicks arrive at much higher volume than trending events", "correct": false,
+         "why": "Volume is comparable or lower — and the estimation explicitly concludes scale isn't the issue. The difference lives in what an error costs, not in events per second."},
+        {"t": "The error bar has a dollar sign: at ~$500M/day flowing through the counters, 0.1% error is real money and legal exposure", "correct": true,
+         "why": "Right. Same stream shapes, different stakes: a trending list off by one rank harms nobody; a bill off by 0.1% is $180M/year misallocated, so sketches and approximation are inadmissible on the billing path. Pricing the error bar is the estimation move that changes the architecture."},
+        {"t": "Trending tolerates minutes of staleness, but invoices must be generated in real time the instant a billing period closes, which demands a faster pipeline", "correct": false,
+         "why": "Inverted — billing is the path that can wait (T+1 settlement), and dashboards are the ones needing freshness. The bar that differs is accuracy-and-provability, not speed."},
+        {"t": "Count-min sketches can't count above a few million", "correct": false,
+         "why": "Sketches count arbitrarily high — their issue is bounded overestimation error, which is fine for ranking and fatal for invoicing. The tool didn't hit a limit; the requirement changed."}
+      ]
+    },
+    {
+      "id": "p3c13-q25", "level": 3, "type": "mcq", "tag": "what-breaks",
+      "q": "A dedup bug billed duplicate clicks Monday through Thursday. Kafka retention is 7 days; the raw S3 archive is intact. Plan the correction.",
+      "options": [
+        {"t": "Replay the affected days from Kafka through the fixed job before retention expires — it's the fastest path while the data still exists", "correct": false,
+         "why": "Racing retention windows is fragile and unnecessary — and it re-couples correction to streaming infrastructure. The archive exists precisely so replay never depends on Kafka's retention clock."},
+        {"t": "UPDATE the settled rows in place with corrected counts and notify advertisers", "correct": false,
+         "why": "Editing settled rows destroys the audit trail — a history that can be quietly rewritten proves nothing. Corrections must be append-only, with the wrong numbers preserved beside them."},
+        {"t": "Corrected logic over the S3 archive into shadow tables, diff against live settled rows, verified swap, credits as appended line items", "correct": true,
+         "why": "The shadow-table replay pattern, applied to data instead of schema. The immutable archive is the fuel, the diff is the safety check, and append-only credits keep the books honest. This is why '13 months raw retention' was a requirement, not a nice-to-have."},
+        {"t": "Estimate the overbilling from the affected SDK version's install share, apply a confidence interval, and issue flat credits proportional to each advertiser's spend", "correct": false,
+         "why": "You have the actual events — estimating from demographics when the raw log can compute the exact per-advertiser delta is indefensible, especially to the advertiser whose auditor asks how the credit was derived."}
+      ]
+    },
+    {
+      "id": "p3c13-q26", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Interviewer: 'Your dashboards show provisional numbers that later change at settlement. Isn't that a bug? Make them match.' Your best response:",
+      "options": [
+        {"t": "\"I'll tighten the pipeline until stream and batch always agree\"", "correct": false,
+         "why": "Promising the impossible. A click sitting on an offline phone cannot appear in any real-time number — no engineering closes that gap without redefining when a click 'exists'."},
+        {"t": "\"The mismatch is late-arriving data made visible, not sloppiness. I'd label both numbers — live provisional, billable settled. Forcing a match means billing on processing time, i.e. invoices shaped by our queue lag\"", "correct": true,
+         "why": "Right: name the physics, offer the honest UI fix that mature ad platforms actually use, and state the real cost of the demanded alternative. Defending a correct design with mechanism rather than assertion is a pure senior signal."},
+        {"t": "\"Fair point — I'll switch dashboards to read only settled data, so they always match invoices exactly; advertisers value consistency over freshness anyway\"", "correct": false,
+         "why": "It technically satisfies the demand, but silently sacrifices the requirement dashboards exist for — campaign feedback within minutes, which is how advertisers tune live campaigns. Conceding a core requirement to close a cosmetic gap is the wrong trade, and a senior says so."},
+        {"t": "\"That's a product decision — I'd defer to the PM\"", "correct": false,
+         "why": "There's an engineering fact the PM needs first — the mismatch is physics, and 'making them match' has a specific architectural price. Deferring before stating it is the waiting-to-be-led pattern."}
+      ]
+    },
+    {
+      "id": "p3c13-q27", "level": 3, "type": "mcq", "tag": "what-breaks",
+      "q": "Traffic goes 10x: 10 billion clicks/day, 500K/sec peaks. What's the honest assessment of this architecture?",
+      "options": [
+        {"t": "Nothing structural changes if partition count was over-provisioned up front; the work is operational — incremental checkpoints for grown state, more hot-ad salting", "correct": true,
+         "why": "Right, and the meta-point matters at the whiteboard: a design whose hard parts were guarantees scales boringly, because guarantees don't get harder with volume. The one decision that couldn't wait was partition count, since repartitioning breaks key stickiness."},
+        {"t": "The single Postgres billing store becomes the write bottleneck at 10x and must be sharded by advertiser before the traffic arrives", "correct": false,
+         "why": "Run the numbers before declaring emergencies: the sink writes checkpoint-aligned batches of minute-aggregates, not per-click rows. 10x the ads' activity is still bulk upserts every few seconds — well within one well-kept Postgres."},
+        {"t": "Streaming aggregation stops being viable at this volume; the pipeline should retreat to batch-only processing with hourly dashboard refreshes", "correct": false,
+         "why": "500K events/sec is routine for a partitioned Flink job — this is exactly the workload stream processors are built for. Retreating to batch-only would abandon the dashboard freshness requirement for no reason."},
+        {"t": "The design must move to a multi-region active-active topology", "correct": false,
+         "why": "Volume alone doesn't demand multi-region — that's driven by latency and availability geography, which didn't change. Reaching for multi-region as a scale reflex is buzzword architecture."}
+      ]
+    },
+    {
+      "id": "p3c13-q28", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Budget pacing is added: stop serving an ad once its daily budget is spent. A teammate wants the billing path to publish spend in real time so pacing can read it. Better call?",
+      "options": [
+        {"t": "Agree — billing data is the ground truth, and a control loop that spends real money should read the most accurate numbers the platform has", "correct": false,
+         "why": "Pacing doesn't need accurate; it needs immediate. Settled data is a day old and even streaming sink rows trail by window-plus-watermark delay — by then a viral ad has burned thousands past its cap. Best-for-billing is worst-for-pacing."},
+        {"t": "Give pacing a third path: cheap approximate running spend in Redis, cut serving at ~95% of budget, eat marginal overdelivery", "correct": true,
+         "why": "A third consumer with a third freshness/accuracy contract gets a third path — the same reasoning that split dashboards from billing, applied again. Torturing the exact path to be fast (or the fast path to be exact) breaks the contract that made each work."},
+        {"t": "Have pacing query the ClickHouse rollups, since dashboards already show spend that's only a couple of minutes stale — close enough for a budget check", "correct": false,
+         "why": "Minutes stale through the window/watermark/rollup chain is thousands of dollars of overspend on a viral ad — and it pins a serving-critical control loop to an analytics store's availability. Pacing wants a purpose-built sub-second signal, not a dashboard's leftovers."},
+        {"t": "Enforce budgets at settlement: refund any spend beyond the cap the next day", "correct": false,
+         "why": "This turns a control problem into a refund machine — advertisers watch budgets blow through caps all day and trust evaporates, while the platform eats disputes. Overspend must be prevented approximately in real time, then reconciled exactly later."}
+      ]
+    }
+  ]
+}

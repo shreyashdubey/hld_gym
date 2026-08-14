@@ -1,0 +1,355 @@
+{
+  "chapter": "p3c17",
+  "items": [
+    {
+      "id": "p3c17-q01", "level": 1, "type": "mcq", "tag": "partitions",
+      "q": "In Kafka, what is the unit of ordering?",
+      "options": [
+        {"t": "The partition", "correct": true,
+         "why": "Right. A partition is one append-only sequence with one leader appending, so order is unambiguous within it — and guaranteed nowhere else. It's simultaneously the unit of parallelism, which is the design's central tension."},
+        {"t": "The topic", "correct": false,
+         "why": "A topic is a set of partitions, and records in different partitions can be observed in either order. Topic-wide order would require a single partition."},
+        {"t": "The broker", "correct": false,
+         "why": "A broker hosts many partitions from many topics; it imposes no ordering across them. Ordering lives inside each partition's log."},
+        {"t": "The consumer group", "correct": false,
+         "why": "Groups divide partitions among workers — they inherit per-partition order but create none. Two members processing different partitions run fully independently."}
+      ]
+    },
+    {
+      "id": "p3c17-q02", "level": 1, "type": "mcq", "tag": "storage",
+      "q": "Kafka writes every message to disk yet serves millions per second. What's the core reason this isn't a contradiction?",
+      "options": [
+        {"t": "It only appends sequentially and serves recent reads from the OS page cache, with zero-copy to the network", "correct": true,
+         "why": "Exactly. Sequential disk I/O is thousands of times faster than random I/O, appends are purely sequential, and freshly written data is already in the kernel's page cache — so tail consumers are served RAM-to-NIC without touching the platter."},
+        {"t": "It keeps all messages in a large JVM heap cache and flushes to disk in the background", "correct": false,
+         "why": "That's precisely the design Kafka rejected: a big heap cache doubles memory use (page cache plus heap) and brings GC pauses. Kafka deliberately lets the OS page cache be the only cache."},
+        {"t": "It uses SSDs, which have no seek penalty", "correct": false,
+         "why": "Kafka's design predates cheap SSDs and its famous benchmarks ran on spinning disks. Sequential access is the trick; SSDs help but aren't the reason."},
+        {"t": "It compresses messages so the disk barely does any work", "correct": false,
+         "why": "Batch compression is a real throughput lever (4-5x on similar records), but it multiplies an already-fast sequential pipeline — it isn't what makes disk viable in the first place."}
+      ]
+    },
+    {
+      "id": "p3c17-q03", "level": 1, "type": "mcq", "tag": "acks",
+      "q": "With acks=1, when does the producer receive its acknowledgment?",
+      "options": [
+        {"t": "As soon as the partition leader has appended the record to its own log", "correct": true,
+         "why": "Right — and that defines the loss window: if the leader dies after acking but before any follower fetches the record, the acked record exists nowhere and is lost when a follower takes over."},
+        {"t": "After a majority of all replicas have the record", "correct": false,
+         "why": "That's a Raft-style majority quorum, which Kafka's data plane doesn't use. acks=1 waits for exactly one machine: the leader."},
+        {"t": "After every in-sync replica has the record", "correct": false,
+         "why": "That's acks=all. The whole point of acks=1 is answering before replication — lower latency bought with a small loss window."},
+        {"t": "Immediately, without waiting for any broker", "correct": false,
+         "why": "That's acks=0 — fire-and-forget, where even a dropped packet loses the record silently. acks=1 does wait for the leader's append."}
+      ]
+    },
+    {
+      "id": "p3c17-q04", "level": 1, "type": "mcq", "tag": "isr",
+      "q": "What is the ISR (in-sync replica set) of a partition?",
+      "options": [
+        {"t": "The leader plus every follower that has kept up with it within a time bound", "correct": true,
+         "why": "Right — and note it's a time promise, not a byte promise: a follower a few records behind for two seconds is still in-sync. The ISR is the live answer to 'who could safely become leader right now?'"},
+        {"t": "The set of replicas that have byte-for-byte identical logs at this instant", "correct": false,
+         "why": "Followers are perpetually a few records behind between fetches — identical-at-this-instant would make the set empty most of the time. In-sync means caught up within replica.lag.time.max.ms."},
+        {"t": "All replicas of the partition, alive or dead", "correct": false,
+         "why": "That's the replica assignment. The ISR is the dynamic, healthy subset — replicas that stall get evicted and readmitted when they catch up."},
+        {"t": "The three brokers with the most free disk", "correct": false,
+         "why": "Replica placement considers balance, but the ISR has nothing to do with disk space — it tracks replication freshness only."}
+      ]
+    },
+    {
+      "id": "p3c17-q05", "level": 1, "type": "mcq", "tag": "storage",
+      "q": "Why is a Kafka segment's offset index sparse (one entry per ~4 KB) instead of indexing every record?",
+      "options": [
+        {"t": "A sparse index stays small enough for memory, and the gap is closed by a short sequential scan, which is nearly free", "correct": true,
+         "why": "Right. Binary-search the index, seek once, scan at most ~4 KB forward. Since sequential scanning is what disks do best, indexing every record would buy almost nothing and cost gigabytes of pointers."},
+        {"t": "Full indexes are impossible on append-only files", "correct": false,
+         "why": "Perfectly possible — you'd append index entries as you append records. It's not impossible, it's pointless: the dense entries would optimize away a scan that costs microseconds."},
+        {"t": "Kafka looks up records by key, so offsets rarely need indexing", "correct": false,
+         "why": "Backwards — Kafka has no key lookup at all; offset lookup is the ONLY lookup, which is why each segment carries this index. It's a log, not a database."},
+        {"t": "Sparse indexes rebuild faster after a crash", "correct": false,
+         "why": "Recovery speed is a minor side benefit, not the reason. The design driver is memory footprint versus the near-zero cost of a tiny sequential scan."}
+      ]
+    },
+    {
+      "id": "p3c17-q06", "level": 1, "type": "mcq", "tag": "compaction",
+      "q": "When should a topic use log compaction instead of time-based retention?",
+      "options": [
+        {"t": "When it's a changelog where only the latest value per key matters — state, not events", "correct": true,
+         "why": "Right: events get retention, state gets compaction. A compacted topic keeps the newest record per key forever (bounded by key count, not time) — which is why Kafka stores consumer offsets in a compacted topic itself."},
+        {"t": "When the topic is very high-throughput and disk is tight", "correct": false,
+         "why": "Compaction isn't a disk-saving mode for event streams — dropping old events by time is cheaper and simpler. Compaction answers a semantic question: is this stream a table in disguise?"},
+        {"t": "When consumers need messages in a stricter order", "correct": false,
+         "why": "Compaction doesn't touch ordering — order is per-partition either way. It changes which records survive, not their sequence."},
+        {"t": "Always — compaction is the newer, better retention", "correct": false,
+         "why": "They coexist for different jobs. Compacting a clickstream would silently discard every click except each user's latest — data loss dressed as a config choice."}
+      ]
+    },
+    {
+      "id": "p3c17-q07", "level": 1, "type": "mcq", "tag": "pull",
+      "q": "Why do Kafka consumers pull data rather than have brokers push it?",
+      "options": [
+        {"t": "Pull makes the consumer set the pace, so backpressure is automatic, lag is a visible number, and replay is just fetching an older offset", "correct": true,
+         "why": "Right — chapter 2.7's lesson built into the protocol. A push broker must guess every consumer's capacity and buffer or drop when wrong; a pull consumer simply falls behind, measurably. Long-polling erases pull's latency penalty."},
+        {"t": "Push is impossible across data centers", "correct": false,
+         "why": "Plenty of systems push across DCs. The choice is about who owns pacing and position, not network feasibility."},
+        {"t": "Pull uses less CPU on the broker", "correct": false,
+         "why": "Broker CPU is roughly a wash either way. The win is architectural: the broker stays a dumb, fast log while consumers own their own flow control."},
+        {"t": "Pull guarantees exactly-once delivery", "correct": false,
+         "why": "No transport model gives you exactly-once to external systems — pull consumers still face the crash-before-commit duplicate window and must be idempotent."}
+      ]
+    },
+    {
+      "id": "p3c17-q08", "level": 1, "type": "mcq", "tag": "consumer-groups",
+      "q": "Within one consumer group, how are a topic's partitions divided?",
+      "options": [
+        {"t": "Each partition is assigned to exactly one member at a time; a member may hold several partitions", "correct": true,
+         "why": "Right — that's how per-partition ordering survives parallelism: one reader per partition. It also sets the ceiling: more members than partitions leaves the extras idle."},
+        {"t": "Every member reads every partition and duplicates are filtered by the broker", "correct": false,
+         "why": "That would burn N times the read bandwidth and the broker does no such filtering. Full-stream delivery is what SEPARATE groups get, each with its own offsets."},
+        {"t": "Members race to lock each message individually", "correct": false,
+         "why": "Per-message locking is classic queue behavior and would destroy ordering and batching. Kafka assigns whole partitions, not messages."},
+        {"t": "The producer decides which consumer gets each record", "correct": false,
+         "why": "Producers know nothing about consumers — total decoupling is the point of the log. Producers pick partitions (by key); the group coordinator assigns partitions to members."}
+      ]
+    },
+    {
+      "id": "p3c17-q09", "level": 1, "type": "mcq", "tag": "min-insync",
+      "q": "What does min.insync.replicas=2 actually do?",
+      "options": [
+        {"t": "If the ISR shrinks below 2, the leader refuses acks=all writes with an error instead of accepting them", "correct": true,
+         "why": "Right. It closes the acks=all trap: since 'all of the ISR' can legally mean one machine, this floor makes the broker choose unavailability over under-replicated acks — CAP as a config line."},
+        {"t": "It forces every partition to keep at least 2 replicas on disk", "correct": false,
+         "why": "Replica count is the replication factor, set at topic creation. min.insync.replicas doesn't create copies — it gates writes on how many are currently in-sync."},
+        {"t": "It makes consumers wait until 2 replicas have a record before reading it", "correct": false,
+         "why": "Consumer visibility is governed by the high watermark (replicated to ALL ISR members), a separate mechanism. min.insync gates the producer side."},
+        {"t": "It elects 2 leaders for redundancy", "correct": false,
+         "why": "Never — two leaders is the forked-log disaster the whole epoch machinery exists to prevent. One leader per partition, always."}
+      ]
+    },
+    {
+      "id": "p3c17-q10", "level": 2, "type": "mcq", "tag": "acks",
+      "q": "acks=1 topic. The leader appends offsets 501-520, acks the producer, then dies before any follower fetches them. An ISR follower (log ends at 500) becomes leader. What is the state of offsets 501-520?",
+      "options": [
+        {"t": "Acknowledged but gone — they existed only on the dead leader, and it will truncate them when it returns", "correct": true,
+         "why": "Right — this is THE acks=1 walk. The producer believes they're safe; no consumer ever saw them (the high watermark never passed 500, so reads stayed consistent); the returning broker truncates to the new leader's history. Silent loss, by contract."},
+        {"t": "Lost, and consumers who read them will see them disappear", "correct": false,
+         "why": "Half right — they're lost, but consumers never read them. The high watermark only advances when all ISR members have the records, precisely so consumers can't observe data that might be un-happened."},
+        {"t": "Safe — the follower was in the ISR, so it must have had them", "correct": false,
+         "why": "The trap in 'in-sync': it's a TIME bound, not a byte bound. A follower seconds behind is legitimately in the ISR while missing the newest records — that gap is exactly the acks=1 loss window."},
+        {"t": "The producer's retry will restore them automatically", "correct": false,
+         "why": "The producer got a successful ack, so it will never retry — that's what makes the loss silent. Retries fix lost ACKS, not lost DATA that was acknowledged."}
+      ]
+    },
+    {
+      "id": "p3c17-q11", "level": 2, "type": "mcq", "tag": "partitions",
+      "q": "New topic: 100 MB/s peak, consumers will eventually need ~15-way parallelism, keys must stay ordered. How many partitions do you create?",
+      "options": [
+        {"t": "About 20 — peak ÷ ~10 MB/s per partition, doubled for headroom, covering the parallelism target — because adding partitions later re-maps keys", "correct": true,
+         "why": "Right heuristic, right reason. Growing the count later changes hash(key) % N, breaking per-key ordering across the boundary — so you buy modest headroom up front instead of a re-keying migration later."},
+        {"t": "1,000 — partitions are free, so max out future-proofing", "correct": false,
+         "why": "Partitions aren't free: each costs files, index memory, controller metadata, and a leader election when its broker dies. A thousand partitions for 100 MB/s buys recovery pain, smaller batches, and nothing else."},
+        {"t": "1 — start simple and split when traffic arrives", "correct": false,
+         "why": "One partition caps the topic at a single leader's pipeline and one consumer, and the 'split later' step is exactly the ordering-breaking re-map you were trying to avoid. This is the one knob to over-provision modestly."},
+        {"t": "Exactly 15, matching the consumer count", "correct": false,
+         "why": "Close, but it leaves zero throughput headroom at ~6.7 MB/s per partition against spikes, and no room to add a 16th consumer ever. Round up with margin; the cost of a few extra partitions is trivial at this scale."}
+      ]
+    },
+    {
+      "id": "p3c17-q12", "level": 2, "type": "mcq", "tag": "offsets",
+      "q": "A consumer fetches offsets 100-149, writes all fifty results to its database, then crashes before committing offsets. After the rebalance, what happens?",
+      "options": [
+        {"t": "The new assignee resumes at committed offset 100 and reprocesses all fifty — duplicates, unless processing is idempotent", "correct": true,
+         "why": "Right — at-least-once doing exactly what it says. Process-then-commit can only ever duplicate, never lose. The elegant fix: (topic, partition, offset) is a free, stable idempotency key for deduping at the sink."},
+        {"t": "The fifty records are skipped, since they were already processed", "correct": false,
+         "why": "The broker has no idea they were processed — the only record of progress is the committed offset, which still says 100. Skipping is what would happen if you'd committed FIRST (at-most-once: crash = silent loss)."},
+        {"t": "Kafka detects the duplicate writes and rolls back the database", "correct": false,
+         "why": "Kafka cannot see your database at all. Broker-side transactions cover Kafka-to-Kafka atomicity only; external side effects are entirely the consumer's responsibility — chapter 2.2's whole territory."},
+        {"t": "The partition is paused until an operator resolves the ambiguity", "correct": false,
+         "why": "No human in this loop — the group heals automatically and replays from the last commit. The duplicate window is structural and routine, which is why idempotent sinks are mandatory, not optional."}
+      ]
+    },
+    {
+      "id": "p3c17-q13", "level": 2, "type": "mcq", "tag": "min-insync",
+      "q": "Payments topic, RF=3, acks=all, min.insync.replicas=2. Both followers hit long GC pauses and drop from the ISR. Producers now get NotEnoughReplicas errors. What is the system doing?",
+      "options": [
+        {"t": "Exactly what you configured: refusing writes that only one machine would hold, trading availability for durability", "correct": true,
+         "why": "Right. This is the config working, not failing — accepting those writes would recreate the Jepsen scenario where 'fully acked' data lived on one broker. Fix the followers; don't loosen the guarantee mid-incident."},
+        {"t": "Malfunctioning — acks=all writes should fail over to another partition", "correct": false,
+         "why": "Records can't hop partitions; the key-to-partition mapping is the ordering contract. The refusal is deliberate, local, and correct."},
+        {"t": "Lowering min.insync would be the standard operational fix", "correct": false,
+         "why": "That 'fix' converts a write outage into a durability hole — every write accepted while ISR=1 is one broker failure from being lost. Loosening guarantees under pressure is how postmortems get written."},
+        {"t": "Losing the writes that get errors", "correct": false,
+         "why": "Nothing is lost — the producer KNOWS these writes failed and retries them, which is infinitely better than an ack that might be hollow. Explicit failure is the durable option here."}
+      ]
+    },
+    {
+      "id": "p3c17-q14", "level": 2, "type": "mcq", "tag": "epochs",
+      "q": "A partitioned-away leader (epoch 7) comes back online still believing it leads, while the cluster moved to a new leader at epoch 8. What prevents a forked log?",
+      "options": [
+        {"t": "Every replica that has seen epoch 8 rejects epoch-7 authority on sight; the returner learns the new epoch, truncates its diverged tail, and follows", "correct": true,
+         "why": "Right — chapter 2.3's fencing token, here called the leader epoch. It does double duty: fences the zombie's writes by counter arithmetic, and marks exactly where the returner's history diverged so truncation is precise."},
+        {"t": "The old leader's session with the controller expires, deleting its data", "correct": false,
+         "why": "Nothing deletes its data wholesale — only the unreplicated tail past the divergence point is truncated; the rest of its log is still a valid replica that re-syncs and rejoins."},
+        {"t": "Producers notice the leadership change and stop sending to the old leader", "correct": false,
+         "why": "Producers with stale metadata WILL send to the old leader — you can't rely on every client noticing in time. Safety must live server-side, in epoch checks, not in client politeness."},
+        {"t": "A distributed lock ensures only one broker can write the partition", "correct": false,
+         "why": "Chapter 2.3's lesson: a lock alone can't stop a holder that was paused or partitioned while holding it. The fencing token — a monotonic epoch checked on every request — is precisely the mechanism that replaces the lock."}
+      ]
+    },
+    {
+      "id": "p3c17-q15", "level": 2, "type": "mcq", "tag": "ordering",
+      "q": "A stakeholder requires that ALL events in a busy topic be processed in one global order. What must you tell them?",
+      "options": [
+        {"t": "Global order means one partition — one leader's disk and one consumer, no parallelism — so let's check whether per-key order actually satisfies the real need", "correct": true,
+         "why": "Right — say the ceiling plainly, then negotiate the requirement. Almost always 'global order' really means 'events for the same entity in order,' which per-key partitioning gives at full parallelism."},
+        {"t": "Kafka can provide global order across partitions with acks=all", "correct": false,
+         "why": "acks controls durability, not cross-partition order. No setting orders records across partitions — different leaders append independently by design."},
+        {"t": "Consumers can sort by timestamp to reconstruct global order", "correct": false,
+         "why": "Producer clocks skew and records interleave continuously, so timestamp order is neither stable nor authoritative. If a court-grade sequence is truly required, a single writer must assign it."},
+        {"t": "Use one consumer reading all partitions in a round-robin", "correct": false,
+         "why": "A single consumer still receives partitions' contents in arbitrary interleave — reading everything in one place doesn't recover an order that was never recorded."}
+      ]
+    },
+    {
+      "id": "p3c17-q16", "level": 2, "type": "mcq", "tag": "page-cache",
+      "q": "A team starts replaying 3 days of history at full speed, and suddenly TAIL consumers across the cluster see latency spikes. What's the mechanism?",
+      "options": [
+        {"t": "The replay reads cold segments from disk and floods the page cache with them, evicting the hot tail that caught-up consumers were being served from", "correct": true,
+         "why": "Right — page-cache poisoning, the sneakiest Kafka incident. The design's greatest strength (OS-managed cache) is also its weakness: you don't control eviction. Defenses: consumer quotas, off-peak replay windows, tiered storage for deep history."},
+        {"t": "The replay consumer holds locks on the partitions it reads", "correct": false,
+         "why": "Reads take no locks — any number of groups read the same partitions independently. The interference is through a shared resource (cache and disk), not through concurrency control."},
+        {"t": "Replays force brokers to decompress old batches, saturating CPU", "correct": false,
+         "why": "Batches travel compressed end-to-end — the broker never decompresses. CPU stays modest; the contended resources are disk I/O and page-cache residency."},
+        {"t": "Tail consumers and the replay share one offset, so the replay drags everyone backward", "correct": false,
+         "why": "Offsets are per-group — that isolation is the core pub/sub feature. No group's position ever affects another's; only shared physical resources couple them."}
+      ]
+    },
+    {
+      "id": "p3c17-q17", "level": 2, "type": "mcq", "tag": "compaction",
+      "q": "You're publishing every change to user profiles so services can build local caches of current profile state. New services must be able to bootstrap the FULL current state. How do you configure the topic?",
+      "options": [
+        {"t": "Compacted, keyed by user ID", "correct": true,
+         "why": "Right — this is a changelog: state, not events. Compaction keeps the latest value per key forever, so a new service replays the topic from the start and ends holding exactly the current table, bounded by user count rather than by time."},
+        {"t": "7-day retention with daily full-state snapshots published in", "correct": false,
+         "why": "Workable but clumsy — you've hand-built a worse compactor: snapshot jobs to babysit, doubled write volume, and bootstrap logic stitching snapshot plus deltas. Compaction is this exact feature, native."},
+        {"t": "7-day retention, keyed by user ID", "correct": false,
+         "why": "Any user whose profile hasn't changed in 7 days vanishes from the topic — new services bootstrap a hole-riddled table. Time-based retention answers 'how long do events matter,' which is the wrong question for state."},
+        {"t": "Compacted, with random keys for even load distribution", "correct": false,
+         "why": "Compaction dedupes BY KEY — random keys make every record unique and nothing ever compacts. The key must be the entity ID; that's also what keeps each user's updates ordered."}
+      ]
+    },
+    {
+      "id": "p3c17-q18", "level": 2, "type": "mcq", "tag": "rebalance",
+      "q": "Every deploy of your 40-consumer service causes minutes of processing pauses as pods restart one by one. What's happening, and what's the fix?",
+      "options": [
+        {"t": "Each restart triggers a group rebalance; cooperative rebalancing plus static membership makes restarts near-invisible", "correct": true,
+         "why": "Right. Eager rebalancing revokes ALL partitions from ALL members on every change — 40 restarts, 40 stop-the-world events. Cooperative moves only affected partitions, and static membership lets a returning pod reclaim its identity without any rebalance."},
+        {"t": "The brokers are re-electing partition leaders on each deploy", "correct": false,
+         "why": "Leader elections happen when BROKERS change, not when consumers do. Client-side membership churn lands on the group coordinator's rebalance path, a different mechanism entirely."},
+        {"t": "Consumers must re-download all their partition data after restart", "correct": false,
+         "why": "Consumers store no partition data — they resume from committed offsets in seconds. The pause is coordination (rebalancing), not data transfer."},
+        {"t": "Kafka fundamentally can't support rolling deploys of consumers; deploy all-at-once instead", "correct": false,
+         "why": "All-at-once trades many small rebalances for one total outage — strictly worse. The eager protocol's pain was real, which is exactly why cooperative rebalancing was built; use it."}
+      ]
+    },
+    {
+      "id": "p3c17-q19", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "You must set replication policy for two topic classes: payment events and debug telemetry. Which commitment reads senior?",
+      "options": [
+        {"t": "Payments: RF=3, acks=all, min.insync=2, unclean elections off — writes stop rather than risk loss. Telemetry: acks=1, and I'll say out loud that a leader crash can drop a few seconds of metrics", "correct": true,
+         "why": "Right — durability is priced per topic class, and each loss window is stated, not hidden. Naming the telemetry trade-off explicitly is what makes this an engineering decision instead of a default."},
+        {"t": "Everything gets the payments settings — consistency of configuration prevents mistakes", "correct": false,
+         "why": "Uniformity sounds prudent but taxes every telemetry producer with acks=all latency and turns every follower stall into a cluster-wide write refusal — for data nobody would miss. Paying maximum durability for disposable data is over-engineering."},
+        {"t": "Everything gets acks=1 — Kafka is fast because you don't wait for replication", "correct": false,
+         "why": "This silently accepts the leader-dies-after-ack loss window on PAYMENTS. Speed-first as a blanket policy means the loss window was never priced — the exact failure the Jepsen analysis made famous."},
+        {"t": "Let each producing team choose their own settings freely", "correct": false,
+         "why": "Delegation without guardrails means the intern's default wins on the money topic. Senior practice: platform defines the topic classes and their guarantees; teams pick a class, not raw configs."}
+      ]
+    },
+    {
+      "id": "p3c17-q20", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "Incident: a rack failure kills every ISR replica of 12 partitions of the payments topic. Out-of-sync replicas (about 2 minutes behind) are available. The payments team is down and escalating. Your call?",
+      "options": [
+        {"t": "Keep the partitions offline and race to recover an ISR replica's disk; unclean election stays off — those 2 minutes contain acknowledged payments", "correct": true,
+         "why": "Right. Electing the stale replica erases ~2 minutes of ACKED payment events — history rewritten, producer promises broken, reconciliation nightmare. Downtime is visible and recoverable; silently vanished payments are neither. The config encoded this decision before the pressure arrived; honor it."},
+        {"t": "Enable unclean election — availability first, reconcile the gap from producer logs later", "correct": false,
+         "why": "'Reconcile later' assumes every producer kept a replayable record of 2 minutes of acked writes — mostly they didn't, that's what the log was FOR. This converts a bounded outage into unbounded uncertainty about what the payment history even is."},
+        {"t": "Enable it for these 12 partitions only, since partial availability beats none", "correct": false,
+         "why": "Scoping the blast radius doesn't change its nature — those 12 partitions still lose acknowledged payment data permanently. A smaller version of the wrong call is still the wrong call on a topic whose class promised durability."},
+        {"t": "Delete and recreate the affected partitions to restore service fastest", "correct": false,
+         "why": "This is unclean election with extra data loss — you'd discard the ENTIRE partition history, not just 2 minutes, plus every consumer's offsets into it. Faster, and strictly worse."}
+      ]
+    },
+    {
+      "id": "p3c17-q21", "level": 3, "type": "mcq", "tag": "crux",
+      "q": "Interviewer: 'You have 20 minutes left on Build Kafka. Where do you spend them?' Which agenda reads E5?",
+      "options": [
+        {"t": "\"The replicated log's guarantee machinery — ISR, the acks loss windows, epochs — because that's the part where wrong is silent data loss. Storage and consumers I'll cover fast; they're simpler engineering.\"", "correct": true,
+         "why": "Right — crux-spotting plus driving. The append-only file is clever but straightforward; the hard, failure-riddled part is making an ack MEAN something across dying machines. Naming why (silent loss) shows you found the fire, not just a fashionable topic."},
+        {"t": "\"The REST API and client SDK design — that's what users actually touch.\"", "correct": false,
+         "why": "Four operations on a log is deliberately boring API surface. Spending scarce deep-dive minutes on the easiest room in the house is the classic curtains-tour while the replication room burns."},
+        {"t": "\"Performance tuning — batch sizes, compression codecs, socket buffers.\"", "correct": false,
+         "why": "Real knobs, wrong altitude for scarce minutes: tuning presumes the machine; the interview is probing whether you can BUILD the machine's guarantees. Mention batching as the throughput lever in two sentences, then go where correctness lives."},
+        {"t": "\"A survey of everything remaining — partitions, storage, producers, consumers, ops — evenly.\"", "correct": false,
+         "why": "Even coverage is the no-judgment allocation: it guarantees you're shallow everywhere, and depth-on-the-crux is what separates levels. Triage by difficulty IS the graded skill."}
+      ]
+    },
+    {
+      "id": "p3c17-q22", "level": 3, "type": "mcq", "tag": "exactly-once",
+      "q": "A teammate says: 'We enabled Kafka's idempotent producer and transactions, so our consumer that calls the payment provider's API needs no dedup logic.' What's the senior correction?",
+      "options": [
+        {"t": "Those features make the KAFKA side exactly-once; the external API call sits outside them, and the crash-before-commit replay will re-call it — dedupe with (partition, offset) as the idempotency key", "correct": true,
+         "why": "Right — know the guarantee's boundary. Idempotent producers dedupe broker-side appends; transactions cover Kafka-to-Kafka atomicity; neither reaches into a third-party API. The replay window is structural, and offsets are a free, stable dedup key."},
+        {"t": "Correct — exactly-once semantics cover the full pipeline once enabled", "correct": false,
+         "why": "This is the most expensive misreading of 'exactly-once' in production use. The transactional machinery can't roll back an HTTP call it never saw — external effects need chapter 2.2's idempotency at the boundary, always."},
+        {"t": "Transactions are too slow to use anywhere, so drop them entirely", "correct": false,
+         "why": "Overcorrection. Transactions cost a coordinator round-trip and some latency — a fair price where cross-partition atomicity matters inside Kafka. The issue isn't their cost; it's their scope."},
+        {"t": "Switch the consumer to commit offsets before processing, eliminating replays", "correct": false,
+         "why": "That eliminates duplicates by introducing something worse: commit-then-crash now LOSES payments silently (at-most-once). For money, replay-plus-dedupe strictly beats silent loss."}
+      ]
+    },
+    {
+      "id": "p3c17-q23", "level": 3, "type": "mcq", "tag": "scale",
+      "q": "'What actually breaks if this cluster goes 10x — 10M messages/sec?' Which answer shows you built it rather than used it?",
+      "options": [
+        {"t": "\"Ingest scales by adding brokers — partitions are shared-nothing. What strains is per-partition overhead: controller metadata, mass leader elections when a big broker dies, giant-group rebalances, and the retention bill, which pushes you to tiered storage.\"", "correct": true,
+         "why": "Right — the honest split between what scales by addition (the data plane, by design) and what scales by count (metadata, elections, coordination, storage economics). Naming recovery time as the real ceiling is the builder's answer."},
+        {"t": "\"Disk throughput becomes the bottleneck — we'd need to move to an in-memory design.\"", "correct": false,
+         "why": "Backwards on both counts: sequential disk bandwidth is the most addable resource in the system (more brokers, more spindles), and 'in-memory' abandons the retention requirement that motivated the design. The estimation section exists to prevent this answer."},
+        {"t": "\"Kafka is proven at trillions of messages a day, so nothing breaks.\"", "correct": false,
+         "why": "Appeal to LinkedIn's fleet isn't an analysis of YOURS. Those operators earned that scale precisely by managing partition budgets, election storms, and cache behavior — the things this answer waves away."},
+        {"t": "\"We'd rewrite the consumers in a faster language first.\"", "correct": false,
+         "why": "Consumer CPU is the component you can scale horizontally with zero design work (add members, up to the partition count). Nothing about broker-side 10x pressure is addressed by client language choice."}
+      ]
+    },
+    {
+      "id": "p3c17-q24", "level": 3, "type": "mcq", "tag": "ops",
+      "q": "You inherit a Kafka cluster with zero alerting and can ship one alert today. Which one, and what's the reasoning?",
+      "options": [
+        {"t": "Under-replicated partitions &gt; 0 — it means some acked data is one failure from loss, and it's the early symptom of almost every broker-side problem", "correct": true,
+         "why": "Right. URP catches dead brokers, sick disks, saturated networks, and GC storms — all as one number, firing while everything still 'works.' It's the alarm that buys you time before the second failure makes headlines."},
+        {"t": "Broker CPU above 80%", "correct": false,
+         "why": "Kafka brokers run happily hot, and CPU says nothing about the guarantee that matters (redundancy of acked data). Cause-based alerts like CPU page you for non-problems and sleep through real ones."},
+        {"t": "Consumer lag on every group", "correct": false,
+         "why": "Lag is THE metric for pipeline health and belongs in your top three — but blanket-alerting every group on day one drowns you in batch jobs that lag by design. The one alert that guards DURABILITY cluster-wide comes first; lag alerts follow, tuned per group."},
+        {"t": "Disk usage above 95%", "correct": false,
+         "why": "Right idea, fatally late threshold — at 95% you have hours while partition moves take hours. Disk belongs on the list at ~70%; but even then it's one failure domain, while under-replicated partitions catches nearly all of them."}
+      ]
+    },
+    {
+      "id": "p3c17-q25", "level": 3, "type": "mcq", "tag": "judgment",
+      "q": "A team requests 10,000 partitions for a new 20 MB/s topic 'so we never have to think about scaling again.' Your response as the platform owner?",
+      "options": [
+        {"t": "Provision ~8 with headroom and a documented path: the topic needs ~2 by throughput, and 10,000 partitions buys mass elections on every broker failure, coordinator strain, and tiny batches — real costs against imaginary load", "correct": true,
+         "why": "Right — the number comes from the sizing heuristic (peak ÷ 10 MB/s, doubled, floored at parallelism needs), and the refusal names the specific per-partition costs. 'Never think about it again' is how clusters accumulate six-figure partition counts that turn one broker death into a ten-minute election storm."},
+        {"t": "Grant it — partitions cost nothing when idle, and re-partitioning later breaks key ordering, so maximum future-proofing is prudent", "correct": false,
+         "why": "The re-mapping pain is real, which justifies 2-4x headroom — not 500x. Idle partitions still cost open files, index memory, replication fetch slots, and election work on every failover. The argument proves modest padding, and gets stretched to absurdity."},
+        {"t": "Grant 10,000 but spread them over extra brokers to absorb the overhead", "correct": false,
+         "why": "Buying hardware to subsidize an unjustified number inverts the responsibility: the request had no load analysis, so the fix is analysis, not capacity. You'd also be normalizing a precedent every future team will cite."},
+        {"t": "Refuse anything above 100 partitions as cluster policy, no exceptions", "correct": false,
+         "why": "A rigid cap without reasoning is the mirror image of the team's rigid ask — some legitimately hot topics need hundreds. The senior posture is a sizing formula plus per-case judgment, not a magic number in either direction."}
+      ]
+    }
+  ]
+}
