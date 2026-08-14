@@ -103,13 +103,13 @@
       "id": "p1c03-q08", "level": 1, "type": "mcq", "tag": "n-plus-one",
       "q": "What is the N+1 query problem?",
       "options": [
-        {"t": "One query fetches N items, then one more query runs per item", "correct": true,
+        {"t": "One query fetches N items, then one query per item", "correct": true,
          "why": "Yes — 50 posts, then 50 author lookups in a loop. Every query is fast; the page is slow, because 101 round trips at 1ms each is 100ms of pure back-and-forth. ORMs generate this silently."},
         {"t": "A query that returns N+1 rows when you expected N", "correct": false,
          "why": "That's an off-by-one or a join fanning out — a correctness bug. N+1 is a performance pattern: too many round trips, each individually innocent."},
         {"t": "Having one more index than you have queries", "correct": false,
          "why": "Unused indexes are a real problem (the write tax with no refund), but that's index hygiene. N+1 is about query counts per request exploding."},
-        {"t": "N servers overwhelming 1 database", "correct": false,
+        {"t": "N app servers hammering one database until connections run out", "correct": false,
          "why": "Connection saturation is real but different. N+1 happens with one app server and one database — the round trips themselves are the waste."}
       ]
     },
@@ -243,8 +243,8 @@
       "id": "p1c03-q18", "level": 2, "type": "mcq", "tag": "keys",
       "q": "A teammate wants random UUIDs (v4) as the primary key for a 500M-row, insert-heavy table. What's the honest concern?",
       "options": [
-        {"t": "Random keys land at random index positions, so pages churn and split instead of appending", "correct": true,
-         "why": "Right. Sequential bigints (or time-ordered IDs like Instagram's 41-bit-timestamp scheme) keep inserts on a warm rightmost page. Random UUIDs spray writes across the whole tree — measurably slower writes and a colder cache at this scale."},
+        {"t": "Random keys scatter inserts across the index instead of appending", "correct": true,
+         "why": "Right. Sequential bigints (or time-ordered IDs like Instagram's 41-bit-timestamp scheme) keep inserts on a warm rightmost page. Random UUIDs land at random positions, so pages churn and split all over the tree — measurably slower writes and a colder cache at this scale."},
         {"t": "UUIDs can collide, and a primary-key collision silently corrupts the table", "correct": false,
          "why": "Collision odds on 122 random bits are astronomically negligible — that's not the issue. The issue is where in the sorted index each new key lands, and 'random' is the worst possible answer for locality."},
         {"t": "UUIDs can't be primary keys in SQL databases", "correct": false,
@@ -271,8 +271,8 @@
       "id": "p1c03-q20", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Your booking system handles normal load easily. A superstar concert goes on sale and traffic jumps 10x, all aimed at one show. What breaks first, and what's the senior response?",
       "options": [
-        {"t": "Contention on that one show's rows — contain with short transactions and fast-fail, then queue admission for on-sale events", "correct": true,
-         "why": "The hot spot is logical, not physical — thousands of buyers fighting over the same few hundred rows. Naming the failure order (locks queue → latency climbs → connections exhaust) and answering with containment plus a structural fix is exactly the 10x-question rubric."},
+        {"t": "Contention on that one show's rows — contain it, then queue admission for on-sale events", "correct": true,
+         "why": "The hot spot is logical, not physical — thousands of buyers fighting over the same few hundred rows. Containment means short transactions and fast-fail on lock waits so the queue drains; the waiting room is the structural fix. Naming the failure order (locks queue → latency climbs → connections exhaust) and answering with both is exactly the 10x-question rubric."},
         {"t": "Shard the database by show_id so the load spreads across machines — 10x traffic needs horizontal scale", "correct": false,
          "why": "Sharding spreads load across keys — but this load is all ONE key. The hot show lands on a single shard and melts it identically. Sharding is the reflex answer that reveals the hot-partition blind spot; interviewers set this trap deliberately."},
         {"t": "Add read replicas to absorb the extra traffic", "correct": false,

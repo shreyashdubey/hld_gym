@@ -53,8 +53,8 @@
          "why": "Yes — a multi-day job WILL die mid-run (deploy, OOM, reclaimed instance). 'Done through key X' recorded after each batch turns a disaster into a shrug."},
         {"t": "Idempotent, with writes conditional on version so newer data survives", "correct": true,
          "why": "Yes — batches get retried and race live dual writes. A blind upsert can overwrite tonight's data with last year's; comparing a version or updated_at prevents it."},
-        {"t": "Wrapped in a single transaction covering the whole table", "correct": false,
-         "why": "A transaction spanning billions of rows would hold locks for days and could never commit. Small independent batches are the entire point — the job is safe because each piece is tiny and repeatable."}
+        {"t": "Wrapped in one transaction over the whole table so a failure rolls back cleanly", "correct": false,
+         "why": "Clean rollback sounds reassuring, but a transaction spanning billions of rows would hold locks for days and could never commit. Small independent batches are the entire point — the job is safe because each piece is tiny and repeatable, so a failure just means redoing one batch."}
       ]
     },
     {
@@ -105,10 +105,10 @@
       "options": [
         {"t": "Flags are easier to code-review than deploys", "correct": false,
          "why": "Review effort isn't the issue. The operational property that matters is reaction time when something goes wrong mid-cutover."},
-        {"t": "A flag flips in seconds without shipping code, and supports percentage rollout", "correct": true,
-         "why": "Right. Rollback becomes a runtime toggle measured in seconds, not a deploy measured in minutes — and you can expose 1% of users first, watch, and ramp. The flag IS the rollback plan."},
-        {"t": "Deploys are forbidden during migrations", "correct": false,
-         "why": "Deploys continue normally throughout a migration — each phase ships as one. The flag specifically decouples the risky flip from the deploy machinery."},
+        {"t": "A flag flips in seconds and supports percentage rollout", "correct": true,
+         "why": "Right. No code ships, so rollback becomes a runtime toggle measured in seconds instead of a deploy measured in minutes — and you can expose 1% of users first, watch the mismatch metric, and ramp. The flag IS the rollback plan."},
+        {"t": "A deploy restarts pods and would drop in-flight dual writes", "correct": false,
+         "why": "Rolling deploys drain connections and your retries cover the rest — services restart all through a migration without losing writes, and each phase ships as its own deploy. The flag matters for reaction time: it undoes the flip in seconds, which a redeploy can't."},
         {"t": "Flags avoid having to verify the new store first", "correct": false,
          "why": "Nothing skips verification — the flag flips only after the mismatch metric has sat at ~zero for days. The flag controls exposure; the metric grants permission."}
       ]
@@ -135,8 +135,8 @@
          "why": "This couples production availability to an unproven shadow system — the warming-up copy can now take down checkout. The old store is the truth; its success means the request succeeded."},
         {"t": "Retry synchronously until the new store accepts it", "correct": false,
          "why": "Blocking a live user on an unlimited retry against a non-authoritative store turns a shadow's bad day into user-facing latency. Bound the work, then hand off."},
-        {"t": "Succeed the request; log the miss for repair and let verification catch drift", "correct": true,
-         "why": "Right. Old store first and authoritative; new store best-effort with failures recorded. The mismatch metric exists precisely because dual writes leak — the design absorbs it."},
+        {"t": "Succeed the request and log the miss for repair", "correct": true,
+         "why": "Right. The old store is authoritative, so its success means the request succeeded; the new store is best-effort, with every failure recorded for a repair job to replay later. The mismatch metric exists precisely because dual writes leak — verification catches whatever the repair queue misses, and the design absorbs it."},
         {"t": "Roll back the old-store write to keep the copies identical", "correct": false,
          "why": "Undoing a committed, user-visible write to protect a shadow copy inverts the hierarchy of truth — and introduces its own failure window. The copy serves the migration, never the other way around."}
       ]
@@ -177,7 +177,7 @@
          "why": "Uniform overall, but constrained per row: x % 4 = 2 forces x % 16 into {2, 6, 10, 14}. Missing this means planning a 16-way shuffle when a clean 4-way split is available."},
         {"t": "Only new shard 2 — matching remainders stay together", "correct": false,
          "why": "Only user_ids with x % 16 = 2 stay; the rest of old shard 2 spreads to 6, 10, and 14. If nothing moved, the reshard wouldn't relieve anything."},
-        {"t": "New shards {2, 6, 10, 14} — each old shard splits into exactly four children", "correct": true,
+        {"t": "New shards {2, 6, 10, 14} — each old shard splits four ways", "correct": true,
          "why": "Yes: x % 4 = 2 constrains x % 16 to that set. No row crosses between old shards, so backfill runs as four independent streams, verification pairs cleanly, and a bad row implicates exactly one stream. Multiplying the shard count is why the split is clean."},
         {"t": "New shards {0, 4, 8, 12} — offsets shift by the old count", "correct": false,
          "why": "Those are old shard 0's children. The remainder mod 4 is preserved inside the remainder mod 16, so shard 2's children all keep remainder 2 when reduced mod 4."}
@@ -231,10 +231,10 @@
       "options": [
         {"t": "CDC is faster than application writes", "correct": false,
          "why": "Throughput isn't the argument — CDC adds a relay hop, if anything. The argument is about a gap that no amount of careful app code can fully close."},
-        {"t": "It removes the need for a backfill", "correct": false,
-         "why": "CDC captures changes from when you start tailing; history still needs the chunked backfill. The phases don't collapse — only the live-change capture gets more trustworthy."},
-        {"t": "The app can crash between its two writes and record nothing; CDC reads the database's own journal, so no committed change can be missed", "correct": true,
-         "why": "Right. Two non-atomic app writes always leave a crash window where the stores silently diverge. CDC (or outbox: event committed in the same transaction) anchors capture to the commit itself — for money, that's the difference between 'unlikely to drift' and 'cannot silently drift.'"},
+        {"t": "It removes the need for a separate backfill, since the log replays history", "correct": false,
+         "why": "Tempting, because the log really does contain history — but binlog retention is measured in days, not years, so its oldest entry is long past the table's oldest row. CDC captures changes from when you start tailing; history still needs the chunked backfill. Only the live-change capture gets more trustworthy."},
+        {"t": "CDC captures from the commit itself, so no committed change can be missed", "correct": true,
+         "why": "Right. Two non-atomic app writes always leave a crash window: the old store commits, the process dies, the new store never hears about it, and nothing logs an error. CDC (or outbox — the event committed in the same transaction) anchors capture to the commit, not to your code path. For money, that's the difference between 'unlikely to drift' and 'cannot silently drift.'"},
         {"t": "Dual writes are deprecated in modern architectures", "correct": false,
          "why": "App-level dual writes remain a legitimate, fast-to-ship choice for tolerant data. The senior skill is matching the mechanism to the stakes, not declaring one pattern dead."}
       ]
@@ -277,8 +277,8 @@
          "why": "Right instinct, junior delivery. A flat refusal on hygiene grounds invites an authority contest; the senior version prices the risk and redesigns the schedule so the conflict dissolves."},
         {"t": "Compromise: skip shadow reads but spot-check a thousand random rows manually", "correct": false,
          "why": "A thousand hand-checked rows can't see a 0.1% systematic bug (that's ~1 expected hit), and manual checks don't run on real read traffic — the thing shadow reads uniquely cover. This trades away the instrument that works for one that feels diligent."},
-        {"t": "Reframe: \"Verification runs in parallel with life, not instead of it — flip 1% behind the flag while shadow reads accumulate, and ramp on the metric. Skipping it doesn't save two weeks; it moves discovery from a dashboard to production incidents.\"", "correct": true,
-         "why": "Names the real cost of skipping (bugs found by users instead of counters), then restructures so safety and schedule stop competing — percentage rollout means verification and launch overlap. Turning a refusal into a better plan is the senior move."}
+        {"t": "Reframe: run verification in parallel — flip 1% behind the flag and ramp on the metric", "correct": true,
+         "why": "Names the real cost of skipping — bugs found by users instead of by counters — then restructures so safety and schedule stop competing. Verification runs alongside the launch, not instead of it: 1% of reads go to the new store behind the flag while shadow reads accumulate, and each ramp is granted by the mismatch metric. Skipping doesn't save two weeks; it moves discovery from a dashboard to production incidents. Turning a refusal into a better plan is the senior move."}
       ]
     },
     {
@@ -299,8 +299,8 @@
       "id": "p2c11-q22", "level": 3, "type": "mcq", "tag": "incident",
       "q": "Read cutover at 50%. p99 is fine, but mismatch alerts fire — confined to rows updated in the last few minutes. First action, and likely cause?",
       "options": [
-        {"t": "Flip the read flag back to old, then investigate — likely lag in the pipeline feeding the new store", "correct": true,
-         "why": "Right on both. Recently-updated-rows-only is the signature of capture lag: the CDC/dual-write pipe is behind, so new-store reads serve slightly stale data. The flag exists for this exact moment — take the free rollback first, diagnose without users in the blast zone."},
+        {"t": "Flip the read flag back to old, then investigate — likely capture lag", "correct": true,
+         "why": "Right on both. Mismatches confined to recently-updated rows is the signature of capture lag: the CDC or dual-write pipe feeding the new store is behind, so new-store reads serve slightly stale data while older rows agree perfectly. The flag exists for this exact moment — take the free rollback first, then diagnose without users in the blast zone."},
         {"t": "Push to 100% — partial cutovers cause transient inconsistencies that settle", "correct": false,
          "why": "Percentage cutover doesn't create mismatches; it REVEALS them on a small audience, which is its job. Ramping into an active alert converts a contained signal into a full-population incident on a hunch."},
         {"t": "Investigate thoroughly first — flapping the flag might mask the evidence", "correct": false,
@@ -315,10 +315,10 @@
       "options": [
         {"t": "Start the full reshard immediately — it's the root-cause fix", "correct": false,
          "why": "A multi-week migration racing a disk that fills in days is exactly the Foursquare shape: the fix arrives mid-collapse and executes under emergency conditions, where their chunk moves couldn't even free memory due to fragmentation. Root cause, wrong tempo."},
-        {"t": "Buy headroom first — bigger volume, archive cold data, shed load — then run the reshard as the planned project it was", "correct": true,
-         "why": "Right. Cheap reversible moves reset the clock so the migration runs with rehearsals and rollbacks intact. Foursquare's lesson is precisely this: the same operation is routine as a project and catastrophic as a rescue — eleven hours down proved it."},
-        {"t": "It teaches nothing current — that was MongoDB in 2010", "correct": false,
-         "why": "The tooling aged; the dynamics didn't. Skewed growth, a resource ceiling, and a live rebalance attempted past the safety margin is a timeless failure shape — Shopify built dedicated tooling (Ghostferry) to keep this exact operation boring."},
+        {"t": "Buy headroom first — bigger volume, archive cold data — then reshard as planned", "correct": true,
+         "why": "Right. Cheap reversible moves (a bigger volume, archiving cold data, shedding load) reset the clock, so the migration still runs as a project with rehearsals and rollbacks intact. Foursquare's lesson is precisely this: the same operation is routine as a project and catastrophic as a rescue — eleven hours down proved it."},
+        {"t": "Nothing current — that was MongoDB 2010, and modern balancers move chunks online", "correct": false,
+         "why": "Balancers really have improved, and the tooling aged — but the dynamics didn't. Skewed growth, a resource ceiling, and a live rebalance attempted past the safety margin is a timeless failure shape, and no balancer helps once there's no free space to move chunks into. Shopify built dedicated tooling (Ghostferry) to keep this exact operation boring."},
         {"t": "Freeze all writes to the hot shard until the reshard completes", "correct": false,
          "why": "A write freeze on a hot shard IS an outage for those users — self-inflicted, for weeks. You'd be spending certain downtime to avoid possible downtime, which inverts the entire premise of live migration."}
       ]
@@ -329,12 +329,12 @@
       "options": [
         {"t": "Nothing — the metrics have covered every angle", "correct": false,
          "why": "The metrics covered every reader that goes through the app's read path. The dangerous readers are the ones that never did."},
-        {"t": "Readers that never went through the app: cron jobs, analytics pipelines, other services querying the table directly", "correct": true,
-         "why": "The classic last-step casualty. Shadow reads instrument YOUR code path; the nightly report, the ETL job, and that other team's direct SQL never appeared in any mismatch metric. Audit grants and query logs, migrate the stragglers, snapshot — then drop."},
+        {"t": "Readers that never went through the app: cron jobs, ETL, other services", "correct": true,
+         "why": "The classic last-step casualty. Shadow reads instrument YOUR code path; the nightly report, the analytics pipeline, and that other team's direct SQL never appeared in any mismatch metric, so a week of zeroes says nothing about them. Audit grants and query logs to find them, migrate the stragglers, snapshot — then drop."},
         {"t": "That the verification week was too short", "correct": false,
          "why": "More of the same verification finds more of the same nothing — it watches the instrumented path, which is clean. The gap is coverage, not duration; unwatched paths don't improve with waiting."},
-        {"t": "Disk space freed by the drop may fragment", "correct": false,
-         "why": "Reclaiming space is a routine operation and roughly the least risky part of the endgame. The irreversible risk is severing a reader nobody instrumented — you learn about it from their outage."}
+        {"t": "Dropping a huge table can stall the server while it frees the file", "correct": false,
+         "why": "A real effect — deleting a large tablespace can block for a while, which is why teams rename first or unlink lazily. But it's a scheduling detail with known workarounds, and reclaiming space is the least risky part of the endgame. The irreversible risk is severing a reader nobody instrumented — you learn about that one from their outage."}
       ]
     },
     {
@@ -343,7 +343,7 @@
       "options": [
         {"t": "B — more depth and platform thinking signal a higher ceiling", "correct": false,
          "why": "B skipped the load-bearing senior material (reversibility — the 'how do I get back' at every phase) to perform staff-level garnish. Depth stacked on a missing foundation grades as miscalibration, not ceiling."},
-        {"t": "A — complete execution of the senior list beats garnish missing its foundation", "correct": true,
+        {"t": "A — complete execution of the senior list beats missing foundations", "correct": true,
          "why": "Right. The senior bar is executing ONE migration safely: phases, numbers, verification gate, rollback per step, the trap named. A delivered all of it. B's platform talk is real staff material — but only on top of A's list, never instead of it."},
         {"t": "Equal — both clearly know the pattern deeply", "correct": false,
          "why": "Interviews grade the judgment displayed, not knowledge inferred. An answer with no rollback story fails the rubric's center regardless of what the candidate probably knows — unsaid safety doesn't score."},

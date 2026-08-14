@@ -65,8 +65,8 @@
          "why": "Both describe how content gets TO the edge for serving downloads. Uploads are a different topic entirely (presigned URLs, multipart)."},
         {"t": "Pull fills edges lazily on the first miss; push pre-positions content in advance", "correct": true,
          "why": "Right. Pull is the default: zero planning, but first requesters pay the miss. Push trades planning effort and edge storage for guaranteed hits — worth it when demand is predictable and huge, like Netflix's nightly pre-positioning."},
-        {"t": "Push CDNs are faster because they use better cables", "correct": false,
-         "why": "Same infrastructure, same cables. The difference is purely when content arrives at the edge: before the first request (push) or because of it (pull)."},
+        {"t": "Push CDNs ride a dedicated private backbone, so their bytes travel faster", "correct": false,
+         "why": "Many CDNs really do run a private backbone — but pull traffic uses the very same links. Push and pull are the same network; the only difference is when content arrives at the edge: before the first request, or because of it."},
         {"t": "Pull CDNs can't cache large video files the way push CDNs can", "correct": false,
          "why": "Pull CDNs cache video all day long. The push choice is about miss cost and predictability, not file type."}
       ]
@@ -81,8 +81,8 @@
          "why": "No partial writes — you replace the object entirely. That constraint is a feature: whole-object semantics make massive replication and durability far simpler."},
         {"t": "Buckets are limited to 5 TB of total storage", "correct": false,
          "why": "5 TB is the maximum size of a single object. Buckets are effectively unlimited — that bottomless capacity is a core reason blobs go here and not in your database."},
-        {"t": "Objects live in buckets under flat string keys and are replaced whole — no partial edits", "correct": true,
-         "why": "Yes. Keys like photos/2026/cat.jpg look like folder paths but the slashes are cosmetic. The tiny PUT/GET/DELETE/LIST API with whole-object writes is what lets S3 scale to trillions of objects with 11-nines durability."}
+        {"t": "Objects live in buckets under flat string keys, replaced whole", "correct": true,
+         "why": "Yes — flat keys and whole-object writes, no partial edits. Keys like photos/2026/cat.jpg look like folder paths but the slashes are cosmetic. That tiny PUT/GET/DELETE/LIST API is what lets S3 scale to trillions of objects with 11-nines durability."}
       ]
     },
     {
@@ -135,8 +135,8 @@
          "why": "The CDN is obediently doing what it was told. Cache-key misconfiguration is an operator error every vendor lets you make — switching vendors ships the same mistake to a new bill."},
         {"t": "The responses are too large for the edges to cache, so almost everything passes through", "correct": false,
          "why": "Size limits exist but produce skipped caching with telltale logs, not a uniform 0.5% hit rate. The per-user key partitioning explains the observed number precisely."},
-        {"t": "Every user's requests form a distinct cache key, so responses are cached per-user and almost never reused", "correct": true,
-         "why": "Exactly. A unique-per-user value in the key partitions the cache into millions of single-user shelves. Hit rate collapses, the origin takes full traffic, and everything looks 'fine' except the bills and the latency. Too-broad keys leak data; too-narrow keys destroy hit rate — this is the second failure."},
+        {"t": "Each user's cookie makes a distinct cache key, so nothing is ever shared", "correct": true,
+         "why": "Exactly. Responses get cached per-user and almost never reused: a unique-per-user value in the key partitions the cache into millions of single-user shelves. Hit rate collapses, the origin takes full traffic, and everything looks 'fine' except the bills and the latency. Too-broad keys leak data; too-narrow keys destroy hit rate — this is the second failure."},
         {"t": "API responses can never be cached; only static files can", "correct": false,
          "why": "Plenty of API responses (public catalog data, trending lists) cache beautifully with the right key and TTL. The absolutism misses the real diagnosis — and the real fix: strip the cookie from the key for cacheable routes."}
       ]
@@ -201,8 +201,8 @@
       "id": "p1c07-q15", "level": 2, "type": "mcq", "tag": "multipart",
       "q": "Users upload 20 GB video files from home connections that drop every few minutes. Which mechanism makes these uploads actually complete?",
       "options": [
-        {"t": "Multipart upload: split into parts, retry only failed parts, resume across disconnects, assemble at the end", "correct": true,
-         "why": "This is the purpose-built tool. A drop costs one part, not 20 GB; parts upload in parallel for speed; and S3 requires it anyway above the 5 GB single-PUT cap. Pair it with a lifecycle rule that aborts abandoned sessions so half-uploaded parts don't bill you forever."},
+        {"t": "Multipart upload: split the file into parts and retry only the failed ones", "correct": true,
+         "why": "This is the purpose-built tool. Parts resume across disconnects and S3 assembles them at the end, so a drop costs one part, not 20 GB; parts upload in parallel for speed; and S3 requires it anyway above the 5 GB single-PUT cap. Pair it with a lifecycle rule that aborts abandoned sessions so half-uploaded parts don't bill you forever."},
         {"t": "A single PUT with a very long timeout", "correct": false,
          "why": "Two failures: S3 caps single PUTs at 5 GB, and a 99%-done drop restarts from zero — on a flaky link the upload may literally never finish. Timeouts don't fix restart-from-zero."},
         {"t": "Gzip the video first so there's less to upload", "correct": false,
@@ -221,8 +221,8 @@
          "why": "Client-side generation of some sizes is a real optimization, but you can't trust client output (malformed variants, tampering), and you still want the original for future formats. It complements the pipeline; it doesn't replace it."},
         {"t": "It's fine — four resizes at 800 ms is cheap enough to keep inline", "correct": false,
          "why": "For photos at low volume, honestly, it can work — but it sets the architecture down a path that hard-fails at video (minutes of transcoding) and at spikes. The senior instinct is to keep slow, retryable work off the request path from the start."},
-        {"t": "Synchronous CPU work couples request capacity to resize capacity — the 9 pm rush degrades ALL requests", "correct": true,
-         "why": "The load-shape argument is the killer: 800 ms of CPU per upload × an evening spike saturates the fleet serving everything else. Decoupling via queue lets workers lag gracefully during spikes and redo work after crashes — the pipeline pattern exists precisely for this."}
+        {"t": "Synchronous CPU work couples request capacity to resize capacity", "correct": true,
+         "why": "The load-shape argument is the killer: 800 ms of CPU per upload × a 9 pm spike saturates the fleet serving everything else, so ALL requests degrade, not just uploads. Decoupling via queue lets workers lag gracefully during spikes and redo work after crashes — the pipeline pattern exists precisely for this."}
       ]
     },
     {
@@ -231,7 +231,7 @@
       "options": [
         {"t": "Postgres can't store binary data", "correct": false,
          "why": "It can (BYTEA, large objects) — that's what makes the proposal tempting. The argument against isn't capability, it's cost: DB storage, replication, and cache are premium resources wasted on unqueryable bytes."},
-        {"t": "That's 2 TB bloating every backup and replica for bytes we never query — S3 for the bytes, keys in the DB", "correct": true,
+        {"t": "That's 2 TB of never-queried bytes in every backup — S3 for those, keys in the DB", "correct": true,
          "why": "The full argument: 2 TB rides along in every backup, streams through every replication event, and competes with hot rows for RAM cache — while the query engine can do nothing useful with a JPEG. 'Free' backups of blob bytes are the most expensive free thing you'll ever get."},
         {"t": "Fine for avatars since they're small; just don't do it for videos", "correct": false,
          "why": "Small × 10 million = 2 TB, which is not small. The per-object size is a red herring; aggregate volume and the total absence of query benefit are what condemn the design. (And products grow: avatars today, cover photos tomorrow.)"},
@@ -257,8 +257,8 @@
       "id": "p1c07-q19", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Interviewer: 'A user in Jakarta taps a photo in your app. Walk me through the bytes.' Which walkthrough earns the senior grade?",
       "options": [
-        {"t": "\"App requests a versioned variant URL; DNS lands it on a Jakarta-area edge — usually a hit in ~20 ms. On a miss the edge pulls from S3 and caches under a year-long immutable TTL. My servers never touch image bytes.\"", "correct": true,
-         "why": "Complete loop, correct mechanics, and the two senior tells: quantified hit behavior and the explicit observation that app servers are out of the byte path. It also names WHY the TTL can be a year (versioned, immutable keys) — mechanism, not vocabulary."},
+        {"t": "\"App requests a versioned variant URL; DNS lands it on a Jakarta-area edge — usually a hit in ~20 ms. On a miss the edge pulls from S3 and caches it. My servers never touch image bytes.\"", "correct": true,
+         "why": "Complete loop, correct mechanics, and the two senior tells: quantified hit behavior and the explicit observation that app servers are out of the byte path. The word 'versioned' is doing quiet work too — immutable URLs are what let that cached copy carry a year-long TTL. Mechanism, not vocabulary."},
         {"t": "\"The request hits our API, which reads the image from S3 and returns it to the user; we'd also put a CDN in front of the API to cache the popular photos as an optimization.\"", "correct": false,
          "why": "This buries the design error inside a fluent sentence: the API proxying image bytes means your fleet scales with image traffic. 'A CDN caches it too' bolted onto a proxy path suggests the candidate has the words but not the architecture."},
         {"t": "\"CloudFront with an S3 origin, standard setup — honestly there's not much to say here, it's a solved problem these days.\"", "correct": false,
@@ -287,7 +287,7 @@
       "options": [
         {"t": "Approve — a 95% storage saving is far too large to leave on the table", "correct": false,
          "why": "The percentage is real; the outage it causes is realer. A customer invoking the 90-day clause waits hours for a 'instant' document — a contract breach discovered by a customer. Storage classes encode access-latency promises, and this one breaks yours."},
-        {"t": "Reject: Deep Archive restores take hours, violating the 90-day instant-access clause", "correct": true,
+        {"t": "Reject — Deep Archive restores take hours, breaking the instant-access clause", "correct": true,
          "why": "The senior move is catching that a storage-class change is a PRODUCT-CONTRACT change: Deep Archive's hours-long restore breaks 'retrievable instantly.' The counter-proposal honors the constraint — and the closing instinct matters too: 50K/day × 300 KB ≈ 15 GB/day, so the absolute savings are small; engineering time might be the bigger cost."},
         {"t": "Reject any tiering — storage is cheap, keep everything in Standard", "correct": false,
          "why": "At THIS volume (~5.5 TB/year), defensible! But as a blanket principle it's how companies wake up with petabyte Standard bills. The graded skill is doing the volume math and matching tiers to measured access — not a slogan in either direction."},
@@ -303,8 +303,8 @@
          "why": "Maximal redundancy without a cost or complexity acknowledgment reads as fear, not judgment. Cross-region doubles storage cost and cross-cloud doubles your ops surface; proposing both, unpriced, for a once-in-years event is the over-engineering tell. (Also: 11-nines durability was never the issue — availability was.)"},
         {"t": "\"S3 has eleven nines of durability, so outages aren't a real concern.\"", "correct": false,
          "why": "This confuses the two words the question is testing. Durability says your data survived; availability says you can reach it. February 2017 lost essentially no data and still broke half the internet for four hours — because availability, not durability, failed."},
-        {"t": "\"Uploads queue behind 'posting…'; reads mostly survive because the CDN keeps serving cached content through an origin outage. Multi-region waits for a business case.\"", "correct": true,
-         "why": "Degraded-mode thinking (what still works, what queues, what users see), the non-obvious insight that a CDN is itself an availability layer during origin outages (serve-stale is a real CDN feature), and a cost-justified decision NOT to build the maximal thing. Committing to less, with reasons, outranks promising everything."},
+        {"t": "\"Uploads queue behind 'posting…'; reads mostly survive on the CDN. Multi-region waits for a business case.\"", "correct": true,
+         "why": "Reads survive because the edge keeps serving cached content straight through an origin outage. That's degraded-mode thinking (what still works, what queues, what users see), the non-obvious insight that a CDN is itself an availability layer during origin outages (serve-stale is a real CDN feature), and a cost-justified decision NOT to build the maximal thing. Committing to less, with reasons, outranks promising everything."},
         {"t": "\"I'd build our own object storage layer so we're not dependent on AWS.\"", "correct": false,
          "why": "Trading a battle-tested dependency for the hardest infrastructure project in the catalog — S3 IS one of Part 3's design problems for a reason. 'Build it ourselves' as a resilience plan, without acknowledging the years and the team it costs, reads as never having priced it."}
       ]
@@ -327,8 +327,8 @@
       "id": "p1c07-q24", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "You inherit a system serving user-uploaded images at original resolution through the CDN — no variants. Mobile users on slow connections download 4 MB images for 300-pixel thumbnails. Two proposals: (A) backfill-generate four fixed sizes for all 500M existing images via the pipeline; (B) on-the-fly resizing at the edge/origin, cached by the CDN under the requested-size cache key. Your call?",
       "options": [
-        {"t": "B: resize-on-request only pays for sizes actually requested, and the CDN amortizes each resize", "correct": true,
-         "why": "The insight that decides it: eager backfill (A) burns enormous compute generating variants nobody requests, while lazy generation is demand-proportional and CDN caching makes each size a one-time cost. Committing to B while naming its cost (first-hit latency, a resize service to run and protect) is the senior shape. A remains right for guaranteed-hot sets like recent uploads — saying that hybrid out loud is the flourish."},
+        {"t": "B: resize on request, cached by the CDN under the size key", "correct": true,
+         "why": "You pay only for sizes someone actually asks for, and the CDN amortizes each resize across every later request for it. Eager backfill (A) burns enormous compute generating variants nobody requests, while lazy generation is demand-proportional and CDN caching makes each size a one-time cost. Committing to B while naming its cost (first-hit latency, a resize service to run and protect) is the senior shape. A remains right for guaranteed-hot sets like recent uploads — saying that hybrid out loud is the flourish."},
         {"t": "A — precomputing off the request path is always better than computing on it", "correct": false,
          "why": "'Always' is doing unjustified work here. Precompute wins when access is likely; against a 500M-image long tail where most items are never viewed again, eager generation is a giant compute bill for variants nobody fetches. The access distribution, not a maxim, decides this."},
         {"t": "Neither — have the mobile app downscale the image after downloading it", "correct": false,

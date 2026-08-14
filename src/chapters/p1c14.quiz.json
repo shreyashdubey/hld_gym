@@ -7,8 +7,8 @@
       "options": [
         {"t": "Different shards mint the same ID for different rows", "correct": true,
          "why": "Right. Each shard counts 1, 2, 3 independently, so 'order 4,000,317' now exists on multiple shards as different orders. An ID stops being an identifier the moment two shards can both produce it."},
-        {"t": "Auto-increment gets slower as tables grow", "correct": false,
-         "why": "Auto-increment stays fast at any size — incrementing a counter is O(1), and sequential inserts keep the B-tree's right edge hot. The problem is collisions across shards, not speed."},
+        {"t": "Each shard's counter becomes a write hotspot, capping insert throughput per shard", "correct": false,
+         "why": "The counter is not a bottleneck — InnoDB holds the auto-increment lock for an instant and releases it, and appending to the hot right edge of the B-tree is the cheapest insert there is. Speed was never the problem here; two shards handing out the same number is."},
         {"t": "The IDs stop being sortable by time", "correct": false,
          "why": "Within one shard they remain time-ordered. Cross-shard ordering does get murky, but the immediate, data-corrupting failure is duplicate IDs, not sort order."},
         {"t": "The IDs run out of integer space", "correct": false,
@@ -33,8 +33,8 @@
       "id": "p1c14-q03", "level": 1, "type": "mcq", "tag": "uuid",
       "q": "What does UUIDv7 change relative to UUIDv4?",
       "options": [
-        {"t": "It puts a millisecond timestamp in the leading bits, making IDs roughly time-sorted", "correct": true,
-         "why": "Exactly — RFC 9562 (2024). A 48-bit Unix timestamp up front means IDs minted near each other in time sort near each other, so B-tree inserts return to the warm right edge. Same zero coordination, same practical collision immunity."},
+        {"t": "It puts a millisecond timestamp in the leading bits", "correct": true,
+         "why": "Exactly — RFC 9562 (2024). A 48-bit Unix timestamp up front makes IDs roughly time-sorted: IDs minted near each other in time sort near each other, so B-tree inserts return to the warm right edge. Same zero coordination, same practical collision immunity."},
         {"t": "It shrinks the ID from 128 bits to 64", "correct": false,
          "why": "Still 128 bits. Compactness is what Snowflake-style 64-bit IDs buy you; UUIDv7's fix is ordering, not size."},
         {"t": "It guarantees zero collisions instead of merely improbable ones", "correct": false,
@@ -145,7 +145,7 @@
       "id": "p1c14-q11", "level": 2, "type": "mcq", "tag": "snowflake",
       "q": "NTP steps a Snowflake worker's clock backwards by 3 seconds. What's the danger, and what should the generator do?",
       "options": [
-        {"t": "It could re-mint timestamp+sequence pairs it already issued — duplicates — so it should refuse to generate until the clock passes its last-used timestamp", "correct": true,
+        {"t": "It could re-mint IDs it already issued, so it must stall until the clock passes its last-used timestamp", "correct": true,
          "why": "Yes. Uniqueness rests on (timestamp, worker, sequence) never repeating; a rewound clock revisits old timestamps with a reset sequence. Real implementations track the last timestamp and stall or error while now < last. Naming this unprompted is a strong operational signal."},
         {"t": "Nothing — the sequence field already disambiguates IDs within a millisecond, so it absorbs clock changes too", "correct": false,
          "why": "The sequence only disambiguates within one millisecond and resets each new one. When the clock revisits a past millisecond, the sequence restarts from 0 and can collide with what was issued the first time through."},
@@ -159,8 +159,8 @@
       "id": "p1c14-q12", "level": 2, "type": "mcq", "tag": "ids",
       "q": "A three-person startup runs sharded Postgres and needs 64-bit, roughly time-sorted IDs. Closest fit?",
       "options": [
-        {"t": "Instagram's approach: generate the ID inside each Postgres shard with a small SQL function (timestamp | shard ID | per-shard sequence)", "correct": true,
-         "why": "This is literally why Instagram built it — a tiny team that wanted Snowflake's properties without operating ZooKeeper plus an ID-server fleet. Zero new infrastructure, and the shard ID embedded in the key even tells you where the row lives."},
+        {"t": "Instagram's approach: mint the ID inside each Postgres shard with a small PL/pgSQL function", "correct": true,
+         "why": "This is literally why Instagram built it — a tiny team that wanted Snowflake's properties without operating ZooKeeper plus an ID-server fleet. The function packs timestamp | shard ID | per-shard sequence into 64 bits, so you add zero new infrastructure, and the embedded shard ID even tells you where the row lives."},
         {"t": "Deploy Snowflake as a standalone service with ZooKeeper assigning worker IDs, the way Twitter ran it", "correct": false,
          "why": "The properties are right; the operational bill is wrong. Two new always-on services for a team of three is real on-call surface — Instagram evaluated exactly this and passed. The best version of a pattern is the one your team can operate."},
         {"t": "UUIDv4 primary keys, since they need no infrastructure and collisions are effectively impossible", "correct": false,
@@ -173,10 +173,10 @@
       "id": "p1c14-q13", "level": 2, "type": "mcq", "tag": "ticket-server",
       "q": "Flickr ran two MySQL ticket servers, one issuing only odd IDs and one only even. What did that buy them?",
       "options": [
-        {"t": "Either server can die and the other keeps issuing IDs, with collisions impossible by construction", "correct": true,
+        {"t": "Either server can die and the other keeps issuing IDs, collision-free by construction", "correct": true,
          "why": "Right — availability without coordination. Odd and even sequences can never intersect, so the two boxes never need to talk to each other. The accepted cost: IDs are only roughly ordered across the pair. Cheap, boring, effective."},
-        {"t": "Double the ID-issuing throughput", "correct": false,
-         "why": "Round-robining does spread load, but throughput wasn't the pain — one MySQL box can issue IDs very fast. The design goal was surviving a box dying without a collision risk or a failover dance."},
+        {"t": "Twice the ID-issuing throughput, since two independent counters advance in parallel", "correct": false,
+         "why": "Round-robining does spread load, and the two counters really do advance in parallel — but throughput was never the pain, since one MySQL box issues IDs very fast. The design goal was surviving a box dying without a collision risk or a failover dance."},
         {"t": "Odd/even lets clients tell which server issued an ID for debugging", "correct": false,
          "why": "True as a side effect, but nobody builds redundancy for parity-based debugging. The partition exists so two independent counters can never mint the same number."},
         {"t": "It keeps IDs perfectly sequential for time-ordering", "correct": false,
@@ -187,7 +187,7 @@
       "id": "p1c14-q14", "level": 2, "type": "mcq", "tag": "staleness",
       "q": "A seller deletes a listing; it keeps appearing in search results for ~8 seconds. The pipeline is Postgres → CDC → queue → Elasticsearch. What's happening?",
       "options": [
-        {"t": "Normal pipeline lag: the delete is committed in Postgres but hasn't flowed through CDC, the queue, and ES's refresh yet", "correct": true,
+        {"t": "Normal pipeline lag — the delete is committed in Postgres but hasn't reached the index yet", "correct": true,
          "why": "Exactly — the index is a derived copy trailing truth by design. Log tail + queue + indexing + ES's ~1s refresh add up to seconds. The senior follow-up: state the staleness bound out loud, and re-check anything critical (like purchase) against Postgres."},
         {"t": "The CDC pipeline dropped the delete event and the index is now permanently wrong", "correct": false,
          "why": "CDC's whole appeal is that it can't silently drop committed changes — it reads the database's own commit log and resumes from its position after failures. Eight seconds of visibility is lag, not loss; loss is the signature of dual-writes."},
@@ -215,7 +215,7 @@
       "id": "p1c14-q16", "level": 2, "type": "mcq", "tag": "locks",
       "q": "Why must the lock value be a random per-worker token, checked before deletion, instead of just calling DEL to release?",
       "options": [
-        {"t": "A slow worker could otherwise delete a lock that expired and was already acquired by someone else — releasing a lock it no longer owns", "correct": true,
+        {"t": "A slow worker could otherwise delete a lock that had expired and been re-acquired by someone else", "correct": true,
          "why": "Right. Timeline: A's lock expires mid-work, B acquires, A finishes late and calls blind DEL — destroying B's lock, letting C in beside B. The token plus an atomic check-and-delete (a small Lua script) means you can only release what's still yours."},
         {"t": "The token is a security measure that stops malicious processes from stealing the lock", "correct": false,
          "why": "It's not a security feature — anyone with Redis access can delete any key. The token protects against your own well-meaning slow workers, which in practice is the far more common threat."},
@@ -229,8 +229,8 @@
       "id": "p1c14-q17", "level": 2, "type": "mcq", "tag": "ttl",
       "q": "Your lock's TTL is 30s but the job occasionally takes 3 minutes. Which change addresses the mechanism rather than the symptom?",
       "options": [
-        {"t": "A heartbeat: the worker extends the TTL every few seconds while alive, so the lease tracks liveness instead of a guess about duration", "correct": true,
-         "why": "Right — the TTL's real job is 'free the lock if the holder died,' and a heartbeat measures exactly that. A crashed worker stops renewing and the lock frees in seconds. (Still not bulletproof against a long GC pause — which is why the correctness layer is idempotency or fencing.)"},
+        {"t": "A heartbeat: the worker extends the TTL every few seconds while it's alive", "correct": true,
+         "why": "Right — now the lease tracks liveness instead of a guess about how long the job runs. The TTL's real job is 'free the lock if the holder died,' and a heartbeat measures exactly that. A crashed worker stops renewing and the lock frees in seconds. (Still not bulletproof against a long GC pause — which is why the correctness layer is idempotency or fencing.)"},
         {"t": "Raise the TTL to 10 minutes, so even the slowest observed batch finishes well inside the lease", "correct": false,
          "why": "Fixes yesterday's incident, schedules the next one: a worker that crashes at minute 1 now blocks all work for 10 minutes. Static TTLs force a bad trade between expiring-too-early and blocking-too-long; heartbeats escape the trade."},
         {"t": "Remove the TTL entirely, so a held lock can never expire while its job is still running", "correct": false,
@@ -243,7 +243,7 @@
       "id": "p1c14-q18", "level": 2, "type": "mcq", "tag": "uuid",
       "q": "A dashboard sorts 'recent signups' by their UUIDv4 primary key descending, and the order looks random. Why, and what ID choice would have made this work?",
       "options": [
-        {"t": "v4 is pure randomness with no time component; a UUIDv7 or Snowflake-style ID sorts by creation time because the timestamp occupies the leading bits", "correct": true,
+        {"t": "v4 carries no time component at all; a UUIDv7 or Snowflake-style ID would sort by creation time", "correct": true,
          "why": "Right. 'Sort by ID = sort by time' is a property you must design in, by putting the timestamp in the most significant position. It's the same property that fixes B-tree insert locality — one design decision, two payoffs."},
         {"t": "The dashboard should sort ascending — descending order on UUIDs comes out reversed", "correct": false,
          "why": "Reversing a random order yields a differently random order. No sort direction extracts time from bits that don't contain it."},
@@ -257,8 +257,8 @@
       "id": "p1c14-q19", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Interviewer: 'How will you generate message IDs for this chat system?' Which answer reads most senior?",
       "options": [
-        {"t": "\"Snowflake-style 64-bit: timestamp high bits, worker ID, sequence. Messages sort by time for free, generation is local after boot-time worker assignment, and I'll handle the one real failure mode — clock rollback — by refusing to generate until the clock catches up.\"", "correct": true,
-         "why": "Commits, gives the bit-level mechanism, ties the choice to a system need (chat wants time-ordered messages), and volunteers the failure mode with its mitigation. Choice, reason, cost, contingency — the full senior package."},
+        {"t": "\"Snowflake-style 64-bit: timestamp high bits, worker ID, sequence. Messages sort by time for free, and I'll handle the one real failure mode — clock rollback — by refusing to generate until the clock catches up.\"", "correct": true,
+         "why": "Commits, gives the bit-level mechanism, ties the choice to a system need (chat wants time-ordered messages), and volunteers the failure mode with its mitigation. It also keeps generation off the network: after a boot-time worker assignment, every ID is local arithmetic. Choice, reason, cost, contingency — the full senior package."},
         {"t": "\"There are several options — auto-increment, UUIDv4, UUIDv7, Snowflake, ticket servers — each with different trade-offs around ordering, size, and coordination, so it really depends on the requirements.\"", "correct": false,
          "why": "A correct table of contents and zero judgment. Option-listing without a commitment is the most reliably junior-reading pattern there is; the interviewer learns you've read about IDs, not that you can choose one."},
         {"t": "\"UUIDv4 on every app server — collisions are statistically impossible, so uniqueness is solved with zero infrastructure and zero coordination.\"", "correct": false,
@@ -271,8 +271,8 @@
       "id": "p1c14-q20", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Product search runs on SQL LIKE. It's fine at 1M rows; the catalog is heading to 100M. Plan?",
       "options": [
-        {"t": "\"Add Elasticsearch as a derived index fed by CDC from the database, which stays the source of truth. Search moves off the DB; staleness is seconds and I'll state that bound to product. LIKE dies at this scale because every query scans every row.\"", "correct": true,
-         "why": "Names why the current design fails (scan cost grows linearly with rows times query volume), adds the right specialized component in the right role (index, not truth), specifies the sync mechanism, and volunteers the staleness cost honestly. That's the complete senior shape."},
+        {"t": "\"Add Elasticsearch as a derived index fed by CDC; Postgres stays the source of truth. LIKE can't survive 100M rows — every query scans the whole table.\"", "correct": true,
+         "why": "Names why the current design fails (scan cost grows linearly with rows times query volume), adds the right specialized component in the right role (index, not truth), and specifies the sync mechanism. Finish it by pricing the cost out loud — search now trails truth by seconds — so product hears the staleness bound from you rather than discovering it. That's the complete senior shape."},
         {"t": "\"Migrate the catalog into Elasticsearch and make it the primary store — the data has to live there for search anyway, and one system is simpler to operate than two.\"", "correct": false,
          "why": "'The data's already there' is how teams historically lost data — ES's own guidance was to keep the system of record elsewhere, and Jepsen testing found acknowledged-write loss in older versions under partitions. Modern ES is far better, but the architecture principle stands: an index you can rebuild is safe; an index that IS the data is a bet."},
         {"t": "\"Add read replicas and fan the LIKE queries out across them — ten replicas means each box carries a tenth of the search load.\"", "correct": false,
@@ -285,13 +285,13 @@
       "id": "p1c14-q21", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "A teammate proposes Redlock (5 Redis nodes, majority acquisition) to guarantee a payment is never captured twice. Your call?",
       "options": [
-        {"t": "\"Redlock defends against Redis node failure, but our failure mode is a paused client writing after expiry — more nodes don't touch that. Make the capture idempotent, keyed on payment ID; keep a simple lock only to avoid duplicate work.\"", "correct": true,
-         "why": "This is Kleppmann's efficiency-versus-correctness distinction applied correctly: identify WHICH failure you're defending against, notice the proposal defends a different one, and move the real guarantee into the resource (idempotent capture), where a frozen process can't lie. The lock is demoted to an optimization — its honest job."},
+        {"t": "\"Wrong failure mode: Redlock survives dead Redis nodes, not a paused client writing after expiry. Make the capture idempotent on payment ID; the lock only avoids duplicate work.\"", "correct": true,
+         "why": "This is Kleppmann's efficiency-versus-correctness distinction applied correctly: identify WHICH failure you're defending against, notice that more Redis nodes defend a different one, and move the real guarantee into the resource (idempotent capture), where a frozen process can't lie. The lock is demoted to an optimization — its honest job."},
         {"t": "\"Good call — five independent nodes with majority acquisition is much safer than one Redis, and a single node failure can no longer take out the lock.\"", "correct": false,
          "why": "Safer against node crashes, yes — but the two-holders bug comes from the CLIENT freezing (GC pause) past its TTL, and all five nodes expire the lease on schedule regardless. Adding replicas of the lock doesn't help when the lock isn't the thing that's wrong."},
         {"t": "\"Distributed locks can't be trusted at all — remove them entirely and rely on retries plus monitoring to catch any duplicates.\"", "correct": false,
          "why": "Overcorrection. Locks are legitimately useful for their honest job — making duplicate work rare and cheap. The senior position isn't 'no locks'; it's 'locks for efficiency, idempotency/fencing for correctness' — layers, not a purge."},
-        {"t": "\"Keep the single Redis but use a much longer TTL, so no realistic pause can outlive the lease.\"", "correct": false,
+        {"t": "\"Keep the single Redis but raise the TTL to ten minutes — no realistic GC pause outlives that, so two holders can never overlap.\"", "correct": false,
          "why": "There is no 'long enough': GC pauses, VM migrations, and network stalls have no upper bound you can budget for, and every extra second of TTL is extra downtime when a holder crashes. Unbounded problem, bounded knob — the mitigation belongs in a different layer."}
       ]
     },
@@ -299,8 +299,8 @@
       "id": "p1c14-q22", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Interviewer: 'Your worker held the lock, hit a 40-second GC pause, and its TTL was 30 seconds. Walk me through what happens.' The strongest walk-through ends with:",
       "options": [
-        {"t": "\"...A resumes and writes alongside B — two holders. No TTL lock can prevent this: a frozen client can't know it lost the lease. So the job must be idempotent, or storage must reject stale holders via fencing tokens.\"", "correct": true,
-         "why": "Correct timeline PLUS the structural conclusion (timeout locks can't alone guarantee exclusion) PLUS where the real guarantee lives. The interviewer asked a mechanism question hoping to hear the principle; this answers both."},
+        {"t": "\"...A resumes and writes alongside B — two holders. No TTL lock can prevent that, so the guarantee has to live in idempotency or fencing tokens.\"", "correct": true,
+         "why": "Correct timeline PLUS the structural conclusion — a frozen client can't know it lost the lease, so timeout locks alone can never guarantee exclusion — PLUS where the real guarantee lives (idempotent work, or storage that rejects stale holders). The interviewer asked a mechanism question hoping to hear the principle; this answers both."},
         {"t": "\"...the lock expires, B acquires it and finishes the batch — which is the TTL doing exactly its job: recovering from a stuck holder.\"", "correct": false,
          "why": "Stops one scene early. The TTL did work as designed — and then A thawed, still mid-function, still believing it holds the lock, and kept writing. The whole horror is that expiry doesn't reach inside a frozen process to stop it."},
         {"t": "\"...which is why I'd tune the JVM's garbage collector so its worst-case pauses stay comfortably under the TTL.\"", "correct": false,
@@ -313,8 +313,8 @@
       "id": "p1c14-q23", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "PM: 'Search results must reflect inventory in real time — zero staleness. Non-negotiable.' Your search is ES fed by CDC (~5s lag). Best response?",
       "options": [
-        {"t": "\"Let's split it in two: purchases always re-check the database, so no one can ever buy a phantom item — guaranteed. Display lags a few seconds, like every big marketplace, and we can pay DB load to shrink that where it truly matters.\"", "correct": true,
-         "why": "Separates transactional correctness (achievable, guaranteed at the source of truth) from display freshness (a cost knob), guarantees the one that protects users and money, and prices the other honestly. Translating an absolute demand into its two real requirements is exactly the senior conversation."},
+        {"t": "\"Split it in two: purchases re-check the database, so nobody can buy a phantom item — guaranteed. Display freshness stays seconds, and we can pay DB load to shrink it where it matters.\"", "correct": true,
+         "why": "Separates transactional correctness (achievable, guaranteed at the source of truth) from display freshness (a cost knob — and a few seconds is what every large marketplace lives with), guarantees the one that protects users and money, and prices the other honestly. Translating an absolute demand into its two real requirements is exactly the senior conversation."},
         {"t": "\"Fine — I'll point search straight at Postgres so results are always perfectly current, and we can revisit the decision later if database load ever becomes a problem.\"", "correct": false,
          "why": "Caving reintroduces the original disease: full-text search load back on the transactional database, which is what fell over at scale. Agreeing to an absolute without pricing it isn't collaboration, it's deferred incident response."},
         {"t": "\"Zero staleness is physically impossible in a distributed system, so the requirement is invalid and we shouldn't accept it.\"", "correct": false,
@@ -341,7 +341,7 @@
       "id": "p1c14-q25", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Design review: an engineer proposes dropping Postgres and keeping only Elasticsearch — 'products live there anyway, one system is simpler.' Your position?",
       "options": [
-        {"t": "\"Simpler until the first incident. ES is a rebuildable index — it historically lost acknowledged writes under partitions, and lacks the transactions orders need. Keep Postgres as truth; cut what we index instead.\"", "correct": true,
+        {"t": "\"Simpler until the first incident. ES is a rebuildable index and lacks the transactions orders need — keep Postgres as truth, and cut what we index instead.\"", "correct": true,
          "why": "Grounds the objection in the tool's actual design intent and documented history (Jepsen's findings; Elastic's own past guidance to keep truth elsewhere), names the specific missing property (transactions), and offers a real path to the simplicity the engineer wants. Disagreement with mechanism and an alternative — the senior shape."},
         {"t": "\"Agreed — ES 7 fixed the old split-brain data-loss bugs years ago, so keeping a second database around is legacy caution we can retire.\"", "correct": false,
          "why": "ES 7's rebuilt coordination layer did fix known split-brain scenarios — but 'fewer known loss bugs' isn't the bar for the only copy of your orders. The deeper mismatch remains: no real transactions, and a system whose recovery story assumes truth lives elsewhere. Rebuildability is a feature you only have if there's somewhere to rebuild from."},

@@ -5,10 +5,10 @@
       "id": "p2c04-q01", "level": 1, "type": "mcq", "tag": "problem",
       "q": "Two replicas apply the same two concurrent text edits in different orders and end up with different documents. What's the root cause?",
       "options": [
-        {"t": "Each op's positions were computed against a document state the other edit has since changed", "correct": true,
-         "why": "Right. 'Insert at position 4' only means what its author intended in the document where position 4 was measured. Apply it after someone else's edit shifted everything, and the same op does a different thing."},
-        {"t": "Network packets arrived corrupted", "correct": false,
-         "why": "The ops arrive perfectly intact — that's what makes the bug nasty. Both replicas faithfully apply exactly what was sent and still diverge."},
+        {"t": "Each op's positions were measured in a document the other edit changed", "correct": true,
+         "why": "Right. 'Insert at position 4' only means what its author intended in the document where position 4 was measured. Apply it after someone else's edit shifted everything, and the same op does a different thing — so the two replicas end up with different text."},
+        {"t": "Network packets arrived corrupted, so each replica applied different op contents", "correct": false,
+         "why": "The ops arrive perfectly intact — that's what makes the bug nasty. Both replicas received byte-identical ops, applied exactly what was sent, and still diverged. Add a checksum and nothing changes."},
         {"t": "The replicas' clocks disagree", "correct": false,
          "why": "Clock skew is a real problem for LWW, but the cold-open divergence happens even with perfect clocks. The issue is positional context, not time."},
         {"t": "Text editing is inherently non-deterministic", "correct": false,
@@ -67,8 +67,8 @@
          "why": "LWW merges are about the fastest possible — compare two timestamps. The cost is data loss, not compute."},
         {"t": "It requires a central server", "correct": false,
          "why": "LWW needs no server at all — any two replicas can merge. (A server can help by assigning honest timestamps, as Figma's does, but it isn't required.)"},
-        {"t": "The register grows without bound", "correct": false,
-         "why": "A register holds one value plus one timestamp forever — it's the sequence CRDTs that grow via tombstones and per-character metadata."}
+        {"t": "The register grows without bound as writes pile up", "correct": false,
+         "why": "Each write replaces the previous one, so nothing piles up — a register holds exactly one value plus one timestamp forever. It's the sequence CRDTs that grow, via tombstones and per-character metadata."}
       ]
     },
     {
@@ -103,10 +103,10 @@
       "id": "p2c04-q08", "level": 1, "type": "mcq", "tag": "or-set",
       "q": "In an OR-set, Priya removes \"milk\" while Arjun concurrently re-adds it. After merge, is \"milk\" in the set — and why?",
       "options": [
-        {"t": "Yes — a remove only deletes add-tags it observed, and Arjun's fresh tag was never seen by Priya's remove", "correct": true,
-         "why": "That's the observed-remove mechanism: every add carries a hidden unique tag, removes kill only known tags, so concurrent adds always survive. 'Add wins' was chosen at design time, not merge time."},
-        {"t": "No — removes always win to be safe", "correct": false,
-         "why": "A remove-wins set is buildable, but it's not the OR-set. And 'always' hides a design choice either way — the senior point is that the winner is picked in the data structure, deliberately."},
+        {"t": "Yes — a remove only deletes the add-tags it has already seen", "correct": true,
+         "why": "That's the observed-remove mechanism: every add carries a hidden unique tag, and a remove kills only the tags it saw. Arjun's tag was created after Priya's remove read the set, so nothing kills it and 'milk' survives. 'Add wins' was chosen at design time, not merge time."},
+        {"t": "No — the remove is the more recent intent, so it wins", "correct": false,
+         "why": "Recency isn't what an OR-set consults, and 'more recent' isn't even true here — the two ops are concurrent, neither saw the other. A remove-wins set is buildable, but the OR-set deliberately picks add-wins in its design."},
         {"t": "Whichever op has the later timestamp stays", "correct": false,
          "why": "That's an LWW-set, with LWW's clock-skew problems attached. The OR-set's answer is deterministic without timestamps."},
         {"t": "The set flags a conflict for the user", "correct": false,
@@ -201,8 +201,8 @@
       "id": "p2c04-q15", "level": 2, "type": "mcq", "tag": "replay",
       "q": "A client disconnects mid-upload and retries, so the server receives some of its edit ops twice. What design makes this harmless?",
       "options": [
-        {"t": "Every op carries a stable ID (clientID + sequence number); the server ignores IDs it has already logged", "correct": true,
-         "why": "Idempotent replay — Chapter 2.2's habit, back again. Retries and reconnects make duplicate delivery inevitable, so the op log dedupes by identity. State-based CRDT merges get this free; OT and op-based systems must build it."},
+        {"t": "Every op carries a stable ID; the server ignores IDs it has already logged", "correct": true,
+         "why": "Idempotent replay — Chapter 2.2's habit, back again. The usual ID is clientID plus a per-client sequence number, which is unique without any coordination. Retries and reconnects make duplicate delivery inevitable, so the op log dedupes by identity. State-based CRDT merges get this free; OT and op-based systems must build it."},
         {"t": "The server briefly locks the document during each upload", "correct": false,
          "why": "A lock serializes the writes but does nothing about seeing the same op twice — the duplicate arrives politely after the first, is applied again, and the character appears twice."},
         {"t": "Clients wait for a server ack before sending the next op, so duplicates can't happen", "correct": false,
@@ -229,12 +229,12 @@
       "id": "p2c04-q17", "level": 2, "type": "mcq", "tag": "tombstones",
       "q": "A year-old CRDT document renders 20 KB of visible text but takes 40 MB of memory and seconds to load. What's happening?",
       "options": [
-        {"t": "Per-character metadata and tombstones from a year of edits — the document carries its graveyard", "correct": true,
-         "why": "Sequence CRDTs pay ID-and-ordering metadata per character, and every deleted character lingers as a tombstone so offline replicas' anchors still resolve. Long-lived docs need snapshots and compaction as deliberate features, not afterthoughts."},
+        {"t": "Per-character metadata and tombstones from a year of edits", "correct": true,
+         "why": "The document is carrying its graveyard. Sequence CRDTs pay ID-and-ordering metadata per character, and every deleted character lingers as a tombstone so offline replicas' anchors still resolve. Long-lived docs need snapshots and compaction as deliberate features, not afterthoughts."},
         {"t": "A memory leak in the CRDT library", "correct": false,
          "why": "Plausible first guess, wrong default: this growth is the data structure working as designed. Profiling for a leak wastes a week that reading the CRDT cost model would have saved."},
-        {"t": "The op log was never garbage-collected", "correct": false,
-         "why": "Closer — log compaction matters too — but the in-memory document itself carries the overhead here. Even a freshly loaded snapshot holds per-character metadata and tombstones; the log is a separate (also real) growth axis."},
+        {"t": "The op log was never garbage-collected, so replaying it dominates load", "correct": false,
+         "why": "Closer — log compaction matters too — but load a fresh snapshot with no replay at all and the 40 MB is still resident. The in-memory document itself holds per-character metadata and tombstones; the log is a separate (also real) growth axis."},
         {"t": "Text should be gzipped in memory", "correct": false,
          "why": "Compression squeezes bytes; it doesn't touch the structural problem that the doc holds a year of dead characters and IDs. You'd shrink the graveyard's headstones, not empty it."}
       ]
@@ -243,7 +243,7 @@
       "id": "p2c04-q18", "level": 2, "type": "mcq", "tag": "problem",
       "q": "A teammate proposes: \"Skip OT and CRDTs — timestamp every edit with NTP-synced clocks and have every replica apply edits in timestamp order.\" Even granting perfect clocks, why does this fail for text?",
       "options": [
-        {"t": "A total order doesn't fix meaning: each op's indexes were computed against its author's document state, so replaying in global order still garbles intent", "correct": true,
+        {"t": "A total order doesn't fix meaning — each op's indexes were computed in its author's document, not yours", "correct": true,
          "why": "This is the chapter's deepest point. Ordering was never the real problem — an op like delete(0,4) changes meaning when applied in a context it wasn't born in. You need transformation (OT) or index-free positions (CRDT), not better clocks."},
         {"t": "NTP can't sync clocks tightly enough — real networks leave milliseconds of skew, and concurrent edits land inside that window", "correct": false,
          "why": "True in practice (and worth saying), but the question granted perfect clocks — and the scheme still fails. Candidates who only name clock skew miss that a flawless total order is insufficient."},
@@ -271,8 +271,8 @@
       "id": "p2c04-q20", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Your shipped editor uses server-based OT. Product now wants offline editing for two-week trips. The senior first response is:",
       "options": [
-        {"t": "\"That breaks OT's core assumption — short divergence from one server stream. I'd scope how much offline we truly need: minutes of tunnel are fine as-is; weeks means migrating the doc model toward CRDT, which is a project, not a patch.\"", "correct": true,
-         "why": "Names the violated assumption, quantifies the boundary (brief offline is already fine), and prices the honest fix instead of hand-waving. Recognizing when a requirement change invalidates an architecture — and saying the migration cost out loud — is senior judgment."},
+        {"t": "\"That breaks OT's assumption of short divergence from one server stream. How much offline do we actually need? Minutes is fine today; weeks means a CRDT migration.\"", "correct": true,
+         "why": "Names the violated assumption, quantifies the boundary — minutes of tunnel already work, weeks do not — and prices the honest fix instead of hand-waving. Moving the doc model to a CRDT is a project, not a patch, and saying that cost out loud is what separates senior judgment from cheerful agreement."},
         {"t": "\"Sure — OT already handles disconnects: queue ops locally while offline, then transform the whole batch against the server stream on reconnect, same machinery as a dropped connection.\"", "correct": false,
          "why": "This is literally how OT reconnect works, which makes it a seductive answer — but at two weeks of divergence the transform cascade over thousands of interleaved ops is where OT gets fragile and intent gets mangled. Agreeing without flagging the cliff is the trap."},
         {"t": "\"Impossible with OT — we must rewrite on CRDTs before any offline ships.\"", "correct": false,
@@ -285,8 +285,8 @@
       "id": "p2c04-q21", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Designing event ticketing, a teammate suggests storing each event's remaining-seat state as a CRDT so regions can sell during partitions and \"merge conflict-free later.\" Your call?",
       "options": [
-        {"t": "No — CRDTs guarantee convergence, not invariants; \"a seat sells once\" needs coordination, so seat inventory gets transactions/consensus while CRDTs can serve soft state like view counts", "correct": true,
-         "why": "The sharpest trap in the topic. Two partitioned regions each sell the last seat; the merge converges perfectly — on a double-sale. Global invariants and coordination-free merging are opposites; knowing which data gets which treatment is the senior move."},
+        {"t": "No — CRDTs guarantee convergence, not invariants, and \"a seat sells once\" is an invariant", "correct": true,
+         "why": "The sharpest trap in the topic. Two partitioned regions each sell the last seat; the merge converges perfectly — on a double-sale. So seat inventory gets transactions or consensus, while CRDTs happily serve the soft state around it: view counts, cart previews, 'others are looking at this event'. Knowing which data gets which treatment is the senior move."},
         {"t": "Yes — conflict-free merging is exactly what partitioned sales need; the regions reconcile automatically once the partition heals", "correct": false,
          "why": "'Conflict-free' means the replicas agree afterward, not that the agreed state respects business rules. The merge will happily agree that seat 14B sold twice."},
         {"t": "Yes — model remaining seats as a PN-counter, so every region's sales decrement it and the merged count converges to the true number sold", "correct": false,
@@ -299,14 +299,14 @@
       "id": "p2c04-q22", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Your collaborative-doc service works at current load. Interviewer: \"traffic 10x — what breaks first?\" The strongest answer:",
       "options": [
-        {"t": "\"Fan-out: every op broadcasts to every editor of that doc, so one 500-person doc is 500 messages per keystroke — that melts before CPU does. Then reconnect storms after deploys, then unbounded log/tombstone growth. Mitigations in that order: batch and coalesce ops, jitter reconnects and serve tails from snapshots, schedule compaction.\"", "correct": true,
-         "why": "Failure modes named in order, unprompted, each with a mitigation — and the bottleneck identified is the one specific to this system's shape (broadcast amplification), not a generic 'add servers'. That ordering-plus-mitigation pattern is exactly what the 10x probe exists to elicit."},
-        {"t": "\"Add more app servers behind the load balancer — collaborative editing scales horizontally like any stateless web tier.\"", "correct": false,
-         "why": "Horizontal scaling is the generic answer to the wrong bottleneck: a hot document's fan-out concentrates on whichever node hosts its session, and more nodes don't dilute a single 500-editor doc. The probe wants this system's failure, not any system's remedy."},
-        {"t": "\"The transform/merge algorithm becomes the bottleneck — at 10x concurrent ops the transform cascades saturate CPU before anything else gives out.\"", "correct": false,
-         "why": "Per-op transform and merge costs are microseconds — algorithmic throughput is nowhere near the first casualty. Guessing the exotic component over the boring amplification math reads as reciting the chapter title instead of doing the arithmetic."},
-        {"t": "\"Nothing I'd predict in advance — run a proper load test, watch the dashboards, and let measurements say which component gives out first.\"", "correct": false,
-         "why": "Load testing is real practice, but 'I'd measure' as the whole answer defers the reasoning the interviewer is grading right now. Predict first, then say you'd verify by measurement — that order shows judgment plus rigor."}
+        {"t": "\"Fan-out: one 500-editor doc is 500 messages per keystroke, which melts before CPU does. Then reconnect storms, then log and tombstone growth — coalesce, jitter, compact.\"", "correct": true,
+         "why": "Failure modes named in order, unprompted, each with its mitigation: batch and coalesce ops so one keystroke isn't one broadcast, jitter reconnects and serve the tail from snapshots after a deploy, schedule compaction before docs bloat. And the bottleneck identified is the one specific to this system's shape — broadcast amplification — not a generic 'add servers'. That ordering-plus-mitigation pattern is exactly what the 10x probe exists to elicit."},
+        {"t": "\"Add more app servers behind the load balancer and shard documents across them — collaborative editing scales horizontally like any stateless web tier.\"", "correct": false,
+         "why": "Sharding by document is sensible and still misses it: the hot doc's fan-out lands entirely on the one node hosting its session, and no amount of extra nodes dilutes a single 500-editor room. Editing sessions are stateful, so the stateless-web-tier reflex doesn't transfer. The probe wants this system's failure, not any system's remedy."},
+        {"t": "\"The transform/merge algorithm becomes the bottleneck — at 10x concurrent ops the transform cascades saturate CPU on whichever node owns the document.\"", "correct": false,
+         "why": "Per-op transform and merge costs are microseconds, so a node would drown in socket writes long before the algorithm noticed. Guessing the exotic component over the boring amplification math reads as reciting the chapter title instead of doing the arithmetic."},
+        {"t": "\"Nothing I'd predict in advance — run a load test at 10x synthetic traffic, watch the dashboards, and let the measurements name the component that gives out first.\"", "correct": false,
+         "why": "Load testing is real practice, but 'I'd measure' as the whole answer defers the reasoning the interviewer is grading right now — and a synthetic test you designed without a hypothesis usually misses the shape that actually breaks. Predict first, then say you'd verify by measurement."}
       ]
     },
     {
@@ -327,8 +327,8 @@
       "id": "p2c04-q24", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Figma rejected OT and full CRDTs for server-authoritative, per-property last-writer-wins. As a design judgment, what's the transferable lesson?",
       "options": [
-        {"t": "Scope the actual problem first — central server available, non-text data, property-level granularity acceptable — then buy only the merge machinery that problem requires", "correct": true,
-         "why": "Their constraints deleted most of both algorithms' complexity: the server kills OT's distributed-ordering pain AND decentralized CRDTs' versioning overhead, and atomic properties make LWW's loss recoverable. Requirements-first minimalism, documented in their own write-up, is the lesson worth quoting at a whiteboard."},
+        {"t": "Scope the actual problem first, then buy only the merge machinery it requires", "correct": true,
+         "why": "Their constraints — a central server, non-text data, property-level granularity being acceptable — deleted most of both algorithms' complexity. The server kills OT's distributed-ordering pain AND decentralized CRDTs' versioning overhead, and atomic properties make LWW's loss recoverable in one click. Requirements-first minimalism, documented in their own write-up, is the lesson worth quoting at a whiteboard."},
         {"t": "LWW is generally underrated and most collaborative apps should default to it", "correct": false,
          "why": "Generalizing the conclusion without the constraints is how this story gets misused. LWW worked because properties are small atoms with visible, one-click recovery — apply it to prose and it eats paragraphs."},
         {"t": "OT and CRDTs are academic; practical systems always hand-roll", "correct": false,
@@ -341,10 +341,10 @@
       "id": "p2c04-q25", "level": 3, "type": "mcq", "tag": "judgment",
       "q": "Your CRDT-based notes app is a hit; some power-user documents are now years old and sluggish. Committing to a remediation plan, the senior-shaped one is:",
       "options": [
-        {"t": "\"Snapshot documents periodically and compact history, with an explicit policy for when tombstones may be dropped — clients offline past that horizon do a fresh load instead of an incremental merge. Trigger: doc metadata exceeding, say, 10x visible text.\"", "correct": true,
-         "why": "Attacks the real growth (metadata + tombstones), names the correctness catch (dropping tombstones breaks arbitrarily-late mergers, so the policy must define a horizon and a fallback), and sets a measurable trigger. Numbers plus the acknowledged trade-off is what commitment looks like."},
-        {"t": "\"Modern CRDT libraries garbage-collect internally — upgrade Yjs/Automerge to the latest versions, let their built-in compaction run, and move on.\"", "correct": false,
-         "why": "Wishful delegation. Safe tombstone GC requires knowing every replica saw the delete — which your library cannot know about a laptop in a drawer. Someone must own the policy for stragglers; 'the library handles it' is how year-old docs got sluggish unnoticed."},
+        {"t": "\"Snapshot and compact on a schedule, with an explicit tombstone-drop horizon and a fresh-load fallback past it. Trigger: metadata over 10x visible text.\"", "correct": true,
+         "why": "Attacks the real growth — per-character metadata plus tombstones — and names the correctness catch instead of hiding it: dropping a tombstone breaks any replica that merges later than the horizon, so that client re-downloads the whole document rather than merging incrementally. Then it sets a measurable trigger. Numbers plus the acknowledged trade-off is what commitment looks like."},
+        {"t": "\"Modern CRDT libraries garbage-collect internally — upgrade Yjs/Automerge, let their built-in compaction run, and revisit only if documents are still slow.\"", "correct": false,
+         "why": "Wishful delegation, and 'revisit if still slow' means your users find out before you do. Safe tombstone GC requires knowing every replica saw the delete — which no library can know about a laptop sitting in a drawer. Someone has to own the policy for stragglers; assuming the library did is how these docs got sluggish unnoticed."},
         {"t": "\"Migrate the app to OT — no tombstones there.\"", "correct": false,
          "why": "True about tombstones, but it trades a tuning problem for losing the product's foundation (offline-first merging) plus a full rewrite. Swapping architectures to dodge a maintenance task is the over-correction pattern."},
         {"t": "\"Cap documents at 100 KB and force users to split notes.\"", "correct": false,

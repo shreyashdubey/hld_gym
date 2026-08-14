@@ -93,8 +93,8 @@
          "why": "Quorums never promise that — with W=2 of N=3, one replica is legitimately stale after every write. The guarantee is about the READ finding the fresh copy, not about all copies matching."},
         {"t": "The system can survive any number of node failures", "correct": false,
          "why": "Quite the opposite — R and W define exactly how many failures you tolerate. N=3, W=2 stops accepting writes when two nodes die. Choosing R and W is choosing which failure mode you get."},
-        {"t": "The set of nodes you read from must overlap the set that confirmed the latest write, so at least one node you ask has the newest version", "correct": true,
-         "why": "Right — pure pigeonhole arithmetic. Two groups whose sizes sum to more than N must share a member. Version numbers then identify which reply is freshest. That's the entire quorum trick."},
+        {"t": "The nodes you read from must overlap the nodes that confirmed the latest write", "correct": true,
+         "why": "Right — pure pigeonhole arithmetic. Two groups whose sizes sum to more than N must share at least one member, so at least one node you ask is holding the newest version. Version numbers then tell you which reply is the fresh one. That's the entire quorum trick."},
         {"t": "Writes are applied in the same order on every replica", "correct": false,
          "why": "Ordering is a separate, harder problem. Quorum overlap gives freshness visibility for reads; it says nothing about two concurrent writes arriving at replicas in different orders — that's what conflict resolution handles."}
       ]
@@ -105,8 +105,8 @@
       "options": [
         {"t": "Merges the two versions field by field", "correct": false,
          "why": "That would be a merge strategy — smarter and more work. LWW does no merging at all; it's a coin flip weighted by clock timestamps, which is exactly why it's cheap and exactly why it loses data."},
-        {"t": "Keeps the version with the latest timestamp and silently discards the other — even though it was acknowledged to a user", "correct": true,
-         "why": "Yes, and 'silently' is the load-bearing word. The losing write was accepted, confirmed, and is now gone with no error and no log line. Worse, 'latest' is judged by server clocks, which drift — so clock configuration, not reality, can pick the victim."},
+        {"t": "Keeps the version with the latest timestamp and silently discards the other", "correct": true,
+         "why": "Yes, and 'silently' is the load-bearing word. The losing write was accepted and acknowledged to a user, and it's now gone with no error and no log line. Worse, 'latest' is judged by server clocks, which drift — so clock configuration, not reality, can pick the victim."},
         {"t": "Returns both conflicting versions to the application and lets it decide which one is the truth", "correct": false,
          "why": "That's the Dynamo-style detect-and-surface approach (built on vector clocks), the honest alternative to LWW. LWW's selling point is that the application never has to see conflicts — because it destroys one side."},
         {"t": "Rejects the second write with an error", "correct": false,
@@ -131,10 +131,10 @@
       "id": "p1c10-q10", "level": 2, "type": "mcq", "tag": "levels",
       "q": "You add read replicas to your comments database to handle load. Within a week, users report: 'I posted a comment, refreshed, it was gone — so I posted again, and now it's there twice.' What happened, and what's the targeted fix?",
       "options": [
-        {"t": "Their write hit the primary but their next read hit a lagging replica; pin each user's reads to the primary for a few seconds after they write", "correct": true,
-         "why": "Exactly — a textbook read-your-writes violation, and it's the predictable first bug after adding replicas. Session pinning (or client-side version tokens) fixes precisely this user's view without giving up the read-scaling you added replicas for."},
-        {"t": "The replicas are corrupt; rebuild them from the primary", "correct": false,
-         "why": "Nothing is corrupt — every replica will show the comment within seconds. The data is fine; the freshness of one specific reader's view is the problem. Rebuilding replicas would fix nothing and recur immediately."},
+        {"t": "Their read hit a lagging replica; pin a user's reads to the primary briefly after they write", "correct": true,
+         "why": "Exactly — the write landed on the primary, the very next read landed on a replica that hadn't caught up, and that's a textbook read-your-writes violation: the predictable first bug after adding replicas. Pinning reads to the primary for a few seconds after a write (or using client-side version tokens) fixes precisely this user's view without giving up the read-scaling you added replicas for."},
+        {"t": "One replica fell behind and is serving corrupt rows; rebuild it from the primary and put it back in the pool", "correct": false,
+         "why": "Lag isn't corruption — the lagging replica has correct data, just an older version of it, and it will show the comment within seconds on its own. Rebuilding is hours of work that fixes nothing, and the very next write reopens the same window for the next user."},
         {"t": "Route every comment read to the primary permanently, so replicas can never serve a stale comment to anyone", "correct": false,
          "why": "This fixes the bug by deleting the feature — you added replicas because the primary couldn't take the read load. Read-your-writes only requires the WRITER to get fresh reads, briefly. Everyone else can happily read stale replicas."},
         {"t": "Switch the database to synchronous replication so replicas are never behind", "correct": false,
@@ -159,12 +159,12 @@
       "id": "p1c10-q12", "level": 2, "type": "mcq", "tag": "quorum",
       "q": "Your product catalog does 100 reads for every write, N=3. Someone proposes W=3, R=1. What did they buy, and what's the sharpest risk they took?",
       "options": [
-        {"t": "Nothing useful — R=1 breaks the overlap guarantee", "correct": false,
-         "why": "Check the arithmetic: R+W = 1+3 = 4 > 3. The overlap holds — every node has every confirmed write (W=3), so reading any single node is guaranteed fresh. The weakness is on the write path's availability, not the read path's freshness."},
-        {"t": "One-node reads for the read-heavy workload, still overlapping — but now a single dead node makes ALL writes fail", "correct": true,
-         "why": "Exactly the right analysis. 3+1>3 keeps the overlap, and paying on the write path makes sense at 100:1 read-heavy. But W=N means zero write-side failure tolerance: any one node down and the catalog can't update. Whether that's acceptable depends on how urgent catalog updates are — say that trade out loud."},
-        {"t": "Faster writes, since all three replicas work in parallel", "correct": false,
-         "why": "W=3 makes writes SLOWER, not faster — the write waits for the slowest of three nodes instead of the slowest of two. Parallel dispatch doesn't help when you must wait for all responses; one slow disk drags every write."},
+        {"t": "Nothing useful — a one-node read set is too small to overlap the write set, so reads can miss the newest version", "correct": false,
+         "why": "Check the arithmetic before calling it broken: R+W = 1+3 = 4 > 3, so the overlap holds. W=3 means every node has every confirmed write, which makes reading any single node guaranteed fresh. The weakness here is the write path's availability, not the read path's freshness."},
+        {"t": "Guaranteed-fresh single-node reads — but now one dead node makes ALL writes fail", "correct": true,
+         "why": "Exactly the right analysis. 3+1>3 keeps the overlap, and paying on the write path makes sense at 100:1 read-heavy, so cheap single-node reads are a real win. But W=N means zero write-side failure tolerance: any one node down and the catalog can't update at all. Whether that's acceptable depends on how urgent catalog updates are — say that trade out loud."},
+        {"t": "Faster writes — the coordinator sends to all three replicas in parallel, so waiting for three acks costs no more than waiting for two", "correct": false,
+         "why": "Parallel dispatch is real, but you wait for the SLOWEST responder, and the slowest of three is worse than the slowest of two. W=3 makes writes slower, not faster — one node with a busy disk or a GC pause drags every single write on the system."},
         {"t": "Effectively the same guarantees as W=2, R=2, just with cheaper reads and no real downside", "correct": false,
          "why": "Very different behavior. W=2/R=2 tolerates one dead node for BOTH reads and writes; W=3/R=1 gives cheaper reads but dies for writes on any single failure. Quorum tuning is choosing which failure you'll have — these two configurations fail differently."}
       ]
@@ -187,9 +187,9 @@
       "id": "p1c10-q14", "level": 2, "type": "mcq", "tag": "sloppy-quorum",
       "q": "In a Dynamo-style store, a key's home nodes are A, B, C. Node C becomes unreachable, and the store writes to substitute node D with a note to deliver the data to C later. What is this, and what guarantee did it just trade away?",
       "options": [
-        {"t": "Sloppy quorum with hinted handoff — writes stay available through failures, but reads of A, B, C can now miss the newest write because it's sitting on D", "correct": true,
-         "why": "Exactly. The hint ('this belongs to C') gets delivered when C returns, but until then the R+W>N overlap math is broken — the read set and the actual write locations may not intersect. It's a deliberate AP move: never refuse a write, accept a window of missable data."},
-        {"t": "Standard quorum behavior — any W nodes always suffice", "correct": false,
+        {"t": "Sloppy quorum with hinted handoff — writes stay available, but reads of A, B, C can now miss the newest write", "correct": true,
+         "why": "Exactly — the newest write is sitting on D, which nobody reading the key's home nodes will ask. The hint ('this belongs to C') gets delivered when C returns, but until then the R+W>N overlap math is broken: the read set and the actual write locations may not intersect. It's a deliberate AP move: never refuse a write, accept a window of missable data."},
+        {"t": "Standard quorum behavior — any W healthy nodes satisfy the write, so substituting D for C changes nothing", "correct": false,
          "why": "A STRICT quorum requires W of the key's designated home nodes and refuses the write when they're unreachable (CP behavior). Accepting substitutes is precisely the 'sloppy' relaxation, and it changes the guarantee — that's why the two have different names."},
         {"t": "Read repair — fixing stale replicas during reads", "correct": false,
          "why": "Read repair is a different Dynamo mechanism: when a read notices some replicas returned stale versions, it writes the fresh version back to them. Hinted handoff is about WRITE-time rerouting during failures. Both fight staleness; they act at opposite ends."},
@@ -217,12 +217,12 @@
       "options": [
         {"t": "Strongly consistent reads everywhere — settings are important data, and correctness should never be left to chance", "correct": false,
          "why": "'Important' isn't the test — 'does staleness cause a user-visible bug?' is. At 50:1 read-heavy, this doubles your entire read bill to fix a bug that occurs on one page in one two-second window. Strong-everywhere is the over-engineering pattern with a monthly invoice."},
-        {"t": "Eventually consistent reads everywhere (half the read cost), with a strongly consistent read only on the settings page immediately after a save", "correct": true,
-         "why": "Right — this is per-OPERATION consistency choice in action. DynamoDB prices the difference explicitly: an eventually consistent read costs half a strongly consistent one. Pay double only on the one read that needs read-your-writes behavior, and let the 50x-cheaper path carry everything else."},
-        {"t": "Eventually consistent reads everywhere — users won't notice", "correct": false,
-         "why": "They will notice exactly once: save, land back on settings, see the OLD value, assume the save failed, save again. That's the read-your-writes bug, and it erodes trust in the save button. One targeted strong read closes it for pennies."},
-        {"t": "Cache settings in the app and skip DynamoDB reads entirely", "correct": false,
-         "why": "A cache ADDS a staleness layer — now you have DynamoDB replication lag plus cache invalidation to get wrong. Caching may be worth it for load reasons, but as a consistency fix it moves in the wrong direction."}
+        {"t": "Eventually consistent reads everywhere, with a strongly consistent read only on the settings page right after a save", "correct": true,
+         "why": "Right — this is per-OPERATION consistency choice in action. DynamoDB prices the difference explicitly: an eventually consistent read costs half a strongly consistent one, so at 50:1 read-heavy the default path is where the money is. Pay double only on the one read that needs read-your-writes behavior, and let the cheap path carry everything else."},
+        {"t": "Eventually consistent reads everywhere — a sub-second lag is far below what a human notices, so the cheap read is always the right read", "correct": false,
+         "why": "They will notice exactly once, and it's the once that matters: save, land back on settings, see the OLD value, assume the save failed, save again. Human perception isn't the test — whether staleness contradicts something the user just did is. One targeted strong read closes it for pennies."},
+        {"t": "Cache settings in the app after each read and serve from memory, skipping DynamoDB reads entirely", "correct": false,
+         "why": "A cache ADDS a staleness layer — now you have DynamoDB replication lag PLUS cache invalidation to get wrong, and the post-save page can serve a stale entry for as long as the TTL. Caching may be worth it for load reasons, but as a consistency fix it moves in the wrong direction."}
       ]
     },
     {
@@ -303,8 +303,8 @@
          "why": "The tool handles PROMOTION; no tool can replicate writes across a partition that's blocking replication — the writes physically exist only on the unreachable node. GitHub ran Orchestrator, a genuinely excellent tool, and it executed a split brain flawlessly. Trusting tooling to repeal CAP is how this class of incident keeps happening."},
         {"t": "\"Async replication lag is single-digit milliseconds on our network, so in practice nothing meaningful is lost — a window that small isn't worth engineering around when we have bigger reliability fires.\"", "correct": false,
          "why": "Milliseconds of lag at thousands of writes per second is still real acknowledged data — GitHub's divergence involved seconds of writes and cost over a day of degraded service to reconcile. 'Small window' reasoning fails for correctness questions: the window's existence, not its width, determines whether you need a plan."},
-        {"t": "\"They're stranded on the old primary — after healing we have two divergent histories, exactly GitHub 2018. We must choose now: semi-sync replication (pay write latency), failover only within a sync boundary, or a written reconciliation plan — today the automation makes an AP choice for us.\"", "correct": true,
-         "why": "This names the mechanism (async ack-then-replicate gap), cites the precedent (GitHub's 43-second partition, 24+ hours of degraded reconciliation), and — the senior part — converts it into a decision that must be made deliberately instead of by tooling defaults. Automation without a consistency stance is a CAP choice nobody signed off on."},
+        {"t": "\"They're stranded on the old primary — two divergent histories after healing, exactly GitHub 2018. We pick one now: semi-sync replication, failover only inside a sync boundary, or a written reconciliation plan.\"", "correct": true,
+         "why": "This names the mechanism (the async ack-then-replicate gap), cites the precedent (GitHub's 43-second partition, 24+ hours of degraded reconciliation), and — the senior part — converts it into a decision made deliberately instead of by tooling defaults. Semi-sync buys safety with write latency; a sync-boundary rule limits where failover may go; a reconciliation plan accepts divergence but pre-writes the cleanup. Until you choose, the automation is quietly making an AP choice nobody signed off on."},
         {"t": "\"Disable automated failover — a decision that can lose data should always have a human making the final call.\"", "correct": false,
          "why": "This trades minutes of downtime on every real failure (waiting for a paged human) for the divergence risk, without eliminating it — the human faces the same stranded-writes problem, just slower. The fix isn't removing automation; it's giving the automation an explicit policy about what it may sacrifice."}
       ]
@@ -331,8 +331,8 @@
          "why": "The arithmetic says otherwise: W=2 and R=2 need two live replicas, and two survive. Getting this wrong suggests the numbers were recited rather than understood — the entire point of 3/2/2 is tolerating exactly this failure. Walk the math before answering failure probes."},
         {"t": "\"That's exactly why I'd propose N=5, W=3, R=3 instead — more replicas means more safety margin, quorums keep holding even with two nodes gone, and capacity planning should assume zones fail; an outage like this one stops being a scary event at all.\"", "correct": false,
          "why": "Dodges the question (what happens NOW?) and prices poorly: N=5 with W=3 costs 67% more storage and a heavier write path, against a zone failure that N=3/W=2/R=2 already survives. Reflexively adding replicas under pressure reads as not trusting — or not knowing — what the current design guarantees."},
-        {"t": "\"Nothing user-visible — 2 of 3 survive, so quorum reads and writes continue. My real worry is the NEXT failure: we're one node from refusing writes. I'd alert on degraded replica sets immediately, and if repair is slow, that's when I'd consider sloppy quorums — accepting hint-window staleness to keep writes flowing.\"", "correct": true,
-         "why": "Three senior signals in sequence: the calm correct answer (quorum math holds), the unprompted next-failure analysis (one more loss ends write availability), and a pre-decided operational response with its trade-off named. Thinking one failure ahead, unasked, is precisely what the probe is fishing for."},
+        {"t": "\"Nothing user-visible — 2 of 3 survive, so quorums still form. My worry is the NEXT failure: we'd be one node from refusing writes. I'd alert on degraded replica sets, and consider sloppy quorums if repair drags.\"", "correct": true,
+         "why": "Three senior signals in sequence: the calm correct answer (W=2 and R=2 both still reachable, so quorum math holds), the unprompted next-failure analysis (one more loss ends write availability entirely), and a pre-decided operational response with its trade-off named — sloppy quorums keep writes flowing by accepting a window where reads can miss the newest data. Thinking one failure ahead, unasked, is precisely what the probe is fishing for."},
         {"t": "\"Trigger failover to the standby cluster in another region, route all traffic there until the zone recovers, then fail back once replication has caught up.\"", "correct": false,
          "why": "A quorum system's superpower is that it doesn't NEED failover for a single-replica loss — it degrades gracefully by design. Proposing a cluster-level failover (with its own split-brain and data-lag risks, see GitHub 2018) for a failure the design already absorbs is adding the dangerous mechanism the architecture exists to avoid."}
       ]
