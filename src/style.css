@@ -92,15 +92,34 @@
 }
 
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+/* Text size is one multiplier on the root, so every rem in the stylesheet —
+   prose, headings, chrome — grows together instead of the body drifting away
+   from its own headings. Fixed-px things (rail widths, diagram labels) stay
+   put, which keeps the layout stable while the reading text changes. */
+html { -webkit-text-size-adjust: 100%; font-size: calc(16px * var(--fs, 1)); }
 body {
   margin: 0;
   color: var(--ink);
   background: var(--paper);
   font-family: var(--font-read);
-  font-size: 17px;
+  font-size: 1.0625rem;
   line-height: 1.72;
 }
+/* Text-size toggle: the "aA" mark says what the control is, the numeral says
+   which of the three levels you are on, and the mark itself grows with the
+   level so the state is legible before you read the number. Exempt from the
+   lowercase rule — "aa" would lose the small-to-large contrast that makes the
+   mark recognisable. */
+#text-size {
+  width: auto; padding: 0 9px; text-transform: none;
+  display: inline-flex; align-items: baseline; gap: 4px; line-height: 1;
+}
+#text-size .ts-mark { font-family: var(--font-ui); font-weight: 600; }
+#text-size[data-level="0"] .ts-mark { font-size: .8rem; }
+#text-size[data-level="1"] .ts-mark { font-size: .95rem; }
+#text-size[data-level="2"] .ts-mark { font-size: 1.1rem; }
+#text-size .ts-lv { font-family: var(--font-mono); font-size: .66rem; font-weight: 600; color: var(--ink-3); }
+#text-size:hover .ts-lv { color: var(--accent-ink); }
 :is(button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 51 chapters sit in the sidebar ahead of the article, so a keyboard reader
    would otherwise tab through the whole book to reach a paragraph. Offscreen
@@ -150,11 +169,13 @@ h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt {
   border-bottom: 1px solid var(--line);
 }
 /* same frame as .shell, so the brand sits on the sidebar's text edge */
+/* min-height + tight line-heights keep this row exactly 34px tall at every text
+   size, so the 55px the sticky sidebar and rail assume stays true. */
 .topbar-inner {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 10px; min-height: 34px;
   max-width: 1620px; margin-inline: auto; padding-inline: 22px;
 }
-.brand { color: var(--ink); text-decoration: none; font-weight: 500; font-size: .98rem; letter-spacing: .01em; white-space: nowrap; }
+.brand { color: var(--ink); text-decoration: none; font-weight: 500; font-size: .98rem; line-height: 1.2; letter-spacing: .01em; white-space: nowrap; }
 /* the one filled orange block on the page that isn't a state — the wordmark */
 .brand-mark {
   font-family: var(--font-mono); font-weight: 600; font-size: .82em;
@@ -168,7 +189,7 @@ h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt {
 }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
 .pill {
-  font-size: .7rem; color: var(--ink-2); border: 1px solid var(--line);
+  font-size: .7rem; line-height: 1.2; color: var(--ink-2); border: 1px solid var(--line);
   background: var(--paper); padding: 4px 10px;
   white-space: nowrap; flex: none; letter-spacing: .02em;
 }
@@ -576,7 +597,7 @@ details[open] > summary { margin-bottom: 8px; }
   }
   .sidebar.open { transform: none; }
   .view { padding: 24px 16px 80px; }
-  body { font-size: 16px; }
+  body { font-size: 1rem; }
 }
 @media (min-width: 881px) {
   #nav-toggle { display: none; }

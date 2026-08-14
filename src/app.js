@@ -15,7 +15,7 @@ const RANKS = [
 
 function blank() {
   return {
-    theme: null, gym: false, xp: 0,
+    theme: null, gym: false, fontSize: 0, xp: 0,
     streak: 0, lastDay: null, freezesUsed: 0, freezeWeek: null,
     items: {},      // itemId -> {box, due, right, wrong}
     levels: {},     // chapterId -> {1: best%, 2: best%, 3: best%}
@@ -857,6 +857,31 @@ $('#theme-toggle').addEventListener('click', () => {
   applyTheme(next);
   S.theme = next; save();
 });
+/* ---------- text size ----------
+   Three steps, cycling. The multiplier lands on the root element, so prose,
+   headings and chrome scale together. Saved next to the theme. */
+const FS = [
+  { scale: 1,    name: 'Normal' },
+  { scale: 1.15, name: 'Large' },
+  { scale: 1.3,  name: 'Larger' },
+];
+function applyFontSize(i) {
+  const step = FS[i] || FS[0];
+  document.documentElement.style.setProperty('--fs', step.scale);
+  const b = $('#text-size');
+  b.dataset.level = i;
+  b.querySelector('.ts-lv').textContent = i + 1;
+  b.setAttribute('aria-label', `Text size: ${step.name}, level ${i + 1} of ${FS.length}. Change text size`);
+  b.title = `Text size: ${step.name.toLowerCase()}`;
+}
+applyFontSize(S.fontSize || 0);
+$('#text-size').addEventListener('click', () => {
+  S.fontSize = ((S.fontSize || 0) + 1) % FS.length;
+  save();
+  applyFontSize(S.fontSize);
+  toast(`text size · ${FS[S.fontSize].name.toLowerCase()}`);
+});
+
 $('#nav-toggle').addEventListener('click', () => {
   const sb = $('#sidebar');
   sb.classList.toggle('open');
