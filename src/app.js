@@ -162,8 +162,17 @@ function renderSidebar() {
     openPart = openPart === n ? -1 : n;
     renderSidebar();
   }));
+  // Scroll the sidebar by hand rather than with scrollIntoView: that call also
+  // moves the sequential focus navigation starting point, so the first Tab on
+  // a chapter landed in the middle of the chapter list and the skip link was
+  // unreachable. Setting scrollTop moves the rail without touching focus.
   const active = sb.querySelector('.side-ch.active');
-  if (active) active.scrollIntoView({ block: 'nearest' });
+  if (active) {
+    const top = active.offsetTop - sb.offsetTop;
+    if (top < sb.scrollTop || top + active.offsetHeight > sb.scrollTop + sb.clientHeight) {
+      sb.scrollTop = Math.max(0, top - sb.clientHeight / 2);
+    }
+  }
 }
 
 /* ---------- right rail: where you are inside the chapter ---------- */
@@ -657,6 +666,8 @@ function renderChapter(id) {
     const key = f.dataset.key;
     const ta = document.createElement('textarea');
     ta.placeholder = 'Write it in your own words. Out loud is even better.';
+    // a placeholder is not an accessible name — it disappears the moment you type
+    ta.setAttribute('aria-label', f.querySelector('.fey-prompt')?.textContent.trim() || 'Explain it yourself');
     ta.value = S.feynman[key] || '';
     ta.addEventListener('input', () => { S.feynman[key] = ta.value; save(); });
     const hint = document.createElement('div');
@@ -852,6 +863,16 @@ $('#nav-toggle').addEventListener('click', () => {
   $('#scrim').hidden = !sb.classList.contains('open');
 });
 $('#scrim').addEventListener('click', () => { $('#sidebar').classList.remove('open'); $('#scrim').hidden = true; });
+
+/* The skip link moves focus itself instead of letting the browser follow
+   href="#view". The router owns the hash, and "#view" matches no route, so
+   navigating to it would fall through to the home page — skipping the sidebar
+   by leaving the chapter entirely. #view already carries tabindex="-1". */
+document.querySelector('.skip-link').addEventListener('click', e => {
+  e.preventDefault();
+  VIEW.focus();
+  VIEW.scrollIntoView({ block: 'start' });
+});
 
 renderChrome();
 route();

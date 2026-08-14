@@ -18,21 +18,27 @@
   --panel: #F4F4F4;
   --ink: #0A0A0A;
   --ink-2: #4A4A4A;
-  --ink-3: #8A8A8A;
+  --ink-3: #6B6B6B;
   --line: #D6D6D6;
+  /* --line is a hairline for decorative frames and reads at 1.45:1. Anything
+     whose border is what tells you it's a control uses --line-strong, which
+     clears the 3:1 that WCAG 1.4.11 asks of interactive boundaries. */
+  --line-strong: #8A8A8A;
   /* approximation of RAL high-visibility orange. TE publishes no hex — it
-     commits to the physical RAL standard — so this is a reconstruction. */
+     commits to the physical RAL standard — so this is a reconstruction.
+     The orange is a fill, never a text colour: white on it is only 3.1:1,
+     black on it is 6.39:1 — which is also how TE labels its own hardware. */
   --accent: #FF5C00;
-  --accent-ink: #D94800;
+  --accent-ink: #B83C00;
   --accent-soft: #FFEDE3;
   --good: #167A47;
   --good-soft: #E6F2EA;
-  --bad: #D02B20;
+  --bad: #C62A1E;
   --bad-soft: #FBE9E7;
-  --warm: #A87400;
+  --warm: #8A6000;
   --warm-soft: #FAF1DC;
-  --stamp: #D02B20;
-  --on-accent: #FFFFFF;
+  --stamp: #C62A1E;
+  --on-accent: #0A0A0A;
   --shadow: none;
   --h0: #EDEDED; --h1: #FFDCC6; --h2: #FFB183; --h3: #FF8340; --h4: #FF5C00;
 }
@@ -43,8 +49,9 @@
   --panel: #161616;
   --ink: #F2F2F2;
   --ink-2: #B0B0B0;
-  --ink-3: #7E7E7E;
+  --ink-3: #949494;
   --line: #2E2E2E;
+  --line-strong: #666666;
   --accent: #FF6A1A;
   --accent-ink: #FF8A45;
   --accent-soft: #2A1508;
@@ -68,6 +75,7 @@
   --ink-2: #B9BCC4;
   --ink-3: #888888;
   --line: #2C2C36;
+  --line-strong: #66666F;
   --accent: #58C4DD;
   --accent-ink: #9CDCEB;
   --accent-soft: #123A45;
@@ -94,6 +102,17 @@ body {
   line-height: 1.72;
 }
 :is(button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 51 chapters sit in the sidebar ahead of the article, so a keyboard reader
+   would otherwise tab through the whole book to reach a paragraph. Offscreen
+   until focused, then it lands in the top-left corner. */
+.skip-link {
+  position: absolute; left: 8px; top: -60px; z-index: 100;
+  background: var(--accent); color: var(--on-accent);
+  font-family: var(--font-ui); font-size: .8rem; font-weight: 600;
+  padding: 9px 16px; text-decoration: none; letter-spacing: .04em;
+  transition: top .15s ease;
+}
+.skip-link:focus { top: 9px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
@@ -144,10 +163,10 @@ h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt {
 }
 .topbar-spacer { flex: 1; }
 .icon-btn {
-  border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+  border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink);
   width: 34px; height: 34px; font-size: .95rem; cursor: pointer; padding: 0;
 }
-.icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+.icon-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
 .pill {
   font-size: .7rem; color: var(--ink-2); border: 1px solid var(--line);
   background: var(--paper); padding: 4px 10px;
@@ -212,7 +231,7 @@ h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt {
 .side-ch.soon { color: var(--ink-3); opacity: .5; pointer-events: none; }
 /* wide enough for two-digit chapters — 3.10 needs more room than 1.7 */
 .side-ch .n { font-size: .66rem; color: var(--ink-3); flex: none; width: 2.6em; text-align: right; }
-.side-ch.active .n { color: var(--accent); }
+.side-ch.active .n { color: var(--accent-ink); }
 .side-ch .m { margin-left: auto; flex: none; font-size: .76rem; }
 .side-ch .m.done { color: var(--good); }
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 45; }
@@ -251,7 +270,7 @@ h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt {
 
 .eyebrow {
   font-size: .68rem; letter-spacing: .16em;
-  color: var(--accent); font-weight: 600; margin: 0 0 12px;
+  color: var(--accent-ink); font-weight: 600; margin: 0 0 12px;
 }
 h1.ch-title {
   font-size: clamp(1.7rem, 4.5vw, 2.35rem); line-height: 1.12; font-weight: 600;
@@ -361,10 +380,10 @@ figure.diagram figcaption {
   margin: 6px 0 2px; font-size: .74rem; color: var(--ink-2);
 }
 .dg-steps button {
-  border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+  border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink);
   width: 28px; height: 26px; cursor: pointer; font-size: .7rem; line-height: 1; padding: 0;
 }
-.dg-steps button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.dg-steps button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-ink); }
 .dg-steps button:disabled { opacity: .3; cursor: default; }
 .dg-steps .dg-count { color: var(--ink-3); letter-spacing: .08em; font-family: var(--font-mono); }
 .dg-steps .dg-label { color: var(--ink); }
@@ -387,10 +406,10 @@ figure.diagram figcaption {
 .dg-overlay .dg-cap { max-width: 860px; margin: 0; text-align: center; color: var(--ink-2); font-size: .9rem; }
 .dg-close {
   position: absolute; top: 16px; right: 18px;
-  border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+  border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink);
   padding: 7px 13px; cursor: pointer; font-size: .72rem; letter-spacing: .06em;
 }
-.dg-close:hover { border-color: var(--accent); color: var(--accent); }
+.dg-close:hover { border-color: var(--accent); color: var(--accent-ink); }
 /* Printing must never capture a diagram mid-reveal, and a stepped diagram has
    to print whole rather than frozen on step 1. !important beats the inline
    opacity the script sets. */
@@ -419,9 +438,9 @@ text.dg-good, tspan.dg-good { fill: var(--good); stroke: none; font-family: var(
 .feynman textarea {
   width: 100%; min-height: 110px; resize: vertical;
   font-family: var(--font-read); font-size: .92rem; line-height: 1.6; color: var(--ink);
-  background: var(--paper); border: 1px solid var(--line); padding: 10px 12px;
+  background: var(--paper); border: 1px solid var(--line-strong); padding: 10px 12px;
 }
-.feynman .fey-hint { font-size: .74rem; color: var(--ink-3); margin: 6px 0 10px; font-family: var(--font-mono); }
+.feynman .fey-hint { font-size: .74rem; color: var(--ink-2); margin: 6px 0 10px; font-family: var(--font-mono); }
 .exercise { border: 1px solid var(--line); background: var(--panel); padding: 12px 18px; margin: 1.3em 0; }
 .exercise .ex-q p:first-child { margin-top: .2em; }
 details > summary {
@@ -434,7 +453,7 @@ details[open] > summary { margin-bottom: 8px; }
 .quiz-wrap { margin-top: 3.2em; border-top: 1px solid var(--ink-3); padding-top: 1.5em; }
 .q-level-tabs { display: flex; gap: 0; flex-wrap: wrap; margin: 14px 0 6px; }
 .q-level-tab {
-  border: 1px solid var(--line); margin-right: -1px;
+  border: 1px solid var(--line-strong); margin-right: -1px;
   background: var(--paper); color: var(--ink-2);
   padding: 7px 15px; font-size: .74rem; cursor: pointer; letter-spacing: .04em;
 }
@@ -446,7 +465,7 @@ details[open] > summary { margin-bottom: 8px; }
 .q-text { font-weight: 600; margin: 6px 0 12px; line-height: 1.5; }
 .q-opt {
   display: block; width: 100%; text-align: left;
-  border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+  border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink);
   padding: 10px 14px; margin: 7px 0;
   font: inherit; font-size: .92rem; line-height: 1.5; cursor: pointer;
 }
