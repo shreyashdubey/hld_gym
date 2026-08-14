@@ -433,10 +433,20 @@ function route() {
 }
 window.addEventListener('hashchange', route);
 
+const THEMES = ['light', 'dark', 'manim'];
+const THEME_GLYPH = { light: '◐', dark: '◑', manim: 'π' };
+const THEME_NAME = { light: 'Paper', dark: 'Blueprint', manim: 'Manim' };
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  const b = $('#theme-toggle');
+  b.textContent = THEME_GLYPH[t];
+  b.setAttribute('aria-label', `Theme: ${THEME_NAME[t]}. Switch theme`);
+}
+applyTheme(document.documentElement.dataset.theme);
 $('#theme-toggle').addEventListener('click', () => {
-  const cur = document.documentElement.dataset.theme;
-  const next = cur === 'dark' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = next;
+  const i = THEMES.indexOf(document.documentElement.dataset.theme);
+  const next = THEMES[(i + 1) % THEMES.length];
+  applyTheme(next);
   S.theme = next; save();
 });
 $('#nav-toggle').addEventListener('click', () => {
