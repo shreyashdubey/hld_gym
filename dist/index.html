@@ -17678,7 +17678,7 @@ const RANKS = [
 
 function blank() {
   return {
-    theme: null, xp: 0,
+    theme: null, gym: false, xp: 0,
     streak: 0, lastDay: null, freezesUsed: 0, freezeWeek: null,
     items: {},      // itemId -> {box, due, right, wrong}
     levels: {},     // chapterId -> {1: best%, 2: best%, 3: best%}
@@ -17691,6 +17691,15 @@ function blank() {
 let S = blank();
 try { S = Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) {}
 const save = () => localStorage.setItem(KEY, JSON.stringify(S));
+
+/* The gym layer — streak, xp, rank, stamps, boss battles, the review queue — is
+   off for anyone who arrives just to read. Visiting #gym toggles it on for this
+   browser and it stays on; nothing is deleted while it is off, so turning it
+   back on restores whatever that browser had already earned. While it is off
+   nothing is graded or recorded, so a public reader accumulates no progress at
+   all. Feynman answers and the theme choice save either way — those are the
+   reader's own words, not a score. */
+const GYM = () => !!S.gym;
 
 const today = () => new Date().toISOString().slice(0, 10);
 const dayNum = iso => Math.floor(Date.parse(iso) / DAY);
@@ -17713,11 +17722,13 @@ function rank() {
   return { name: r, next };
 }
 function addXP(n, label) {
+  if (!GYM()) return;
   S.xp += n; save();
   toast(`+${n} XP${label ? ' · ' + label : ''}`);
   renderChrome();
 }
 function touchStreak() {
+  if (!GYM()) return;
   const t = today();
   if (S.lastDay === t) return;
   // weekly freeze reset (ISO week key)
@@ -17739,6 +17750,7 @@ function bumpHeat() { const t = today(); S.heat[t] = (S.heat[t] || 0) + 1; }
 
 /* ---------- leitner ---------- */
 function gradeItem(itemId, correct) {
+  if (!GYM()) return;
   const it = S.items[itemId] || { box: 0, due: null, right: 0, wrong: 0 };
   if (correct) { it.right++; it.box = Math.min(5, (it.box || 0) + 1); }
   else { it.wrong++; it.box = 1; }
@@ -17767,7 +17779,9 @@ function toast(msg) {
   setTimeout(() => el.remove(), 2800);
 }
 function renderChrome() {
-  $('#streak-pill').innerHTML = `🔥 <b>${S.streak}</b>d · ${S.xp} XP`;
+  const pill = $('#streak-pill');
+  pill.hidden = !GYM();
+  if (GYM()) pill.innerHTML = `🔥 <b>${S.streak}</b>d · ${S.xp} XP`;
   renderSidebar();
 }
 // Only the part you are working through is expanded. 51 chapters in one flat
@@ -17783,6 +17797,7 @@ function renderSidebar() {
   }
   if (openPart === null) openPart = TOC.parts[0].n;
 
+  const gym = GYM();
   let html = '';
   for (const p of TOC.parts) {
     const done = p.chapters.filter(c => mastered(c.id)).length;
@@ -17790,15 +17805,15 @@ function renderSidebar() {
     const open = p.n === openPart ? 1 : 0;
     html += `<div class="side-part" data-part="${p.n}" data-open="${open}">
       <button class="side-part-btn" aria-expanded="${open ? 'true' : 'false'}">
-        <span class="pn">Part ${p.n}<span class="frac">${done}/${p.chapters.length}</span></span>
+        <span class="pn">Part ${p.n}${gym ? `<span class="frac">${done}/${p.chapters.length}</span>` : ''}</span>
         <span class="pt">${p.title}</span>
-        <span class="pbar"><i style="width:${pct}%"></i></span>
+        ${gym ? `<span class="pbar"><i style="width:${pct}%"></i></span>` : ''}
       </button>
       <div class="side-list">`;
     p.chapters.forEach((c, i) => {
       const ready = isReady(c.id);
       const cls = ['side-ch', ready ? '' : 'soon', cur === c.id ? 'active' : ''].join(' ');
-      const mark = mastered(c.id) ? '<span class="m done">✔</span>' : '';
+      const mark = gym && mastered(c.id) ? '<span class="m done">✔</span>' : '';
       html += `<a class="${cls}" href="#ch/${c.id}"><span class="n">${p.n}.${i + 1}</span><span>${c.title}</span>${mark}</a>`;
     });
     html += `</div></div>`;
@@ -17827,7 +17842,7 @@ function renderRail(id) {
   clearRail();
   const rail = $('#rail');
   const heads = [...VIEW.querySelectorAll('.ch-body h2')];
-  const levels = S.levels[id] || {};
+  const levels = GYM() ? (S.levels[id] || {}) : {};
   // spelled out, not "L1" — lowercase chrome turns that into an unreadable "l1"
   const names = { 1: 'Level 1 · Recall', 2: 'Level 2 · Apply', 3: 'Level 3 · Senior bar' };
 
@@ -17841,7 +17856,9 @@ function renderRail(id) {
   [1, 2, 3].forEach(lv => {
     const b = levels[lv];
     const cls = b === undefined ? 'none' : (b >= 80 ? 'pass' : '');
-    html += `<button class="rq" data-lv="${lv}">${names[lv]}<b class="${cls}">${b === undefined ? '—' : b + '%'}</b></button>`;
+    // with the gym off nothing is ever scored, so don't hang an empty score on it
+    const score = GYM() ? `<b class="${cls}">${b === undefined ? '—' : b + '%'}</b>` : '';
+    html += `<button class="rq" data-lv="${lv}">${names[lv]}${score}</button>`;
   });
   rail.innerHTML = html;
   $('.shell').classList.remove('no-rail');
@@ -17939,49 +17956,65 @@ function renderQuizItem(q, onAnswer, num) {
 const VIEW = $('#view');
 
 function renderHome() {
-  const due = dueItems().length;
+  const gym = GYM();
+  const due = gym ? dueItems().length : 0;
   const done = CHAPTERS.filter(c => mastered(c.id)).length;
   const readyCount = CHAPTERS.filter(c => isReady(c.id)).length;
   const r = rank();
-  const cont = S.lastCh && isReady(S.lastCh) ? chById(S.lastCh) : CHAPTERS.find(c => isReady(c.id) && !mastered(c.id));
+  const resumed = !!(S.lastCh && isReady(S.lastCh));
+  const cont = resumed ? chById(S.lastCh) : CHAPTERS.find(c => isReady(c.id) && !mastered(c.id));
   let html = `<div class="content">
-    <p class="eyebrow">Training floor</p>
-    <h1 class="ch-title">Welcome back.</h1>
-    <div class="tiles">
+    <p class="eyebrow">${gym ? 'Training floor' : 'Senior system design'}</p>
+    <h1 class="ch-title">${gym ? 'Welcome back.' : 'HLD Gym'}</h1>`;
+
+  if (gym) {
+    html += `<div class="tiles">
       <div class="tile accent"><div class="tile-label">Rank</div><div class="tile-value">${r.name}</div>
         <div class="tile-label">${r.next ? (r.next[1] - S.xp) + ' xp to ' + r.next[0] : 'max rank'}</div></div>
       <div class="tile"><div class="tile-label">XP</div><div class="tile-value">${S.xp}</div></div>
       <div class="tile warm"><div class="tile-label">Streak</div><div class="tile-value">${S.streak}<small> days</small></div></div>
       <div class="tile"><div class="tile-label">Mastered</div><div class="tile-value">${done}<small> / ${CHAPTERS.length}</small></div></div>
-    </div>
-    <p>
-      ${cont ? `<a class="btn" href="#ch/${cont.id}">Continue: ${cont.title}</a>` : ''}
-      <a class="btn ghost" href="#review">Review due · ${due}</a>
-    </p>
-    <h2 style="margin-top:2em">Review activity</h2>
+    </div>`;
+  } else {
+    html += `<p>${readyCount} chapters on designing systems at the level a senior interview actually probes. Every idea starts with the problem that forces it, carries an analogy and a real company's incident, and ends with a quiz that explains every option — including the ones you didn't pick.</p>`;
+  }
+
+  html += `<p>
+      ${cont ? `<a class="btn" href="#ch/${cont.id}">${gym || resumed ? 'Continue' : 'Start reading'}: ${cont.title}</a>` : ''}
+      ${gym ? `<a class="btn ghost" href="#review">Review due · ${due}</a>` : ''}
+    </p>`;
+
+  if (gym) {
+    html += `<h2 style="margin-top:2em">Review activity</h2>
     <div class="heat" aria-label="review activity heatmap">${heatCells()}</div>
     <div class="heat-cap">last 15 weeks · darker = more answers</div>`;
+  }
 
   for (const p of TOC.parts) {
     const boss = S.boss[p.n];
     const partReady = p.chapters.some(c => isReady(c.id));
     html += `<div class="part-block">
       <div class="part-head"><h2>Part ${p.n} — ${p.title}</h2><span class="tagline">${p.tagline}</span>
-      ${partReady ? `<a class="btn ghost bossbtn" href="#boss/${p.n}">${boss?.passed ? '👑 Boss cleared' : 'Boss battle'}</a>` : ''}</div>
+      ${gym && partReady ? `<a class="btn ghost bossbtn" href="#boss/${p.n}">${boss?.passed ? '👑 Boss cleared' : 'Boss battle'}</a>` : ''}</div>
       <div class="ch-grid">`;
     p.chapters.forEach((c, i) => {
       const ready = isReady(c.id);
-      const st = mastered(c.id) ? '<span class="st done">✔</span>'
+      const st = !gym ? ''
+        : mastered(c.id) ? '<span class="st done">✔</span>'
         : (S.levels[c.id] ? '<span class="st part">◐</span>' : '');
       html += `<a class="ch-cell ${ready ? '' : 'soon'}" href="#ch/${c.id}"><span class="n">${p.n}.${i + 1}</span><span>${c.title}${ready ? '' : ' <small>(soon)</small>'}</span>${st}</a>`;
     });
     html += `</div></div>`;
   }
-  html += `<div class="part-block"><h2>Backup</h2>
-    <p style="font-size:.9rem;color:var(--ink-2)">Progress lives in this browser. Copy the blob to move it to another device.</p>
-    <p><button class="btn ghost" id="exp">Export progress</button> <button class="btn ghost" id="imp">Import</button></p>
-    <textarea id="expbox" style="width:100%;min-height:70px;display:none;font-size:.75rem"></textarea></div></div>`;
+  if (gym) {
+    html += `<div class="part-block"><h2>Backup</h2>
+      <p style="font-size:.9rem;color:var(--ink-2)">Progress lives in this browser. Copy the blob to move it to another device.</p>
+      <p><button class="btn ghost" id="exp">Export progress</button> <button class="btn ghost" id="imp">Import</button></p>
+      <textarea id="expbox" style="width:100%;min-height:70px;display:none;font-size:.75rem"></textarea></div>`;
+  }
+  html += `</div>`;
   VIEW.innerHTML = html;
+  if (!gym) return;
   $('#exp').onclick = () => { const b = $('#expbox'); b.style.display = 'block'; b.value = JSON.stringify(S); b.select(); };
   $('#imp').onclick = () => {
     const b = $('#expbox'); b.style.display = 'block';
@@ -18266,14 +18299,15 @@ function renderChapter(id) {
   const tpl = document.querySelector(`template[data-ch="${id}"]`);
   if (!c || !tpl) { VIEW.innerHTML = `<div class="content"><h1 class="ch-title">Coming soon</h1><p>This chapter isn't written yet.</p></div>`; clearRail(); return; }
   S.lastCh = id; save();
+  const gym = GYM();
 
   const words = tpl.content.textContent.split(/\s+/).length;
   VIEW.innerHTML = `<div class="content">
     <p class="eyebrow">Part ${c.part} — ${c.partTitle}</p>
-    <h1 class="ch-title">${c.title} ${mastered(id) ? '<span class="stamp">Mastered</span>' : ''}</h1>
+    <h1 class="ch-title">${c.title} ${gym && mastered(id) ? '<span class="stamp">Mastered</span>' : ''}</h1>
     <div class="ch-meta">${c.part}.${c.idx} · ~${Math.max(1, Math.round(words / 220))} min read · ${chQuiz(id).length} quiz questions</div>
     <div class="ch-body"></div>
-    <div class="quiz-wrap"><h2>Quiz</h2><p style="font-size:.9rem;color:var(--ink-2)">Three levels. Pass Level 3 with 80% to earn the stamp. Answers go into your review queue.</p>
+    <div class="quiz-wrap"><h2>Quiz</h2><p style="font-size:.9rem;color:var(--ink-2)">${gym ? 'Three levels. Pass Level 3 with 80% to earn the stamp. Answers go into your review queue.' : 'Three levels, hardest last. Every option explains itself once you pick — including the ones that are wrong.'}</p>
     <div class="q-level-tabs"></div><div class="q-zone"></div></div>
     <div class="ch-nav"></div>
   </div>`;
@@ -18321,12 +18355,20 @@ function renderChapter(id) {
     });
     function levelDone() {
       const pct = Math.round(100 * correct / qs.length);
+      const sum = document.createElement('div');
+      sum.className = 'q-summary' + (pct >= 80 ? ' pass' : '');
+      if (!gym) {
+        // no stamp, no best-ever, nothing recorded — just the score for this run
+        sum.innerHTML = `<b>${pct}%</b> (${correct}/${qs.length}). ` +
+          (pct >= 80 ? 'Strong.' : 'Below 80 — worth rereading the sections you missed.');
+        zone.appendChild(sum);
+        sum.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
       const best = (S.levels[id] = S.levels[id] || {});
       const prev = best[lv] || 0;
       best[lv] = Math.max(prev, pct); save();
       const pass = lv === 3 && pct >= 80;
-      const sum = document.createElement('div');
-      sum.className = 'q-summary' + (pct >= 80 ? ' pass' : '');
       sum.innerHTML = `<b>${pct}%</b> (${correct}/${qs.length}) — best ${best[lv]}%. ` +
         (pass && prev < 80 ? '<span class="stamp big">Mastered</span> Chapter stamped. It’s yours now — reviews will keep it that way.'
           : pct >= 80 ? 'Strong.' : 'Below 80 — reread the sections you missed, the queue will bring these back.');
@@ -18338,7 +18380,7 @@ function renderChapter(id) {
   levels.forEach(lv => {
     const b = document.createElement('button');
     b.className = 'q-level-tab'; b.dataset.lv = lv;
-    const best = (S.levels[id] || {})[lv];
+    const best = gym ? (S.levels[id] || {})[lv] : undefined;
     b.innerHTML = names[lv] + (best !== undefined ? ` <span class="score">${best}%</span>` : '');
     b.onclick = () => openLevel(lv);
     tabs.appendChild(b);
@@ -18431,9 +18473,19 @@ function renderBoss(part) {
 /* ---------- router + boot ---------- */
 function route() {
   const h = location.hash || '#home';
+  // the one door into the gym: visit #gym to turn it on for this browser, again
+  // to turn it off. Nothing is cleared either way.
+  if (h === '#gym') {
+    S.gym = !S.gym; save();
+    toast(S.gym ? 'Gym mode on — streak, xp and reviews are back' : 'Gym mode off — reading only');
+    location.replace('#home');
+    renderChrome();
+    return;
+  }
   $('#sidebar').classList.remove('open'); $('#scrim').hidden = true;
   clearRail(); // renderChapter puts it back; every other view runs full width
   if (h.startsWith('#ch/')) renderChapter(h.slice(4));
+  else if (!GYM() && (h === '#review' || h.startsWith('#boss/'))) { location.replace('#home'); return; }
   else if (h === '#review') renderReview();
   else if (h.startsWith('#boss/')) renderBoss(h.slice(6));
   else renderHome();
