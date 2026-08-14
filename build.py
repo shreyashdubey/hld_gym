@@ -14,6 +14,7 @@ ALLOWED_TAGS = set("p h2 h3 ul ol li strong em code pre table thead tbody tr th 
 ALLOWED_DIV = {"box", "box-tag", "analogy", "story", "lens", "crux", "feynman", "fey-prompt",
                "fey-model", "exercise", "ex-q", "takeaways", "diagram"}
 FONTS = [
+    ("Archivo", "normal", "300 700", "Archivo-normal-300_700.woff2"),
     ("Literata", "normal", "200 900", "Literata-normal-200_900.woff2"),
     ("Literata", "italic", "200 900", "Literata-italic-200_900.woff2"),
     ("IBM Plex Mono", "normal", "400", "IBMPlexMono-normal-400.woff2"),

@@ -165,7 +165,8 @@ function renderRail(id) {
   const rail = $('#rail');
   const heads = [...VIEW.querySelectorAll('.ch-body h2')];
   const levels = S.levels[id] || {};
-  const names = { 1: 'L1 · Recall', 2: 'L2 · Apply', 3: 'L3 · Senior bar' };
+  // spelled out, not "L1" — lowercase chrome turns that into an unreadable "l1"
+  const names = { 1: 'Level 1 · Recall', 2: 'Level 2 · Apply', 3: 'Level 3 · Senior bar' };
 
   let html = '';
   if (heads.length) {
@@ -213,7 +214,7 @@ function renderQuizItem(q, onAnswer, num) {
   q = { ...q, options: [...q.options].sort(() => Math.random() - 0.5) }; // authors write correct-first; never show it that way
   const wrap = document.createElement('div');
   wrap.className = 'q-item';
-  wrap.innerHTML = `<div class="q-num">${num || ''}${q.tag ? ' · ' + q.tag : ''} · L${q.level}</div>
+  wrap.innerHTML = `<div class="q-num">${num || ''}${q.tag ? ' · ' + q.tag : ''} · level ${q.level}</div>
     <div class="q-text"></div>`;
   wrap.querySelector('.q-text').textContent = q.q;
   const multi = q.type === 'multi';
