@@ -893,6 +893,58 @@ fade, shooting the frame before the thing existed.
 `index.html` lists every reel; each page plays, scrubs, steps a frame, jumps to a
 named beat and cycles the three cuts.
 
+## 2026-08-16 — one repo, and the reel feed goes on the page
+
+**What:** the sell page moved from its own repository into the book's, as
+`sell/`. The reel renderer came with it as `reel/`. A reel feed now sits on the
+page as the second-biggest thing on it, and the offer sells it.
+
+**Why the split died:** it bought nothing and cost a working directory every
+time. Two git histories, two node trees, and a deploy that ran from the repo you
+were not editing — the sell page's own `AGENTS.md` had to open with a warning
+that pushing it deployed nothing. Three pipelines, one output directory:
+
+```
+build.py       ->  dist/book/index.html
+sell/          ->  dist/
+reel/make.sh   ->  dist/reels/
+```
+
+Each writes only its own subtree, which is what makes them safe to run in any
+order. `publish:book` keeps `--exclude 'book/'` and gains `--exclude 'reels/'`;
+together they are the only thing stopping `rsync --delete` from wiping 4.6MB of
+book and every reel encode. The old repository's history is parked at
+`~/Desktop/misc-projects/hld-sprint-history.git` and nothing in the tree
+references it.
+
+**The feed borrows a habit, deliberately.** Vertical snap, one reel per screen,
+`scroll-snap-stop: always` so a hard flick never skips two. The reel in view
+plays; every other one pauses, and any reel fully off screen rewinds to zero so
+coming back starts the story rather than dropping you into the middle of it.
+**Nothing plays until you scroll to it** — a wall of autoplaying video is what
+the rest of the internet does and it reads as an ad.
+
+**Encodes swap with the site theme:** `light` gets the `paper` cut, everything
+else gets `dark`. Unlike every other part of this site, a video cannot adapt to
+its reader — it is a rendered file, so each palette is a separate render. Manim
+falls back to the dark cut rather than paying for a third set of files to serve
+one toggle. The `<video>` is keyed on the cut: swapping only `src` leaves the
+last decoded frame on screen until the new file buffers, which reads as the
+theme toggle being broken.
+
+**Two encodes per cut, because they are different jobs.** The master is
+1080×1920 with grain, for uploading to a feed that will re-encode it anyway. The
+web copy is 720×1280 with the grain dropped entirely and lands at **644KB**
+against the master's 17MB — grain is noise by definition, it defeats every
+predictor in the encoder, and at that size nobody can see it. The person
+downloading it is on mobile data deciding whether to buy.
+
+**The offer, and the line it must not cross:** ten reels a day on your current
+topic, plus reels from topics you already finished mixed back in as revision.
+The page says twice — in the section and again in the price box — that **four
+exist today and the daily ten start on 1 September**. The hard rule stands:
+never claim the product does something it does not.
+
 ---
 
 ## Open
