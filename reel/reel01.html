@@ -1,0 +1,245 @@
+<!doctype html>
+<!--
+  Reel 01 — "A lock is a statement about the past" (kernel: p2c03 fencing).
+
+  Told as a hotel keycard, not a schematic. The first cut opened on
+  client A / client B / lock service / storage — four nouns with no stakes, so
+  the collision had nothing to lose. The book's own rule is problem before
+  solution: create the pain first, then name the mechanism.
+
+  The crux is one image: THERE IS NO WIRE between the front desk and the door.
+  The desk can revoke your key all it likes; the door never hears about it. That
+  single gap is why a lock is a statement about the past, and why only the
+  resource can close it.
+
+  Machinery lives in reel.css and reel.js. This file is geometry and timeline.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>reel 01 — the keycard</title>
+<link rel="stylesheet" href="reel.css">
+</head>
+<body>
+<div id="camera">
+  <div class="eyebrow" id="eyebrow">checkout was two hours ago</div>
+  <div id="hook">Your hotel key<br>still opens the door.</div>
+
+  <svg id="stage" viewBox="0 0 360 400" xmlns="http://www.w3.org/2000/svg">
+    <!-- front desk -->
+    <g id="gDesk">
+      <rect class="nRect" id="deskRect" x="110" y="14" width="140" height="46"></rect>
+      <text class="nName" id="deskName" x="180" y="36">front desk</text>
+      <text class="nSub"  id="deskSub"  x="180" y="51">issues keys</text>
+    </g>
+
+    <!-- the clock. The desk runs on it; the door has never heard of it. -->
+    <g id="gClock">
+      <text class="num"  id="clock" x="48" y="40">10:42</text>
+      <text class="numS" id="clockS" x="48" y="56">lobby</text>
+    </g>
+
+    <!-- The gap. Two stubs and a cross where the wire would be: the desk and
+         the door are not connected, and that is the entire idea. -->
+    <g id="gGap">
+      <line class="edge" x1="180" y1="62" x2="180" y2="82"></line>
+      <line class="edge" x1="180" y1="118" x2="180" y2="138"></line>
+      <g id="gCross">
+        <line class="edge" id="x1" x1="166" y1="86" x2="194" y2="114" stroke-width="2.2"></line>
+        <line class="edge" id="x2" x1="194" y1="86" x2="166" y2="114" stroke-width="2.2"></line>
+      </g>
+      <text class="nSub" id="gapT" x="236" y="104" style="text-anchor:start">no wire</text>
+    </g>
+
+    <!-- the door -->
+    <g id="gDoor">
+      <rect class="nRect" id="doorRect" x="100" y="140" width="160" height="190"></rect>
+      <text class="nName" id="doorName" x="180" y="168">room 412</text>
+      <text class="nSub"  id="doorSub"  x="180" y="184">the lock</text>
+      <g id="occA"><rect class="chip" x="118" y="246" width="124" height="26"></rect>
+        <text class="chipT" id="occAT" x="180" y="263">you</text></g>
+      <g id="occB"><rect class="chip" x="118" y="280" width="124" height="26"></rect>
+        <text class="chipT" id="occBT" x="180" y="297">guest B</text></g>
+    </g>
+
+    <!-- the reader, and the lamp that is the whole verdict -->
+    <!-- The lamp is the verdict and the verdict is the reel, so it is sized to
+         be read at a glance on a phone rather than tucked inside the reader. -->
+    <g id="gReader">
+      <rect class="nRect" x="264" y="200" width="76" height="76"></rect>
+      <rect id="lamp" x="276" y="212" width="52" height="34" stroke-width="1.4"></rect>
+      <text class="nSub" id="readerT" x="302" y="266">reader</text>
+    </g>
+
+    <!-- the door's own memory: the fence, which only appears once earned -->
+    <g id="gFence">
+      <rect class="chip" x="100" y="342" width="160" height="26"></rect>
+      <text class="gateT" id="fenceT" x="180" y="359">last key · 34</text>
+    </g>
+
+    <!-- keys. Positioned by transform, so travel is a lerp and never a measure. -->
+    <g id="cardA">
+      <rect class="chip" x="-29" y="-18" width="58" height="36"></rect>
+      <line class="edge" x1="-29" y1="-6" x2="29" y2="-6"></line>
+      <text class="chipT" id="cardAT" x="0" y="10">your key</text>
+    </g>
+    <g id="cardB">
+      <rect class="chip" x="-29" y="-18" width="58" height="36"></rect>
+      <line class="edge" x1="-29" y1="-6" x2="29" y2="-6"></line>
+      <text class="chipT" id="cardBT" x="0" y="10">key 34</text>
+    </g>
+  </svg>
+
+  <div id="caps">
+    <div class="cap" id="c1">10:42 · your key. <b>your room.</b></div>
+    <div class="cap" id="c2">11:00 · the desk gives your room away</div>
+    <div class="cap big" id="c3">you were asleep.</div>
+    <div class="cap" id="c4">guest B checks in · <b>same room</b></div>
+    <div class="cap big" id="c5">your old key still opens it</div>
+    <div class="cap" id="c6"><b>the door was never told.</b></div>
+    <div class="cap win" id="c7">so the door keeps its own count</div>
+  </div>
+
+  <div id="kernel">
+    <div class="k">A lock is a statement about the past.</div>
+    <div class="s">Only the door can know who is current. That is a fencing token,
+      checked at the resource.</div>
+  </div>
+  <div id="brand"><b>hld gym</b> · one rep a day</div>
+</div>
+
+<script src="reel.js"></script>
+<script>
+"use strict";
+
+/* Base timings below are the 15s cut; PACE stretches the whole thing to 45s.
+   Slow was the note from the first viewing that landed — the story needs room
+   to be read, not just watched. */
+const T = 15000, PACE = 3;
+const BEATS = [
+  [0, "hook"], [1700, "your key"], [3700, "checkout"], [5500, "asleep"],
+  [7000, "guest B"], [8600, "still opens"], [10350, "no wire"],
+  [11950, "relabel"], [14300, "kernel"],
+];
+
+/* Key travel is a straight lerp between a resting spot and the reader.
+   B rests to the RIGHT of the desk, never at x=180: parked in the middle it sat
+   directly on top of the gap and hid the cross, which is the one image the reel
+   is built to deliver. */
+const HOME_A = [56, 306], HOME_B = [304, 44], TAP = [302, 160];
+const place = (id, from, to, p) =>
+  $(id).setAttribute("transform",
+    `translate(${lerp(from[0], to[0], p)} ${lerp(from[1], to[1], p)})`);
+
+/* The lamp is the verdict, and the verdict is the whole reel: it says GREEN at
+   8.5s when every instinct says it should say red. */
+const LAMP = { off: ["var(--panel-2)", "var(--line-strong)"],
+               go:  ["var(--good-soft)", "var(--good)"],
+               no:  ["var(--bad-soft)", "var(--bad)"] };
+function lamp(kind) {
+  const [fill, stroke] = LAMP[kind];
+  $("lamp").style.fill = fill;
+  $("lamp").style.stroke = stroke;
+}
+
+mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
+  /* --- beat 0: hook. Opaque at t=0 by design — frame 0 is the thumbnail every
+     feed shows before anyone presses play, and this shipped black once. The
+     movement on arrival is the scene building underneath it. --- */
+  op("eyebrow", win(t, 0, 14400, 0, 300));
+  op("hook",    win(t, 0, 1500, 0, 340));
+
+  const out = 1 - raw(t, 13400, 400);            // the stage clears for the kernel
+  $("stage").style.opacity = out;
+  op("gDoor",   Math.min(es(t, 260, 460), out));
+  op("gReader", Math.min(es(t, 420, 460), out));
+  op("gDesk",   Math.min(es(t, 580, 460), out));
+  op("gClock",  Math.min(es(t, 700, 460), out));
+  /* The gap arrives with checkout and stays. Planting it quietly for seven
+     seconds and only naming it at 10.3s is what makes the payoff land — a cross
+     that appears at the same moment it is explained reads as an afterthought. */
+  const gap = Math.min(es(t, 3600, 500), out);
+  op("gGap", gap);
+  op("gCross", gap);
+  const gapHot = win(t, 10300, 13400, 400, 300) > .5;
+
+  /* --- beat 1 (1.6–3.4): your key works. Establish normal, or nothing that
+     follows is a betrayal. --- */
+  const tapA1 = raw(t, 1700, 620);
+  const inRoom = t >= 2500;
+  op("cardA", Math.min(win(t, 1500, 12900, 300, 300), out));
+  op("occA", Math.min(win(t, 2500, 13000, 320, 300), out));
+
+  /* --- beat 2 (3.6–5.4): checkout. The desk acts alone. --- */
+  const checkout = t >= 3700;
+  txt("clock", checkout ? "11:03" : "10:42");
+  $("clock").style.fill = checkout ? "var(--accent)" : "var(--ink)";
+  state("deskRect", win(t, 3700, 6000, 200, 400) > .4 ? "nHot" : null);
+  op("cardB", Math.min(win(t, 4200, 12900, 320, 300), out));
+
+  /* --- beat 3 (5.5–6.8): you are asleep. The one still beat. Everything the
+     desk does happens while you cannot hear it, which is the pause. --- */
+  const asleep = raw(t, 5500, 320) * (1 - raw(t, 8500, 160));
+  txt("occAT", asleep > .5 ? "you · asleep" : "you");
+  op("occA", Number($("occA").style.opacity) * lerp(1, .34, asleep));
+
+  /* --- beat 4 (6.9–8.4): guest B taps in, legitimately. --- */
+  const tapB = raw(t, 7000, 640);
+  const bIn = t >= 7900;
+  op("occB", Math.min(win(t, 7900, 13000, 320, 300), out));
+
+  /* --- beat 5 (8.5–10.2): you wake, tap the same dead key, and the lamp goes
+     GREEN. The shock is that nothing refuses you. --- */
+  const tapA2 = raw(t, 8600, 620);
+  const collide = win(t, 9300, 11900, 220, 300);
+  const refused = t >= 12100;                       // only after the fence exists
+
+  /* key positions: A taps twice, B once, each returning home in between. The
+     first tap holds ~800ms — long enough to read the green before it leaves. */
+  const aOut = raw(t, 3120, 380) * (1 - raw(t, 8500, 1));
+  place("cardA", HOME_A, TAP, Math.max(tapA1 - aOut, tapA2));
+  place("cardB", HOME_B, TAP, tapB * (1 - raw(t, 8000, 400)));
+
+  const reading = tapA2 > .8 || (tapB > .8 && t < 8000) || (tapA1 > .8 && t < 3120);
+  lamp(refused ? "no" : reading ? "go" : "off");
+
+  state("doorRect", refused ? "nGood" : collide > .35 ? "nBad" : null);
+  txt("doorSub", refused ? "checks the key number"
+                : collide > .35 ? "two keys, one room" : "the lock");
+
+  /* --- beat 6 (10.3–11.8): name the gap that has been sitting there since 3.6s --- */
+  $("gapT").style.fill = gapHot ? "var(--bad)" : "var(--ink-3)";
+  $("x1").style.stroke = $("x2").style.stroke = gapHot ? "var(--bad)" : "var(--ink-3)";
+
+  /* --- beat 7 (11.9–13.4): the relabel. Same picture, your system. The fence
+     appears on the door, because the door is the only thing that can hold it. --- */
+  const relabel = t >= 11900;
+  txt("deskName", relabel ? "lock service" : "front desk");
+  txt("deskSub",  relabel ? "grants leases" : "issues keys");
+  txt("doorName", relabel ? "your database" : "room 412");
+  txt("cardAT",   relabel ? "lease 33" : "your key");
+  txt("cardBT",   relabel ? "lease 34" : "key 34");
+  /* The verdict word outranks the label: at the moment a key is on the reader,
+     what it says is the only thing on screen that matters. */
+  txt("readerT", refused ? "denied" : reading ? "open" : relabel ? "the check" : "reader");
+  $("readerT").style.fill = refused ? "var(--bad)" : reading ? "var(--good)" : "var(--ink-3)";
+  op("gFence", Math.min(win(t, 12100, 13400, 340, 300), out));
+  txt("fenceT", "last key · 34");
+
+  /* --- captions: one slot, never two at once --- */
+  op("c1", win(t, 1700, 3400));
+  op("c2", win(t, 3700, 5400));
+  op("c3", win(t, 5550, 6850, 300, 240));
+  op("c4", win(t, 7000, 8400));
+  op("c5", win(t, 8600, 10200, 260, 260));
+  op("c6", win(t, 10350, 11800));
+  op("c7", win(t, 11950, 13400));
+
+  /* --- beat 8: the kernel, then the brand --- */
+  $("kernel").style.opacity = win(t, 13600, 15000, 520, 1);
+  $("kernel").style.transform = `translateY(${mix(t, 13600, 620, 14, 0)}px)`;
+  op("brand", win(t, 14500, 15000, 400, 1));
+}});
+</script>
+</body>
+</html>

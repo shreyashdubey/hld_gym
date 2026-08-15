@@ -1,0 +1,107 @@
+/* Shared chrome for every reel. A scene file owns only its SVG and its
+   timeline; layout, palette and diagram vocabulary live here.
+
+   Fonts resolve relative to this file, which sits beside the scene files, so
+   the paths work over file:// exactly as they do over http. */
+@font-face { font-family: Archivo; src: url(../src/fonts/Archivo-normal-300_700.woff2) format('woff2'); font-weight: 300 700; }
+@font-face { font-family: Literata; src: url(../src/fonts/Literata-normal-200_900.woff2) format('woff2'); font-weight: 200 900; }
+@font-face { font-family: 'IBM Plex Mono'; src: url(../src/fonts/IBMPlexMono-normal-400.woff2) format('woff2'); font-weight: 400; }
+@font-face { font-family: 'IBM Plex Mono'; src: url(../src/fonts/IBMPlexMono-normal-600.woff2) format('woff2'); font-weight: 600; }
+
+/* Dark by default, not manim: the accent stays TE orange because brand recall
+   on a feed beats the 3B1B homage. record.mjs --theme manim swaps it. */
+:root[data-theme="dark"] {
+  --paper:#0d0d0d; --panel:#161616; --panel-2:#1f1f1f;
+  --ink:#f0eeec; --ink-2:#b0aca8; --ink-3:#949494;
+  --line:#2e2e2e; --line-strong:#666; --accent:#ff6a14; --accent-ink:#ff9257;
+  --accent-soft:#2a1810; --good:#4fbe84; --good-soft:#16281e;
+  --bad:#f2705f; --bad-soft:#2a1614; --on-accent:#0a0a0a;
+}
+/* Paper — the book's light theme, verbatim. A reel is a rendered file rather
+   than a page, so it never adapts to a viewer: each cut is a separate render
+   and you pick the one that suits the feed. */
+:root[data-theme="paper"] {
+  --paper:#ffffff; --panel:#f4f4f4; --panel-2:#eaeaea;
+  --ink:#0a0a0a; --ink-2:#4a4a4a; --ink-3:#6b6b6b;
+  --line:#d6d6d6; --line-strong:#8a8a8a; --accent:#ff5c00; --accent-ink:#b83c00;
+  --accent-soft:#ffede3; --good:#167a47; --good-soft:#e6f2ea;
+  --bad:#c62a1e; --bad-soft:#fbe9e7; --on-accent:#0a0a0a;
+}
+:root[data-theme="manim"] {
+  --paper:#0b0b0f; --panel:#16161e; --panel-2:#1f1f29;
+  --ink:#ececec; --ink-2:#b9bcc4; --ink-3:#888;
+  --line:#2c2c36; --line-strong:#66666f; --accent:#58c4dd; --accent-ink:#9cdceb;
+  --accent-soft:#123a45; --good:#83c167; --good-soft:#17301a;
+  --bad:#fc6255; --bad-soft:#3a1b18; --on-accent:#0b0b0f;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+body { width:540px; height:960px; overflow:hidden; background:var(--paper); color:var(--ink); }
+
+/* #camera carries the slow push-in. Doing it here rather than in ffmpeg avoids
+   a resample pass, so the hairlines stay 1px sharp. */
+#camera { position:absolute; inset:0; transform-origin:50% 46%; padding:44px 36px; }
+
+/* accent-ink, not accent: the pure orange is ~3.2:1 on the paper ground, which
+   is too light for 13px type. Each theme's accent-ink is the readable step of
+   the same hue, so one token works in all three cuts. */
+.eyebrow { font:600 13px/1 'IBM Plex Mono',monospace; letter-spacing:.14em;
+           text-transform:lowercase; color:var(--accent-ink); }
+#hook { position:absolute; left:36px; right:36px; top:98px;
+        font:600 31px/1.24 Literata,serif; letter-spacing:-.01em; }
+
+/* Everything lives between 10% and 80% of the height. Reels and Shorts paint
+   their own chrome over the bottom ~15%, and a caption that lands under a
+   username is a caption nobody read. The stage is narrower than the column for
+   the same reason: it buys the vertical budget back. */
+#stage { position:absolute; left:60px; top:186px; width:420px; display:block; }
+
+#caps { position:absolute; left:36px; right:36px; top:726px; height:76px; }
+.cap { position:absolute; inset:0; font:400 17px/1.35 'IBM Plex Mono',monospace;
+       color:var(--ink-2); }
+.cap b { color:var(--ink); font-weight:600; }
+.cap.big { font-size:23px; color:var(--bad); font-weight:600; letter-spacing:.01em; }
+.cap.win { color:var(--good); font-weight:600; }
+
+#kernel { position:absolute; left:44px; right:44px; top:312px; }
+#kernel .k { font:700 38px/1.2 Literata,serif; letter-spacing:-.015em; }
+/* Two-sentence kernels need the step down or they run past the safe zone. */
+#kernel .k.long { font-size:31px; }
+#kernel .s { margin-top:22px; padding-top:20px; border-top:1px solid var(--line);
+             font:400 18px/1.5 'IBM Plex Mono',monospace; color:var(--ink-2); }
+#brand { position:absolute; left:44px; bottom:172px;
+         font:600 15px/1 'IBM Plex Mono',monospace; letter-spacing:.1em; color:var(--ink-3); }
+#brand b { color:var(--accent); }
+
+/* Diagram vocabulary — mirrors the product's classes so the reels and the page
+   draw with one hand. Zero radius, 1px hairlines, orange reserved. */
+.nRect  { fill:var(--panel-2); stroke:var(--ink-3); stroke-width:1.3; }
+.nHot   { fill:var(--accent-soft); stroke:var(--accent); stroke-width:1.6; }
+.nGood  { fill:var(--good-soft); stroke:var(--good); stroke-width:1.6; }
+.nBad   { fill:var(--bad-soft); stroke:var(--bad); stroke-width:1.6; }
+.nName  { fill:var(--ink); font:600 14px 'IBM Plex Mono',monospace; text-anchor:middle; }
+.nSub   { fill:var(--ink-3); font:400 11px 'IBM Plex Mono',monospace; text-anchor:middle; }
+.edge   { stroke:var(--ink-3); stroke-width:1.5; fill:none; stroke-linecap:round; }
+.head   { fill:var(--ink-3); }
+.chip   { fill:var(--panel); stroke:var(--line-strong); stroke-width:1.1; }
+.chipT  { fill:var(--ink); font:600 12px 'IBM Plex Mono',monospace; text-anchor:middle; }
+.barBg  { fill:var(--panel-2); }
+.barFg  { fill:var(--good); }
+.gateT  { fill:var(--ink); font:600 12px 'IBM Plex Mono',monospace; text-anchor:middle; }
+.tick   { stroke:var(--good); stroke-width:2.4; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+
+/* A dashed grouping rect — the set, the region, the blast radius. Its label
+   rides the top-left corner rather than sitting inside, so it never fights the
+   nodes it contains. */
+.zone   { fill:none; stroke-width:1.4; stroke-dasharray:5 4; }
+.zoneW  { stroke:var(--accent); }
+.zoneR  { stroke:var(--good); }
+.zoneT  { font:600 11px 'IBM Plex Mono',monospace; letter-spacing:.06em; }
+.zoneTW { fill:var(--accent); }
+.zoneTR { fill:var(--good); }
+
+/* A measurement the viewer is meant to watch change. Tabular figures, because
+   a number that reflows while it counts reads as broken. */
+.num    { font:600 26px 'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums;
+          fill:var(--ink); text-anchor:middle; }
+.numS   { font:400 11px 'IBM Plex Mono',monospace; fill:var(--ink-3); text-anchor:middle; }

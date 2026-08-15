@@ -1,0 +1,190 @@
+<!doctype html>
+<!--
+  Reel 03 — "queueing is refusing slowly" (kernel: p2c07, backpressure).
+
+  Told as a coffee counter in a rush. Orders pile up, the wait climbs, and the
+  barista keeps making drinks for people who already walked out.
+
+  The crux is one image: the cup being made RIGHT NOW belongs to someone who
+  left four minutes ago. Every drink after that is work you will never get paid
+  for — which is why the honest move is to refuse at the door, not to queue.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>reel 03 — the queue</title>
+<link rel="stylesheet" href="reel.css">
+</head>
+<body>
+<div id="camera">
+  <div class="eyebrow" id="eyebrow">the queue is not resilience</div>
+  <div id="hook">You're still making<br>coffee they left without.</div>
+
+  <svg id="stage" viewBox="0 0 360 400" xmlns="http://www.w3.org/2000/svg">
+    <!-- the door: where refusing is cheap -->
+    <g id="gDoor">
+      <rect class="nRect" id="doorR" x="24" y="10" width="180" height="44"></rect>
+      <text class="nName" id="doorN" x="114" y="30">the door</text>
+      <text class="nSub"  id="doorS" x="114" y="45">everyone gets in</text>
+    </g>
+
+    <!-- the wait, which is the number the customer actually feels -->
+    <g id="gWait">
+      <text class="num"  id="wait"  x="292" y="34">40s</text>
+      <text class="numS" id="waitS" x="292" y="50">wait</text>
+    </g>
+
+    <!-- the queue: ten slots, lit by depth -->
+    <g id="gQ">
+      <rect class="chip" id="q0" x="112" y="72"  width="136" height="20"></rect>
+      <rect class="chip" id="q1" x="112" y="96"  width="136" height="20"></rect>
+      <rect class="chip" id="q2" x="112" y="120" width="136" height="20"></rect>
+      <rect class="chip" id="q3" x="112" y="144" width="136" height="20"></rect>
+      <rect class="chip" id="q4" x="112" y="168" width="136" height="20"></rect>
+      <rect class="chip" id="q5" x="112" y="192" width="136" height="20"></rect>
+      <rect class="chip" id="q6" x="112" y="216" width="136" height="20"></rect>
+      <rect class="chip" id="q7" x="112" y="240" width="136" height="20"></rect>
+      <rect class="chip" id="q8" x="112" y="264" width="136" height="20"></rect>
+      <rect class="chip" id="q9" x="112" y="288" width="136" height="20"></rect>
+      <!-- label and count are separate elements: nesting the count inside the
+           label meant relabelling the label deleted the count. -->
+      <text class="nSub" id="qT" x="292" y="186">orders</text>
+      <text class="num"  id="qN" x="292" y="210" style="font-size:22px">3</text>
+    </g>
+
+    <!-- the barista, and the one cup that matters -->
+    <g id="gServer">
+      <rect class="nRect" id="srvR" x="80" y="330" width="200" height="56"></rect>
+      <text class="nName" id="srvN" x="180" y="352">the barista</text>
+      <text class="nSub"  id="srvS" x="180" y="368">one drink at a time</text>
+    </g>
+
+    <!-- who the current cup belongs to -->
+    <g id="gCup">
+      <rect class="chip" id="cupR" x="80" y="300" width="200" height="24"></rect>
+      <text class="chipT" id="cupT" x="180" y="316">making: order 12</text>
+    </g>
+
+    <!-- the sign: refusing at the door, where it is cheapest -->
+    <g id="gSign">
+      <rect class="chip" id="signR" x="24" y="10" width="180" height="44"></rect>
+      <text class="chipT" id="signT" x="114" y="30">full — 10 min</text>
+      <text class="nSub"  id="signS" x="114" y="46">come back</text>
+    </g>
+  </svg>
+
+  <div id="caps">
+    <div class="cap" id="c1">three orders · <b>40 second</b> wait · everyone happy</div>
+    <div class="cap" id="c2">the rush · orders arrive faster than coffee</div>
+    <div class="cap big" id="c3">9 minute wait</div>
+    <div class="cap big" id="c4">they left. you're still making it.</div>
+    <div class="cap" id="c5">the queue never said no. it just said <b>later</b>.</div>
+    <div class="cap win" id="c6">refuse at the door · it costs almost nothing there</div>
+    <div class="cap" id="c7">orders = <b>requests</b> · wait = <b>latency</b> · sign = <b>shed</b></div>
+  </div>
+
+  <div id="kernel">
+    <div class="k">Queueing is refusing slowly.</div>
+    <div class="s">With the customer still waiting. Unless nobody is waiting —
+      then the queue is doing its job.</div>
+  </div>
+  <div id="brand"><b>hld gym</b> · one rep a day</div>
+</div>
+
+<script src="reel.js"></script>
+<script>
+"use strict";
+
+const T = 15000, PACE = 3;
+const BEATS = [
+  [0, "hook"], [2300, "normal"], [4300, "the rush"], [5900, "9 minutes"],
+  [7600, "they left"], [9400, "queue said later"], [11100, "the sign"],
+  [12600, "relabel"], [14300, "kernel"],
+];
+
+/* Queue depth over time, in base ms. Steady at 3, climbs through the rush, then
+   collapses once the door starts refusing. Depth drives the drawing; nothing
+   here is animated by hand. */
+function depth(t) {
+  if (t < 3300) return 3;
+  if (t < 10400) return Math.min(10, 3 + Math.floor((t - 3300) / 640));
+  return Math.max(2, 10 - Math.floor((t - 10400) / 260));
+}
+/* The felt wait is the queue times the service time. It is the customer's
+   number, not the server's, which is the whole argument — and it is written the
+   way a customer would say it, because "495s" is a server's way of saying it. */
+function waitFor(d) {
+  const s = d <= 3 ? 40 : d * 55;
+  return s < 90 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
+  op("eyebrow", win(t, 0, 14400, 0, 300));
+  op("hook",    win(t, 0, 1400, 0, 340));
+
+  const out = 1 - raw(t, 13200, 400);
+  $("stage").style.opacity = out;
+  op("gDoor",   Math.min(es(t, 300, 440), out));
+  op("gServer", Math.min(es(t, 440, 440), out));
+  op("gWait",   Math.min(es(t, 580, 440), out));
+  op("gQ",      Math.min(es(t, 700, 440), out));
+
+  /* --- the queue itself --- */
+  const d = depth(t);
+  const shedding = t >= 10400;
+  for (let i = 0; i < 10; i++) {
+    const on = i < d;
+    const el = $("q" + i);
+    el.style.opacity = on ? 1 : 0.12;
+    // Anything past the fourth slot is already older than anyone will wait for.
+    el.style.fill = on && i >= 4 && !shedding ? "var(--bad-soft)" : "var(--panel)";
+    el.style.stroke = on && i >= 4 && !shedding ? "var(--bad)"
+                    : on ? "var(--line-strong)" : "var(--line)";
+  }
+  txt("qN", String(d));
+
+  txt("wait", waitFor(d));
+  $("wait").style.fill = d >= 8 ? "var(--bad)" : d >= 5 ? "var(--accent)" : "var(--ink)";
+
+  /* --- beat 4 (6.8–8.6): the cup being made belongs to someone who is gone.
+     This is the frame the whole reel exists for. --- */
+  const gone = t >= 6900 && t < 10400;
+  op("gCup", Math.min(win(t, 4200, 13200, 340, 300), out));
+  txt("cupT", gone ? "order 12 · gone 4m ago" : "making: order 12");
+  $("cupR").style.stroke = gone ? "var(--bad)" : "var(--line-strong)";
+  $("cupR").style.fill = gone ? "var(--bad-soft)" : "var(--panel)";
+  $("cupT").style.fill = gone ? "var(--bad)" : "var(--ink)";
+  state("srvR", gone ? "nBad" : shedding ? "nGood" : null);
+  txt("srvS", gone ? "still busy · still useless" : "one drink at a time");
+
+  /* --- beat 6 (10.4–12.0): the sign goes up. Refusing at the door is the only
+     honest move, and it is cheap exactly there. --- */
+  const sign = win(t, 10400, 13200, 360, 300);
+  op("gSign", Math.min(sign, out));
+  op("gDoor", Math.min(es(t, 300, 440), out) * (1 - sign));
+  $("signR").style.stroke = "var(--good)";
+  $("signR").style.fill = "var(--good-soft)";
+
+  /* --- beat 7 (12.0–13.2): relabel --- */
+  const relabel = t >= 12000;
+  txt("doorN", relabel ? "the edge" : "the door");
+  txt("srvN",  relabel ? "your service" : "the barista");
+  txt("qT",    relabel ? "queued" : "orders");
+  txt("signT", relabel ? "429 · retry later" : "full — 10 min");
+  txt("signS", relabel ? "shed at the edge" : "come back");
+
+  op("c1", win(t, 1600, 3200));
+  op("c2", win(t, 3400, 4900));
+  op("c3", win(t, 5100, 6700, 280, 240));
+  op("c4", win(t, 6900, 8600, 280, 260));
+  op("c5", win(t, 8800, 10300));
+  op("c6", win(t, 10500, 11900));
+  op("c7", win(t, 12050, 13200));
+
+  $("kernel").style.opacity = win(t, 13400, 15000, 520, 1);
+  $("kernel").style.transform = `translateY(${mix(t, 13400, 620, 14, 0)}px)`;
+  op("brand", win(t, 14400, 15000, 400, 1));
+}});
+</script>
+</body>
+</html>

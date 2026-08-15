@@ -1,0 +1,196 @@
+<!doctype html>
+<!--
+  Reel 02 — "R + W > N" (kernel: p1c10, quorums).
+
+  Told as three flatmates and a moved dinner. You tell two of the three. Later
+  someone asks two of the three. Do they get the new time?
+
+  The crux is one image: the two dashed sets OVERLAP, and the overlap is a
+  person. That is the entire guarantee — not a rule to memorise, a picture. The
+  reel earns it by first showing the failure of asking only one.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>reel 02 — the overlap</title>
+<link rel="stylesheet" href="reel.css">
+</head>
+<body>
+<div id="camera">
+  <div class="eyebrow" id="eyebrow">three people know · one is wrong</div>
+  <div id="hook">You told two of them.<br>Is that enough?</div>
+
+  <svg id="stage" viewBox="0 0 360 400" xmlns="http://www.w3.org/2000/svg">
+    <!-- the sender -->
+    <g id="gYou">
+      <rect class="nRect" x="120" y="10" width="120" height="42"></rect>
+      <text class="nName" id="youName" x="180" y="30">you</text>
+      <text class="nSub"  id="youSub"  x="180" y="45">dinner moved</text>
+    </g>
+
+    <!-- the two sets. Drawn before the people so the people sit inside them. -->
+    <g id="gW">
+      <rect class="zone zoneW" x="8" y="150" width="230" height="110"></rect>
+      <text class="zoneT zoneTW" id="wT" x="12" y="143">told 2</text>
+    </g>
+    <g id="gR">
+      <rect class="zone zoneR" x="122" y="162" width="230" height="110"></rect>
+      <text class="zoneT zoneTR" id="rT" x="348" y="285" style="text-anchor:end">asked 2</text>
+    </g>
+
+    <!-- the three -->
+    <g id="p1">
+      <rect class="nRect" id="p1r" x="22" y="176" width="94" height="62"></rect>
+      <text class="nName" id="p1n" x="69" y="200">asha</text>
+      <text class="num"   id="p1v" x="69" y="226" style="font-size:20px">7</text>
+    </g>
+    <g id="p2">
+      <rect class="nRect" id="p2r" x="133" y="176" width="94" height="62"></rect>
+      <text class="nName" id="p2n" x="180" y="200">ravi</text>
+      <text class="num"   id="p2v" x="180" y="226" style="font-size:20px">7</text>
+    </g>
+    <g id="p3">
+      <rect class="nRect" id="p3r" x="244" y="176" width="94" height="62"></rect>
+      <text class="nName" id="p3n" x="291" y="200">meera</text>
+      <text class="num"   id="p3v" x="291" y="226" style="font-size:20px">6</text>
+    </g>
+
+    <!-- telling: you -> the two you reached -->
+    <g id="gTell">
+      <path class="edge" id="tell1"></path><path class="head" id="htell1"></path>
+      <path class="edge" id="tell2"></path><path class="head" id="htell2"></path>
+    </g>
+
+    <!-- asking: the asker pulls from whoever they picked -->
+    <g id="gAsk">
+      <path class="edge" id="ask1"></path><path class="head" id="hask1"></path>
+      <path class="edge" id="ask2"></path><path class="head" id="hask2"></path>
+    </g>
+    <g id="gAsker">
+      <rect class="nRect" id="askerR" x="120" y="318" width="120" height="46"></rect>
+      <text class="nName" id="askerN" x="180" y="338">the asker</text>
+      <text class="nSub"  id="askerS" x="180" y="354">hears: 6</text>
+    </g>
+
+    <!-- the arithmetic, revealed only once the picture has already said it -->
+    <g id="gMath">
+      <text class="num" id="mathT" x="180" y="292" style="font-size:22px">2 + 2 &gt; 3</text>
+    </g>
+  </svg>
+
+  <div id="caps">
+    <div class="cap" id="c1">dinner moved to <b>7</b> · you tell two of three</div>
+    <div class="cap" id="c2">meera never heard. she still says <b>6</b>.</div>
+    <div class="cap big" id="c3">ask only one · you can miss it entirely</div>
+    <div class="cap" id="c4">so ask <b>two</b>. any two.</div>
+    <div class="cap win" id="c5">the sets must share someone</div>
+    <div class="cap" id="c6">told = <b>write</b> · asked = <b>read</b> · three = <b>N</b></div>
+  </div>
+
+  <div id="kernel">
+    <div class="k">The read set and the write set must overlap.</div>
+    <div class="s">R + W &gt; N forces it. That overlap is the whole guarantee.</div>
+  </div>
+  <div id="brand"><b>hld gym</b> · one rep a day</div>
+</div>
+
+<script src="reel.js"></script>
+<script>
+"use strict";
+
+const T = 15000, PACE = 3;
+const BEATS = [
+  // Each beat sits just AFTER the moment it names — a marker on the leading
+  // edge of a fade shoots the frame before the thing exists.
+  [0, "hook"], [2600, "you tell two"], [4200, "meera is stale"],
+  [6200, "ask one · wrong"], [7900, "ask two"], [9900, "the overlap"],
+  [12000, "relabel"], [14300, "kernel"],
+];
+
+const E = edges({
+  tell1: [150, 54, 80, 172],    // you -> asha
+  tell2: [180, 54, 180, 172],   // you -> ravi
+  ask1:  [180, 314, 180, 242],  // asker -> ravi   (the shared one)
+  ask2:  [210, 314, 288, 242],  // asker -> meera
+});
+
+mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
+  op("eyebrow", win(t, 0, 14400, 0, 300));
+  op("hook",    win(t, 0, 1500, 0, 340));
+
+  const out = 1 - raw(t, 13200, 400);
+  $("stage").style.opacity = out;
+  op("gYou", Math.min(es(t, 300, 440), out));
+  op("p1",   Math.min(es(t, 460, 440), out));
+  op("p2",   Math.min(es(t, 580, 440), out));
+  op("p3",   Math.min(es(t, 700, 440), out));
+
+  /* --- beat 1 (1.6–3.4): you tell two of the three --- */
+  E.draw("tell1", es(t, 1700, 620));
+  E.draw("tell2", es(t, 1900, 620));
+  E.arm("tell1", raw(t, 2200, 200));
+  E.arm("tell2", raw(t, 2400, 200));
+  op("gTell", Math.min(win(t, 1700, 13200, 1, 320), out));
+
+  /* The two you reached now hold 7; the third still holds 6 and does not know
+     it. Nothing on screen marks her as wrong — that is the point. */
+  const told = t >= 2500;
+  state("p1r", told ? "nHot" : null);
+  state("p2r", told ? "nHot" : null);
+  txt("p1v", told ? "7" : "6");
+  txt("p2v", told ? "7" : "6");
+
+  /* --- beat 2 (3.6–5.0): name the stale one --- */
+  const stale = win(t, 3600, 13200, 300, 300) > .4;
+  state("p3r", stale && t < 11400 ? "nBad" : null);
+
+  /* --- beat 3 (5.2–7.2): ask ONE, and pick wrong. The failure has to be shown
+     before the fix means anything. --- */
+  const askOne = win(t, 5300, 7200, 260, 260);
+  op("gAsker", Math.min(win(t, 5100, 13200, 320, 300), out));
+  E.draw("ask2", es(t, 5400, 560), askOne > .4 && t < 7400 ? "var(--bad)" : null);
+  E.arm("ask2", raw(t, 5800, 200));
+
+  /* --- beat 4 (7.4–9.0): ask two instead --- */
+  E.draw("ask1", es(t, 7500, 560));
+  E.arm("ask1", raw(t, 7900, 200));
+
+  const heard = t < 7400 ? "hears: 6" : "hears: 6 and 7";
+  txt("askerS", t >= 9200 ? "takes the newest: 7" : heard);
+  $("askerS").style.fill = t >= 9200 ? "var(--good)" : t >= 5400 && t < 7400 ? "var(--bad)" : "";
+  state("askerR", t >= 9200 ? "nGood" : t >= 5400 && t < 7400 ? "nBad" : null);
+
+  /* --- beat 5 (9.2–11.2): THE OVERLAP. Both sets on screen at once, and the
+     one person standing in both is lit. No words needed for this frame. --- */
+  op("gW", Math.min(win(t, 2600, 13200, 400, 300), out));
+  op("gR", Math.min(win(t, 7500, 13200, 400, 300), out));
+  const overlap = t >= 9300;
+  if (overlap && t < 11400) { state("p2r", "nGood"); }
+  op("gMath", Math.min(win(t, 9600, 13200, 420, 300), out));
+
+  /* --- beat 6 (11.4–13.2): relabel. Same picture, your database. --- */
+  const relabel = t >= 11400;
+  txt("youName",  relabel ? "the write" : "you");
+  txt("youSub",   relabel ? "W = 2" : "dinner moved");
+  txt("askerN",   relabel ? "the read" : "the asker");
+  txt("p1n", relabel ? "replica 1" : "asha");
+  txt("p2n", relabel ? "replica 2" : "ravi");
+  txt("p3n", relabel ? "replica 3" : "meera");
+  txt("wT", relabel ? "W = 2" : "told 2");
+  txt("rT", relabel ? "R = 2" : "asked 2");
+  txt("mathT", relabel ? "R + W > N" : "2 + 2 > 3");
+
+  op("c1", win(t, 1700, 3400));
+  op("c2", win(t, 3600, 5000));
+  op("c3", win(t, 5300, 7200, 280, 260));
+  op("c4", win(t, 7450, 9100));
+  op("c5", win(t, 9300, 11200));
+  op("c6", win(t, 11450, 13200));
+
+  $("kernel").style.opacity = win(t, 13400, 15000, 520, 1);
+  $("kernel").style.transform = `translateY(${mix(t, 13400, 620, 14, 0)}px)`;
+  op("brand", win(t, 14400, 15000, 400, 1));
+}});
+</script>
+</body>
+</html>
