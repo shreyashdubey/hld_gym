@@ -1,0 +1,1041 @@
+/* Teenage Engineering palette, carried over from the book so the sprint and
+   HLD Gym read as one product: zero radius, 1px hairlines, no shadows, and
+   orange reserved the way TE reserves the record button. */
+
+:root {
+  --paper: #ffffff;
+  --panel: #f4f4f4;
+  --panel-2: #eaeaea;
+  --ink: #0a0a0a;
+  --ink-2: #4a4a4a;
+  --ink-3: #6b6b6b;
+  --line: #d6d6d6;
+  --line-strong: #8a8a8a;
+  --accent: #ff5c00;
+  --accent-ink: #b83c00;
+  --accent-soft: #ffede3;
+  --good: #167a47;
+  --good-soft: #e6f2ea;
+  --bad: #c62a1e;
+  --bad-soft: #fbe9e7;
+  --on-accent: #0a0a0a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0d0d0d;
+    --panel: #161616;
+    --panel-2: #1f1f1f;
+    --ink: #f0eeec;
+    --ink-2: #b0aca8;
+    --ink-3: #949494;
+    --line: #2e2e2e;
+    --line-strong: #666666;
+    --accent: #ff6a14;
+    --accent-ink: #ff9257;
+    --accent-soft: #2a1810;
+    --good: #4fbe84;
+    --good-soft: #16281e;
+    --bad: #f2705f;
+    --bad-soft: #2a1614;
+    --on-accent: #0a0a0a;
+  }
+  html { color-scheme: dark; }
+}
+
+/* Explicit choices come after the media block so a toggle beats the OS in both
+   directions. Light needs no block of its own: the :not([data-theme="light"])
+   guard above already lets the bare :root values stand. */
+:root[data-theme="dark"] {
+  --paper: #0d0d0d;
+  --panel: #161616;
+  --panel-2: #1f1f1f;
+  --ink: #f0eeec;
+  --ink-2: #b0aca8;
+  --ink-3: #949494;
+  --line: #2e2e2e;
+  --line-strong: #666666;
+  --accent: #ff6a14;
+  --accent-ink: #ff9257;
+  --accent-soft: #2a1810;
+  --good: #4fbe84;
+  --good-soft: #16281e;
+  --bad: #f2705f;
+  --bad-soft: #2a1614;
+  --on-accent: #0a0a0a;
+}
+
+/* Manim — the 3Blue1Brown palette, carried over from the book unchanged so the
+   two products stay one product. Redefines every token the dark block sets,
+   because on a dark OS that block still matches before this one. */
+:root[data-theme="manim"] {
+  --paper: #0b0b0f;
+  --panel: #16161e;
+  --panel-2: #1f1f29;
+  --ink: #ececec;
+  --ink-2: #b9bcc4;
+  --ink-3: #888888;
+  --line: #2c2c36;
+  --line-strong: #66666f;
+  --accent: #58c4dd;
+  --accent-ink: #9cdceb;
+  --accent-soft: #123a45;
+  --good: #83c167;
+  --good-soft: #17301a;
+  --bad: #fc6255;
+  --bad-soft: #3a1b18;
+  --on-accent: #0b0b0f;
+}
+
+/* Motion. Two curves and nothing else, so everything on the page decelerates
+   the same way. --ease-out settles hard and long, which is what reads as
+   engineered rather than springy; nothing here overshoots or bounces, because
+   a bounce reads as a toy and this page is asking for $39. */
+:root {
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* Text size. --fs multiplies every reading-text rule below; the header chrome
+   and the SVG labels deliberately opt out (see .brand / .dgTxt). Set on <html>
+   before first paint by the init script in lib/prefs.ts. */
+:root { --fs: 1; }
+:root[data-fs="l"] { --fs: 1.13; }
+:root[data-fs="xl"] { --fs: 1.28; }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-read), Charter, Georgia, serif;
+  font-size: calc(17px * var(--fs));
+  line-height: 1.68;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Two widths, not one. --shell is how wide the page is allowed to be;
+   --measure is how wide a line of text may run before it gets hard to track
+   back to the next line (~70 characters). The old layout applied the prose
+   width to everything, so the demo — a 720-unit drawing, the most persuasive
+   thing on the page — was squeezed into a reading column while a third of a
+   desktop screen sat empty either side. */
+:root {
+  --shell: 1140px;
+  --measure: 44rem;
+}
+
+.wrap { max-width: var(--shell); margin-inline: auto; padding: 0 22px; }
+
+/* Text holds the measure. Everything structural — the rep, the grids, the
+   terms strips, the price box — takes the full shell. */
+section > p,
+section > h2,
+section > h3,
+section > .eyebrow,
+section > .key,
+section > ul,
+footer > p { max-width: var(--measure); }
+
+/* ---------- chrome ---------- */
+
+.topbar {
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--paper);
+}
+.topbarInner {
+  max-width: var(--shell);
+  margin-inline: auto;
+  padding: 0 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 60px;
+}
+/* The header opts out of --fs on purpose: the size control lives in it, and a
+   button that resizes itself on click walks away from the cursor. It is also
+   the one row with no space to grow on a phone. */
+.brand {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+.brand .mk {
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: 3px 7px;
+  margin-right: 7px;
+}
+.spacer { flex: 1; }
+.mini {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-2);
+  text-decoration: none;
+  border-bottom: 1px solid var(--line-strong);
+  padding-bottom: 1px;
+}
+.mini:hover { color: var(--accent-ink); border-color: var(--accent); }
+
+/* Named, not just a glyph: an unlabelled symbol in a box tells nobody what the
+   control does. Names hide under 560px where the header runs out of room, and
+   the aria-label carries them in both states. */
+.prefBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 7px 11px;
+  cursor: pointer;
+  line-height: 1;
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+/* text-transform: none on the glyph — the button lowercases its label, which
+   would otherwise flatten the "aA" size cue into a meaningless "aa". */
+.prefBtn .pg { font-size: 14px; color: var(--accent-ink); text-transform: none; }
+.prefBtn:hover { border-color: var(--accent); color: var(--ink); }
+@media (max-width: 560px) {
+  .prefBtn .pn { display: none; }
+  .prefBtn { padding: 7px 9px; }
+  .mini { font-size: 13px; }
+  .topbarInner { gap: 9px; }
+}
+
+/* ---------- type ---------- */
+
+h1 {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  font-size: calc(clamp(30px, 4.6vw, 54px) * var(--fs));
+  line-height: 1.03;
+  letter-spacing: -0.028em;
+  margin: 0 0 18px;
+  /* Wider than the measure on purpose: a headline is scanned, not tracked
+     line to line, so it can run long where body copy cannot. */
+  max-width: 17ch;
+  text-wrap: balance;
+}
+h2 {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  font-size: calc(clamp(20px, 3.6vw, 26px) * var(--fs));
+  line-height: 1.16;
+  letter-spacing: -0.015em;
+  margin: 0 0 14px;
+  text-wrap: balance;
+}
+h3 {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  font-size: calc(15px * var(--fs));
+  margin: 26px 0 8px;
+}
+p { margin: 0 0 16px; }
+p:last-child { margin-bottom: 0; }
+strong { font-weight: 700; }
+
+.lead { font-size: calc(20px * var(--fs)); line-height: 1.5; color: var(--ink-2); }
+
+/* The kicker carries what the page sells. It was 11px grey — the least
+   readable text on the page doing the most important job. */
+.eyebrow {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(12.5px * var(--fs));
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: lowercase;
+  color: var(--accent-ink);
+  margin: 0 0 14px;
+}
+
+/* One scannable sentence per section, for readers who never read the prose. */
+.key {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: calc(17.5px * var(--fs));
+  font-weight: 700;
+  line-height: 1.45;
+  letter-spacing: -0.012em;
+  margin: 0 0 16px;
+  text-wrap: pretty;
+}
+.fact {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(12px * var(--fs));
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+  line-height: 1.7;
+}
+.fact a { color: var(--accent-ink); }
+
+section { padding: 46px 0; border-bottom: 1px solid var(--line); }
+section.hero { padding: 58px 0 26px; border-bottom: 0; }
+
+ul.plain { padding-left: 19px; margin: 0 0 16px; }
+ul.plain li { margin-bottom: 8px; }
+
+/* ---------- the rep ---------- */
+
+.rep { border: 1px solid var(--line-strong); background: var(--panel); margin: 0; }
+.repTag {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(10.5px * var(--fs));
+  letter-spacing: 0.13em;
+  text-transform: lowercase;
+  color: var(--on-accent);
+  background: var(--accent);
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+}
+.repTag .phase { margin-left: auto; font-weight: 400; opacity: 0.75; }
+.repBody { padding: 18px 16px 20px; }
+
+.stage { min-height: 268px; display: flex; flex-direction: column; justify-content: center; }
+.stage svg { width: 100%; height: auto; display: block; }
+
+.narr {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(12px * var(--fs));
+  color: var(--ink-2);
+  min-height: 34px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  line-height: 1.5;
+}
+.narr .n { color: var(--accent-ink); font-weight: 600; }
+
+.locked {
+  min-height: 268px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed var(--line-strong);
+  background: var(--panel-2);
+  text-align: center;
+  padding: 20px;
+}
+.locked .big {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  font-size: calc(22px * var(--fs));
+  letter-spacing: -0.01em;
+}
+.locked .sub {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(11.5px * var(--fs));
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+  max-width: 42ch;
+  line-height: 1.6;
+}
+
+/* ---------- controls ---------- */
+
+.btn {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  font-size: calc(14px * var(--fs));
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid var(--accent);
+  padding: 11px 20px;
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  border-radius: 0;
+  text-decoration: none;
+  display: inline-block;
+  line-height: 1.3;
+}
+.btn:hover { filter: brightness(1.07); }
+.btn:disabled { opacity: 0.35; cursor: default; filter: none; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--line-strong); }
+.btn.ghost:hover { border-color: var(--accent); color: var(--accent-ink); filter: none; }
+
+.btnRow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+
+.hint {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(11px * var(--fs));
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+
+textarea {
+  width: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  font-family: var(--font-read), Georgia, serif;
+  font-size: calc(16px * var(--fs));
+  line-height: 1.6;
+  padding: 12px 13px;
+  resize: vertical;
+  min-height: 118px;
+}
+textarea:focus { border-color: var(--accent); outline: none; }
+
+label.q {
+  display: block;
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  font-size: calc(15.5px * var(--fs));
+  margin: 0 0 9px;
+  line-height: 1.4;
+}
+
+/* ---------- probes ---------- */
+
+.probe { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }
+.probeWho {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(10.5px * var(--fs));
+  letter-spacing: 0.13em;
+  text-transform: lowercase;
+  color: var(--accent-ink);
+  margin-bottom: 7px;
+}
+.probeGap { height: 18px; }
+
+.model { border-left: 3px solid var(--accent); padding: 2px 0 2px 14px; margin: 12px 0 0; }
+.model .lbl {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(10.5px * var(--fs));
+  letter-spacing: 0.12em;
+  text-transform: lowercase;
+  color: var(--ink-3);
+  margin-bottom: 5px;
+}
+.model p { font-size: calc(15.5px * var(--fs)); line-height: 1.6; }
+
+/* ---------- scorecard ---------- */
+
+.score { border: 1px solid var(--line-strong); margin-top: 18px; }
+.scoreH {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(10.5px * var(--fs));
+  letter-spacing: 0.13em;
+  text-transform: lowercase;
+  padding: 7px 14px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--ink-2);
+}
+.score ul { list-style: none; }
+.score li {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: calc(15px * var(--fs));
+  align-items: baseline;
+}
+.score li:last-child { border-bottom: 0; }
+.score .mk { font-family: var(--font-mono), monospace; font-size: calc(13px * var(--fs)); font-weight: 600; }
+.score li.hit .mk { color: var(--good); }
+.score li.miss .mk { color: var(--bad); }
+.score li.miss { background: var(--bad-soft); }
+.scoreVerdict {
+  padding: 12px 14px;
+  border-top: 1px solid var(--line-strong);
+  font-size: calc(15px * var(--fs));
+  background: var(--panel-2);
+}
+
+/* ---------- blocks ---------- */
+
+.grid2 {
+  display: grid;
+  /* auto-fit fitted four columns into the wider shell, leaving the six steps as
+     a ragged 4 + 2. Pinned to three so it always reads as two clean rows. */
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  border: 1px solid var(--line-strong);
+  margin: 22px 0;
+}
+.grid2 > div { padding: 15px 17px 17px; border-right: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+.grid2 > div h4 {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: calc(16px * var(--fs));
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  margin: 0 0 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.grid2 > div h4 .n {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(12px * var(--fs));
+  font-weight: 700;
+  color: var(--accent-ink);
+}
+.grid2 > div p { font-size: calc(15px * var(--fs)); line-height: 1.55; margin: 0; }
+
+/* Terms and stats as a strip of big numerals: the facts that sell this page
+   are numbers, and numbers get read when prose does not. */
+.termbar {
+  display: flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--line-strong);
+  margin: 22px 0 0;
+}
+.termbar > div {
+  flex: 1 1 132px;
+  padding: 11px 15px 12px;
+  border-right: 1px solid var(--line-strong);
+}
+.termbar > div:last-child { border-right: 0; }
+.termbar b {
+  display: block;
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: calc(20px * var(--fs));
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.termbar span {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(10.5px * var(--fs));
+  letter-spacing: 0.1em;
+  text-transform: lowercase;
+  color: var(--ink-3);
+}
+@media (max-width: 560px) {
+  .termbar > div { flex-basis: 50%; border-bottom: 1px solid var(--line-strong); }
+  .termbar > div:nth-child(2n) { border-right: 0; }
+}
+
+#rep { scroll-margin-top: 76px; }
+
+.pricebox { border: 1px solid var(--accent); margin: 24px 0 0; }
+.priceH {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  font-family: var(--font-mono), monospace;
+  font-size: calc(10.5px * var(--fs));
+  letter-spacing: 0.13em;
+  text-transform: lowercase;
+  padding: 7px 16px;
+}
+.priceB { padding: 18px 16px 20px; }
+.amount {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  font-size: calc(40px * var(--fs));
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+.amount .cur { font-size: calc(22px * var(--fs)); vertical-align: super; margin-right: 1px; }
+.amount .per {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(12px * var(--fs));
+  font-weight: 400;
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+  margin-left: 8px;
+}
+
+footer { padding: 34px 0 70px; }
+
+/* ---------- diagram ---------- */
+
+.dgNode { fill: var(--panel-2); stroke: var(--ink-2); stroke-width: 1.3; }
+.dgNodeAlt { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+.dgEdge { stroke: var(--ink-3); stroke-width: 1.4; fill: none; }
+.dgArrowhead { fill: var(--ink-3); }
+/* SVG labels opt out of --fs: they are already sized in viewBox units, so they
+   scale with the drawing itself. Multiplying again would scale them twice and
+   break the narrow diagram's 10.2px budget. */
+.dgTxt { fill: var(--ink); font-family: var(--font-mono), monospace; font-size: 13px; }
+.dgTxtS { fill: var(--ink-3); font-family: var(--font-mono), monospace; font-size: 11px; }
+
+/* Every drawable line carries its own length as --len, computed from its own
+   endpoints rather than getTotalLength(), so the draw-on works even while the
+   SVG is hidden — a measured length would come back zero there. */
+.dgDraw {
+  stroke-dasharray: var(--len);
+  stroke-dashoffset: var(--len);
+  transition: stroke-dashoffset 0.55s ease, opacity 0.42s ease;
+  opacity: 0;
+}
+.dgPart { opacity: 0; transition: opacity 0.42s ease; }
+.dgOn .dgDraw { stroke-dashoffset: 0; opacity: 1; }
+.dgOn.dgPart, .dgOn .dgPart { opacity: 1; }
+
+/* The wide drawing squeezed into a phone renders its 11px labels at ~4.5px.
+   Below 720px the narrow redraw takes over, which keeps them near 11px.
+   Selectors are qualified with .stage svg deliberately: the bare .dgWide class
+   loses to `.stage svg { display: block }` on specificity and both diagrams
+   render stacked. */
+.stage svg.dgNarrow { display: none; }
+@media (max-width: 719px) {
+  .stage svg.dgWide { display: none; }
+  .stage svg.dgNarrow { display: block; }
+}
+
+/* ---------- motion ---------- */
+
+/* The scaffold boots on arrival: nodes fade up, then the three lifelines draw
+   themselves a beat apart, left to right. It reads as an instrument powering on
+   rather than a picture appearing. */
+.dgScaffold .dgPart { animation: dgFade 620ms var(--ease-out) both; }
+.dgScaffold > line { animation: dgDraw 780ms var(--ease-out) both; }
+.dgScaffold > line:nth-of-type(1) { animation-delay: 120ms; }
+.dgScaffold > line:nth-of-type(2) { animation-delay: 230ms; }
+.dgScaffold > line:nth-of-type(3) { animation-delay: 340ms; }
+
+@keyframes dgFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dgDraw {
+  from { stroke-dashoffset: var(--len); opacity: 0; }
+  35% { opacity: 1; }
+  to { stroke-dashoffset: 0; opacity: 1; }
+}
+
+/* Idle only. A signal runs App, then Cache, then DB, on a long loop with a rest
+   at the end of each cycle. Slow and low-contrast on purpose: it should read as
+   a machine ticking over in the corner of your eye, not as something demanding
+   to be clicked. It stops the moment the rep starts, because from then on the
+   diagram is saying something and ambient motion would compete with it. */
+.dgPulse {
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-linecap: round;
+  fill: none;
+  opacity: 0;
+  /* Units are hundredths of the line, via pathLength="100" on the element. */
+  stroke-dasharray: 18 200;
+}
+
+/* Each node flashes as the signal reaches it. The travelling tick alone was too
+   small to register — 2.4 units in a 720-unit viewBox is a ~2px hairline, which
+   is legible in a measurement and invisible in real peripheral vision. The node
+   flash is the part you actually notice. */
+.dgHalo {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  opacity: 0;
+}
+.dgIdle .dgHalo {
+  animation: dgHaloPop 3200ms var(--ease-in-out) infinite;
+  animation-delay: calc(var(--i) * 300ms);
+}
+@keyframes dgHaloPop {
+  0%, 6% { opacity: 0; }
+  16% { opacity: 1; }
+  42% { opacity: 0; }
+  100% { opacity: 0; }
+}
+.dgIdle .dgPulse {
+  animation: dgPulseRun 3200ms var(--ease-in-out) infinite;
+  animation-delay: calc(var(--i) * 300ms);
+}
+@keyframes dgPulseRun {
+  0% { stroke-dashoffset: 0; opacity: 0; }
+  10% { opacity: 0.9; }
+  55% { opacity: 0.9; }
+  70%, 100% { stroke-dashoffset: -118; opacity: 0; }
+}
+
+/* The lock is the emotional core of the product, so it gets weight: the panel
+   shutters down over the diagram, then the verdict stamps in behind it. Scale
+   runs 1.06 to 1 — settling, never overshooting. A bounce here would undercut
+   the one moment the page needs to feel serious. */
+.locked {
+  overflow: hidden;
+  animation: lockShut 280ms var(--ease-out) both;
+}
+.locked .big { animation: stampIn 340ms var(--ease-out) 150ms both; }
+.locked .sub { animation: dgFade 420ms var(--ease-out) 320ms both; }
+
+@keyframes lockShut {
+  from { clip-path: inset(0 0 100% 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes stampIn {
+  from { opacity: 0; transform: scale(1.06); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* Rows tick in one at a time and the mark lands after its row, so the score
+   arrives as a sequence you watch rather than a number that was already there.
+   --i comes from the index on each <li> and inherits down to the mark. */
+.score li {
+  animation: rowIn 300ms var(--ease-out) both;
+  animation-delay: calc(var(--i) * 70ms + 60ms);
+}
+.score .mk {
+  display: inline-block;
+  animation: markIn 300ms var(--ease-out) both;
+  animation-delay: calc(var(--i) * 70ms + 220ms);
+}
+.scoreVerdict { animation: rowIn 340ms var(--ease-out) 560ms both; }
+
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes markIn {
+  from { opacity: 0; transform: scale(1.45); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dgDraw, .dgPart { transition: none; }
+  html { scroll-behavior: auto; }
+  /* Everything above is decoration over a state that is already correct, so it
+     all resolves to its end frame instantly rather than being re-tuned. */
+  .dgScaffold .dgPart,
+  .dgScaffold > line,
+  .locked,
+  .locked .big,
+  .locked .sub,
+  .score li,
+  .score .mk,
+  .scoreVerdict { animation: none; }
+  .dgIdle .dgPulse, .dgIdle .dgHalo { animation: none; opacity: 0; }
+}
+
+/* ---------- desktop ---------- */
+
+@media (min-width: 900px) {
+  .grid2 { grid-template-columns: repeat(3, 1fr); }
+  section { padding: 62px 0; }
+  section.hero { padding: 76px 0 34px; }
+  .lead { max-width: var(--measure); }
+  .repBody { padding: 24px 22px 26px; }
+}
+
+/* The hero splits in two on desktop: the argument on the left at a readable
+   measure, the terms and both calls to action on the right at eye level beside
+   the headline. A single column in a 1140px shell just leaves a third of the
+   screen empty and reads as a page that does not know how wide it is. */
+.heroGrid { display: grid; gap: 30px; }
+.heroCopy > .eyebrow, .heroCopy > .lead { max-width: var(--measure); }
+
+@media (min-width: 1000px) {
+  .heroGrid {
+    grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
+    gap: 56px;
+    align-items: start;
+  }
+  /* Stacked, not side by side: in a narrow column four cells in a row would
+     wrap their captions and go ragged. */
+  .termCol { flex-direction: column; margin-top: 6px; }
+  .termCol > div { flex: none; border-right: 0; border-bottom: 1px solid var(--line-strong); }
+  .termCol > div:last-child { border-bottom: 0; }
+  .heroCard .btnRow { flex-direction: column; align-items: stretch; }
+  .heroCard .btn { text-align: center; }
+}
+
+/* ---------- the study chart ---------- */
+
+/* A prose column at the measure inside a 1140px shell leaves a third of the
+   row empty. That column holds the evidence, which also fixes a credibility
+   problem: a page arguing that diagrams beat prose for this material was
+   making its case entirely in prose. */
+.split { display: grid; gap: 26px; }
+
+@media (min-width: 1000px) {
+  .split {
+    grid-template-columns: minmax(0, 1fr) minmax(330px, 430px);
+    gap: 48px;
+    align-items: start;
+  }
+}
+
+.chart { margin: 0; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart figcaption {
+  font-family: var(--font-mono), monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  line-height: 1.55;
+  color: var(--ink-3);
+  margin-top: 10px;
+}
+
+.chAxis { stroke: var(--line-strong); stroke-width: 1; }
+.chRule { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+.chAxisTxt { fill: var(--ink-3); font-family: var(--font-mono), monospace; font-size: 12px; }
+.chLine { fill: none; stroke-width: 2.4; stroke-linecap: round; }
+/* The losing series is grey and the winning one takes the accent: the accent is
+   the page's one reserved colour, and this is the claim it is reserved for. */
+.chRead { stroke: var(--ink-3); }
+.chRecall { stroke: var(--accent); }
+.chDot { stroke: var(--panel); stroke-width: 2; }
+.chReadDot { fill: var(--ink-3); }
+.chRecallDot { fill: var(--accent); }
+.chVal {
+  fill: var(--ink-2);
+  font-family: var(--font-mono), monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+.chDim { fill: var(--ink-3); }
+.chHot { fill: var(--accent-ink); }
+.chSeries { font-family: var(--font-mono), monospace; font-size: 12px; letter-spacing: 0.02em; }
+/* The legend keys are lines too, so they inherit the draw-on. Reset them:
+   a 28-unit swatch has nothing to reveal. */
+.chKey { stroke-dasharray: none !important; stroke-dashoffset: 0 !important; }
+.chReadTxt { fill: var(--ink-3); }
+.chRecallTxt { fill: var(--accent-ink); font-weight: 600; }
+
+/* .chartArm is added by JavaScript only, so with JS off the server's markup
+   renders the chart already complete rather than blank. */
+.chartArm .chLine { stroke-dasharray: var(--len); stroke-dashoffset: var(--len); }
+.chartArm .chDot, .chartArm .chVal, .chartArm .chSeries { opacity: 0; }
+
+.chartOn .chLine {
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 950ms var(--ease-out);
+}
+.chartOn .chDot, .chartOn .chVal, .chartOn .chSeries {
+  opacity: 1;
+  transition: opacity 420ms var(--ease-out) 720ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chartArm .chLine { stroke-dashoffset: 0; }
+  .chartArm .chDot, .chartArm .chVal, .chartArm .chSeries { opacity: 1; }
+  .chartOn .chLine, .chartOn .chDot, .chartOn .chVal, .chartOn .chSeries { transition: none; }
+}
+
+/* ---------- the free book, everywhere ---------- */
+
+/* The book is the distribution: it is how a stranger learns the material is
+   good before being asked for $39. So it gets four routes on the page — header,
+   hero, its own section, footer — plus a floating one on phones.
+
+   None of them blink, pulse or shake. An earlier version did all three and it
+   read as cheap, which is a real cost on a page asking for money: looping
+   motion looks like a thing begging to be noticed, and the eye filters it out
+   within seconds anyway. Attention here comes from three things that do not
+   decay — solid colour, a number worth reading, and a single decisive movement
+   the first time an element arrives.
+
+   On the accent rule (§2.2): "one primary action" is per screen, not per page.
+   In the hero the buy button is primary, so the book is a text link. In the
+   book's own section there is no buy button, so the book button IS primary and
+   takes the accent. Two accent fills never share a viewport. */
+
+.freeChip {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 5px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+.alt {
+  font-size: calc(14.5px * var(--fs));
+  color: var(--ink-2);
+  margin: 14px 0 0;
+}
+.alt a {
+  color: var(--accent-ink);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 2px;
+}
+.alt a:hover { background: var(--accent-soft); }
+
+/* Arrives as an outline, fills left to right once on first view, then holds.
+   Near-black text is legible before and after the fill passes under it, which
+   is why the label never needs to change colour mid-animation. */
+.bookBtn {
+  position: relative;
+  overflow: hidden;
+  background: transparent;
+  color: var(--on-accent);
+  border-color: var(--accent);
+  font-size: calc(15px * var(--fs));
+  padding: 13px 22px;
+}
+:root[data-theme="dark"] .bookBtn,
+:root[data-theme="manim"] .bookBtn { color: var(--ink); }
+.bookBtn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.62s var(--ease-out);
+}
+.bookBtn.bookBtnOn::before { transform: scaleX(1); }
+.bookBtn.bookBtnOn { color: var(--on-accent); }
+.bookBtn > span { position: relative; }
+.bookBtn:hover { filter: brightness(1.06); }
+
+/* Phones only: the desktop layout shows the other routes without needing one.
+   It slides up once when the hero leaves, and then it is simply there —
+   a solid orange block on a white page is already the loudest thing in the
+   viewport, and making it move would only make it look unsure of that. */
+.fab {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 30;
+  display: none;
+  align-items: center;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: 1px solid var(--accent);
+  padding: 12px 16px;
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.36s var(--ease-out), transform 0.36s var(--ease-out);
+}
+@media (max-width: 999px) {
+  .fab { display: inline-flex; }
+}
+.fab.fabOn { opacity: 1; transform: none; }
+.fabInner { display: inline-flex; align-items: baseline; gap: 7px; }
+/* The count is the argument. "Free" alone is a claim; "51 chapters" is a
+   reason, and a number is read faster than a sentence. */
+.fabNum { font-family: var(--font-mono), monospace; font-size: 15px; font-weight: 700; }
+.fab:active { transform: translateY(1px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .fab { transition: none; }
+  .bookBtn::before { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   The reel feed.
+
+   Borrowed on purpose: this is the one interaction every buyer already has ten
+   thousand reps in. Swipe, next. The point is that studying does not have to
+   feel like opening a textbook, so the surface should not either.
+
+   One reel plays at a time — the one in view — and nothing plays until you
+   scroll to it. A wall of autoplaying video is what the rest of the internet
+   does and it reads as an ad.
+--------------------------------------------------------------------------- */
+.reels { display: flex; gap: 16px; align-items: stretch; margin: 22px 0 0; }
+
+.reelRail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  /* Snap makes the wheel and the trackpad behave like a thumb: one reel per
+     gesture, landing square, never parked between two. */
+  scroll-snap-type: y mandatory;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  height: min(78vh, 760px);
+  border: 1px solid var(--line-strong);
+  scrollbar-width: none;
+}
+.reelRail::-webkit-scrollbar { display: none; }
+.reelRail:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.reelSlide {
+  scroll-snap-align: center;
+  scroll-snap-stop: always;   /* never skip two reels on one flick */
+  flex: 0 0 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  gap: 22px;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reelFrame { background: var(--panel-2); border: 1px solid var(--line-strong); line-height: 0; }
+.reelFrame video { width: 100%; height: auto; display: block; cursor: pointer; }
+
+.reelMeta { display: flex; flex-direction: column; gap: 10px; }
+.reelNum {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(12px * var(--fs));
+  letter-spacing: 0.08em;
+  color: var(--ink-3);
+  margin: 0;
+}
+.reelNum span { color: var(--line-strong); }
+.reelKernel {
+  font-family: var(--font-read), Georgia, serif;
+  font-size: calc(23px * var(--fs));
+  line-height: 1.25;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  margin: 0;
+  text-wrap: balance;
+}
+.reelTold { font-size: calc(15px * var(--fs)); color: var(--ink-2); margin: 0; }
+
+/* The rail is a scroll container, so it needs a visible position. Numbers, not
+   dots: they say how many are left, which a dot cannot. */
+.reelDots { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+.reelDot {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(11px * var(--fs));
+  padding: 8px 7px;
+  background: transparent;
+  color: var(--ink-3);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  cursor: pointer;
+}
+.reelDot:hover { border-color: var(--line-strong); color: var(--ink); }
+.reelDot[aria-current="true"] { border-color: var(--ink); color: var(--ink); }
+.reelDot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 720px) {
+  /* On a phone the caption goes under the video, where a feed puts it. */
+  .reelSlide { grid-template-columns: 1fr; gap: 14px; padding: 14px; align-content: center; }
+  .reelFrame { max-width: 260px; margin: 0 auto; }
+  .reelRail { height: min(82vh, 700px); }
+  .reelDots { flex-direction: row; justify-content: center; }
+  .reels { flex-direction: column; }
+}
