@@ -6,7 +6,9 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 SRC = ROOT / "src"
 CH = SRC / "chapters"
-OUT = ROOT / "dist" / "index.html"
+# The sprint presell page owns dist/ root (and so the site root); the book
+# lives one level down at /book.
+OUT = ROOT / "dist" / "book" / "index.html"
 
 ALLOWED_TAGS = set("p h2 h3 ul ol li strong em code pre table thead tbody tr th td figure figcaption "
                    "svg g rect circle ellipse line path polyline polygon text tspan defs marker title "
@@ -113,7 +115,7 @@ def main():
         .replace("/*{{TOC_JSON}}*/", json.dumps(toc).replace("</", "<\\/"))
         .replace("/*{{QUIZ_JSON}}*/", json.dumps(quiz_all).replace("</", "<\\/"))
         .replace("/*{{APP_JS}}*/", (SRC / "app.js").read_text().replace("</script", "<\\/script")))
-    OUT.parent.mkdir(exist_ok=True)
+    OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(page)
     print(f"Built {OUT} ({OUT.stat().st_size / 1024:.0f} KB, {ready} chapters)")
 
