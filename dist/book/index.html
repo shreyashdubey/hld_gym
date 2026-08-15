@@ -141,8 +141,24 @@ body {
 #text-size[data-level="0"] .ts-mark { font-size: .8rem; }
 #text-size[data-level="1"] .ts-mark { font-size: .95rem; }
 #text-size[data-level="2"] .ts-mark { font-size: 1.1rem; }
-#text-size .ts-lv { font-family: var(--font-mono); font-size: .66rem; font-weight: 600; color: var(--ink-3); }
-#text-size:hover .ts-lv { color: var(--accent-ink); }
+/* Named controls: a glyph alone says nothing about what the button changes.
+   The name appears wherever the header has room and drops out below 880px,
+   where the row reverts to the square glyph buttons it has always been. */
+.icon-btn.named {
+  width: auto; height: 34px; padding: 0 10px;
+  display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--font-mono); font-size: .72rem; letter-spacing: .06em;
+}
+/* No font-family here on purpose: the UI face has no U+25D0 and falls back with
+   odd metrics, so the theme glyph stays in mono where those marks exist.
+   #text-size's own rules put the aA mark back in the UI face and keep sizing it
+   per step. */
+.icon-btn.named .ib-g { font-size: .95rem; color: var(--accent-ink); }
+/* #text-size carries id-level width/padding/gap rules above, which outrank a
+   plain class selector, so the shared metrics are restated at id+class. */
+#text-size.named { padding: 0 10px; gap: 7px; align-items: center; }
+.icon-btn.named .ib-n { white-space: nowrap; color: var(--ink-2); }
+.icon-btn.named:hover .ib-n { color: var(--ink); }
 :is(button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 51 chapters sit in the sidebar ahead of the article, so a keyboard reader
    would otherwise tab through the whole book to reach a paragraph. Offscreen
@@ -602,13 +618,15 @@ details[open] > summary { margin-bottom: 8px; }
 @media (max-width: 880px) {
   .shell, .shell.no-rail { grid-template-columns: 1fr; }
   .topbar-inner { padding-inline: 12px; gap: 8px; }
+  .icon-btn.named, #text-size.named { width: 34px; padding: 0; gap: 0; justify-content: center; }
+  .icon-btn.named .ib-n { display: none; }
   .tiles { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
   .tile { border-bottom: 1px solid var(--line); }
 }
 /* iPhone SE and friends: the top row is 11px too wide at this width */
 @media (max-width: 360px) {
   .topbar-inner { padding-inline: 8px; gap: 6px; }
-  .icon-btn { width: 30px; height: 30px; }
+  .icon-btn, .icon-btn.named, #text-size.named { width: 30px; height: 30px; }
   .pill { font-size: .64rem; padding: 3px 8px; }
 }
 @media (max-width: 880px) {
@@ -646,8 +664,8 @@ details[open] > summary { margin-bottom: 8px; }
     <a class="brand" href="#home"><span class="brand-mark">HLD</span> Gym</a>
     <span class="topbar-spacer"></span>
     <span id="streak-pill" class="pill" title="Current streak"></span>
-    <button id="text-size" class="icon-btn" data-level="0"><span class="ts-mark">aA</span><span class="ts-lv">1</span></button>
-    <button id="theme-toggle" class="icon-btn" aria-label="Switch theme">◐</button>
+    <button id="text-size" class="icon-btn named" data-level="0"><span class="ib-g ts-mark">aA</span><span class="ib-n">normal</span></button>
+    <button id="theme-toggle" class="icon-btn named" aria-label="Switch theme"><span class="ib-g">◐</span><span class="ib-n">paper</span></button>
   </div>
 </header>
 
@@ -18553,7 +18571,8 @@ const THEME_NAME = { light: 'Paper', dark: 'Blueprint', manim: 'Manim' };
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   const b = $('#theme-toggle');
-  b.textContent = THEME_GLYPH[t];
+  b.querySelector('.ib-g').textContent = THEME_GLYPH[t];
+  b.querySelector('.ib-n').textContent = THEME_NAME[t].toLowerCase();
   b.setAttribute('aria-label', `Theme: ${THEME_NAME[t]}. Switch theme`);
 }
 applyTheme(document.documentElement.dataset.theme);
@@ -18576,7 +18595,7 @@ function applyFontSize(i) {
   document.documentElement.style.setProperty('--fs', step.scale);
   const b = $('#text-size');
   b.dataset.level = i;
-  b.querySelector('.ts-lv').textContent = i + 1;
+  b.querySelector('.ib-n').textContent = step.name.toLowerCase();
   b.setAttribute('aria-label', `Text size: ${step.name}, level ${i + 1} of ${FS.length}. Change text size`);
   b.title = `Text size: ${step.name.toLowerCase()}`;
 }

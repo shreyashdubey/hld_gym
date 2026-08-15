@@ -847,7 +847,8 @@ const THEME_NAME = { light: 'Paper', dark: 'Blueprint', manim: 'Manim' };
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   const b = $('#theme-toggle');
-  b.textContent = THEME_GLYPH[t];
+  b.querySelector('.ib-g').textContent = THEME_GLYPH[t];
+  b.querySelector('.ib-n').textContent = THEME_NAME[t].toLowerCase();
   b.setAttribute('aria-label', `Theme: ${THEME_NAME[t]}. Switch theme`);
 }
 applyTheme(document.documentElement.dataset.theme);
@@ -870,7 +871,7 @@ function applyFontSize(i) {
   document.documentElement.style.setProperty('--fs', step.scale);
   const b = $('#text-size');
   b.dataset.level = i;
-  b.querySelector('.ts-lv').textContent = i + 1;
+  b.querySelector('.ib-n').textContent = step.name.toLowerCase();
   b.setAttribute('aria-label', `Text size: ${step.name}, level ${i + 1} of ${FS.length}. Change text size`);
   b.title = `Text size: ${step.name.toLowerCase()}`;
 }
