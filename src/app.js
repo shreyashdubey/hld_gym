@@ -135,7 +135,11 @@ function renderSidebar() {
   if (openPart === null) openPart = TOC.parts[0].n;
 
   const gym = GYM();
-  let html = '';
+  /* The brand in the header leaves for the sell page, so this is now the only
+     route back to the book's own home — progress, streak, review. */
+  const atHome = !location.hash || location.hash === '#home';
+  let html = `<a class="side-ch side-home${atHome ? ' active' : ''}" href="#home">
+    <span class="n">◆</span><span>home</span></a>`;
   for (const p of TOC.parts) {
     const done = p.chapters.filter(c => mastered(c.id)).length;
     const pct = Math.round(done / p.chapters.length * 100);

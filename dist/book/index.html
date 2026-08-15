@@ -294,6 +294,10 @@ h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt {
 .side-ch.active .n { color: var(--accent-ink); }
 .side-ch .m { margin-left: auto; flex: none; font-size: .76rem; }
 .side-ch .m.done { color: var(--good); }
+/* Home sits above the parts, separated by a rule, because it is a different
+   kind of destination from a chapter. */
+.side-home { margin-bottom: 10px; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
+.side-home .n { font-size: .58rem; }
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 45; }
 
 /* ---------- right rail: where you are inside the chapter ---------- */
@@ -661,7 +665,7 @@ details[open] > summary { margin-bottom: 8px; }
 <header class="topbar">
   <div class="topbar-inner">
     <button id="nav-toggle" class="icon-btn" aria-label="Open chapters">☰</button>
-    <a class="brand" href="#home"><span class="brand-mark">HLD</span> Gym</a>
+    <a class="brand" href="/"><span class="brand-mark">HLD</span> Gym</a>
     <span class="topbar-spacer"></span>
     <span id="streak-pill" class="pill" title="Current streak"></span>
     <button id="text-size" class="icon-btn named" data-level="0"><span class="ib-g ts-mark">aA</span><span class="ib-n">normal</span></button>
@@ -17859,7 +17863,11 @@ function renderSidebar() {
   if (openPart === null) openPart = TOC.parts[0].n;
 
   const gym = GYM();
-  let html = '';
+  /* The brand in the header leaves for the sell page, so this is now the only
+     route back to the book's own home — progress, streak, review. */
+  const atHome = !location.hash || location.hash === '#home';
+  let html = `<a class="side-ch side-home${atHome ? ' active' : ''}" href="#home">
+    <span class="n">◆</span><span>home</span></a>`;
   for (const p of TOC.parts) {
     const done = p.chapters.filter(c => mastered(c.id)).length;
     const pct = Math.round(done / p.chapters.length * 100);
