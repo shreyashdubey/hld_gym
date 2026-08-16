@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 /**
  * The reel feed. Swipe one, get the next, the way a phone feed works, because
@@ -10,12 +10,14 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
  * its own title card, so it gets one hairline and nothing else around it. An
  * earlier version put it inside a bordered slide inside a bordered rail, which
  * boxed a box twice over and squeezed the video down to 300px, where the
- * burned-in captions rendered at about 9px and could not be read at any text
- * size. The text-size control cannot help here: those captions are pixels in a
- * file, so the only lever is how big the video is drawn.
+ * burned-in captions rendered at about 9px. The text-size control cannot help
+ * there: those captions are pixels in a file, so the only lever is how large
+ * the video is drawn.
  *
- * The caption sits OUTSIDE the rail and follows the active reel, so the video
- * gets the full column instead of splitting it.
+ * The column beside it carries the whole playlist rather than the active reel
+ * alone. Four kernels in a row is the fastest possible argument for what the
+ * product is, and it fills a column that a 9:16 video otherwise leaves half
+ * empty.
  */
 
 type Reel = {
@@ -53,11 +55,28 @@ function subscribe(cb: () => void) {
 }
 const getTheme = () => document.documentElement.getAttribute("data-theme");
 
+/* Fullscreen is browser state too, so it is read the same way the theme is
+   rather than mirrored into React with an effect. Both subscribe functions are
+   module-level constants: a new function identity on every render makes
+   useSyncExternalStore resubscribe on every render. */
+const NEVER = () => () => {};
+/* iOS Safari allows fullscreen only on a <video>, never on a container, so
+   there the button would be a dead control and is not rendered at all. */
+const getCanFull = () => Boolean(document.fullscreenEnabled);
+
+function subFullscreen(cb: () => void) {
+  document.addEventListener("fullscreenchange", cb);
+  return () => document.removeEventListener("fullscreenchange", cb);
+}
+const getFull = () => document.fullscreenElement !== null;
+
 export default function Reels() {
   const theme = useSyncExternalStore(subscribe, getTheme, () => null);
   const cut = cutFor(theme);
   const railRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState(0);
+  const canFull = useSyncExternalStore(NEVER, getCanFull, () => false);
+  const full = useSyncExternalStore(subFullscreen, getFull, () => false);
 
   /* One observer over all the slides. Whichever is most on screen plays; every
      other one pauses, and any reel fully off screen rewinds, so coming back to
@@ -85,16 +104,42 @@ export default function Reels() {
     return () => io.disconnect();
   }, []);
 
-  const goTo = (i: number) =>
+  const goTo = useCallback((i: number) => {
     railRef.current
       ?.querySelector<HTMLElement>(`[data-slide="${i}"]`)
       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, []);
+
+  const toggleFull = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void railRef.current?.requestFullscreen().catch(() => {});
+  };
+
+  /* Arrow keys move between reels while the rail has focus. Scroll-snap already
+     does this with a wheel; a keyboard user needs the same thing said out loud. */
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+      e.preventDefault();
+      goTo(Math.min(active + 1, REELS.length - 1));
+    }
+    if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
+      e.preventDefault();
+      goTo(Math.max(active - 1, 0));
+    }
+  };
 
   const current = REELS[active];
 
   return (
     <div className="reels">
-      <div className="reelRail" ref={railRef} tabIndex={0} aria-label="Reel feed">
+      <div
+        className="reelRail"
+        ref={railRef}
+        tabIndex={0}
+        onKeyDown={onKey}
+        aria-label="Reel feed"
+        data-full={full || undefined}
+      >
         {REELS.map((r, i) => (
           <div className="reelSlide" data-slide={i} key={r.id}>
             <video
@@ -120,25 +165,40 @@ export default function Reels() {
 
       <div className="reelSide">
         <p className="reelNum">
-          reel {current.id} <span>·</span> {current.chapter}
+          now playing <span>·</span> {current.chapter}
         </p>
         <p className="reelKernel">{current.kernel}</p>
         <p className="reelTold">Told as {current.told}.</p>
 
-        <nav className="reelDots" aria-label="Jump to a reel">
-          {REELS.map((r, i) => (
-            <button
-              key={r.id}
-              className="reelDot"
-              aria-current={i === active}
-              aria-label={`Reel ${r.id}: ${r.kernel}`}
-              onClick={() => goTo(i)}
-            >
-              {r.id}
+        <div className="reelCtl">
+          {canFull && (
+            <button className="reelBtn" onClick={toggleFull}>
+              {full ? "Exit fullscreen" : "Fullscreen"}
             </button>
+          )}
+          <span className="reelHint">Scroll the reel for the next one. Click it to pause.</span>
+        </div>
+
+        <ol className="reelList" aria-label="All reels">
+          {REELS.map((r, i) => (
+            <li key={r.id}>
+              <button
+                className="reelRow"
+                aria-current={i === active}
+                onClick={() => goTo(i)}
+              >
+                <span className="rowN">{r.id}</span>
+                <span className="rowK">{r.kernel}</span>
+                <span className="rowC">{r.chapter}</span>
+              </button>
+            </li>
           ))}
-        </nav>
-        <p className="reelHint">Scroll the reel for the next one. Click it to pause.</p>
+        </ol>
+
+        <p className="reelFoot">
+          Four built. Ten a day on your current topic from 1 September, plus reels from topics
+          you have already finished.
+        </p>
       </div>
     </div>
   );

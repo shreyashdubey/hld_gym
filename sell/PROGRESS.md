@@ -977,6 +977,45 @@ sentence became its own sentence.
 **Verified in the browser at 1440px**, not from the DOM: video 430×764, playing,
 zero em dashes in `document.body.innerText`.
 
+## 2026-08-16 — the reel column earns its space, and fullscreen
+
+**Symptom:** *"on the right side there is a lot of empty space"* and *"can we
+have fullscreen for the reel?"*
+
+**The space was structural, not a spacing bug.** A 9:16 video 764px tall sits
+beside a caption three lines long, so the column was always going to be two
+thirds empty. Filling it with padding would have been decoration; it now carries
+the **whole playlist** instead of the active title alone. Four kernels in a row
+is the fastest argument on the page for what the product actually is, and each
+row is also the navigation, which retires the four numbered dots that said less.
+The active row is marked by an accent rule on its left edge, not a fill: two
+accent fills never share a viewport, and the buy button owns that.
+
+**Fullscreen goes on the rail, never the video.** Fullscreening a `<video>`
+shows one reel and hands the browser's own chrome the scroll, which ends the
+feed at the first reel. Fullscreening the scroll-snap container keeps it: a
+wheel or a swipe moves to the next reel in fullscreen exactly as it does on the
+page. `.reelRail:fullscreen` drops the aspect ratio for `100vw/100vh` and each
+slide becomes `100vh`.
+
+**The button is not rendered where it cannot work.** iOS Safari allows
+fullscreen only on a `<video>`, never on a container, so `document.
+fullscreenEnabled` is checked and the control is absent rather than dead.
+
+**Both fullscreen values are read with `useSyncExternalStore`, not mirrored into
+state.** The first attempt used `useState` plus an effect and tripped
+`react-hooks/set-state-in-effect` — the same rule `Toggles.tsx` already exists
+to satisfy. Fullscreen is browser state; React does not own it. Both subscribe
+functions are module-level constants, because a fresh function identity on every render
+makes `useSyncExternalStore` resubscribe on every render.
+
+**Also added:** arrow keys move between reels while the rail has focus. Scroll
+snap already does this with a wheel; a keyboard user needed it said out loud.
+
+**Verified in the browser:** clicking playlist row 3 scrolled the rail, started
+reel 03, paused the other three and swapped the heading to "Queueing is refusing
+slowly."
+
 ---
 
 ## Open
