@@ -953,74 +953,79 @@ footer { padding: 34px 0 70px; }
    The reel feed.
 
    Borrowed on purpose: this is the one interaction every buyer already has ten
-   thousand reps in. Swipe, next. The point is that studying does not have to
-   feel like opening a textbook, so the surface should not either.
+   thousand reps in. Swipe, next.
 
-   One reel plays at a time — the one in view — and nothing plays until you
-   scroll to it. A wall of autoplaying video is what the rest of the internet
-   does and it reads as an ad.
+   The video is the object and it gets ONE hairline. It arrives already framed,
+   already captioned, with its own title card. An earlier version put it inside
+   a bordered slide inside a bordered rail, which boxed a box twice over and
+   squeezed the video to 300px, where the burned-in captions rendered around 9px
+   and could not be read at any text size. --fs cannot rescue them either: those
+   captions are pixels in a file, so the only lever is how large the video is
+   drawn. Hence a column that gives it 430px and never splits it.
 --------------------------------------------------------------------------- */
-.reels { display: flex; gap: 16px; align-items: stretch; margin: 22px 0 0; }
+.reels {
+  display: grid;
+  grid-template-columns: clamp(300px, 32vw, 430px) minmax(0, 1fr);
+  gap: 30px;
+  align-items: start;
+  margin: 26px 0 0;
+}
 
 .reelRail {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  /* Snap makes the wheel and the trackpad behave like a thumb: one reel per
-     gesture, landing square, never parked between two. */
-  scroll-snap-type: y mandatory;
+  /* Height follows width, so the rail is exactly one 9:16 reel tall and a
+     snap always lands on a whole one. */
+  aspect-ratio: 9 / 16;
   overflow-y: auto;
+  scroll-snap-type: y mandatory;
   overscroll-behavior: contain;
-  height: min(78vh, 760px);
-  border: 1px solid var(--line-strong);
   scrollbar-width: none;
+  background: var(--paper);
 }
 .reelRail::-webkit-scrollbar { display: none; }
-.reelRail:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.reelRail:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .reelSlide {
-  scroll-snap-align: center;
-  scroll-snap-stop: always;   /* never skip two reels on one flick */
-  flex: 0 0 100%;
   height: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
-  gap: 22px;
-  align-items: center;
-  padding: 20px;
-  border-bottom: 1px solid var(--line);
+  scroll-snap-align: start;
+  scroll-snap-stop: always;   /* a hard flick must never skip a reel */
+}
+.reelSlide video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  cursor: pointer;
+  border: 1px solid var(--line-strong);
 }
 
-.reelFrame { background: var(--panel-2); border: 1px solid var(--line-strong); line-height: 0; }
-.reelFrame video { width: 100%; height: auto; display: block; cursor: pointer; }
-
-.reelMeta { display: flex; flex-direction: column; gap: 10px; }
+/* The caption follows the reel in view instead of riding alongside each one,
+   which is what lets the video keep the whole column. */
+.reelSide { position: sticky; top: 24px; display: flex; flex-direction: column; gap: 12px; }
 .reelNum {
   font-family: var(--font-mono), monospace;
   font-size: calc(12px * var(--fs));
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
   color: var(--ink-3);
   margin: 0;
 }
 .reelNum span { color: var(--line-strong); }
 .reelKernel {
   font-family: var(--font-read), Georgia, serif;
-  font-size: calc(23px * var(--fs));
-  line-height: 1.25;
+  font-size: calc(clamp(22px, 2.5vw, 30px) * var(--fs));
+  line-height: 1.22;
   font-weight: 600;
-  letter-spacing: -0.012em;
+  letter-spacing: -0.015em;
   margin: 0;
   text-wrap: balance;
 }
-.reelTold { font-size: calc(15px * var(--fs)); color: var(--ink-2); margin: 0; }
+.reelTold { font-size: calc(16px * var(--fs)); color: var(--ink-2); margin: 0; }
 
-/* The rail is a scroll container, so it needs a visible position. Numbers, not
-   dots: they say how many are left, which a dot cannot. */
-.reelDots { display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+/* Numbers, not dots: they say how many are left, which a dot cannot. */
+.reelDots { display: flex; gap: 6px; margin-top: 6px; }
 .reelDot {
   font-family: var(--font-mono), monospace;
-  font-size: calc(11px * var(--fs));
-  padding: 8px 7px;
+  font-size: calc(12px * var(--fs));
+  padding: 9px 11px;
   background: transparent;
   color: var(--ink-3);
   border: 1px solid var(--line);
@@ -1030,12 +1035,11 @@ footer { padding: 34px 0 70px; }
 .reelDot:hover { border-color: var(--line-strong); color: var(--ink); }
 .reelDot[aria-current="true"] { border-color: var(--ink); color: var(--ink); }
 .reelDot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.reelHint { font-size: calc(13px * var(--fs)); color: var(--ink-3); margin: 4px 0 0; }
 
-@media (max-width: 720px) {
-  /* On a phone the caption goes under the video, where a feed puts it. */
-  .reelSlide { grid-template-columns: 1fr; gap: 14px; padding: 14px; align-content: center; }
-  .reelFrame { max-width: 260px; margin: 0 auto; }
-  .reelRail { height: min(82vh, 700px); }
-  .reelDots { flex-direction: row; justify-content: center; }
-  .reels { flex-direction: column; }
+@media (max-width: 860px) {
+  /* One column, video first, caption under it, the way a feed stacks. */
+  .reels { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .reelRail { width: min(100%, 380px); margin: 0 auto; }
+  .reelSide { position: static; }
 }

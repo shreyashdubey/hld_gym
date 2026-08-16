@@ -155,10 +155,10 @@ export default function Home() {
             Nobody re-opens a chapter they finished three weeks ago. Everybody watches one more.
           </p>
           <p>
-            Every topic you study ships with <strong>ten reels</strong>: fifteen seconds each, one
-            idea, told as something ordinary going wrong &mdash; a hotel keycard, a coffee queue, a
-            cleared desk &mdash; and then relabelled as your system in the last two seconds. Watch
-            them on the train. That is the whole ask.
+            Every topic you study ships with <strong>ten reels</strong>. Fifteen seconds each,
+            one idea, told as something ordinary going wrong: a hotel keycard, a coffee queue, a
+            cleared desk. In the last two seconds the same picture is relabelled as your system.
+            Watch them on the train. That is the whole ask.
           </p>
           <p>
             Then the topics you already finished come back. Not all of them, and not on a day you
@@ -173,8 +173,8 @@ export default function Home() {
           </p>
           <Reels />
           <p className="fact">
-            Why the format works, and it is not because anyone is a “visual learner” &mdash; that
-            idea has no evidence behind it (Pashler, 2008). It is that the thing you are practising
+            Why the format works, and it is not because anyone is a “visual learner”. That idea
+            has no evidence behind it (Pashler, 2008). It works because the thing you are practising
             is drawing a system while talking through it, which is the thing the interview asks for.
             The reel is that same picture, built one piece at a time, short enough that you finish it.
           </p>

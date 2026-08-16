@@ -945,6 +945,38 @@ The page says twice — in the section and again in the price box — that **fou
 exist today and the daily ten start on 1 September**. The hard rule stands:
 never claim the product does something it does not.
 
+## 2026-08-16 — the reel feed was boxed, small, and full of em dashes
+
+**Symptom, verbatim:** *"why is our reel inside another box it is itself a
+box"*, *"there are em dashes across the whole new text"*, *"every text seems to
+be very very small in desktop mode I can't read it even in the largest
+setting."* Three separate defects, all in the same section, all mine.
+
+**The boxing.** A reel arrives already framed, already captioned, with its own
+title card. It was then put inside a bordered slide, inside a bordered rail, so
+the page drew three nested rectangles around one object. The video now gets
+**one** hairline and nothing else. The rail has no border and no background.
+
+**The size, which was caused by the boxing.** Each slide was a two-column grid,
+video on the left and caption on the right, inside a rail that was itself one
+column of the section. That left the video 300px wide. The captions are burned
+into the file at 1080px, so at 300px they render around **9px**.
+
+**The text-size control cannot fix this and it is worth knowing why.** `--fs`
+scales CSS type. These captions are pixels in an mp4. The only lever is how
+large the video is drawn, which is why the caption moved *out* of the rail and
+now follows the active reel: the video gets the whole column, 430px, and the
+captions land at about **13.5px**.
+
+**The em dashes.** Three, in copy written six entries after the entry recording
+that every em dash on this page had been removed. They were not repunctuated in
+place, for the reason that entry gives: the mark was doing two different jobs. A
+list being introduced took a colon; a clause pretending to belong to its
+sentence became its own sentence.
+
+**Verified in the browser at 1440px**, not from the DOM: video 430×764, playing,
+zero em dashes in `document.body.innerText`.
+
 ---
 
 ## Open
