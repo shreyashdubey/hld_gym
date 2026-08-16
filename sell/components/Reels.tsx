@@ -110,10 +110,8 @@ export default function Reels() {
       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, []);
 
-  const toggleFull = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void railRef.current?.requestFullscreen().catch(() => {});
-  };
+  const enterFull = () => void railRef.current?.requestFullscreen().catch(() => {});
+  const exitFull = () => void document.exitFullscreen().catch(() => {});
 
   /* Arrow keys move between reels while the rail has focus. Scroll-snap already
      does this with a wheel; a keyboard user needs the same thing said out loud. */
@@ -141,7 +139,16 @@ export default function Reels() {
         data-full={full || undefined}
       >
         {REELS.map((r, i) => (
-          <div className="reelSlide" data-slide={i} key={r.id}>
+          <div
+            className="reelSlide"
+            data-slide={i}
+            key={r.id}
+            /* In fullscreen the slide is the letterbox around a 9:16 video on a
+               16:9 screen, so a click here is a click outside the reel and
+               dismisses it. On the page the slide is exactly the video and this
+               never fires on its own. */
+            onClick={full ? exitFull : undefined}
+          >
             <video
               /* keyed on the cut: swapping src alone leaves the previous
                  decoded frame on screen until the new file buffers, which
@@ -154,6 +161,11 @@ export default function Reels() {
               preload={i === 0 ? "auto" : "none"}
               aria-label={`Reel ${r.id}: ${r.kernel}`}
               onClick={(e) => {
+                e.stopPropagation();       /* never reach the letterbox handler */
+                if (!full && canFull) {
+                  enterFull();
+                  return;
+                }
                 const v = e.currentTarget;
                 if (v.paused) void v.play();
                 else v.pause();
@@ -161,6 +173,11 @@ export default function Reels() {
             />
           </div>
         ))}
+        {full && (
+          <button className="reelClose" onClick={exitFull} aria-label="Exit fullscreen">
+            &#215;
+          </button>
+        )}
       </div>
 
       <div className="reelSide">
@@ -170,14 +187,11 @@ export default function Reels() {
         <p className="reelKernel">{current.kernel}</p>
         <p className="reelTold">Told as {current.told}.</p>
 
-        <div className="reelCtl">
-          {canFull && (
-            <button className="reelBtn" onClick={toggleFull}>
-              {full ? "Exit fullscreen" : "Fullscreen"}
-            </button>
-          )}
-          <span className="reelHint">Scroll the reel for the next one. Click it to pause.</span>
-        </div>
+        <p className="reelHint">
+          {canFull
+            ? "Click the reel for fullscreen. Scroll it for the next one."
+            : "Click the reel to pause. Scroll it for the next one."}
+        </p>
 
         <ol className="reelList" aria-label="All reels">
           {REELS.map((r, i) => (
