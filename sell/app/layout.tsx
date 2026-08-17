@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Archivo, Literata, IBM_Plex_Mono } from "next/font/google";
 import { PREFS_INIT_SCRIPT } from "@/lib/prefs";
+import { SCHEMA } from "@/lib/schema";
+import { SITE } from "@/lib/site";
 import "./globals.css";
 
 const archivo = Archivo({
@@ -36,8 +38,6 @@ const DESC =
    this is a static export with no server, so there is no route to generate it
    on request. metadataBase turns the relative image and canonical URLs into
    the absolute ones scrapers require. */
-const SITE = "https://hld-gym.vercel.app";
-
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
   title: TITLE,
@@ -52,6 +52,11 @@ export const metadata: Metadata = {
     images: [{ url: "/og.png", width: 1200, height: 630, alt: TITLE }],
   },
   twitter: { card: "summary_large_image", title: TITLE, description: DESC, images: ["/og.png"] },
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: { index: true, follow: true, "max-snippet": -1, "max-image-preview": "large" },
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -63,6 +68,15 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: PREFS_INIT_SCRIPT }} />
+        {/* Theme colour follows the OS, because the page does too until the
+            reader picks one. A single value would tint the browser chrome the
+            wrong way for half of them. */}
+        <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+        <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0d0d0d" />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(SCHEMA) }}
+        />
       </head>
       <body>{children}</body>
     </html>

@@ -341,7 +341,7 @@ export default function Home() {
                 <span className="per">one time · not a subscription</span>
               </div>
               <p style={{ marginTop: 0 }}>
-                Thirty days, one topic a day, the whole 51-chapter book. What you get:
+                Thirty days, one topic a day, the whole 51-chapter book.
               </p>
               <ul className="plain">
                 <li>
@@ -447,19 +447,17 @@ export default function Home() {
               <ul className="plain">
                 <li>
                   <strong>What exists today?</strong> The book, all of it. The rep on this page,
-                  which is real and hand-built: its three follow-ups were written in advance, and
-                  its score is keyword matching. In the product the follow-ups are generated
-                  against your actual answer. Four reels of the 450. The sprint itself ships
-                  1 September.
+                  hand-built: its follow-ups were written in advance and its score is keyword
+                  matching; in the product the follow-ups are generated against your answer. Four
+                  reels of the 450. The sprint itself ships 1 September.
                 </li>
                 <li>
                   <strong>Why not quiz myself with a chat window?</strong> You can, for one rep,
-                  and you should try it tonight. Paste a chapter into any model and ask it to quiz
-                  you and you get a fair question. What it will not do for thirty days: take the
-                  diagram off the screen before you answer, keep track of which of 197 diagrams you
-                  failed, bring the failed one back on day nine unasked, and hold the line when you
-                  argue with it. That is the part being sold. The explanation is free, in the book,
-                  because explanation is free everywhere now.
+                  and you should try it tonight. What a chat window will not do for thirty days:
+                  take the diagram off the screen before you answer, keep track of which of 197
+                  diagrams you failed, bring the failed one back on day nine unasked, and hold the
+                  line when you argue with it. That is the part being sold. The explanation is
+                  free, in the book, because explanation is free everywhere now.
                 </li>
                 <li>
                   <strong>My interview is in the middle of September.</strong> The form asks when

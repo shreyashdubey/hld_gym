@@ -1276,12 +1276,145 @@ favicon as its default page icon with no error anywhere. It looked exactly like
 the bug being fixed. Rendered and looked at the pixels, rather than trusting a
 200 on the request.
 
+## 2026-08-17 — the page rebuilt against five critiques
+
+**What:** the sell page was read by five independent reviewers (copy, design,
+a sceptical E5 buyer, front-end/SEO/a11y, and the repo's own honesty rule) and
+rebuilt against what survived. Every visible section changed; the design system
+did not. Word count went from ~1,800 to ~1,900 because the buyer's unanswered
+questions were worth more than the cuts, which were made elsewhere.
+
+**Two claims on the page were false, and both were the visitor's to catch:**
+
+- **"15 seconds each" and "under four minutes".** Every encode under
+  `dist/reels/` is 45.0s (`PACE = 3`, recorded on 2026-08-16 as "15s of story
+  now plays over 45s"), and the reel plays beside the claim. Now `45s` in the
+  strip, "about eleven minutes" for the daily fifteen, and `SYSTEM.md` §1
+  derives 15 × 45s. Symptom for next time: a number that can be timed must be
+  checked against the file, not the spec that wrote it.
+- **"A record of what you actually know"** in the price box, while `SYSTEM.md`
+  §1 and the form's Q5 both list the record dashboard as *planned, not built*.
+  Deleted; the schedule bullet carries the honest half (it remembers what you
+  failed).
+
+**Disclosures moved to where the belief forms.** The demo's follow-ups are
+declared hand-written *under the probe header in the rep*, with "nothing you
+type here is graded"; the keyword score is declared under the verdict. Both used
+to live only in a block near the buy button, five screens below the demo, while
+the verdict said "the gaps above are where the follow-ups go next" (false: the
+probes are fixed) and "this is the normal score" (a norm nobody has measured).
+`REP_TITLE` is `p1c06 · …` rather than `rep 07`, which implied six others.
+"show me what I missed" is "show what the chapter says", since nothing reads the
+textareas. The two closing anchors are sentence case, matching the page's CTAs.
+The reduced-motion branch that skipped straight to the lock (1.3s after a
+button promising 13s) is gone: the CSS already drops the draw transitions, so
+the steps pop in on cadence with their narration. The button's seconds are
+derived (`WATCH_S`, 12s), not typed.
+
+**Copy.** Hero lead leads with the mechanic and names the book before calling
+it "the whole book"; the fourth strip cell is `~1 hour / a day, 30 days` (the
+buyer's first question), refund moves into the hint. Section order is now
+hero → rep → how → *why the lock works* → reels → book → offer, so the evidence
+sits next to the lock and the reels read as the supporting act. Reels prose is
+two paragraphs, rendered inside the playlist column (`<Reels>{children}</Reels>`)
+so the proof shows first and the section lost ~500px. Chase & Simon cut. The
+book section gained a `.spec` table of the four parts with chapter counts and
+compressed topic lists, all checkable in the free book. `125 real outages`
+became `125 war stories`, the book's own tag. The offer key and price-box intro
+stopped repeating each other. "Straight about what exists today" and "Ask me
+anything" merged into **Before you pay**, seven Q&As beside *What you are not
+buying* (`.split2`): what exists today, why not a chat window (the §1 thesis,
+finally on the page), an interview mid-September (the form asks; the reply says
+what the first days cover before payment), falling behind, the refund, why trust
+it (judge it by the book, two deep links), contact. Footer carries a plain
+reserve link. Title and description carry the brand and name the book.
+
+**Design.** Hero strip 2×2 at desktop (button rises to the headline's second
+line); on phones the buttons come before the strip, full width, so the ask is on
+the first screen. Wide diagram capped at 880px (labels were 19px, bigger than
+body). Price box is a grid: amount and button left, list at the measure right.
+Kickers are `--ink-2` (hero excepted) and step numerals `--ink-3`: nine accent
+marks in a viewport with nothing to click made the buy button one more orange
+thing. `h3` is 20px, above the key line it sits over. Six-step grid is a
+hairline list under 560px. `.termbar` carries 18px below; the inline
+`marginTop` patches are gone. `--ink-3` light is `#666` (was 4.43:1 on
+`--panel-2`). `.chart figcaption` scales with `--fs`. `<main>`, no `<aside>`
+around the price, `h3` in the six-step grid so the outline has no skip.
+
+**Verified defects fixed in components:** the reel feed froze after any theme
+toggle (videos remount on `key={cut}`, the observer never re-armed: deps are
+`[cut]` now); light-theme visitors fetched the dark reel01 before hydration and
+then the paper one (`preload` gated on `theme !== null`); the active reel kept
+decoding with the rail scrolled off the page (`root: rail` dropped, the
+viewport root still clips per-slide); focus after grading landed on the first
+probe and scrolled the ticking scorecard off screen (focus the card, scroll it
+in); the FAB was tabbable while invisible (`visibility`) and shared a viewport
+with the rep's buttons and the book button (it now yields to `.pricebox, .rep,
+.bookBtn`). Rail is `role="region"`, space pauses.
+
+**Share card.** `reel/og.mjs` renders `reel/og.html` to `sell/public/og.png`,
+1200×630 in the page's own tokens; `layout.tsx` sets `metadataBase`, canonical,
+`og:image`, `twitter:image`. `.gitignore` gains `!sell/public/og.png`. Re-run
+`node reel/og.mjs` if the h1 or the strip numbers change.
+
+**Not done, and why:** the live Google Form still lists three unbuilt features
+unlabelled and is missing six of README's ten Q5 options: a Forms edit, not
+code. Refund after shipping is undecided, so the page still says only "if it
+does not ship". Naming the payment rail in step 02 waits for the rail to exist.
+"The reply … tells you what the first days cover" is a promise the reply has to
+keep. Whether days unlock daily or are all open on 1 September is unstated on
+the page because it is undecided.
+
+## 2026-08-17 — robots, sitemap, structured data, and the book's missing head
+
+**What:** `/robots.txt`, `/sitemap.xml`, a JSON-LD graph on the root, explicit
+robots directives, `theme-color`, and a full head for the book, which had none.
+
+**The book was the gap, and it is the half that matters.** It shipped with
+`<title>HLD Gym</title>` and nothing else: no description, no canonical, no
+share card. It is 284,000 words of the exact phrases people search for, free and
+with no signup, and it was invisible to a crawler beyond two words. It now
+carries a descriptive title, a description naming what is actually in it,
+`rel=canonical`, the full Open Graph and Twitter set pointing at the same
+`og.png` the sell page uses, and two `theme-color` values.
+
+**Two `theme-color` values, not one.** Both halves follow the OS until the
+reader picks a theme, so a single value tints the browser chrome the wrong way
+for half of them.
+
+**What the structured data deliberately does not say.** No `aggregateRating`,
+no `review`: nobody has bought this, so there is nothing to average, and those
+two are the most commonly faked properties in the format. The offer is
+`PreOrder`, not `InStock`, because it is a presale that ships on 1 September.
+The machine-readable version must not quietly claim something stronger than the
+visible copy, which says the same thing twice in words.
+
+The graph is `Organization` + `WebSite` + `Book` (with `isAccessibleForFree`)
++ `Product` with one `Offer`. It renders in `<head>` from a server component, so
+it costs no client JavaScript.
+
+**No `lastModified` in the sitemap.** It would be re-stamped on every build and
+show up as a diff in the committed `dist/` whether or not anything changed. An
+untrue lastmod is worse than none.
+
+**Build error worth recording, because the message names the fix:** a metadata
+route is a route handler, and under `output: "export"` the build refuses to
+prerender one without `export const dynamic = "force-static"`. Both `robots.ts`
+and `sitemap.ts` failed with exactly that until it was added.
+
+**Verified on the built output, not asserted:** `/robots.txt` 200 `text/plain`,
+`/sitemap.xml` 200 `application/xml` listing both URLs, `/og.png` 200 at
+1200×630, JSON-LD parsed back out of the shipped HTML with the offer reading
+`19 USD PreOrder`, and every head tag present in `dist/book/index.html`.
+
 ---
 
 ## Open
 
-- [ ] **Form collects no email, and its unbuilt options are unlabelled.** See
-      the entry above; both are Google Forms settings, no code involved.
+- [ ] **The live form's Q5 has four options, three unbuilt and none labelled**
+      (Playground, reels with audio, LLD gym beside the lock), and is missing
+      six of README's ten. Email is collected now (Responder input). Google
+      Forms edit, no code involved.
 - [x] **Reservation form created and wired**
       (`https://forms.gle/hkf5buMLV6PsAomp8`, `lib/links.ts`).
 - [ ] **Gumroad product not created.** Not blocking any more: the payment link
@@ -1290,11 +1423,16 @@ the bug being fixed. Rendered and looked at the pixels, rather than trusting a
 - [x] **Live at `https://hld-gym.vercel.app/`** (2026-08-17). Book at `/book/`,
       reel encodes serving from `/reels/`, all three CTAs on the form.
 - [ ] Free book not yet posted to r/leetcode, r/ExperiencedDevs, HN, LinkedIn.
-- [ ] **Reels 02–04 not cut.** Renderer and format exist; each new kernel is a
-      new `reelNN.html` against the same five-beat template. Shortlist:
-      `R + W > N` (two circles overlapping three nodes, needs no words),
-      "queueing is refusing slowly" (the customer leaves while the ticket is
-      still queued), "the cache is a suggestion".
+- [ ] **Reels 05+ not cut.** Four exist and play on the page. Each new kernel
+      is a new `reelNN.html` against the same five-beat template.
+- [ ] **Refund after 1 September is undecided.** The page promises a refund
+      only if the sprint does not ship; a buyer who wants out on day five gets
+      no answer. Say either "no refund after it ships" or "seven days, reply
+      to the payment email"; either is better than silence.
+- [ ] **Days gated or open?** Whether day N unlocks on its date or all thirty
+      are open from 1 September is undecided and therefore unsaid; a buyer with
+      an onsite on 15 September asks exactly this. Decide, then say it in
+      *Before you pay*.
 - [ ] **Reel audio unbuilt.** Spec is silent-first with burned captions, so this
       is additive: ticking under the lease bar, a low thud when it empties, one
       sharp hit on the stale write, a crisp click on the rejection. Muted

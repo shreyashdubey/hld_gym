@@ -99,8 +99,11 @@ Accent is permitted on:
 - the single most important number
 - the `crux` box — the thing you must not miss
 
-Accent is **not** permitted on: decorative rules, every heading, hover states of
-non-primary elements, or anything used more than once per viewport for emphasis.
+Accent is **not** permitted on: decorative rules, every heading, section kickers
+(the hero's excepted), step numerals, hover states of non-primary elements, or
+anything used more than once per viewport for emphasis. Kickers and numerals
+were accent for a day: nine orange marks in a viewport with nothing to click,
+so when the buy button arrived it was one more orange thing.
 
 **"One primary action" is per screen, not per page.** In the hero the buy button
 is primary, so the free book is a text link there. In the book's own section
@@ -138,11 +141,11 @@ measurement is never grotesque.
 |---|---|---|
 | `h1` | `clamp(30px, 4.6vw, 54px)` | `-.028em`, `text-wrap: balance`, `max-width: 17ch` |
 | `h2` | `clamp(20px, 3.6vw, 26px)` | `-.015em` |
-| `h3` | `15px` | UI font, 700 |
+| `h3` | `20px` / `1.2` | UI font, 700, `-.012em`; bigger than the key line under it, or the block reads inverted |
 | body | `17px` / `1.68` | reading register |
 | `.lead` | `20px` / `1.5` | `--ink-2` |
 | `.key` | `17.5px` UI 700 | one per section, see §5.7 |
-| `.eyebrow` | `12.5px` mono 600 | `.1em`, lowercase, `--accent-ink` |
+| `.eyebrow` | `12.5px` mono 600 | `.1em`, lowercase, `--ink-2`; only the hero's kicker takes `--accent-ink` (§2.2) |
 | `.hint`, `.fact` | `11–12px` mono | `--ink-3` |
 
 Tight negative tracking on display sizes, generous positive tracking on small
@@ -198,9 +201,15 @@ drawing into a 736px column while the space it needed sat empty either side.
 
 Above 1000px the hero splits: the argument on the left at the measure, the terms
 and both calls to action on the right, level with the headline. Simply widening
-one column leaves the same page with bigger margins. The terms strip **stacks**
-in that column rather than staying a row — four cells in a 364px column would
-wrap their captions and go ragged.
+one column leaves the same page with bigger margins. The terms strip goes
+**two by two** in that column: four in a row wrap their captions at 91px, and
+four stacked left each cell 80% empty and pushed the button level with the last
+line of the headline. Below 1000px the card stacks under the lead with the two
+buttons first, full width, so a 390px phone shows the ask on its first screen.
+
+The price box takes the same shape: amount and button in a 300px left column,
+the list at a readable measure on the right. Poured across the full shell the
+list ran 115 characters a line, in the one box that has to be read carefully.
 
 The step grid pins to `repeat(3, 1fr)` above 900px. Left on `auto-fit`, the
 wider shell fits four columns and leaves the six steps as a ragged 4 + 2.
@@ -216,7 +225,7 @@ in a strip on its own top rule.
 
 ```
 ┌──────────────────────────────────┐
-│ rep 07 · cache-aside read path   │  ← .repTag, mono, lowercase, on accent
+│ p1c06 · cache-aside read path    │  ← .repTag, mono, lowercase, on accent
 ├──────────────────────────────────┤
 │                                  │
 │  content                         │  ← .repBody
@@ -272,7 +281,12 @@ actually takes in**, and burying them inside sentences hides the whole offer.
 
 Rules: numerals in the UI face at 20px with `tabular-nums`; captions ≤ 3 words,
 so a cell never wraps to a second line and the row stays even; two columns
-below 560px. Never more than four cells — a fifth stops being a glance.
+below 560px. Never more than four cells — a fifth stops being a glance. The
+strip carries 18px below it, so whatever follows never sits flush on its rule.
+
+Its sibling is the spec grid (§5.3) as `.spec`: the book's four parts, chapter
+counts and topics as an instrument panel under the book strip. Below 560px each
+row becomes name and count on one line with the topics under them.
 
 ### 5.7 The key line (`.key`)
 
@@ -348,8 +362,11 @@ so it never competes with the buy button:
 
 **The floater is bounded at both ends.** It waits for the hero to scroll away —
 at the top the hero already offers the book twice and a floater over that is
-clutter — and it hides whenever the price box is on screen, because two accent
-fills in one viewport leave the eye with no primary action (§2.2).
+clutter — and it hides whenever any other accent fill is on screen: the price
+box, the rep panel, or the book button. Two accent fills in one viewport leave
+the eye with no primary action (§2.2), and on a phone it was also sitting on the
+probe textareas while the visitor typed. Hidden means `visibility: hidden` too,
+or the invisible link stays in the tab order.
 
 None of these loop. See §8 for what was tried, why it looked cheap, and what
 replaced it.

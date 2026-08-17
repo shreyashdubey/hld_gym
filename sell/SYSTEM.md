@@ -45,8 +45,9 @@ from two facts a visitor can verify by opening the free book.
 | 30 topics | 51 chapters over 30 days, so one topic is one or two chapters |
 | **197 reps** | one per diagram in the book; 197 / 30 = **6 or 7 a day** |
 | about an hour a day | 6–7 reps at roughly 7 minutes each |
+| 125 war stories | the book's `War story` boxes; they were called "outages" once and about half are not |
 | **15 reels a day** | 10 on the topic studied that day + 5 on a finished one |
-| under 4 minutes | 15 × 15s |
+| about 11 minutes | 15 × 45s; each reel is a 15s story played at a 3× slower pace, so the file is 45s and the copy says 45s |
 | **450 reels** | 30 × 10 new = 300, plus 30 × 5 revision = 150 |
 
 Two consequences worth stating, because both have already been got wrong once:
@@ -56,9 +57,16 @@ Two consequences worth stating, because both have already been got wrong once:
    buyer with an onsite in five weeks would have finished the sprint having
    never rebuilt six-sevenths of the book.
 2. **Changing the shape changes copy in five places at once** — the hero strip,
-   the hero lead, the reels section, the price box list, the `<title>` — plus
-   `Reels.tsx`'s own foot note, which lives inside the section that describes it
-   and therefore goes stale independently.
+   the hero lead, the reels section, the price box list, the `<title>` and
+   description in `layout.tsx` — plus `reel/og.html`, the share card, which is
+   a rendered file and has to be re-run (`node reel/og.mjs`). `Reels.tsx` used
+   to carry its own foot note repeating the count; it was removed because copy
+   duplicated between a section and the component inside it goes stale in
+   exactly one of the two places.
+3. **A number the visitor can time is checked against the file, not the spec.**
+   The reels were sold as "15 seconds each" for a day while every encode under
+   `dist/reels/` ran 45s (`PACE = 3` in `reel/reelNN.html`). The strip says
+   `45s`, the derivation says 15 × 45s, and any change to the pace changes both.
 
 ### Planned, not built
 
@@ -98,7 +106,7 @@ happens rather than in small print:
 
 ```
 CTA (RESERVE_URL) ──► Google Form ──► response lands in the sheet
-                      4 questions      │
+                      5 questions      │
                       + email          ▼
                                     payment link sent by hand, ≤24h
                                        │
@@ -164,8 +172,10 @@ type Phase = "idle" | "watching" | "locked" | "graded" | "done";
 
 2. **watching** — five steps reveal on a 2200ms cadence (`STEP_MS`), each with a
    narration line. Total ≈ 11.7s plus a 700ms lead-in. Under
-   `prefers-reduced-motion` the whole diagram appears at once and locks after
-   1.2s.
+   `prefers-reduced-motion` the CSS drops the draw transitions, so each step
+   pops in complete on the same cadence with its narration line. An earlier
+   branch skipped to the finished diagram and locked after 1.2s, which removed
+   the teaching rather than the motion.
 
 3. **locked** — the SVG is **unmounted**, not hidden. Hiding it would leave it in
    the DOM for anyone who opens devtools, and the lock is the product's central
@@ -174,10 +184,16 @@ type Phase = "idle" | "watching" | "locked" | "graded" | "done";
 
 4. **graded** — the six scorecard rows tick in 70ms apart, each mark landing
    160ms behind its own row, verdict last: the reward is the sequence, not the
-   number. The answer is scored against the rubric (§4), then three
-   follow-ups appear with empty textareas. Model answers are **not rendered**
-   until the learner clicks through — commitment before reveal is the generation
-   effect, and rendering them hidden would let a curious reader peek.
+   number. Focus moves to the scorecard itself (`tabIndex={-1}`, then
+   `scrollIntoView`), not past it: focusing the first probe textarea scrolled
+   the rows off the top of the screen while they were still arriving. Under the
+   verdict a hint says the demo scores by keyword, and under the probe header
+   another says the three follow-ups were written in advance and nothing typed
+   into them is read. Both disclosures live where the belief forms. The answer
+   is scored against the rubric (§4), then three follow-ups appear with empty
+   textareas. Model answers are **not rendered** until the learner clicks
+   through — commitment before reveal is the generation effect, and rendering
+   them hidden would let a curious reader peek.
 
 5. **done** — the model answers appear, and the diagram returns fully drawn so
    the learner can compare it against what they wrote.
@@ -186,12 +202,13 @@ type Phase = "idle" | "watching" | "locked" | "graded" | "done";
 
 | constant | value | where |
 |---|---|---|
-| lead-in before step 1 | 700ms | `Rep.tsx` |
+| lead-in before step 1 | 700ms | `LEAD_MS` in `lib/rep.ts` |
 | per-step hold | 2200ms | `STEP_MS` in `lib/rep.ts` |
 | arrowhead arm delay | 520ms after its step | `Rep.tsx` |
 | line draw duration | 550ms | `.dgDraw` transition |
 | node fade | 420ms | `.dgPart` transition |
-| lock after last step | +400ms | `Rep.tsx` |
+| lock after last step | +400ms | `LOCK_MS` in `lib/rep.ts` |
+| the button's promise | `WATCH_S` = round((700 + 5 × 2200 + 400) / 1000) = 12s | `lib/rep.ts` |
 | idle pulse cycle | 3200ms, staggered 300ms per lifeline | `.dgPulse` |
 | lock shutter | 280ms | `.locked` |
 | scorecard row stagger | 70ms, mark +160ms | `.score li` |
@@ -459,9 +476,9 @@ Everything the rep says lives in `lib/rep.ts`, separate from the component:
 
 | export | what it is |
 |---|---|
-| `REP_TITLE` | the strip label, e.g. `rep 07 · cache-aside read path` |
+| `REP_TITLE` | the strip label, `p1c06 · cache-aside read path` (the chapter id: "rep 07" implied six others) |
 | `STEPS` | five narration lines, one per diagram step |
-| `STEP_MS` | per-step hold |
+| `STEP_MS`, `LEAD_MS`, `LOCK_MS`, `WATCH_S` | the timings, and the seconds the button promises, derived from them |
 | `RUBRIC` | six `{ label, re }` scoring keys |
 | `PROBES` | three `{ q, a }` follow-ups |
 | `verdictFor()` | the sentence under the scorecard |
@@ -479,7 +496,7 @@ not invented.
 
 The reels are one of the two things being sold, and their claim is specific:
 **hard material made easy to consume, not easy material made short.** Anyone can
-cut fifteen seconds on "what is a load balancer". The value is the opposite end
+cut forty-five seconds on "what is a load balancer". The value is the opposite end
 of the book — consensus, quorum overlap, isolation levels, clock skew — the
 chapters a reader bounces off once and never opens again.
 
@@ -489,7 +506,7 @@ Two rules follow, and they are content rules, not production ones:
    reader was avoiding. Ordering the queue by what is easy to animate produces a
    feed of things nobody needed explained.
 2. **Simplify the telling, never the claim.** The kernel is the chapter's actual
-   position, compressed; if the fifteen-second version is wrong, it is not a
+   position, compressed; if the forty-five-second version is wrong, it is not a
    reel, it is a liability on a page that sells accuracy. The format already
    enforces most of this: one idea, told as something ordinary going wrong, with
    the system vocabulary withheld until the last two seconds.
@@ -591,10 +608,13 @@ partner.
 ## 10. Known limits
 
 - **One rep.** The page says so; do not let it imply the 197 exist.
-- **Four reels of 450.** The page says so, in the section that sells the 450 and
-  again in `Reels.tsx`'s own foot note. Both say it because both are read.
-- **Probes are hand-written.** Stated on the page. The product generates them.
-- **Rubric is keyword-based**, and the cost is measured, not estimated: nonsense
+- **Four reels of 450.** The page says so once, in the reels section's fact
+  line above the player. `Reels.tsx` no longer carries a second copy.
+- **Probes are hand-written.** Stated in `Rep.tsx` under the probe header, where
+  the belief forms, and once more in the offer's *Before you pay*. The product
+  generates them.
+- **Rubric is keyword-based**, stated in `Rep.tsx` under the verdict, and the
+  cost is measured, not estimated: nonsense
   with the right words scores **6/6**, a *fully reversed* read path scores
   **6/6**, and "I don't remember, let me check my notes" scores **4/6**. It
   detects vocabulary, not knowledge. Acceptable for a demo whose job is to

@@ -107,7 +107,15 @@ from the DOM, "the animation is visible" is not, and they are different claims.
 - **The rubric matches stems, not exact words.** A false negative makes the
   grader look broken to the person deciding whether to buy.
 - **Never claim the product does something it does not.** The page says the
-  demo's follow-ups are hand-written, because they are.
+  demo's follow-ups are hand-written and its score keyword-matched, because
+  they are, and it says so inside the rep where the belief forms.
+- **A number the visitor can check is checked against the artefact.** The reels
+  are 45s files (`PACE = 3`), so the page says 45s and "about eleven minutes",
+  not the 15s the story was written at. `grep -c '—' dist/index.html` must
+  print `0`.
+- **Each disclosure lives in one place.** Four reels: the fact line above the
+  player. Hand-written probes and keyword score: the rep, plus one Q&A entry.
+  Form-not-checkout: the hero hint and *What happens after you click*.
 - Model answers are never rendered before the learner commits.
 
 ## Facts not worth re-deriving
