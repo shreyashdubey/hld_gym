@@ -25,15 +25,33 @@ const plexMono = IBM_Plex_Mono({
   display: "swap",
 });
 
-const TITLE = "System Design Sprint: the whole book in 30 days";
+/* Title and description are read off the page: a tab, a search result, a share
+   card. So the brand is in the title, and the description names the book
+   rather than presuming the reader has read it. */
+const TITLE = "System design sprint: 197 diagrams from memory in 30 days · HLD Gym";
 const DESC =
-  "You have read the chapters. The sprint makes you rebuild them from memory, then takes your answer apart. 51 chapters, 197 reps and 450 reels in 30 days, starting 1 September.";
+  "Every diagram in the free HLD Gym book, rebuilt from memory while an interviewer pushes back. 197 reps and 450 reels in 30 days from 1 September. $19, refund if late.";
+
+/* The share card is a static PNG rendered by ../reel/og.mjs into public/og.png:
+   this is a static export with no server, so there is no route to generate it
+   on request. metadataBase turns the relative image and canonical URLs into
+   the absolute ones scrapers require. */
+const SITE = "https://hld-gym.vercel.app";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE),
   title: TITLE,
   description: DESC,
-  openGraph: { title: TITLE, description: DESC, type: "website" },
-  twitter: { card: "summary_large_image", title: TITLE, description: DESC },
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: TITLE,
+    description: DESC,
+    type: "website",
+    url: "/",
+    siteName: "HLD Gym",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: TITLE }],
+  },
+  twitter: { card: "summary_large_image", title: TITLE, description: DESC, images: ["/og.png"] },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

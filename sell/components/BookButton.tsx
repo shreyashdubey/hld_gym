@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { BOOK_URL } from "@/lib/links";
 
 /* The free-book button. It arrives as an outline and fills with accent, left to
    right, once, when it first scrolls into view — then it is finished and never
@@ -31,7 +32,7 @@ export default function BookButton({ children }: { children: React.ReactNode }) 
   }, []);
 
   return (
-    <a ref={ref} className="btn bookBtn" href="/book/">
+    <a ref={ref} className="btn bookBtn" href={BOOK_URL}>
       <span>{children}</span>
     </a>
   );

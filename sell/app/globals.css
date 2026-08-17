@@ -8,7 +8,7 @@
   --panel-2: #eaeaea;
   --ink: #0a0a0a;
   --ink-2: #4a4a4a;
-  --ink-3: #6b6b6b;
+  --ink-3: #666666;   /* not #6b6b6b: 4.43:1 on --panel-2 fails AA for the lock's small line */
   --line: #d6d6d6;
   --line-strong: #8a8a8a;
   --accent: #ff5c00;
@@ -86,6 +86,12 @@
   --bad-soft: #3a1b18;
   --on-accent: #0b0b0f;
 }
+
+/* An explicit theme sets the UA colour scheme too, so scrollbars, the textarea
+   resize grip and selection chrome match the palette on a light OS. The media
+   block above covers the unstamped state. */
+:root[data-theme="dark"], :root[data-theme="manim"] { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
 
 /* Motion. Two curves and nothing else, so everything on the page decelerates
    the same way. --ease-out settles hard and long, which is what reads as
@@ -245,11 +251,15 @@ h2 {
   margin: 0 0 14px;
   text-wrap: balance;
 }
+/* Bigger than the key line under it. At 15px the h3 sat below the 17.5px bold
+   key and each offer block read as label-then-headline, inverted. */
 h3 {
   font-family: var(--font-ui), system-ui, sans-serif;
   font-weight: 700;
-  font-size: calc(15px * var(--fs));
-  margin: 26px 0 8px;
+  font-size: calc(20px * var(--fs));
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  margin: 40px 0 10px;
 }
 p { margin: 0 0 16px; }
 p:last-child { margin-bottom: 0; }
@@ -258,16 +268,21 @@ strong { font-weight: 700; }
 .lead { font-size: calc(20px * var(--fs)); line-height: 1.5; color: var(--ink-2); }
 
 /* The kicker carries what the page sells. It was 11px grey — the least
-   readable text on the page doing the most important job. */
+   readable text on the page doing the most important job — so it went to
+   12.5px bold. It was also accent on every section, which with six accent
+   step numerals put nine orange marks in a viewport with nothing to click; so
+   the ink came back to --ink-2 (9:1) and only the hero's kicker keeps the
+   accent. Orange means "act here", or it means nothing. */
 .eyebrow {
   font-family: var(--font-mono), monospace;
   font-size: calc(12.5px * var(--fs));
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: lowercase;
-  color: var(--accent-ink);
+  color: var(--ink-2);
   margin: 0 0 14px;
 }
+.hero .eyebrow { color: var(--accent-ink); }
 
 /* One scannable sentence per section, for readers who never read the prose. */
 .key {
@@ -400,7 +415,7 @@ textarea {
   resize: vertical;
   min-height: 118px;
 }
-textarea:focus { border-color: var(--accent); outline: none; }
+textarea:focus { border-color: var(--accent); }   /* the global :focus-visible ring stays */
 
 label.q {
   display: block;
@@ -437,7 +452,8 @@ label.q {
 
 /* ---------- scorecard ---------- */
 
-.score { border: 1px solid var(--line-strong); margin-top: 18px; }
+.score { border: 1px solid var(--line-strong); margin-top: 18px; scroll-margin-top: 76px; }
+.score:focus { outline: none; }   /* programmatic focus only; the rows arriving are the signal */
 .scoreH {
   font-family: var(--font-mono), monospace;
   font-size: calc(10.5px * var(--fs));
@@ -481,24 +497,32 @@ label.q {
   margin: 22px 0;
 }
 .grid2 > div { padding: 15px 17px 17px; border-right: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
-.grid2 > div h4 {
+/* h3 in the six-step grid (it sits under an h2), h4 in the offer's grid (under
+   an h3): same look, correct outline. */
+.grid2 > div :is(h3, h4) {
   font-family: var(--font-ui), system-ui, sans-serif;
   font-size: calc(16px * var(--fs));
   font-weight: 700;
   letter-spacing: -0.012em;
+  line-height: 1.3;
   color: var(--ink);
   margin: 0 0 6px;
   display: flex;
   align-items: baseline;
   gap: 9px;
 }
-.grid2 > div h4 .n {
+.grid2 > div :is(h3, h4) .n {
   font-family: var(--font-mono), monospace;
   font-size: calc(12px * var(--fs));
   font-weight: 700;
-  color: var(--accent-ink);
+  color: var(--ink-3);
 }
 .grid2 > div p { font-size: calc(15px * var(--fs)); line-height: 1.55; margin: 0; }
+@media (max-width: 559px) {
+  /* One column is a list, not a grid: hairlines between rows, no boxes. */
+  .grid2 { border: 0; border-top: 1px solid var(--line-strong); }
+  .grid2 > div { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 0 14px; }
+}
 
 /* Terms and stats as a strip of big numerals: the facts that sell this page
    are numbers, and numbers get read when prose does not. */
@@ -506,7 +530,7 @@ label.q {
   display: flex;
   flex-wrap: wrap;
   border: 1px solid var(--line-strong);
-  margin: 22px 0 0;
+  margin: 22px 0 18px;
 }
 .termbar > div {
   flex: 1 1 132px;
@@ -536,6 +560,67 @@ label.q {
 }
 
 #rep { scroll-margin-top: 76px; }
+
+/* The spec grid (DESIGN-SYSTEM §5.3): a table as an instrument panel. Used for
+   the four parts of the book, which is the sprint's syllabus stated in numbers
+   a visitor can check against the free book's contents page. */
+.spec {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--line-strong);
+  margin: 0 0 18px;   /* the strip above carries the gap */
+  font-size: calc(15px * var(--fs));
+  line-height: 1.45;
+}
+.spec th {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(10.5px * var(--fs));
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: lowercase;
+  color: var(--ink-3);
+  text-align: left;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line-strong);
+  padding: 8px 14px;
+}
+.spec td { padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.spec tr:last-child td { border-bottom: 0; }
+/* width: 1% on the first two columns: they shrink to their content and the
+   topic list takes the rest, instead of auto layout spreading all three. */
+.spec td:first-child {
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  width: 1%;
+}
+.spec .num {
+  font-family: var(--font-mono), monospace;
+  font-size: calc(13px * var(--fs));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--ink-2);
+  width: 1%;
+  padding-right: 28px;
+}
+.spec .tag { color: var(--ink-2); }
+@media (max-width: 560px) {
+  /* Three columns do not fit a phone; each row becomes name + count on one
+     line with the tagline under them. */
+  .spec thead { display: none; }
+  .spec tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .spec tr:last-child { border-bottom: 0; }
+  .spec td { display: block; padding: 0; border: 0; }
+  .spec td.tag { grid-column: 1 / -1; }
+}
+
+/* Two prose blocks side by side on desktop, so the tail of the offer does not
+   run as one narrow column down a wide screen. */
+.split2 { display: grid; gap: 0 48px; }
+@media (min-width: 900px) {
+  .split2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 .pricebox { border: 1px solid var(--accent); margin: 24px 0 0; }
 .priceH {
@@ -739,6 +824,26 @@ footer { padding: 34px 0 70px; }
   section.hero { padding: 76px 0 34px; }
   .lead { max-width: var(--measure); }
   .repBody { padding: 24px 22px 26px; }
+  /* Cap the drawing, not the panel. Stretched to the full 1052px shell the
+     720-unit diagram set its 13px labels at 19px, bigger than body text, and
+     the idle panel read as an empty wireframe with its one button 400px down.
+     At 880px the labels land at ~16px, in step with the type. */
+  .stage svg.dgWide { max-width: 880px; margin-inline: auto; }
+  /* The price box takes the hero's shape: number and action in a narrow left
+     column, the list at a readable measure on the right, instead of a
+     115-character line poured across the whole box. */
+  .priceB {
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr);
+    column-gap: 48px;
+    grid-template-areas: "amount list" "intro list" "cta list";
+    align-content: start;
+  }
+  .priceB > .amount { grid-area: amount; }
+  .priceB > p { grid-area: intro; }
+  .priceB > ul.plain { grid-area: list; margin: 0; }
+  .priceB > .btnRow { grid-area: cta; flex-direction: column; align-items: flex-start; align-self: start; margin-top: 8px; }
+  .priceB > .btnRow .hint { max-width: 300px; }
 }
 
 /* The hero splits in two on desktop: the argument on the left at a readable
@@ -748,19 +853,33 @@ footer { padding: 34px 0 70px; }
 .heroGrid { display: grid; gap: 30px; }
 .heroCopy > .eyebrow, .heroCopy > .lead { max-width: var(--measure); }
 
+/* Below the desktop split the card stacks under the lead, and the two buttons
+   go first: on a 390px phone the strip pushed both calls to action off the
+   first screen, and the price is in the button anyway. */
+.heroCard { display: flex; flex-direction: column; }
+.heroCard .termbar { order: 3; margin: 4px 0 0; }
+.heroCard .btnRow { order: 1; margin-top: 0; flex-direction: column; align-items: stretch; }
+.heroCard .btn { text-align: center; }
+.heroCard .hint { order: 2; margin-top: 8px; }
+.heroCard .alt { order: 4; text-wrap: pretty; }
+
 @media (min-width: 1000px) {
   .heroGrid {
     grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
     gap: 56px;
     align-items: start;
   }
-  /* Stacked, not side by side: in a narrow column four cells in a row would
-     wrap their captions and go ragged. */
-  .termCol { flex-direction: column; margin-top: 6px; }
-  .termCol > div { flex: none; border-right: 0; border-bottom: 1px solid var(--line-strong); }
-  .termCol > div:last-child { border-bottom: 0; }
-  .heroCard .btnRow { flex-direction: column; align-items: stretch; }
-  .heroCard .btn { text-align: center; }
+  /* Back to strip-first: beside the headline the numbers are the card's
+     opening line. Two by two, not four in a row (captions wrapped at 91px)
+     and not four stacked (each cell was 80% empty and the card ran 83px past
+     the copy with the button level with the last line of the h1). */
+  .heroCard .termbar { order: 0; margin: 6px 0 0; }
+  .heroCard .btnRow { order: 0; margin-top: 14px; }
+  .heroCard .hint { order: 0; margin-top: 8px; }
+  .heroCard .alt { order: 0; }
+  .termCol > div { flex: 1 1 50%; border-bottom: 1px solid var(--line-strong); }
+  .termCol > div:nth-child(2n) { border-right: 0; }
+  .termCol > div:nth-last-child(-n + 2) { border-bottom: 0; }
 }
 
 /* ---------- the study chart ---------- */
@@ -783,7 +902,7 @@ footer { padding: 34px 0 70px; }
 .chart svg { width: 100%; height: auto; display: block; }
 .chart figcaption {
   font-family: var(--font-mono), monospace;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--fs));
   letter-spacing: 0.05em;
   line-height: 1.55;
   color: var(--ink-3);
@@ -931,13 +1050,17 @@ footer { padding: 34px 0 70px; }
   letter-spacing: -0.01em;
   text-decoration: none;
   opacity: 0;
+  /* visibility too, or the invisible link sits in the tab order from page load
+     and a screen reader announces it before the hero has been read. It
+     transitions discretely: shown at once on entry, hidden after the fade. */
+  visibility: hidden;
   transform: translateY(14px);
-  transition: opacity 0.36s var(--ease-out), transform 0.36s var(--ease-out);
+  transition: opacity 0.36s var(--ease-out), transform 0.36s var(--ease-out), visibility 0.36s;
 }
 @media (max-width: 999px) {
   .fab { display: inline-flex; }
 }
-.fab.fabOn { opacity: 1; transform: none; }
+.fab.fabOn { opacity: 1; visibility: visible; transform: none; }
 .fabInner { display: inline-flex; align-items: baseline; gap: 7px; }
 /* The count is the argument. "Free" alone is a claim; "51 chapters" is a
    reason, and a number is read faster than a sentence. */
@@ -1092,6 +1215,10 @@ footer { padding: 34px 0 70px; }
 }
 .reelRow[aria-current="true"] .rowN { color: var(--accent-ink); }
 .rowK { font-size: calc(16px * var(--fs)); line-height: 1.35; }
+/* The section's prose, under the playlist: the 9:16 rail leaves this column
+   half empty on desktop, and the explanation belongs beside the thing. */
+.reelProse { font-size: calc(16px * var(--fs)); line-height: 1.6; color: var(--ink-2); max-width: 60ch; margin: 14px 0 0; }
+.reelSide > .fact { margin-top: 12px; }
 .rowC {
   grid-column: 2;
   font-family: var(--font-mono), monospace;
@@ -1099,7 +1226,6 @@ footer { padding: 34px 0 70px; }
   letter-spacing: 0.06em;
   color: var(--ink-3);
 }
-.reelFoot { font-size: calc(13px * var(--fs)); line-height: 1.55; color: var(--ink-3); margin: 4px 0 0; }
 
 @media (max-width: 860px) {
   /* One column, video first, everything else under it, the way a feed stacks. */

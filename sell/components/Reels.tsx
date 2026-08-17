@@ -70,7 +70,10 @@ function subFullscreen(cb: () => void) {
 }
 const getFull = () => document.fullscreenElement !== null;
 
-export default function Reels() {
+/* children: the section's explanatory prose, rendered under the playlist. The
+   9:16 rail leaves that column half empty on desktop, and prose above the rail
+   put the proof 900px below its own headline. Show first, explain beside. */
+export default function Reels({ children }: { children?: React.ReactNode }) {
   const theme = useSyncExternalStore(subscribe, getTheme, () => null);
   const cut = cutFor(theme);
   const railRef = useRef<HTMLDivElement>(null);
@@ -80,7 +83,17 @@ export default function Reels() {
 
   /* One observer over all the slides. Whichever is most on screen plays; every
      other one pauses, and any reel fully off screen rewinds, so coming back to
-     it starts the story rather than dropping you into the middle. */
+     it starts the story rather than dropping you into the middle.
+
+     No root option: the root is the viewport, and the intersection rectangle
+     is clipped by every scrolling ancestor, so a slide's visibility inside the
+     rail is unchanged and a rail that has scrolled off the page reports every
+     slide at 0. With root: rail the active reel kept decoding while the visitor
+     read the rest of the page.
+
+     Keyed on cut: a theme change remounts every <video>, and an observer only
+     fires on crossings, so it has to observe again or the new element never
+     gets its play() and the feed sits frozen at 0:00. */
   useEffect(() => {
     const rail = railRef.current;
     if (!rail) return;
@@ -98,11 +111,11 @@ export default function Reels() {
           }
         }
       },
-      { root: rail, threshold: [0, 0.6] },
+      { threshold: [0, 0.6] },
     );
     rail.querySelectorAll<HTMLElement>("[data-slide]").forEach((s) => io.observe(s));
     return () => io.disconnect();
-  }, []);
+  }, [cut]);
 
   const goTo = useCallback((i: number) => {
     railRef.current
@@ -113,8 +126,9 @@ export default function Reels() {
   const enterFull = () => void railRef.current?.requestFullscreen().catch(() => {});
   const exitFull = () => void document.exitFullscreen().catch(() => {});
 
-  /* Arrow keys move between reels while the rail has focus. Scroll-snap already
-     does this with a wheel; a keyboard user needs the same thing said out loud. */
+  /* Arrow keys move between reels while the rail has focus, and space pauses
+     the one playing. Scroll-snap and a click already do both for a mouse; a
+     keyboard user needs the same things said out loud. */
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown" || e.key === "ArrowRight") {
       e.preventDefault();
@@ -123,6 +137,13 @@ export default function Reels() {
     if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
       e.preventDefault();
       goTo(Math.max(active - 1, 0));
+    }
+    if (e.key === " ") {
+      e.preventDefault();
+      const v = railRef.current?.querySelector<HTMLVideoElement>(`[data-slide="${active}"] video`);
+      if (!v) return;
+      if (v.paused) void v.play().catch(() => {});
+      else v.pause();
     }
   };
 
@@ -133,6 +154,7 @@ export default function Reels() {
       <div
         className="reelRail"
         ref={railRef}
+        role="region"
         tabIndex={0}
         onKeyDown={onKey}
         aria-label="Reel feed"
@@ -158,7 +180,11 @@ export default function Reels() {
               muted
               loop
               playsInline
-              preload={i === 0 ? "auto" : "none"}
+              /* Eager only once the theme is known. Before hydration the cut is
+                 a guess (dark), and preload="auto" in the static HTML had a
+                 light-theme phone fetching the dark reel01 and then the paper
+                 one, ~1.7MB spent on a section a third of the page down. */
+              preload={i === 0 && theme !== null ? "auto" : "none"}
               aria-label={`Reel ${r.id}: ${r.kernel}`}
               onClick={(e) => {
                 e.stopPropagation();       /* never reach the letterbox handler */
@@ -208,11 +234,7 @@ export default function Reels() {
             </li>
           ))}
         </ol>
-
-        <p className="reelFoot">
-          Four built. From 1 September, ten a day on your current topic plus five from a topic
-          you have already finished.
-        </p>
+        {children}
       </div>
     </div>
   );

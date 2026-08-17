@@ -3,7 +3,9 @@
    In the product these follow-ups are generated against the learner's actual
    answer; here they are written in advance, which the page says out loud. */
 
-export const REP_TITLE = "rep 07 · cache-aside read path";
+/* The chapter id, not "rep 07": a numbered rep implies six others exist, and the
+   heading above the panel says there is one. The id is checkable in the book. */
+export const REP_TITLE = "p1c06 · cache-aside read path";
 
 /** Narration shown as each step of the diagram draws itself. */
 export const STEPS: string[] = [
@@ -16,6 +18,11 @@ export const STEPS: string[] = [
 
 /** How long each narrated step holds before the next one draws. */
 export const STEP_MS = 2200;
+/** Lead-in before step 1, and the pause after the last step before the lock. */
+export const LEAD_MS = 700;
+export const LOCK_MS = 400;
+/** What the button promises, derived from the same constants that run it. */
+export const WATCH_S = Math.round((LEAD_MS + STEPS.length * STEP_MS + LOCK_MS) / 1000);
 
 /** What a correct reconstruction has to contain. Matched against free text —
     deliberately generous, because the point is to find what was forgotten
@@ -68,9 +75,11 @@ export const PROBES: Probe[] = [
 export function verdictFor(score: number, total: number, blank: boolean): string {
   if (blank)
     return "You left it blank. That is the most honest possible result, and it is exactly why the lock exists.";
+  /* No "this is the normal score": nothing has been measured, and a claimed
+     norm is the one kind of social proof the page could invent by accident. */
   if (score <= 2)
-    return "Two or fewer of the six. This is the normal score, and it is the whole gap between having read something and knowing it.";
+    return "Two or fewer of the six. That is what reading alone gets you, and it is the whole gap between having read something and knowing it.";
   if (score <= 4)
-    return "Most of the shape, missing the parts interviewers actually probe. The gaps above are where the follow-ups go next.";
+    return "Most of the shape, missing the parts interviewers actually probe. The follow-ups below are where that shows.";
   return "Strong recall. Now the follow-ups, which is where this usually comes apart.";
 }

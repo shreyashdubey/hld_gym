@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-import { PROBES, RUBRIC, STEPS, STEP_MS, REP_TITLE, verdictFor } from "@/lib/rep";
-import { RESERVE_URL } from "@/lib/links";
+import { PROBES, RUBRIC, STEPS, STEP_MS, LEAD_MS, LOCK_MS, WATCH_S, REP_TITLE, verdictFor } from "@/lib/rep";
+import { BOOK_URL, PRICE, RESERVE_URL } from "@/lib/links";
 import { DiagramNarrow, DiagramWide } from "./Diagram";
 
 type Phase = "idle" | "watching" | "locked" | "graded" | "done";
@@ -27,29 +27,24 @@ export default function Rep() {
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const recallRef = useRef<HTMLTextAreaElement>(null);
-  const probeRef = useRef<HTMLTextAreaElement>(null);
+  const scoreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const t = timers.current;
     return () => t.forEach(clearTimeout);
   }, []);
 
+  /* No reduced-motion branch. An earlier one jumped straight to the finished
+     diagram and locked 1.2s later, which removed the teaching, not the motion:
+     the visitor was asked to rebuild a diagram they had seen for one second.
+     Under prefers-reduced-motion the CSS already drops the draw transitions, so
+     each step pops in complete on the same cadence with its narration line, and
+     the button's promise holds. */
   const start = useCallback(() => {
-    const reduced =
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
     setPhase("watching");
     setStep(0);
 
-    if (reduced) {
-      setStep(STEPS.length);
-      setArmed(STEPS.length);
-      timers.current.push(setTimeout(() => setPhase("locked"), 1200));
-      return;
-    }
-
-    let t = 700;
+    let t = LEAD_MS;
     STEPS.forEach((_, i) => {
       timers.current.push(
         setTimeout(() => {
@@ -59,12 +54,23 @@ export default function Rep() {
       );
       t += STEP_MS;
     });
-    timers.current.push(setTimeout(() => setPhase("locked"), t + 400));
+    timers.current.push(setTimeout(() => setPhase("locked"), t + LOCK_MS));
   }, []);
 
+  /* On grade, focus moves to the scorecard, not past it. Focusing the first
+     probe textarea scrolled the browser to the probes and the rows ticking in
+     above them, which is the whole reward, played off the top of the screen.
+     The card takes focus (tabIndex -1) so a screen reader lands on the score
+     too, and scroll-margin-top in the CSS keeps it clear of the sticky header. */
   useEffect(() => {
     if (phase === "locked") recallRef.current?.focus();
-    if (phase === "graded") probeRef.current?.focus();
+    if (phase === "graded") {
+      const el = scoreRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      el.scrollIntoView({ block: "start", behavior: reduced ? "auto" : "smooth" });
+    }
   }, [phase]);
 
   const hits = RUBRIC.map((k) => ({ label: k.label, ok: k.re.test(recall) }));
@@ -122,7 +128,7 @@ export default function Rep() {
         {phase === "idle" && (
           <div className="btnRow">
             <button className="btn" onClick={start}>
-              watch the rep · 13s
+              watch the rep · {WATCH_S}s
             </button>
             <span className="hint">then it gets locked</span>
           </div>
@@ -161,7 +167,7 @@ export default function Rep() {
 
         {(phase === "graded" || phase === "done") && (
           <div>
-            <div className="score">
+            <div className="score" ref={scoreRef} tabIndex={-1}>
               <div className="scoreH">
                 recall · {score} of {RUBRIC.length}
               </div>
@@ -181,15 +187,31 @@ export default function Rep() {
                 {verdictFor(score, RUBRIC.length, !recall.trim())}
               </div>
             </div>
+            {/* Said where the score is read, not in a footnote: a senior engineer
+                will probe the grader within a minute, and finding out on their
+                own that it is keyword matching costs every other claim on the
+                page. SYSTEM.md §10 has the measured failure cases. */}
+            <p className="hint" style={{ marginTop: 10 }}>
+              this demo scores by keyword against the chapter&rsquo;s six points. it catches what
+              you left out entirely, not a wrong sentence with the right words in it.
+            </p>
 
             <div className="probe">
               <div className="probeWho">the interviewer, three follow-ups</div>
+              {/* The disclosure lives where the belief forms, not five screens
+                  down in the offer: these three were written for this one
+                  diagram, and the textareas below are read by nobody. */}
+              <p className="hint" style={{ margin: "0 0 14px" }}>
+                written in advance for this one diagram, and nothing you type here is graded:
+                compare it against the chapter yourself. in the sprint the follow-ups are generated
+                against your answer.
+              </p>
               {PROBES.map((p, i) => (
                 <div key={p.q}>
                   <label className="q" htmlFor={`p${i}`}>
                     {p.q}
                   </label>
-                  <textarea id={`p${i}`} rows={3} ref={i === 0 ? probeRef : undefined} />
+                  <textarea id={`p${i}`} rows={3} />
                   {revealed && (
                     <div className="model">
                       <div className="lbl">what the chapter says</div>
@@ -211,7 +233,7 @@ export default function Rep() {
                       setArmed(STEPS.length);
                     }}
                   >
-                    show me what I missed
+                    show what the chapter says
                   </button>
                 </div>
               ) : (
@@ -220,12 +242,14 @@ export default function Rep() {
                     that was one rep. the sprint is 197 of them in thirty days, one for every
                     diagram in the book, and the diagram is different every time.
                   </p>
+                  {/* Sentence case, unlike the rep's own controls: these are the
+                      page's two actions, the same ones the hero offers. */}
                   <div className="btnRow">
                     <a className="btn" href={RESERVE_URL} target="_blank" rel="noopener">
-                      reserve a seat for $19
+                      Reserve a seat for {PRICE}
                     </a>
-                    <a className="btn ghost" href="/book/">
-                      read the book instead, free
+                    <a className="btn ghost" href={BOOK_URL}>
+                      Read the book instead, free
                     </a>
                   </div>
                 </>

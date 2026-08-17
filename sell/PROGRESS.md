@@ -1248,6 +1248,34 @@ assuming:
    would break the standing rule outright; in a form it is the same claim in a
    quieter place. Each needs `(planned, not built)` in its option text.
 
+## 2026-08-17 — the favicon went back to Vercel's default
+
+**Symptom:** *"the favicon or the google tab icon used to be a beautiful h, now
+it is the default stuff vercel gives."*
+
+**Cause:** the book used to own `/`, and `src/template.html` carries its own
+favicon as a data URI: an orange square with a white **h**. When the sell page
+took the root it brought `app/favicon.ico` from the Next starter, which is the
+Vercel mark. Nothing broke; the wrong file simply started winning the root.
+
+**Fix:** `app/icon.svg`, the same square, byte for byte the same artwork as the
+book's. Both halves of the site sit at one origin now, so a tab on `/` and a tab
+on `/book` must not show different icons. The starter's `next.svg`,
+`vercel.svg`, `file.svg`, `globe.svg` and `window.svg` went with it; none were
+referenced anywhere.
+
+**White on the orange, not the near-black the header chip uses.** That rule is a
+contrast rule, and contrast rules govern text. This is a 16px mark, and parity
+with the book beats parity with the chip.
+
+**Bug on the way, worth knowing because it fails silently:** the first version
+had a comment explaining the colour choice, and that comment contained a CSS
+token name written in its normal form. **XML forbids a double hyphen inside a
+comment**, so the file was not valid XML, and a browser renders a malformed SVG
+favicon as its default page icon with no error anywhere. It looked exactly like
+the bug being fixed. Rendered and looked at the pixels, rather than trusting a
+200 on the request.
+
 ---
 
 ## Open

@@ -5,15 +5,50 @@ import StudyChart from "@/components/StudyChart";
 import FreeBookFab from "@/components/FreeBookFab";
 import BookButton from "@/components/BookButton";
 import { TextSizeToggle, ThemeToggle } from "@/components/Toggles";
-import { RESERVE_URL } from "@/lib/links";
+import { BOOK_URL, PRICE, RESERVE_URL } from "@/lib/links";
 
-/* Same origin now: the sprint owns the site root, the book sits at /book. */
-const BOOK_URL = "/book/";
+/* Copy rules for this page.
 
-/* Copy rule for this page: a visitor who reads only the kicker, the h1, the
-   terms strip and the bold line under each heading must still know what this
-   is, what it costs, when it starts, and why the lock exists. The prose is for
-   the minority who want it, never the load-bearing path. */
+   1. A visitor who reads only the kicker, the h1, the terms strip and the bold
+      line under each heading must still know what this is, what it costs, when
+      it starts, and why the lock exists. The prose is for the minority who want
+      it, never the load-bearing path.
+   2. Each disclosure lives in one place. "Four reels exist" is said once, above
+      the reels; "the follow-ups are hand-written" once, in the rep and once in
+      the offer's Q&A. A fact repeated four times reads as nervousness, and a
+      page asking a stranger for money cannot afford to look nervous.
+   3. Section order follows the argument: the demo, how it works, why the lock
+      works, then the reels as the supporting act, then the book, then the
+      offer. The evidence for the lock sits next to the lock. */
+
+/* The book's four parts, from ../src/toc.json. Chapter counts sum to 51 and
+   the topics are the chapter titles, compressed: a Xu or DDIA reader can see
+   what is in without leaving the page, and check it against the free book. */
+const PARTS = [
+  {
+    name: "The Meta-Game",
+    ch: 2,
+    topics: "how the interview is actually scored; company playbooks for Meta, Google, Palantir, Anthropic",
+  },
+  {
+    name: "Foundations",
+    ch: 14,
+    topics:
+      "the request path, API design, data modelling and indexes, estimation, load balancing, caching, CDNs and blobs, replication, sharding and consistent hashing, CAP and quorums, queues, rate limiting, NoSQL, IDs, search indexes and locks",
+  },
+  {
+    name: "Senior Depth",
+    ch: 11,
+    topics:
+      "2PC, sagas and outbox; idempotency and ledgers; consensus, leader election and fencing; CRDTs vs OT; multi-region and cells; hot partitions; backpressure and circuit breakers; SLOs and error budgets; stream processing; probabilistic structures and gossip; zero-downtime migrations",
+  },
+  {
+    name: "The Problem Gauntlet",
+    ch: 24,
+    topics:
+      "URL shortener, typeahead, notifications, WhatsApp, news feed, Uber, Dropbox, Ticketmaster, web crawler, global rate limiter, job scheduler, top-k, ad click aggregation, payments, Google Docs, distributed cache, Kafka, metrics, search, S3, YouTube, stock exchange, LLM inference serving, vector search and RAG",
+  },
+];
 
 export default function Home() {
   return (
@@ -35,22 +70,25 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="wrap">
+      <main className="wrap">
         <section className="hero">
           <div className="heroGrid">
             <div className="heroCopy">
               <p className="eyebrow">30-day system design sprint · presale</p>
               <h1>You can read system design for months and still freeze at the whiteboard.</h1>
               <p className="lead">
-                Thirty days, and you finish the whole book: 51 chapters, one topic a day,{" "}
-                <strong>197 reps</strong>, one for every diagram in it. You learn a system, it is{" "}
-                <strong>taken away</strong>, and you rebuild it from memory while an interviewer
-                picks holes in what you said. Six or seven of those a day, about an hour. The ones
-                you get wrong take longest, and that is where the work is.
+                Reading gets you recognition. Interviews want recall. So a diagram from the free
+                HLD Gym book teaches itself, then it is <strong>taken away</strong>. You rebuild it
+                from memory, explain it the way you would out loud, and an interviewer picks holes
+                in what you said. Six or seven of those a day for thirty days is{" "}
+                <strong>197 reps</strong>, one for every diagram in all 51 chapters. About an hour
+                a day, set at the senior bar: Meta E5, Google L5 and equivalents.
               </p>
             </div>
 
-            <aside className="heroCard">
+            {/* A div, not an aside: the price and the primary action are the
+                page, not something complementary to it. */}
+            <div className="heroCard">
               <div className="termbar termCol">
                 <div>
                   <b>$19</b>
@@ -65,8 +103,8 @@ export default function Home() {
                   <span>start date</span>
                 </div>
                 <div>
-                  <b>100%</b>
-                  <span>refund if late</span>
+                  <b>~1 hour</b>
+                  <span>a day, 30 days</span>
                 </div>
               </div>
               <div className="btnRow">
@@ -74,20 +112,20 @@ export default function Home() {
                     page, and a visitor who backs out of it should land on the
                     offer again rather than on a blank history entry. */}
                 <a className="btn" href={RESERVE_URL} target="_blank" rel="noopener">
-                  Reserve a seat for $19
+                  Reserve a seat for {PRICE}
                 </a>
                 <a className="btn ghost" href="#rep">
                   Try a free rep first, 90 seconds
                 </a>
               </div>
               <p className="hint">
-                Reserving is a short form and your email. The payment link comes back by mail,
-                and you are charged nothing until you click it.
+                A short form, then the payment link by email. You are charged nothing until you
+                click it, and refunded in full if the sprint does not ship on 1 September.
               </p>
               <p className="alt">
                 Not ready to buy? <a href={BOOK_URL}>Read all 51 chapters free</a>, no signup.
               </p>
-            </aside>
+            </div>
           </div>
         </section>
 
@@ -103,54 +141,84 @@ export default function Home() {
 
         <section>
           <p className="eyebrow">how a rep works</p>
-          <h2>Six steps, every day, and it always disappears.</h2>
+          <h2>Six steps per rep, and the diagram always disappears.</h2>
           <p className="key">
-            Reading gets you recognition. Interviews want recall. Reading harder does not turn one
-            into the other.
+            Watch it once. Then rebuild it without it, six or seven times a day, for thirty days.
           </p>
           <div className="grid2">
             <div>
-              <h4>
+              <h3>
                 <span className="n">01</span> Watch
-              </h4>
+              </h3>
               <p>The diagram builds itself, step by step, with the reason for each one.</p>
             </div>
             <div>
-              <h4>
+              <h3>
                 <span className="n">02</span> Lock
-              </h4>
+              </h3>
               <p>It vanishes. No scrolling back, no peeking. This is the part that works.</p>
             </div>
             <div>
-              <h4>
+              <h3>
                 <span className="n">03</span> Rebuild
-              </h4>
-              <p>You put it back from memory and explain it the way you would say it out loud.</p>
+              </h3>
+              <p>
+                You put it back from memory, in words: every step, in order, the way you would say
+                it out loud. No drawing canvas. What fails at a whiteboard is the sequence, not the
+                pen.
+              </p>
             </div>
             <div>
-              <h4>
+              <h3>
                 <span className="n">04</span> Defend
-              </h4>
+              </h3>
               <p>
                 An interviewer attacks the answer. What breaks when this node dies? What is your
                 write path at 50k QPS?
               </p>
             </div>
             <div>
-              <h4>
+              <h3>
                 <span className="n">05</span> Score
-              </h4>
+              </h3>
               <p>Graded against the chapter, not vibes. What you missed is named out loud.</p>
             </div>
             <div>
-              <h4>
+              <h3>
                 <span className="n">06</span> Return
-              </h4>
+              </h3>
+              <p>What you failed comes back in days. What you nailed comes back in weeks.</p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <p className="eyebrow">why the diagram disappears</p>
+          <h2>The part that feels worst is the part that works</h2>
+          <div className="split">
+            <div>
+              <p className="key">
+                Re-reading feels smooth. Smooth feels like knowing. That is the most expensive
+                illusion in interview prep.
+              </p>
               <p>
-                What you failed comes back in days. What you nailed comes back in weeks. You never
-                manage the schedule.
+                In 2006, Roediger and Karpicke gave two groups the same passage and the same total
+                time. One group read it four times. The other read it once, then wrote down
+                everything they could remember, three times, with no feedback and no looking back.
+                Five minutes later the readers were ahead. A week later the readers could produce{" "}
+                <strong>40%</strong> of the passage and the recall group <strong>61%</strong>.
+              </p>
+              <p>
+                Before that final test, everyone predicted their own score. The readers predicted
+                they would win. Reading it four times had been easy, and easy feels like knowing.
+              </p>
+              <p>
+                That feeling is what the lock removes. While the diagram is on screen you cannot
+                tell recognising it apart from being able to build it. Take it away and there is
+                nothing left to feel fluent about. You either produce it or you do not.
               </p>
             </div>
+            <StudyChart />
           </div>
         </section>
 
@@ -170,7 +238,7 @@ export default function Home() {
               <span>on one you finished</span>
             </div>
             <div>
-              <b>15s</b>
+              <b>45s</b>
               <span>each, one idea</span>
             </div>
             <div>
@@ -178,89 +246,41 @@ export default function Home() {
               <span>over 30 days</span>
             </div>
           </div>
-          <p>
-            <strong>Ten reels on the topic you study that day.</strong> Fifteen seconds each, one
-            idea, told as something ordinary going wrong: a hotel keycard, a coffee queue, a
-            cleared desk. In the last two seconds the same picture is relabelled as your system.
-          </p>
-          <p>
-            <strong>The hard topics are the whole point.</strong> Consensus, quorum overlap,
-            isolation levels, clock skew: the chapters people bounce off once and never open
-            again. A reel does not make them easy by making them wrong. It takes the one idea the
-            chapter turns on and shows it happening to a hotel keycard, so the thing you were
-            avoiding arrives in fifteen seconds with no jargon until the last two.
-          </p>
-          <p>
-            <strong>Then five more from a topic you already finished</strong>, chosen for you and
-            mixed into the same feed. Whatever you got wrong comes back in days, whatever you
-            nailed comes back in weeks. Revision stops being a thing you schedule and starts being
-            a thing you scroll.
-          </p>
-          <p>
-            Fifteen reels is <strong>under four minutes</strong>. That is the whole ask, and it is
-            the part of the sprint you do on the train. Across thirty days it adds up to{" "}
-            <strong>450 reels</strong>: 300 teaching the book, 150 dragging it back out of you.
-          </p>
           <p className="fact">
-            <strong>Four of these are built and playing below.</strong> The daily fifteen start on
-            1 September; today there are four. Everything on this page that exists, you can touch,
-            and everything that does not says so.
+            <strong>Four are built and playing below.</strong> The daily fifteen start on
+            1 September.
           </p>
-          <Reels />
-          <p className="fact">
-            Why the format works, and it is not because anyone is a “visual learner”. That idea
-            has no evidence behind it (Pashler, 2008). It works because the thing you are practising
-            is drawing a system while talking through it, which is the thing the interview asks for.
-            The reel is that same picture, built one piece at a time, short enough that you finish it.
-          </p>
-        </section>
-
-        <section>
-          <p className="eyebrow">why the diagram disappears</p>
-          <h2>The part that feels worst is the part that works</h2>
-          <div className="split">
-            <div>
-          <p className="key">
-            Re-reading feels smooth. Smooth feels like knowing. That is the most expensive illusion
-            in interview prep.
-          </p>
-          <p>
-            In 2006, Roediger and Karpicke ran this. Same passage, same total time, two groups. One
-            group read it four times. The other read it once, then three times wrote down everything
-            they could remember, with no feedback and no looking back.
-          </p>
-          <p>
-            Tested five minutes later, the readers were ahead. Tested a week later, the readers
-            could produce <strong>40%</strong> of the passage and the recall group produced{" "}
-            <strong>61%</strong>. Completely reversed.
-          </p>
-          <p>
-            Before that final test, everyone predicted their own score. The readers predicted they
-            would win. Reading it four times had been easy, and easy feels like knowing.
-          </p>
-          <p>
-            That feeling is exactly what the lock removes. While the diagram is on screen you cannot
-            tell recognising it apart from being able to build it, because it is right there in
-            front of you. Take it away and there is nothing left to feel fluent about. You either
-            produce it or you do not.
-          </p>
-            </div>
-            <StudyChart />
-          </div>
-          <p className="fact">
-            Chase &amp; Simon, 1973: chess masters rebuild a real board far better than novices, and
-            lose the whole advantage on a random one. Their memory is not bigger; their chunks are. A
-            junior holds “load balancer, cache, primary, replica” as four things. A senior holds
-            “standard read path” as one. Chunks come from rebuilding with feedback, never from
-            reading a description.
-          </p>
+          {/* The prose renders under the playlist, beside the reel: the proof
+              first, the explanation in the column the 9:16 rail leaves empty. */}
+          <Reels>
+            <p className="reelProse">
+              <strong>Ten reels on the day&rsquo;s topic, five from a topic you already
+              finished</strong>, chosen for you and mixed into one feed. Forty-five seconds
+              each, one idea, told as something ordinary going wrong: a hotel keycard that still
+              opens the door, three flatmates and a moved dinner, a coffee counter in a rush. In
+              the last few seconds the same picture is relabelled as your system. Fifteen a day
+              is about eleven minutes, the part of the sprint you do on the train.
+            </p>
+            <p className="reelProse">
+              <strong>They go where the book is hardest.</strong> Consensus, quorum overlap,
+              isolation levels, clock skew: the chapters people bounce off once and never open
+              again. A reel does not make them easy by making them wrong. It takes the one idea
+              the chapter turns on and shows it happening to something you already understand.
+            </p>
+            <p className="fact">
+              Not because anyone is a &ldquo;visual learner&rdquo;: that idea does not replicate
+              (Pashler, 2008). Because a reel is the picture the interview asks you to draw, built
+              one piece at a time, short enough that you finish it.
+            </p>
+          </Reels>
         </section>
 
         <section>
           <p className="eyebrow">the source material</p>
           <h2>The book is finished, and it is free</h2>
           <p className="key">
-            The sprint is not the book. The book is what the sprint grades you against.
+            The sprint is not the book. The book is what the sprint grades you against, and the
+            sprint covers all of it.
           </p>
           <div className="termbar">
             <div>
@@ -273,16 +293,34 @@ export default function Home() {
             </div>
             <div>
               <b>125</b>
-              <span>real outages</span>
+              <span>war stories</span>
             </div>
             <div>
               <b>1,278</b>
               <span>questions</span>
             </div>
           </div>
-          <p style={{ marginTop: 18 }}>
+          <table className="spec">
+            <thead>
+              <tr>
+                <th>part</th>
+                <th>chapters</th>
+                <th>covers</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PARTS.map((p) => (
+                <tr key={p.name}>
+                  <td>{p.name}</td>
+                  <td className="num">{p.ch}</td>
+                  <td className="tag">{p.topics}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p>
             Written for the senior bar: Meta E5, Google L5 and equivalents. No signup, no email, no
-            paywall, and no plans for one.
+            paywall, and no plans for one. Open any chapter and judge the sprint by it.
           </p>
           <div className="btnRow">
             <BookButton>Read the free book, no signup</BookButton>
@@ -293,9 +331,7 @@ export default function Home() {
           <p className="eyebrow">the offer</p>
           <h2>30-day system design sprint</h2>
           <p className="key">
-            One payment of $19 takes you through the entire book in thirty days, starting
-            1 September 2026, and the seat is yours to keep. Everything you are buying is listed
-            below, and so is everything you are not.
+            Everything you are buying is listed below, and so is everything you are not.
           </p>
           <div className="pricebox">
             <div className="priceH">presale · starts 1 september 2026</div>
@@ -305,42 +341,38 @@ export default function Home() {
                 <span className="per">one time · not a subscription</span>
               </div>
               <p style={{ marginTop: 0 }}>
-                Thirty days, one topic a day, the whole 51-chapter book. Every day you get:
+                Thirty days, one topic a day, the whole 51-chapter book. What you get:
               </p>
               <ul className="plain">
                 <li>
-                  <strong>6 or 7 reps</strong>, and <strong>197 across the sprint</strong>: one for
-                  every diagram in the book. Each is the loop on this page: watch, lock, rebuild
-                  from memory, defend, score. About an hour a day.
+                  <strong>6 or 7 reps a day, 197 across the sprint</strong>: one for every diagram
+                  in the book. Each is the loop on this page: watch, lock, rebuild from memory in
+                  words, defend, score. About an hour.
                 </li>
                 <li>
-                  <strong>An interviewer that pushes back</strong>, with three follow-ups per rep
-                  written against your actual answer, aimed at what you left out.
+                  <strong>An interviewer that pushes back</strong>: three follow-ups per rep,
+                  generated against your actual answer and aimed at what you left out.
                 </li>
                 <li>
-                  <strong>10 reels on that day&rsquo;s topic, and 5 on one you already
-                  finished</strong>. Fifteen a day, under four minutes, <strong>450 in total</strong>.
+                  <strong>15 reels a day, 450 in total</strong>: ten on that day&rsquo;s topic,
+                  five on one you already finished. About eleven minutes.
                 </li>
                 <li>
-                  <strong>A schedule you never manage</strong>, so failures return in days and wins
-                  in weeks. You open the day’s reps; you never pick them.
+                  <strong>A schedule you never manage</strong>: what you could not rebuild comes
+                  back in days, what you nailed comes back in weeks. You open the day&rsquo;s reps;
+                  you never pick them.
                 </li>
                 <li>
-                  <strong>A record of what you actually know</strong>, not what you have read:
-                  every diagram you rebuilt, every one you could not, and what you missed on each.
-                </li>
-                <li>
-                  <strong>Lifetime access.</strong> One payment, no renewal, no seat fee, nothing
-                  to cancel. It runs in the browser, on a phone or a laptop.
+                  <strong>Lifetime access</strong>: one payment, no renewal, nothing to cancel. It
+                  runs in the browser, on a phone or a laptop.
                 </li>
               </ul>
               <div className="btnRow">
                 <a className="btn" id="buy" href={RESERVE_URL} target="_blank" rel="noopener">
-                  Reserve a seat for $19
+                  Reserve a seat for {PRICE}
                 </a>
                 <span className="hint">
-                  a short form, then the payment link by email · full refund if it does not ship
-                  on 1 September
+                  opens a short form · full refund if it does not ship on 1 September
                 </span>
               </div>
             </div>
@@ -366,7 +398,7 @@ export default function Home() {
                 <span className="n">02</span> I email you the payment link
               </h4>
               <p>
-                Within 24 hours, from the address you gave. $19, one time. If you change your mind
+                Within 24 hours, to the address you gave. $19, one time. If you change your mind
                 you simply do not click it.
               </p>
             </div>
@@ -376,65 +408,104 @@ export default function Home() {
               </h4>
               <p>
                 Topic 1, its reps and its fifteen reels, then a new topic every day for thirty
-                days. Nothing more is ever charged, and if it does not ship that day the refund is
-                automatic.
+                days. Nothing more is ever charged.
               </p>
             </div>
           </div>
 
-          <h3>What you are not buying</h3>
-          <p className="key">
-            Said plainly, so nobody pays $19 for a thing they thought was included.
-          </p>
-          <ul className="plain">
-            <li>
-              <strong>Not the book.</strong> All 51 chapters are free, now and permanently, with
-              no signup. The sprint is the practice; the book is what it grades you against.
-            </li>
-            <li>
-              <strong>No videos of anyone talking</strong>, no live calls, no Discord, no
-              one-to-one mentoring, no certificate.
-            </li>
-            <li>
-              <strong>No mock interview with a human.</strong> The interviewer is software, and it
-              is graded against the chapter rather than against a person’s mood.
-            </li>
-            <li>
-              <strong>Not a subscription</strong>, and not a job guarantee. The book rebuilt from
-              memory in thirty days, and an honest score, is the entire promise.
-            </li>
-          </ul>
-
-          <h3>Straight about what exists today</h3>
-          <p className="key">The book is done and live. The sprint ships 1 September.</p>
-          <p>
-            The rep on this page is real, and hand-built: its three follow-ups were written in
-            advance. In the product they are generated against your actual answer. Four reels are
-            built and playing above; the daily fifteen start on 1 September. If it is not live on
-            1 September you get every dollar back, without emailing me to ask.
-          </p>
-
-          <h3>Ask me anything before you pay</h3>
-          <p className="key">
-            A real person reads these, and it is the same person building it.
-          </p>
-          <p>
-            Email <a href="mailto:shreyashlrn@gmail.com">shreyashlrn@gmail.com</a> or message me on{" "}
-            <a href="https://www.linkedin.com/in/dubeyshreyash/" target="_blank" rel="noopener">
-              LinkedIn
-            </a>
-            . Whether this fits your interview timeline, what a day actually costs you in time,
-            refunds: all fair game, and answered before you spend anything.
-          </p>
+          <div className="split2">
+            <div>
+              <h3>What you are not buying</h3>
+              <p className="key">
+                Said plainly, so nobody pays $19 for a thing they thought was included.
+              </p>
+              <ul className="plain">
+                <li>
+                  <strong>Not the book.</strong> All 51 chapters are free, now and permanently,
+                  with no signup. The sprint is the practice; the book is what it grades you
+                  against.
+                </li>
+                <li>
+                  <strong>No videos of anyone talking</strong>, no live calls, no Discord, no
+                  one-to-one mentoring, no certificate.
+                </li>
+                <li>
+                  <strong>No mock interview with a human.</strong> The interviewer is software,
+                  and it is graded against the chapter rather than against a person&rsquo;s mood.
+                </li>
+                <li>
+                  <strong>Not a subscription</strong>, and not a job guarantee. The book rebuilt
+                  from memory in thirty days, and an honest score, is the entire promise.
+                </li>
+              </ul>
+            </div>
+            <div>
+              <h3>Before you pay</h3>
+              <p className="key">
+                The questions people ask, answered by the person building it.
+              </p>
+              <ul className="plain">
+                <li>
+                  <strong>What exists today?</strong> The book, all of it. The rep on this page,
+                  which is real and hand-built: its three follow-ups were written in advance, and
+                  its score is keyword matching. In the product the follow-ups are generated
+                  against your actual answer. Four reels of the 450. The sprint itself ships
+                  1 September.
+                </li>
+                <li>
+                  <strong>Why not quiz myself with a chat window?</strong> You can, for one rep,
+                  and you should try it tonight. Paste a chapter into any model and ask it to quiz
+                  you and you get a fair question. What it will not do for thirty days: take the
+                  diagram off the screen before you answer, keep track of which of 197 diagrams you
+                  failed, bring the failed one back on day nine unasked, and hold the line when you
+                  argue with it. That is the part being sold. The explanation is free, in the book,
+                  because explanation is free everywhere now.
+                </li>
+                <li>
+                  <strong>My interview is in the middle of September.</strong> The form asks when
+                  it is. Say so, and the reply that carries the payment link tells you what the
+                  first days cover, before you have paid anything.
+                </li>
+                <li>
+                  <strong>What if I fall behind?</strong> Nothing expires. Access is for life, so
+                  the thirty days are the pace, not a deadline.
+                </li>
+                <li>
+                  <strong>What if it does not ship on 1 September?</strong> Every dollar back,
+                  without emailing me to ask.
+                </li>
+                <li>
+                  <strong>Why trust the sprint?</strong> Judge it by the book, which is by the same
+                  person. Open{" "}
+                  <a href={`${BOOK_URL}#ch/p2c03`}>Consensus, Leader Election and Fencing</a> or{" "}
+                  <a href={`${BOOK_URL}#ch/p3c08`}>Ticketmaster: Booking Under Pressure</a> and
+                  read at the depth the reps are set to. If the chapter is below the bar you need,
+                  keep your $19.
+                </li>
+                <li>
+                  <strong>Anything else?</strong> Email{" "}
+                  <a href="mailto:shreyashlrn@gmail.com">shreyashlrn@gmail.com</a> or message me
+                  on{" "}
+                  <a href="https://www.linkedin.com/in/dubeyshreyash/" target="_blank" rel="noopener">
+                    LinkedIn
+                  </a>
+                  . A real person reads these, and it is the same person building it.
+                </li>
+              </ul>
+            </div>
+          </div>
         </section>
 
         <footer>
+          {/* A plain text route back to the ask: the page ends 1,100px after the
+              last button, and a third accent fill is not wanted. */}
           <p className="fact">
-            Built by Shreyash Dubey · <a href={BOOK_URL}>the book</a> · shipping in public through
-            Project Shipyard S3
+            Built by Shreyash Dubey · <a href={BOOK_URL}>the book</a> ·{" "}
+            <a href={RESERVE_URL} target="_blank" rel="noopener">reserve a seat for {PRICE}</a> ·
+            shipping in public through Project Shipyard S3
           </p>
         </footer>
-      </div>
+      </main>
 
       <FreeBookFab />
     </>
