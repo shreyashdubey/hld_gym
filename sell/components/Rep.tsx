@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { PROBES, RUBRIC, STEPS, STEP_MS, REP_TITLE, verdictFor } from "@/lib/rep";
+import { RESERVE_URL } from "@/lib/links";
 import { DiagramNarrow, DiagramWide } from "./Diagram";
 
 type Phase = "idle" | "watching" | "locked" | "graded" | "done";
@@ -216,12 +217,12 @@ export default function Rep() {
               ) : (
                 <>
                   <p className="hint" style={{ marginTop: 18 }}>
-                    that was one rep. the sprint is thirty of them, and the diagram is different
-                    every time.
+                    that was one rep. the sprint is 197 of them in thirty days, one for every
+                    diagram in the book, and the diagram is different every time.
                   </p>
                   <div className="btnRow">
-                    <a className="btn" href="#buy">
-                      reserve a seat for $39
+                    <a className="btn" href={RESERVE_URL} target="_blank" rel="noopener">
+                      reserve a seat for $19
                     </a>
                     <a className="btn ghost" href="/book/">
                       read the book instead, free

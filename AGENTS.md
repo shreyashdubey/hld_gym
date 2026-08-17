@@ -55,7 +55,9 @@ repo's other pipelines produce, and the dev server does not know about them.
 
 - **Never claim the product does something it does not.** The page says the
   demo's follow-ups are hand-written, and that four reels exist rather than the
-  daily ten, because both are true today.
+  450 the sprint promises, because both are true today. The rule covers the
+  reservation form too: its roadmap question labels every unbuilt option
+  **planned, not built**.
 - **No backend, no auth, no database until someone pays.** A login between a
   visitor and the payment link costs conversions and answers nothing.
 - **Never publish work as an Artifact.** The claude.ai account is shared, so

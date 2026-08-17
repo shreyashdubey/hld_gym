@@ -23,7 +23,8 @@ file in the same commit as the code.
 
 ## What this is, in 30 seconds
 
-A presell page for a **30-day system design sprint**, $39, starting 1 September
+A presell page for a **30-day system design sprint** — the whole 51-chapter book,
+197 reps and 450 reels — $19, starting 1 September
 2026. It carries one playable rep: a diagram teaches itself, **locks**, you
 rebuild it from memory, get scored, then an interviewer takes the answer apart.
 

@@ -210,7 +210,7 @@ export default function Reels() {
         </ol>
 
         <p className="reelFoot">
-          Four built. Ten a day on your current topic from 1 September, plus reels from topics
+          Four built. From 1 September, ten a day on your current topic plus five from a topic
           you have already finished.
         </p>
       </div>

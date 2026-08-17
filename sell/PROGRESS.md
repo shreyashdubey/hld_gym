@@ -1018,10 +1018,247 @@ slowly."
 
 ---
 
+## 2026-08-17 — $19, and the offer says exactly what it is
+
+**What:** the price dropped from $39 to $19, and the offer section was rewritten
+to answer, without prose, what a buyer receives, what happens after they click,
+and what is deliberately not included. The CTA now points at a Google Form
+(`NEXT_PUBLIC_RESERVE_URL`) instead of a Gumroad product.
+
+**Why the form:** there is still no backend and no payment rail wired, and the
+hard rule is that nothing gets built until someone pays. A form is the smallest
+thing that can take a real reservation today: four questions plus an email, then
+the payment link goes back by hand. It also answers more than a checkout would,
+because the four questions say who is buying and what they keep failing on.
+
+**Why $19:** three paying customers wins Shipyard, and the metric is whether a
+stranger pays at all before the product exists — not the revenue. Halving the
+price halves the size of that decision without changing what is being measured.
+
+**The honesty problem the copy had to solve.** A button reading *Reserve a seat
+for $19* that opens a Google Form is a claim the page does not honour: nothing
+is reserved and nothing is charged. So the flow is stated where the click
+happens — a `.hint` under the hero CTA and under the offer CTA — and *What
+happens after you click* spells out all three steps: form, emailed link, paid
+seat. The section that follows is *What you are not buying*, which names the
+book (free), live calls, Discord, mentoring, a certificate, a human mock
+interview, and a job guarantee, all absent. A presale is bought on trust, and
+the cheapest trust available is telling someone what they do not get.
+
+**Structure:** the offer section grew three `h3` blocks under the pricebox —
+what happens after you click (`.grid2`, **three** cells so the row fills; four
+left an empty bordered box on desktop), what you are not buying, and the
+existing *Straight about what exists today*. The pricebox list gained a sixth
+item, lifetime access, because "not a subscription" in the `.per` line was the
+only place that had been said.
+
+**Prices in prose were changed too**, not just the four in the markup:
+`README.md`, `SYSTEM.md`, `AGENTS.md`, `DESIGN-SYSTEM.md` and two comments in
+`globals.css` all quoted $39 as the reason for a decision ("a bounce reads as a
+toy and this page is asking for $39"). This log is history and keeps the old
+number.
+
+**Verified in the browser** at 1280 and 390: the three-step row fills one line
+on desktop and stacks on the phone, and the `.hint` under the hero CTA wraps to
+three mono lines without pushing the free-book line out of the card.
+
+---
+
+## 2026-08-17 — the sprint covers the whole book, and the reel maths is stated
+
+**What:** the shape of the sprint changed from *30 reps, one a day* to *the
+entire 51-chapter book in 30 days* — one topic a day, **197 reps** (one per
+diagram), **15 reels a day** (10 on today's topic, 5 on a topic already
+finished), **450 reels** in total. Contact routes were added at the bottom.
+
+**Why:** one rep a day was thirty diagrams out of 197, so the sprint finished
+with six-sevenths of the book never rebuilt. A buyer preparing for an onsite in
+five weeks is not buying a sampler. The offer is now the same size as the book.
+
+**The arithmetic, because every number on the page has to survive being
+checked by a stranger:**
+
+| claim | derivation |
+|---|---|
+| 30 topics | 51 chapters over 30 days — one topic is one or two chapters |
+| 197 reps | one per diagram in the book; 197 / 30 = **6 or 7 a day** |
+| ~1 hour a day | 6–7 reps at roughly 7 minutes each |
+| 15 reels a day | 10 new on today's topic + 5 revision from a finished one |
+| under 4 minutes | 15 × 15s = 225s |
+| 450 reels | 30 × 10 new = 300, plus 30 × 5 revision = 150 |
+
+Every one of those appears on the page, and each is reachable from the two the
+reader already trusts: 51 chapters and 197 diagrams, both facts about a book
+they can open right now for free.
+
+**Selling the reel number without a wall of prose:** the reels section got a
+`.termbar` — `10 / 5 / 15s / 450` — above the copy, the same device the hero and
+the book section already use. The strip carries the offer; the paragraphs under
+it are for the minority who want the reasoning. The eyebrow became
+*15 a day · 450 across the sprint*, which is the whole claim in six words.
+
+**Honesty held.** Four reels exist. The disclosure line under the section now
+reads "the daily fifteen start on 1 September; today there are four" rather than
+quietly inheriting the old "daily ten". A bigger promise makes the standing rule
+*never claim the product does something it does not* more load-bearing, not
+less.
+
+**Contact:** a new *Ask me anything before you pay* block above the footer, plus
+the same two routes in the footer itself — `shreyashlrn@gmail.com` and LinkedIn.
+The pitch is a stranger paying for something that does not exist yet, and the
+cheapest reassurance available is a reachable human. The footer became two
+`.fact` lines instead of one so the contact routes are not buried inside the
+Shipyard credit.
+
+**Also updated:** the page `<title>` and description (they still advertised "30
+reps, 30 days"), the CTA at the end of the free rep, and the product tables in
+`SYSTEM.md` and `AGENTS.md`.
+
+**Verified in the browser** at 1280: hero strip reads `197 reps / the whole
+book`, the reels strip fills one row, and both contact links resolve.
+
+**Two things this entry got wrong, caught by reading the rendered page:**
+
+**Symptom: em dashes were back.** Seven of them, all in copy written that same
+day, in a codebase whose §10 rule is *no em dashes anywhere in visible copy* and
+which already had one commit dedicated to removing them. Each became the mark
+the sentence needed: a comma for an apposition (`197 reps, one for every
+diagram`), a colon for an expansion (`450 reels: 300 teaching the book, 150
+dragging it back out of you`), a full stop where the clause was really a
+sentence. The check is one line and belongs in any review of this page:
+`grep -c '—' dist/index.html` must print `0`. Code comments are exempt and stay.
+
+**Symptom: the email and LinkedIn appeared twice within one screen**, once in
+*Ask me anything before you pay* and again three lines below in the footer. Two
+copies of the same link in one viewport reads as filler, not as availability.
+The contact section keeps both routes, and the footer went back to its single
+credit line.
+
+**Also stale:** `Reels.tsx`'s own foot note still promised "ten a day … plus
+reels from topics you have already finished" and never mentioned the five. Copy
+duplicated between a section and the component inside it is copy that goes stale
+in exactly one of the two places.
+
+---
+
+## 2026-08-17 — the reservation form is specified, and the docs catch up
+
+**What:** the form behind every CTA now has its exact wording written down in
+`README.md`, five questions plus the email. `SYSTEM.md` gained the offer
+arithmetic, the reservation flow, and the `/reels` explanation; the page's
+step 01 changed from "four questions" to five.
+
+**The fifth question is the interesting one.** *Which part of this do you most
+want?*, ten options, five labelled **ships 1 Sep** and five labelled
+**planned, not built** — Playground, LLM grading, reel audio, the "what I can
+and cannot rebuild" dashboard, and an LLD gym. Nothing else on this page does
+roadmap research, and this costs nothing to run because the buyer is already in
+the form answering questions about themselves. Which unbuilt option people reach
+for decides what gets built after the first payment.
+
+**Playground** is new here and is now written down in `SYSTEM.md` §1: a coach
+you talk to live while you draw, that makes you think aloud and unsticks you
+where you stall. It is the largest unbuilt thing on the list — realtime audio
+plus a stateful session — and it is also the one that argues with the rest of
+the product, because the lock works by *removing* help at the moment help would
+feel best and a coach is help on demand. Both can hold in one product (rebuild
+alone, get scored, then take your failures into a session) but the sell page
+cannot blur them while it is selling "an interviewer that pushes back". Recorded
+with that tension stated rather than as a feature line, because the tension is
+the part a future session will need.
+
+**The labels are not decoration.** *Never claim the product does something it
+does not* has so far been enforced on the page; a form that lists four unbuilt
+things next to five real ones, unlabelled, breaks the same rule somewhere the
+rule had not been applied yet. `AGENTS.md` at the repo root now says the rule
+covers the form.
+
+**Q6 sorts the list** — *if I send the payment link today, are you paying $19?*
+Three answers: yes, probably, just curious. The whole repo exists to find out
+whether a stranger prepays, and asking directly is cheaper than inferring it
+from a response count.
+
+**Docs updated in the same pass**, because the last two entries changed things
+these files still described the old way:
+
+- `SYSTEM.md` §1 gained **The offer, precisely** (the six-row derivation table,
+  every number on the page traced back to *51 chapters* and *197 diagrams*) and
+  **How a reservation is taken** (the form-to-payment diagram, plus the
+  build-time-only nature of `NEXT_PUBLIC_RESERVE_URL`).
+- §9 gained a *Checkout on the site* row, and a paragraph on why the form is not
+  the waitlist the table forbids: a waitlist ends at the email, this one exists
+  to send a payment link within 24 hours. If it ever stops doing that, it has
+  become the banned thing.
+- §10 said "do not let it imply thirty exist" and now says 197, plus a second
+  limit for four reels of 450.
+- §12 was missing `Reels.tsx` entirely, and its `dist/` tree was missing
+  `reels/`.
+
+**`/reels` is an asset directory, not a route**, and that is now written down
+because it does not look like one locally: `python3 -m http.server` lists it, so
+it reads as a stray page. `Reels.tsx` plays `/reels/reel<NN>-<cut>.mp4`, two
+encodes per reel, and on Vercel a directory with no `index.html` is a 404.
+
+---
+
+## 2026-08-17 — the form is live and wired, and the reels get their real claim
+
+**What:** `https://forms.gle/hkf5buMLV6PsAomp8` now sits behind all three CTAs.
+The URL moved into `lib/links.ts` so the page and the rep import one constant,
+each link opens in a new tab, and `NEXT_PUBLIC_RESERVE_URL` still overrides at
+build time. The reels section gained the claim that is actually the product's
+differentiator.
+
+**`lib/links.ts` exists for a two-line reason:** the rep's closing CTA used to be
+an in-page `#buy` jump to the price box, so the URL only appeared once. Now that
+all three go to the form, a second copy of the URL is a second thing to forget
+when it changes. The old `id="buy"` stays on the price-box CTA — nothing links
+to it any more, but external posts might.
+
+**New tab on every reserve link.** The form is someone else's page. A visitor
+who opens it, hesitates and backs out should find the offer still there rather
+than a blank history entry, and the sell page keeps its scroll position.
+
+**The reels claim, stated properly:** *hard material made easy to consume, not
+easy material made short*. Anyone can cut fifteen seconds on what a load
+balancer is; the value is consensus, quorum overlap, isolation levels, clock
+skew — the chapters a reader bounces off once and never re-opens. The page now
+says so in its own paragraph, and `SYSTEM.md` §7 carries the two content rules
+that follow: **hardest chapters first**, and **simplify the telling, never the
+claim** (a fifteen-second version that is wrong is a liability on a page whose
+whole pitch is accuracy).
+
+**Playground** is written up in `SYSTEM.md` §1 alongside the four other unbuilt
+things, with the reason it is not first (realtime audio plus a stateful session)
+and the copy it would force a re-read of (*no one-to-one mentoring*, *no mock
+interview with a human* — both survive, because the coach is software exactly as
+the interviewer already is). It reaches the public only as one **planned, not
+built** option in the form.
+
+**Two problems with the live form**, both found by reading it rather than
+assuming:
+
+1. **It collects no email address.** The entire flow is *form → payment link by
+   email*, and the page says so three times. Fix: Settings → Responses →
+   Collect email addresses → **Responder input**. Not *Verified*, which forces a
+   Google sign-in and so puts a login between a visitor and a payment link, the
+   exact thing §9 rules out.
+2. **The four unbuilt options in the feature question are unlabelled.**
+   Playground, reels with audio, and the LLD gym do not exist. On the page that
+   would break the standing rule outright; in a form it is the same claim in a
+   quieter place. Each needs `(planned, not built)` in its option text.
+
+---
+
 ## Open
 
-- [ ] **Gumroad product not created.** The buy button is a dead `#buy` anchor
-      until `NEXT_PUBLIC_BUY_URL` is set. The page cannot go live without it.
+- [ ] **Form collects no email, and its unbuilt options are unlabelled.** See
+      the entry above; both are Google Forms settings, no code involved.
+- [x] **Reservation form created and wired**
+      (`https://forms.gle/hkf5buMLV6PsAomp8`, `lib/links.ts`).
+- [ ] **Gumroad product not created.** Not blocking any more: the payment link
+      is emailed by hand after a form response, so it only has to exist before
+      the first reply goes out.
 - [ ] Not deployed to Vercel yet.
 - [ ] Free book not yet posted to r/leetcode, r/ExperiencedDevs, HN, LinkedIn.
 - [ ] **Reels 02–04 not cut.** Renderer and format exist; each new kernel is a
@@ -1037,6 +1274,11 @@ slowly."
       failure retrospective exists across all three Shipyard seasons).
 - [ ] FAULT kill-test emails to HUD and Prime Intellect unsent
       (`shipyard3/06-fault-playbook.md` §5 — 30 minutes, still unrun).
+- [ ] **Playground unspecified.** A live coach that talks while you draw, keeps
+      you thinking aloud, and unsticks you. No spec, no chosen stack, no cost
+      model for realtime audio. Written up in `SYSTEM.md` §1 with the reason it
+      is not first and the copy it would force a re-read of. It appears publicly
+      only as one **planned, not built** option in the reservation form.
 - [ ] Python/FastAPI backend: after the first payment, not before.
 - [ ] **LLM grading (designed 2026-08-15, parked — frontend first).** The rubric
       only detects vocabulary, not knowledge: measured 6/6 on nonsense with the

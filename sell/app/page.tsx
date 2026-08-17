@@ -5,10 +5,8 @@ import StudyChart from "@/components/StudyChart";
 import FreeBookFab from "@/components/FreeBookFab";
 import BookButton from "@/components/BookButton";
 import { TextSizeToggle, ThemeToggle } from "@/components/Toggles";
+import { RESERVE_URL } from "@/lib/links";
 
-/* Swap this for the real Gumroad link once the product is created.
-   Until then it is deliberately obvious that it is unset. */
-const BUY_URL = process.env.NEXT_PUBLIC_BUY_URL ?? "#buy";
 /* Same origin now: the sprint owns the site root, the book sits at /book. */
 const BOOK_URL = "/book/";
 
@@ -44,22 +42,23 @@ export default function Home() {
               <p className="eyebrow">30-day system design sprint · presale</p>
               <h1>You can read system design for months and still freeze at the whiteboard.</h1>
               <p className="lead">
-                Thirty days, one system a day. You learn it, it is{" "}
+                Thirty days, and you finish the whole book: 51 chapters, one topic a day,{" "}
+                <strong>197 reps</strong>, one for every diagram in it. You learn a system, it is{" "}
                 <strong>taken away</strong>, and you rebuild it from memory while an interviewer
-                picks holes in what you said. A rep takes as long as it takes. The ones you get
-                wrong take longest, and that is where the work is.
+                picks holes in what you said. Six or seven of those a day, about an hour. The ones
+                you get wrong take longest, and that is where the work is.
               </p>
             </div>
 
             <aside className="heroCard">
               <div className="termbar termCol">
                 <div>
-                  <b>$39</b>
+                  <b>$19</b>
                   <span>one time</span>
                 </div>
                 <div>
-                  <b>30 reps</b>
-                  <span>one a day</span>
+                  <b>197 reps</b>
+                  <span>the whole book</span>
                 </div>
                 <div>
                   <b>1 Sep</b>
@@ -71,13 +70,20 @@ export default function Home() {
                 </div>
               </div>
               <div className="btnRow">
-                <a className="btn" href={BUY_URL}>
-                  Reserve a seat for $39
+                {/* New tab on every reserve link: the form is someone else's
+                    page, and a visitor who backs out of it should land on the
+                    offer again rather than on a blank history entry. */}
+                <a className="btn" href={RESERVE_URL} target="_blank" rel="noopener">
+                  Reserve a seat for $19
                 </a>
                 <a className="btn ghost" href="#rep">
                   Try a free rep first, 90 seconds
                 </a>
               </div>
+              <p className="hint">
+                Reserving is a short form and your email. The payment link comes back by mail,
+                and you are charged nothing until you click it.
+              </p>
               <p className="alt">
                 Not ready to buy? <a href={BOOK_URL}>Read all 51 chapters free</a>, no signup.
               </p>
@@ -149,25 +155,54 @@ export default function Home() {
         </section>
 
         <section id="reels">
-          <p className="eyebrow">ten a day, on the topic you are on</p>
+          <p className="eyebrow">15 a day · 450 across the sprint</p>
           <h2>The revision you will actually do</h2>
           <p className="key">
             Nobody re-opens a chapter they finished three weeks ago. Everybody watches one more.
           </p>
+          <div className="termbar">
+            <div>
+              <b>10</b>
+              <span>on today&rsquo;s topic</span>
+            </div>
+            <div>
+              <b>5</b>
+              <span>on one you finished</span>
+            </div>
+            <div>
+              <b>15s</b>
+              <span>each, one idea</span>
+            </div>
+            <div>
+              <b>450</b>
+              <span>over 30 days</span>
+            </div>
+          </div>
           <p>
-            Every topic you study ships with <strong>ten reels</strong>. Fifteen seconds each,
-            one idea, told as something ordinary going wrong: a hotel keycard, a coffee queue, a
+            <strong>Ten reels on the topic you study that day.</strong> Fifteen seconds each, one
+            idea, told as something ordinary going wrong: a hotel keycard, a coffee queue, a
             cleared desk. In the last two seconds the same picture is relabelled as your system.
-            Watch them on the train. That is the whole ask.
           </p>
           <p>
-            Then the topics you already finished come back. Not all of them, and not on a day you
-            choose: whatever you got wrong returns in days, whatever you nailed returns in weeks,
-            mixed into the same feed. Revision stops being a thing you schedule and starts being a
-            thing you scroll.
+            <strong>The hard topics are the whole point.</strong> Consensus, quorum overlap,
+            isolation levels, clock skew: the chapters people bounce off once and never open
+            again. A reel does not make them easy by making them wrong. It takes the one idea the
+            chapter turns on and shows it happening to a hotel keycard, so the thing you were
+            avoiding arrives in fifteen seconds with no jargon until the last two.
+          </p>
+          <p>
+            <strong>Then five more from a topic you already finished</strong>, chosen for you and
+            mixed into the same feed. Whatever you got wrong comes back in days, whatever you
+            nailed comes back in weeks. Revision stops being a thing you schedule and starts being
+            a thing you scroll.
+          </p>
+          <p>
+            Fifteen reels is <strong>under four minutes</strong>. That is the whole ask, and it is
+            the part of the sprint you do on the train. Across thirty days it adds up to{" "}
+            <strong>450 reels</strong>: 300 teaching the book, 150 dragging it back out of you.
           </p>
           <p className="fact">
-            <strong>Four of these are built and playing below.</strong> They ship at ten a day from
+            <strong>Four of these are built and playing below.</strong> The daily fifteen start on
             1 September; today there are four. Everything on this page that exists, you can touch,
             and everything that does not says so.
           </p>
@@ -254,52 +289,142 @@ export default function Home() {
           </div>
         </section>
 
-        <section>
+        <section id="offer">
           <p className="eyebrow">the offer</p>
           <h2>30-day system design sprint</h2>
+          <p className="key">
+            One payment of $19 takes you through the entire book in thirty days, starting
+            1 September 2026, and the seat is yours to keep. Everything you are buying is listed
+            below, and so is everything you are not.
+          </p>
           <div className="pricebox">
             <div className="priceH">presale · starts 1 september 2026</div>
             <div className="priceB">
               <div className="amount">
-                <span className="cur">$</span>39
+                <span className="cur">$</span>19
                 <span className="per">one time · not a subscription</span>
               </div>
+              <p style={{ marginTop: 0 }}>
+                Thirty days, one topic a day, the whole 51-chapter book. Every day you get:
+              </p>
               <ul className="plain">
                 <li>
-                  <strong>30 reps</strong>, one a day, drawn from the book’s 197 diagrams.
+                  <strong>6 or 7 reps</strong>, and <strong>197 across the sprint</strong>: one for
+                  every diagram in the book. Each is the loop on this page: watch, lock, rebuild
+                  from memory, defend, score. About an hour a day.
                 </li>
                 <li>
                   <strong>An interviewer that pushes back</strong>, with three follow-ups per rep
-                  aimed at what you left out.
+                  written against your actual answer, aimed at what you left out.
                 </li>
                 <li>
-                  <strong>10 reels a day</strong> on the topic you are on, plus reels from topics
-                  you already finished, mixed back in as revision.
+                  <strong>10 reels on that day&rsquo;s topic, and 5 on one you already
+                  finished</strong>. Fifteen a day, under four minutes, <strong>450 in total</strong>.
                 </li>
                 <li>
                   <strong>A schedule you never manage</strong>, so failures return in days and wins
-                  in weeks.
+                  in weeks. You open the day’s reps; you never pick them.
                 </li>
                 <li>
-                  <strong>A record of what you actually know</strong>, not what you have read.
+                  <strong>A record of what you actually know</strong>, not what you have read:
+                  every diagram you rebuilt, every one you could not, and what you missed on each.
+                </li>
+                <li>
+                  <strong>Lifetime access.</strong> One payment, no renewal, no seat fee, nothing
+                  to cancel. It runs in the browser, on a phone or a laptop.
                 </li>
               </ul>
               <div className="btnRow">
-                <a className="btn" id="buy" href={BUY_URL}>
-                  Reserve a seat for $39
+                <a className="btn" id="buy" href={RESERVE_URL} target="_blank" rel="noopener">
+                  Reserve a seat for $19
                 </a>
-                <span className="hint">full refund if it does not ship on 1 September</span>
+                <span className="hint">
+                  a short form, then the payment link by email · full refund if it does not ship
+                  on 1 September
+                </span>
               </div>
             </div>
           </div>
 
+          <h3>What happens after you click</h3>
+          <p className="key">
+            There is no checkout on this page. The button opens a form, and payment is a link I
+            send you.
+          </p>
+          <div className="grid2">
+            <div>
+              <h4>
+                <span className="n">01</span> You answer five questions
+              </h4>
+              <p>
+                Sixty seconds: when you interview, what you keep failing on, which part of this
+                you want most, and your email. No account, no password, no card.
+              </p>
+            </div>
+            <div>
+              <h4>
+                <span className="n">02</span> I email you the payment link
+              </h4>
+              <p>
+                Within 24 hours, from the address you gave. $19, one time. If you change your mind
+                you simply do not click it.
+              </p>
+            </div>
+            <div>
+              <h4>
+                <span className="n">03</span> You pay, and day one lands 1 September
+              </h4>
+              <p>
+                Topic 1, its reps and its fifteen reels, then a new topic every day for thirty
+                days. Nothing more is ever charged, and if it does not ship that day the refund is
+                automatic.
+              </p>
+            </div>
+          </div>
+
+          <h3>What you are not buying</h3>
+          <p className="key">
+            Said plainly, so nobody pays $19 for a thing they thought was included.
+          </p>
+          <ul className="plain">
+            <li>
+              <strong>Not the book.</strong> All 51 chapters are free, now and permanently, with
+              no signup. The sprint is the practice; the book is what it grades you against.
+            </li>
+            <li>
+              <strong>No videos of anyone talking</strong>, no live calls, no Discord, no
+              one-to-one mentoring, no certificate.
+            </li>
+            <li>
+              <strong>No mock interview with a human.</strong> The interviewer is software, and it
+              is graded against the chapter rather than against a person’s mood.
+            </li>
+            <li>
+              <strong>Not a subscription</strong>, and not a job guarantee. The book rebuilt from
+              memory in thirty days, and an honest score, is the entire promise.
+            </li>
+          </ul>
+
           <h3>Straight about what exists today</h3>
           <p className="key">The book is done and live. The sprint ships 1 September.</p>
           <p>
-            The rep on this page is real, and hand-built. In the product, the follow-ups are
-            generated against your actual answer instead of written in advance. Four reels are
-            built and playing above; the daily ten start on 1 September. If it is not live on
-            1 September you get every rupee back, without emailing me to ask.
+            The rep on this page is real, and hand-built: its three follow-ups were written in
+            advance. In the product they are generated against your actual answer. Four reels are
+            built and playing above; the daily fifteen start on 1 September. If it is not live on
+            1 September you get every dollar back, without emailing me to ask.
+          </p>
+
+          <h3>Ask me anything before you pay</h3>
+          <p className="key">
+            A real person reads these, and it is the same person building it.
+          </p>
+          <p>
+            Email <a href="mailto:shreyashlrn@gmail.com">shreyashlrn@gmail.com</a> or message me on{" "}
+            <a href="https://www.linkedin.com/in/dubeyshreyash/" target="_blank" rel="noopener">
+              LinkedIn
+            </a>
+            . Whether this fits your interview timeline, what a day actually costs you in time,
+            refunds: all fair game, and answered before you spend anything.
           </p>
         </section>
 

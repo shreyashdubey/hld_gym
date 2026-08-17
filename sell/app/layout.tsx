@@ -25,9 +25,9 @@ const plexMono = IBM_Plex_Mono({
   display: "swap",
 });
 
-const TITLE = "System Design Sprint: 30 reps, 30 days";
+const TITLE = "System Design Sprint: the whole book in 30 days";
 const DESC =
-  "You have read the chapters. The sprint makes you rebuild them from memory, then takes your answer apart. 30 reps, one a day, starting 1 September.";
+  "You have read the chapters. The sprint makes you rebuild them from memory, then takes your answer apart. 51 chapters, 197 reps and 450 reels in 30 days, starting 1 September.";
 
 export const metadata: Metadata = {
   title: TITLE,

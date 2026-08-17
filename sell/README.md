@@ -3,7 +3,7 @@
 A one-page presale for the **30-day system design sprint**, with a playable rep
 embedded in it. Built to answer one question and only one:
 
-> Will anyone pay $39 for this before it exists?
+> Will anyone pay $19 for this before it exists?
 
 The metric is **payments**. Not signups, not a waitlist — those measure
 curiosity. Nothing here collects an account, because a login between a stranger
@@ -70,17 +70,99 @@ ships**.
 
 ## Before going live
 
-1. **Create the Gumroad product** ($39, one-time), then set the link:
+1. ~~**Create the reservation form.**~~ Done: `https://forms.gle/hkf5buMLV6PsAomp8`,
+   wired into all three CTAs through `lib/links.ts`. To point them somewhere
+   else without editing code:
    ```
-   NEXT_PUBLIC_BUY_URL=https://<you>.gumroad.com/l/<slug>
+   NEXT_PUBLIC_RESERVE_URL=https://forms.gle/<id> npm run publish:book
    ```
-   Until it is set, the buy button is a dead `#buy` anchor on purpose — it is
-   meant to be obvious that it is unwired.
-   Gumroad is chosen for speed only (sign up and sell the same day, USD, works
-   from India). Dodo Payments is the better long-term rail once there is a real
-   product — lower fees, merchant-of-record, onboards Indian sole proprietors.
+   The env var is read **at build time**: Vercel runs no build here, so it has
+   to be in the environment for `publish:book`, not in the dashboard. With no
+   variable set, the URL above is what ships.
+
+   The form is the checkout for now. A response arrives, the payment link goes
+   back by email, and the page says exactly that in *What happens after you
+   click* — no checkout is claimed that does not exist. Gumroad is the rail for
+   speed (sign up and sell the same day, USD, works from India); Dodo Payments
+   is the better long-term one — lower fees, merchant-of-record, onboards Indian
+   sole proprietors.
 2. `npm run publish:book`, then commit and push **the book repo**.
 3. Post the free book with the sprint offer at the bottom.
+
+## The reservation form
+
+Five questions and an email, in this order. The page promises "sixty seconds",
+so every question is one tap except the email.
+
+**Title:** Reserve a seat — 30-day System Design Sprint ($19)
+
+**Description:** Five questions, sixty seconds. Your email is where the payment
+link goes, and nothing else is ever sent there. I reply within 24 hours, and you
+are charged nothing until you click the link. The sprint is not live until
+1 September 2026, and if it slips you get a full refund.
+
+**Q1. Email** — do **not** write this question. Turn on
+*Settings → Responses → Collect email addresses → **Responder input***. Forms
+then adds a required, format-validated email field at the top by itself.
+
+The third setting, *Verified*, is the one to avoid: it forces a Google account
+sign-in, which blocks every non-Google address and puts a login between a
+visitor and a payment link — the same thing §9 of `SYSTEM.md` rules out for the
+site. *Responder input* asks for no account at all.
+
+The cost is that Google's field takes no help text, so "where the payment link
+goes" moves into the form description, which is where it now is.
+
+**Q2. When is your next system design interview?** — multiple choice, required.
+Within 2 weeks · 2 to 6 weeks · 1 to 3 months · not scheduled, getting ready
+first.
+
+**Q3. What level are you interviewing at?** — multiple choice, required.
+Senior (Meta E5, Google L5, equivalent) · staff or above · mid-level moving to
+senior · startup, no level system.
+
+**Q4. Where does it actually break for you?** — multiple choice + *Other*,
+required. I blank at the whiteboard even on systems I have read · I can draw it
+but cannot defend it under follow-ups · I do not know how deep to go · I have
+never done a real system design round.
+
+**Q5. Which part of this do you most want?** — multiple choice + *Other*,
+required. Options are labelled with what is real, because the page's standing
+rule applies to the form too:
+
+| option | label |
+|---|---|
+| The lock: the diagram vanishes and I rebuild it from memory | ships 1 Sep |
+| An interviewer that pushes back on my answer | ships 1 Sep |
+| 15 reels a day, revision I can do on my phone | ships 1 Sep |
+| A schedule I never manage: what I fail comes back sooner | ships 1 Sep |
+| All 51 chapters covered in 30 days, not a sampler | ships 1 Sep |
+| **Playground**: a coach I talk to live while I draw, that makes me think aloud and unsticks me | planned, not built |
+| Grading by an LLM against what I actually wrote, not keywords | planned, not built |
+| Reels with audio | planned, not built |
+| A dashboard of every diagram I can and cannot rebuild | planned, not built |
+| The same gym for low-level design (LLD) | planned, not built |
+
+This is the only question that is not about the sale. Five of those ten are
+unbuilt, and which one people reach for decides what gets built after the first
+payment. They are listed in `SYSTEM.md` §1 under *Planned, not built*, and the
+two lists have to stay in step: an option here that is not there is a promise
+nobody has thought through. Cheapest roadmap research available, because it
+rides along on a form the buyer was filling in anyway.
+
+**Q6. If I send the payment link today, are you paying $19?** — multiple choice,
+required. Yes, send it · probably, depends on your answers to my questions ·
+just curious for now.
+
+This is the question that sorts the list. Q2 and Q4 decide what the reply leads
+with.
+
+**Settings:** *Collect email addresses* → **Responder input** (see Q1) ·
+*Limit to 1 response* off, since it would force a Google sign-in too ·
+confirmation message:
+
+> Got it. The payment link comes to that address within 24 hours. Reply to it
+> with any questions, I answer them myself. — Shreyash
 
 ## Four things worth knowing before editing
 

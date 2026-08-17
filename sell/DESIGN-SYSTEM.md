@@ -439,7 +439,7 @@ for decoration.
 **This rule loosened deliberately.** It previously forbade page-load entrances
 and any looping outright, and under that rule the rep panel sat as an empty grey
 rectangle until clicked — the page's single most persuasive element, showing
-nothing, on a page whose job is to be trusted enough to take $39. A demo that
+nothing, on a page whose job is to be trusted enough to take $19. A demo that
 does not look alive is not a neutral choice. What survives from the old rule is
 the ban on motion that carries nothing: no parallax, no scroll-jacking, no
 reveal-on-scroll applied to a paragraph because it was there.
@@ -481,7 +481,7 @@ Faster than 70ms reads as a glitch, slower than 300ms reads as a wait.
 ### Attracting attention without looking cheap
 
 The free book is the distribution — how a stranger learns the material is good
-before being asked for $39 — so its calls to action have to pull the eye.
+before being asked for $19 — so its calls to action have to pull the eye.
 
 **They do it without a single loop.** An earlier version of this section
 permitted blinking chips, pulsing rings and a shaking floater. That was wrong
@@ -572,7 +572,7 @@ The interface writes the way the book writes: plainly, and never overselling.
   different jobs on this page and reads as machine-written; picking the right
   mark each time forces the clause to be either a real aside or a real sentence.
   For labels and buttons, a middle dot separates (`watch the rep · 13s`) and a
-  preposition joins (`Reserve a seat for $39`). Code comments are not copy and
+  preposition joins (`Reserve a seat for $19`). Code comments are not copy and
   are exempt.
 
 ---

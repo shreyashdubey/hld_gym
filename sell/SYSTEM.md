@@ -15,8 +15,8 @@ Two products that share one identity:
 
 | | **HLD Gym** (the book) | **The Sprint** (this repo) |
 |---|---|---|
-| What | 51 chapters, ~284k words, 197 diagrams, 1,278 questions | 30 reps, one a day |
-| Price | free forever | $39 one-time |
+| What | 51 chapters, ~284k words, 197 diagrams, 1,278 questions | 197 reps and 450 reels in 30 days |
+| Price | free forever | $19 one-time |
 | Role | distribution and the answer key | the thing that produces retention |
 | Stack | single self-contained HTML, built by `build.py` | Next.js 16, TSX, static export |
 | Where | `src/` + `build.py` at the repo root | `sell/` |
@@ -34,9 +34,96 @@ explanation is given away, and the paid product is the part a chat window is bad
 at: making you produce, remembering what you failed, and refusing to be
 agreeable about it.
 
+### The offer, precisely
+
+The sprint covers **the entire book in thirty days**. It is not a sampler, and
+the numbers on the page are not chosen for how they sound: every one is derived
+from two facts a visitor can verify by opening the free book.
+
+| claim on the page | derivation |
+|---|---|
+| 30 topics | 51 chapters over 30 days, so one topic is one or two chapters |
+| **197 reps** | one per diagram in the book; 197 / 30 = **6 or 7 a day** |
+| about an hour a day | 6–7 reps at roughly 7 minutes each |
+| **15 reels a day** | 10 on the topic studied that day + 5 on a finished one |
+| under 4 minutes | 15 × 15s |
+| **450 reels** | 30 × 10 new = 300, plus 30 × 5 revision = 150 |
+
+Two consequences worth stating, because both have already been got wrong once:
+
+1. **A number that cannot be derived does not go on the page.** "30 reps, one a
+   day" was the earlier shape and it quietly meant thirty of 197 diagrams: a
+   buyer with an onsite in five weeks would have finished the sprint having
+   never rebuilt six-sevenths of the book.
+2. **Changing the shape changes copy in five places at once** — the hero strip,
+   the hero lead, the reels section, the price box list, the `<title>` — plus
+   `Reels.tsx`'s own foot note, which lives inside the section that describes it
+   and therefore goes stale independently.
+
+### Planned, not built
+
+Five things are wanted and none of them exist. They are written down here rather
+than on the page, because the page only sells what ships on 1 September. Their
+one public appearance is the reservation form's fifth question, where each is
+labelled **planned, not built** — that question is the instrument that decides
+which of them is worth building after the first payment.
+
+| | what it is | why it is not first |
+|---|---|---|
+| **Playground** | a coach you talk to live while you draw. It makes you think aloud, draws alongside you, and unsticks you where you stall, rather than grading you after the fact | the only one that needs realtime audio and a stateful session, so it is the largest build here by a distance |
+| **LLM grading** | the recall answer and all three probes graded against the chapter, instead of matched against keywords | designed and parked; the regex rubric stays as the fallback. See the Open list |
+| **Reel audio** | ticking under the lease bar, a thud when it empties, a hit on the stale write | additive to a format that is silent-first by spec, so it can land any time |
+| **A record dashboard** | every diagram you can and cannot rebuild, over time | needs the backend, which waits for the first payment |
+| **LLD gym** | the same loop for low-level design | a second product; spec exists at `../docs/superpowers/specs/2026-08-16-lld-gym-design.md` |
+
+**Playground is the interesting one and also the honest problem.** A live coach
+that talks back is the opposite end of the product from the lock: the lock works
+by removing help at the moment it would feel best, and a coach is help on
+demand. Both can be true in one product — you rebuild alone and get scored, then
+take the ones you failed into a session where someone walks you through thinking
+aloud — but the sell page must not blur them, because "an interviewer that
+pushes back" and "a coach that helps" are opposite promises to a buyer and the
+sprint currently sells the first.
+
+Note also what this does to §9 and to the *What you are not buying* section: the
+page says **no one-to-one mentoring** and **no mock interview with a human**.
+Playground does not contradict either — the coach is software, exactly as the
+interviewer already is — but if it ever ships, that copy has to be re-read line
+by line rather than left standing.
+
+### How a reservation is taken
+
+There is **no checkout on the site**, and the page says so where the click
+happens rather than in small print:
+
+```
+CTA (RESERVE_URL) ──► Google Form ──► response lands in the sheet
+                      4 questions      │
+                      + email          ▼
+                                    payment link sent by hand, ≤24h
+                                       │
+                                       ▼
+                                    paid ──► seat, nothing else until 1 Sep
+```
+
+The URL lives in `lib/links.ts` and all three CTAs import it: hero, price box,
+and the one at the end of the free rep. Each opens in a new tab, because the
+form is someone else's page and a visitor who backs out should land on the offer
+rather than a blank history entry.
+
+`NEXT_PUBLIC_RESERVE_URL` overrides it and is read **at build time**. Vercel
+runs no build for this repo (§8), so setting it in the dashboard does nothing;
+it has to be in the environment for `npm run publish:book`. Unset, the constant
+in `lib/links.ts` is what ships.
+
+The form is not a waitlist. A waitlist measures curiosity; this asks for the
+email *in order to send a payment link*, and its last question asks outright
+whether the sender will pay today. See §9 for why that distinction is the whole
+point.
+
 ### The one question this repo currently answers
 
-> Will a stranger pay $39 for the sprint before it exists?
+> Will a stranger pay $19 for the sprint before it exists?
 
 Everything absent from this repo is absent because it does not serve that
 question. See §9.
@@ -388,6 +475,28 @@ Recompute". The probes are drawn from the chapter's own prose (the invalidation
 race, the outage-math figcaption), so the model answers are the book's position,
 not invented.
 
+### What the reels are for, and which topics get them
+
+The reels are one of the two things being sold, and their claim is specific:
+**hard material made easy to consume, not easy material made short.** Anyone can
+cut fifteen seconds on "what is a load balancer". The value is the opposite end
+of the book — consensus, quorum overlap, isolation levels, clock skew — the
+chapters a reader bounces off once and never opens again.
+
+Two rules follow, and they are content rules, not production ones:
+
+1. **Hardest chapters first.** A reel earns its place by covering something the
+   reader was avoiding. Ordering the queue by what is easy to animate produces a
+   feed of things nobody needed explained.
+2. **Simplify the telling, never the claim.** The kernel is the chapter's actual
+   position, compressed; if the fifteen-second version is wrong, it is not a
+   reel, it is a liability on a page that sells accuracy. The format already
+   enforces most of this: one idea, told as something ordinary going wrong, with
+   the system vocabulary withheld until the last two seconds.
+
+`../docs/kernels.md` is the source material, and `reel/`'s header comments carry
+the five-beat template.
+
 ---
 
 ## 8. Build, test, deploy
@@ -455,7 +564,22 @@ proprietors, and Rishabh Goel is on the Shipyard mentor bench.
 | Database | no per-user state yet | with the backend |
 | LLM interviewer | a hand-written probe set demos the mechanic at zero cost and zero downtime risk | when building the real rep engine |
 | Waitlist / email capture | signups measure curiosity; the gate is `≥1 person prepays` | never as a substitute for the payment |
+| Checkout on the site | a payment rail is a merchant account, a product page and a webhook, none of which move the one question. A form plus a hand-sent link takes a real payment today | when the volume makes hand-sending the bottleneck |
 | Analytics | the metric is payments, and Gumroad reports those | if traffic needs attribution |
+
+**The reservation form is not the waitlist this table forbids.** The difference
+is what happens next: a waitlist ends at the email, and this one exists to send
+a payment link within 24 hours, with a final question asking outright whether
+the sender will pay today. If it ever starts collecting addresses that are not
+followed by a link, it has become the thing the row above rules out.
+
+Its fifth question — *which part of this do you most want?* — is the one piece
+of research the page does, and it is free because the buyer is already in the
+form. Five of its ten options are labelled **planned, not built** (§1), so an
+answer is a vote on what gets built after the first payment rather than a
+promise that it exists. Labelling them is not optional: the standing rule
+against claiming what the product does not do covers the form as much as the
+page.
 
 When the backend arrives, the spend instrument's stack ports directly:
 FastAPI + Postgres + bcrypt + opaque session token in an httpOnly cookie
@@ -466,7 +590,9 @@ partner.
 
 ## 10. Known limits
 
-- **One rep.** The page says so; do not let it imply thirty exist.
+- **One rep.** The page says so; do not let it imply the 197 exist.
+- **Four reels of 450.** The page says so, in the section that sells the 450 and
+  again in `Reels.tsx`'s own foot note. Both say it because both are read.
 - **Probes are hand-written.** Stated on the page. The product generates them.
 - **Rubric is keyword-based**, and the cost is measured, not estimated: nonsense
   with the right words scores **6/6**, a *fully reversed* read path scores
@@ -517,6 +643,7 @@ app/
   globals.css         tokens + every component style
 components/
   Rep.tsx             the five-phase state machine
+  Reels.tsx           the reel rail, playlist and fullscreen
   Diagram.tsx         DiagramWide + DiagramNarrow + the idle pulse
   Toggles.tsx         theme + text size cycles (useSyncExternalStore)
   StudyChart.tsx      the Roediger & Karpicke slope chart
@@ -539,7 +666,14 @@ The book and the reels live at the repo root:
 ../
   build.py            assembles src/ into dist/book/index.html
   src/                chapters, app.js, style.css, template.html
-  dist/               ← Vercel's output directory, serves BOTH
+  dist/               ← Vercel's output directory, serves ALL THREE
     index.html          the sprint (copied by publish:book)
     book/index.html     the book (written by build.py)
+    reels/*.mp4         the reel encodes (written by reel/make.sh)
 ```
+
+`/reels` is an asset directory, not a route: `Reels.tsx` plays
+`/reels/reel<NN>-<cut>.mp4`, two encodes per reel because a rendered video
+cannot follow the theme the way the rest of the site does (`paper` for light,
+`dark` for everything else). Locally `python3 -m http.server` will happily list
+that directory; on Vercel a directory with no `index.html` is a 404.
