@@ -114,8 +114,9 @@ CTA (RESERVE_URL) ──► Google Form ──► response lands in the sheet
                                     paid ──► seat, nothing else until 1 Sep
 ```
 
-The URL lives in `lib/links.ts` and all three CTAs import it: hero, price box,
-and the one at the end of the free rep. Each opens in a new tab, because the
+The URL lives in `lib/links.ts` and all four CTAs import it: hero, price box,
+the one at the end of the free rep, and the footer's text link. Each opens in a
+new tab, because the
 form is someone else's page and a visitor who backs out should land on the offer
 rather than a blank history entry.
 
@@ -144,7 +145,7 @@ A rep is the product's unit of work. Not a chapter: a chapter is a commitment
 with no natural end, and a gym has sets.
 
 ```
-   ┌────────┐  click   ┌──────────┐  ~13s   ┌────────┐  submit  ┌────────┐  reveal  ┌──────┐
+   ┌────────┐  click   ┌──────────┐  ~12s   ┌────────┐  submit  ┌────────┐  reveal  ┌──────┐
    │  idle  │ ───────► │ watching │ ──────► │ locked │ ───────► │ graded │ ───────► │ done │
    └────────┘          └──────────┘         └────────┘          └────────┘          └──────┘
    diagram             steps 1..5           SVG unmounts        rubric score        diagram
@@ -171,7 +172,7 @@ type Phase = "idle" | "watching" | "locked" | "graded" | "done";
    failing is the experience that sells the product.
 
 2. **watching** — five steps reveal on a 2200ms cadence (`STEP_MS`), each with a
-   narration line. Total ≈ 11.7s plus a 700ms lead-in. Under
+   narration line. Total ≈ 11.4s after a 700ms lead-in, so `WATCH_S` is 12. Under
    `prefers-reduced-motion` the CSS drops the draw transitions, so each step
    pops in complete on the same cadence with its narration line. An earlier
    branch skipped to the finished diagram and locked after 1.2s, which removed
@@ -438,6 +439,7 @@ writes `localStorage` (wrapped in try/catch for private mode) and notifies.
 | `components/StudyChart.tsx` | `"use client"` — draws on scroll into view |
 | `components/BookButton.tsx` | `"use client"` — fills on scroll into view |
 | `components/FreeBookFab.tsx` | `"use client"` — the phone floater |
+| `components/Reels.tsx` | `"use client"` — the reel rail: observer-driven play/pause, playlist, fullscreen |
 
 The route is statically prerendered (`○ (Static)` in build output). The only
 client JavaScript is the rep loop, the two header toggles, and three small
@@ -561,9 +563,10 @@ rewrite maps `/book` and `/book/` to `/book/index.html` — necessary because
 gated on `NODE_ENV` and dropped by `output: "export"`, so production never sees
 it. Use `npm run preview` to check the real thing.
 
-**Before going live:** set `NEXT_PUBLIC_BUY_URL` to the Gumroad link. Until it
-is set the buy button is a dead `#buy` anchor **on purpose** — an unwired page
-must not look live.
+**The buy buttons open the reservation form** (`RESERVE_URL` in `lib/links.ts`,
+overridable at build time by `NEXT_PUBLIC_RESERVE_URL`; see §1 *How a
+reservation is taken*). There is no on-site checkout and no Gumroad link on the
+page: the payment link goes out by email after a form response.
 
 **Payments:** Gumroad is chosen for speed alone (sign up and sell the same day,
 USD, works from India, ~10% fees which are irrelevant at three sales). Dodo
@@ -632,7 +635,8 @@ partner.
 
 ## 11. Where the free book is linked
 
-The book is the distribution, so the page routes to it five ways. None of them
+The book is the distribution, so the page routes to it six ways, plus two
+chapter deep links in *Before you pay*. None of them
 loop, blink or shake — see `DESIGN-SYSTEM.md` §8 for why that was tried and
 removed.
 
@@ -669,10 +673,16 @@ components/
   StudyChart.tsx      the Roediger & Karpicke slope chart
   BookButton.tsx      free-book button, fills on first view
   FreeBookFab.tsx     phone-only floating book link
+  Reels.tsx           the reel rail, playlist, fullscreen; takes the section prose as children
 lib/
-  rep.ts              rep content: steps, rubric, probes, verdicts
+  rep.ts              rep content: steps, rubric, probes, verdicts, timings
   rep.test.ts         rubric tests (npm test)
   prefs.ts            theme + text size constants, pre-paint init script
+  links.ts            RESERVE_URL, BOOK_URL, PRICE
+  reels.ts            the four reels: id, kernel, told-as, chapter
+  site.ts             the absolute origin, for metadata and structured data
+  schema.ts           JSON-LD graph (Organization, WebSite, Book, Product, VideoObjects)
+app/robots.ts, sitemap.ts, manifest.ts   metadata routes, force-static
 next.config.ts        static export, trailing slash, dev-only /book rewrite
 AGENTS.md             read order and workflow (CLAUDE.md imports it)
 PROGRESS.md           dated log of what shipped and why

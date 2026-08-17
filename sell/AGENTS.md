@@ -101,7 +101,9 @@ from the DOM, "the animation is visible" is not, and they are different claims.
   built, looked cheap, and were removed. Attention comes from solid colour, a
   number instead of an adjective, and one movement on arrival.
   `DESIGN-SYSTEM.md` §8.
-- **Two accent fills never share a viewport.** One primary action per screen.
+- **Two accent actions never share a viewport.** One primary action per screen.
+  A self-labelling box's strip (`.repTag`, `.priceH`) is a label, not an action,
+  and sits above its own button by design (`DESIGN-SYSTEM.md` §5.1).
 - **Every reading-text rule is `calc(Npx * var(--fs))`** or the text-size
   control cannot scale it.
 - **The rubric matches stems, not exact words.** A false negative makes the
@@ -113,9 +115,10 @@ from the DOM, "the animation is visible" is not, and they are different claims.
   are 45s files (`PACE = 3`), so the page says 45s and "about eleven minutes",
   not the 15s the story was written at. `grep -c '—' dist/index.html` must
   print `0`.
-- **Each disclosure lives in one place.** Four reels: the fact line above the
-  player. Hand-written probes and keyword score: the rep, plus one Q&A entry.
-  Form-not-checkout: the hero hint and *What happens after you click*.
+- **Each disclosure lives in one place, plus the *What exists today* answer,
+  which is the summary.** Four reels: the fact line above the player.
+  Hand-written probes and keyword score: the rep. Form-not-checkout: the hero
+  hint and *What happens after you click*.
 - Model answers are never rendered before the learner commits.
 
 ## Facts not worth re-deriving

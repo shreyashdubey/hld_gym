@@ -14,10 +14,11 @@ import { BOOK_URL, PRICE, RESERVE_URL } from "@/lib/links";
       line under each heading must still know what this is, what it costs, when
       it starts, and why the lock exists. The prose is for the minority who want
       it, never the load-bearing path.
-   2. Each disclosure lives in one place. "Four reels exist" is said once, above
-      the reels; "the follow-ups are hand-written" once, in the rep and once in
-      the offer's Q&A. A fact repeated four times reads as nervousness, and a
-      page asking a stranger for money cannot afford to look nervous.
+   2. Each disclosure lives in one place, plus the "What exists today" answer,
+      which is the summary. "Four reels exist" is the fact line above the reels;
+      "the follow-ups are hand-written" and "the score is keyword" are in the
+      rep. A fact repeated four times reads as nervousness, and a page asking a
+      stranger for money cannot afford to look nervous.
    3. Section order follows the argument: the demo, how it works, why the lock
       works, then the reels as the supporting act, then the book, then the
       offer. The evidence for the lock sits next to the lock.
@@ -82,14 +83,14 @@ export default function Home() {
           </Link>
           <span className="spacer" />
           <a className="mini" href={BOOK_URL}>
-            Read the book <span className="freeChip">free</span>
+            <span className="miniLong">Read the </span>book <span className="freeChip">free</span>
           </a>
           <TextSizeToggle />
           <ThemeToggle />
         </div>
       </header>
 
-      <main className="wrap">
+      <main className="wrap" id="main">
         <section className="hero">
           <div className="heroGrid">
             <div className="heroCopy">
@@ -110,7 +111,7 @@ export default function Home() {
             <div className="heroCard">
               <div className="termbar termCol">
                 <div>
-                  <b>$19</b>
+                  <b>{PRICE}</b>
                   <span>one time</span>
                 </div>
                 <div>
@@ -143,7 +144,7 @@ export default function Home() {
               </p>
               <p className="alt">
                 Not ready to buy? <a href={BOOK_URL}>Read all 51 chapters free</a>, no signup, or{" "}
-                <a href="#offer">see everything the $19 buys</a>.
+                <a href="#offer">see everything the {PRICE} buys</a>.
               </p>
             </div>
           </div>
@@ -248,7 +249,7 @@ export default function Home() {
           <h2>The revision you will actually do</h2>
           <p className="key">
             Ten teach the day&rsquo;s topic. Five bring back one you finished, because nobody
-            re-opens a chapter from three weeks ago and everybody watches one more.
+            re&#8209;opens a chapter from three weeks ago and everybody watches one more.
           </p>
           <div className="termbar">
             <div>
@@ -413,7 +414,8 @@ export default function Home() {
               </h4>
               <p>
                 Sixty seconds: when you interview, at what level, where it breaks for you, which
-                part of this you want most, and your email. No account, no password, no card.
+                part of this you want most, whether you would pay today, and your email. No
+                account, no password, no card.
               </p>
             </div>
             <div>
@@ -421,7 +423,7 @@ export default function Home() {
                 <span className="n">02</span> I email you the payment link
               </h4>
               <p>
-                Within 24 hours, to the address you gave. $19, one time. If you change your mind
+                Within 24 hours, to the address you gave. {PRICE}, one time. If you change your mind
                 you simply do not click it.
               </p>
             </div>
@@ -440,7 +442,7 @@ export default function Home() {
             <div>
               <h3>What you are not buying</h3>
               <p className="key">
-                Said plainly, so nobody pays $19 for a thing they thought was included.
+                Said plainly, so nobody pays {PRICE} for a thing they thought was included.
               </p>
               <ul className="plain">
                 <li>
@@ -471,8 +473,10 @@ export default function Home() {
                 <li>
                   <strong>What exists today?</strong> The book, all of it. The rep on this page,
                   hand-built: its follow-ups were written in advance and its score is keyword
-                  matching; in the product the follow-ups are generated against your answer. Four
-                  reels of the 450. The sprint itself ships 1 September.
+                  matching. In the sprint the follow-ups are generated against your answer; the
+                  score still matches your words against the chapter&rsquo;s points, and grading
+                  them with a model is planned, not built. Four reels of the 450. The sprint
+                  itself ships 1 September.
                 </li>
                 <li>
                   <strong>Why not quiz myself with a chat window?</strong> You can, for one rep,
@@ -501,7 +505,7 @@ export default function Home() {
                   <a href={`${BOOK_URL}#ch/p2c03`}>Consensus, Leader Election and Fencing</a> or{" "}
                   <a href={`${BOOK_URL}#ch/p3c08`}>Ticketmaster: Booking Under Pressure</a> and
                   read at the depth the reps are set to. If the chapter is below the bar you need,
-                  keep your $19.
+                  keep your {PRICE}.
                 </li>
                 <li>
                   <strong>Anything else?</strong> Email{" "}
@@ -517,6 +521,9 @@ export default function Home() {
           </div>
         </section>
 
+      </main>
+      {/* Outside <main>, so it is the page's contentinfo landmark. */}
+      <div className="wrap">
         <footer>
           {/* A plain text route back to the ask: the page ends 1,100px after the
               last button, and a third accent fill is not wanted. */}
@@ -526,7 +533,7 @@ export default function Home() {
             shipping in public through Project Shipyard S3
           </p>
         </footer>
-      </main>
+      </div>
 
       <FreeBookFab />
     </>

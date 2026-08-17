@@ -146,8 +146,9 @@ section > h2,
 section > h3,
 section > .eyebrow,
 section > .key,
-section > ul,
-footer > p { max-width: var(--measure); }
+section > ul { max-width: var(--measure); }
+/* footer > p is a credit line, not reading text; at the measure it wrapped its
+   last three words onto a second line at every desktop width. */
 
 /* ---------- chrome ---------- */
 
@@ -224,8 +225,14 @@ footer > p { max-width: var(--measure); }
 @media (max-width: 560px) {
   .prefBtn .pn { display: none; }
   .prefBtn { padding: 7px 9px; }
-  .mini { font-size: 13px; }
+  .mini { font-size: 13px; white-space: nowrap; }
   .topbarInner { gap: 9px; }
+}
+/* Under 400px "Read the book" wrapped onto two lines with the chip on its own
+   line, and the header grew. "book · FREE" is the same route in half the width. */
+@media (max-width: 380px) {
+  .miniLong { display: none; }
+  .mini { text-transform: capitalize; }
 }
 
 /* ---------- type ---------- */
@@ -262,6 +269,7 @@ h3 {
   margin: 40px 0 10px;
 }
 p { margin: 0 0 16px; }
+p, li, .spec td { text-wrap: pretty; }   /* no one-word last lines */
 p:last-child { margin-bottom: 0; }
 strong { font-weight: 700; }
 
@@ -305,6 +313,8 @@ strong { font-weight: 700; }
 
 section { padding: 46px 0; border-bottom: 1px solid var(--line); }
 section.hero { padding: 58px 0 26px; border-bottom: 0; }
+/* On a phone every pixel above the two buttons is a pixel of fold. */
+@media (max-width: 599px) { section.hero { padding-top: 40px; } }
 
 ul.plain { padding-left: 19px; margin: 0 0 16px; }
 ul.plain li { margin-bottom: 8px; }
@@ -343,6 +353,12 @@ ul.plain li { margin-bottom: 8px; }
   line-height: 1.5;
 }
 .narr .n { color: var(--accent-ink); font-weight: 600; }
+/* Clearance between the stage (lock box, or the redraw's narration rule) and
+   the prompt under it; it sat flush while everything else in the rep had 14. */
+.repBody .stage + div { margin-top: 14px; }
+/* The rep is structural and takes the shell, but its prose is prose: the model
+   answers are the longest paragraphs on the page and ran 130 characters. */
+.repBody :is(label.q, .model, p.hint) { max-width: var(--measure); }
 
 .locked {
   min-height: 268px;
@@ -416,6 +432,9 @@ textarea {
   min-height: 118px;
 }
 textarea:focus { border-color: var(--accent); }   /* the global :focus-visible ring stays */
+/* The answer stays on the page after submit as a record, not a field. */
+textarea:read-only { border-color: var(--line); background: var(--panel-2); resize: none; }
+textarea:read-only:focus { border-color: var(--line-strong); }
 
 label.q {
   display: block;
@@ -519,6 +538,11 @@ label.q {
 }
 .grid2 > div p { font-size: calc(15px * var(--fs)); line-height: 1.55; margin: 0; }
 @media (max-width: 559px) {
+  /* Same class, same width: the offer's Reserve was a 206px pill under a
+     full-width hero button, and it is the page's real ask. */
+  .priceB .btnRow { flex-direction: column; align-items: stretch; }
+  .priceB .btn, .bookBtn { text-align: center; }
+  .btnRow > .bookBtn { flex: 1 1 100%; }
   /* One column is a list, not a grid: hairlines between rows, no boxes. */
   .grid2 { border: 0; border-top: 1px solid var(--line-strong); }
   .grid2 > div { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 0 14px; }
@@ -615,6 +639,8 @@ label.q {
   .spec tr:last-child { border-bottom: 0; }
   .spec td { display: block; padding: 0; border: 0; }
   .spec td.tag { grid-column: 1 / -1; }
+  .spec .num { padding-right: 0; }
+  .spec .num::after { content: " chapters"; }   /* the hidden header, carried along */
 }
 
 /* Two prose blocks side by side on desktop, so the tail of the offer does not
@@ -645,13 +671,16 @@ label.q {
   margin-bottom: 10px;
 }
 .amount .cur { font-size: calc(22px * var(--fs)); vertical-align: super; margin-right: 1px; }
+/* A block under the numeral, like a terms cell: inline it wrapped mid-phrase at
+   the largest text size and dropped "subscription" a full numeral line down. */
 .amount .per {
+  display: block;
   font-family: var(--font-mono), monospace;
   font-size: calc(12px * var(--fs));
   font-weight: 400;
   color: var(--ink-3);
   letter-spacing: 0.06em;
-  margin-left: 8px;
+  margin: 8px 0 0;
 }
 
 footer { padding: 34px 0 70px; }
@@ -690,6 +719,9 @@ footer { padding: 34px 0 70px; }
 @media (max-width: 719px) {
   .stage svg.dgWide { display: none; }
   .stage svg.dgNarrow { display: block; }
+}
+@media (max-width: 560px) {
+  .repTag { letter-spacing: 0.08em; padding-inline: 12px; }   /* one line at largest text */
 }
 
 /* ---------- motion ---------- */
@@ -839,6 +871,7 @@ footer { padding: 34px 0 70px; }
     grid-template-columns: 300px minmax(0, 1fr);
     column-gap: 48px;
     grid-template-areas: "amount list" "intro list" "cta list";
+    grid-template-rows: auto auto 1fr;   /* or the spanning list stretches all three */
     align-content: start;
   }
   .priceB > .amount { grid-area: amount; }
@@ -859,11 +892,16 @@ footer { padding: 34px 0 70px; }
    go first: on a 390px phone the strip pushed both calls to action off the
    first screen, and the price is in the button anyway. */
 .heroCard { display: flex; flex-direction: column; }
-.heroCard .termbar { order: 3; margin: 4px 0 0; }
-.heroCard .btnRow { order: 1; margin-top: 0; flex-direction: column; align-items: stretch; }
+/* display: contents on the button row so the payment hint can sit under the
+   button it describes (Reserve), not under the ghost one. Order: Reserve, its
+   hint, Try a free rep, the strip (phone), the free-book line. */
+.heroCard .btnRow { display: contents; }
 .heroCard .btn { text-align: center; }
+.heroCard .btn:not(.ghost) { order: 1; }
 .heroCard .hint { order: 2; margin-top: 8px; }
-.heroCard .alt { order: 4; text-wrap: pretty; }
+.heroCard .btn.ghost { order: 3; margin-top: 12px; }
+.heroCard .termbar { order: 4; margin: 4px 0 0; }
+.heroCard .alt { order: 5; text-wrap: pretty; }
 
 @media (min-width: 1000px) {
   .heroGrid {
@@ -876,9 +914,7 @@ footer { padding: 34px 0 70px; }
      and not four stacked (each cell was 80% empty and the card ran 83px past
      the copy with the button level with the last line of the h1). */
   .heroCard .termbar { order: 0; margin: 6px 0 0; }
-  .heroCard .btnRow { order: 0; margin-top: 14px; }
-  .heroCard .hint { order: 0; margin-top: 8px; }
-  .heroCard .alt { order: 0; }
+  .heroCard .btn:not(.ghost) { margin-top: 14px; }
   .termCol > div { flex: 1 1 50%; border-bottom: 1px solid var(--line-strong); }
   .termCol > div:nth-child(2n) { border-right: 0; }
   .termCol > div:nth-last-child(-n + 2) { border-bottom: 0; }
@@ -983,7 +1019,7 @@ footer { padding: 34px 0 70px; }
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
+  text-transform: lowercase;
   padding: 2px 5px;
   margin-left: 6px;
   vertical-align: 1px;
@@ -1045,9 +1081,9 @@ footer { padding: 34px 0 70px; }
   background: var(--accent);
   color: var(--on-accent);
   border: 1px solid var(--accent);
-  padding: 12px 16px;
+  padding: 9px 12px;
   font-family: var(--font-ui), system-ui, sans-serif;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: -0.01em;
   text-decoration: none;
@@ -1066,7 +1102,7 @@ footer { padding: 34px 0 70px; }
 .fabInner { display: inline-flex; align-items: baseline; gap: 7px; }
 /* The count is the argument. "Free" alone is a claim; "51 chapters" is a
    reason, and a number is read faster than a sentence. */
-.fabNum { font-family: var(--font-mono), monospace; font-size: 15px; font-weight: 700; }
+.fabNum { font-family: var(--font-mono), monospace; font-size: 14px; font-weight: 700; }
 .fab:active { transform: translateY(1px); }
 
 @media (prefers-reduced-motion: reduce) {

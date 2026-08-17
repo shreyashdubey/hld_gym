@@ -29,7 +29,10 @@ control; if it does not, it must not.
 **Lowercase is chrome, capitals are prose.** Everything the machine says about
 itself is lowercase — labels, tabs, buttons, status strips. Everything a human
 wrote for another human keeps normal sentence case. You can tell at a glance
-which voice you are reading.
+which voice you are reading. The page's own calls to action (*Reserve a seat
+for $19*, *Try a free rep first*) speak as the author and are sentence case;
+the rep's controls (*watch the rep · 12s*, *submit, no going back*) report
+machine state and are lowercase.
 
 **Orange is the record button.** TE reserves red for record. Here, the accent is
 reserved the same way: the primary action, the active state, the one thing that
@@ -109,8 +112,11 @@ so when the buy button arrived it was one more orange thing.
 is primary, so the free book is a text link there. In the book's own section
 there is no buy button, so the book button *is* the primary and takes the accent
 fill. Beside the buy button in the rep it drops back to an outline. The rule to
-hold is that **two accent fills never share a viewport** — a screen with two is a
-screen with none.
+hold is that **two accent actions never share a viewport** — a screen with two is a
+screen with none. A self-labelling box's strip (§5.1) is a label, not an action:
+the rep's tag strip sits above the rep's one button, and the price box's strip
+above the buy button, and that pairing is the pattern, not a violation. The
+header's brand mark and `free` chip are chrome and do not count either.
 
 ### 2.3 Text on accent is near-black, not white
 
@@ -168,7 +174,8 @@ column.
 - `border-radius: 0` — everywhere, no exceptions
 - `box-shadow: none` — depth is expressed by borders and surface tokens
 - borders are `1px` — `1.3–1.6px` only inside SVG diagrams, where the viewBox
-  scales them
+  scales them; two deliberate exceptions are rules, not borders: the model
+  answer's 3px accent left rule (§5.5) and the active reel row's 2px
 - no background gradients, no grid textures, no blur
 
 **Surfaces** are distinguished by token, not elevation: `--paper` for the page,
@@ -279,8 +286,8 @@ Used for facts that are numbers: price and dates in the hero, the book's totals
 further down. It exists because **the numbers are what a skimming reader
 actually takes in**, and burying them inside sentences hides the whole offer.
 
-Rules: numerals in the UI face at 20px with `tabular-nums`; captions ≤ 3 words,
-so a cell never wraps to a second line and the row stays even; two columns
+Rules: numerals in the UI face at 20px with `tabular-nums`; captions short
+enough never to wrap at 390px (four short words at most), so the row stays even; two columns
 below 560px. Never more than four cells — a fifth stops being a glance. The
 strip carries 18px below it, so whatever follows never sits flush on its rule.
 
@@ -348,7 +355,7 @@ bare `px` in prose is a bug — it will be the one line that refuses to grow.
 
 ### 5.10 The free-book routes
 
-The book is the distribution, so the page carries five routes to it, each pitched
+The book is the distribution, so the page carries six routes to it, each pitched
 so it never competes with the buy button:
 
 | place | treatment |
@@ -588,7 +595,7 @@ The interface writes the way the book writes: plainly, and never overselling.
   colon, whichever the sentence actually needs. The em dash was doing three
   different jobs on this page and reads as machine-written; picking the right
   mark each time forces the clause to be either a real aside or a real sentence.
-  For labels and buttons, a middle dot separates (`watch the rep · 13s`) and a
+  For labels and buttons, a middle dot separates (`watch the rep · 12s`) and a
   preposition joins (`Reserve a seat for $19`). Code comments are not copy and
   are exempt.
 

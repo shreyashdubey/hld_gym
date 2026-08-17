@@ -86,9 +86,13 @@ export default function Reels({ children }: { children?: React.ReactNode }) {
         for (const e of entries) {
           const video = e.target.querySelector("video");
           if (!video) continue;
-          if (e.isIntersecting && e.intersectionRatio > 0.6) {
+          if (e.isIntersecting && e.intersectionRatio >= 0.6) {
             setActive(Number((e.target as HTMLElement).dataset.slide));
-            void video.play().catch(() => {});
+            /* Under reduced motion the reel waits on its poster and plays on
+               a click, like any other video; a 45s loop that starts itself is
+               exactly the motion that preference asks not to see. */
+            if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+              void video.play().catch(() => {});
           } else {
             video.pause();
             if (e.intersectionRatio === 0) video.currentTime = 0;
@@ -165,7 +169,7 @@ export default function Reels({ children }: { children?: React.ReactNode }) {
                  are empty rectangles until you scroll to them, and the first one
                  flashes blank while it buffers. Frame 0 is the hook card, so it
                  gives nothing away. */
-              poster={`/reels/reel${r.id}-${cut}.jpg`}
+              poster={theme !== null ? `/reels/reel${r.id}-${cut}.jpg` : undefined}
               muted
               loop
               playsInline

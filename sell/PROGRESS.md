@@ -1376,10 +1376,48 @@ crosses the origin: the sell page's init script falls back to the book's
 `hldgym_v1` theme before the OS, so a Blueprint reader does not land on a Paper
 page.
 
+**The chart mixed two experiments.** Its five-minute pair read 81 / 75, which
+are Experiment 1's numbers (one test vs restudy); the one-week pair 40 / 61 is
+Experiment 2's. Checked against the PDF this time: Experiment 2 is 83 / 71 at
+five minutes and 40 / 61 at one week, and the chart now says so. A chart on a
+page asking for money ships only with numbers read off the source, and the
+comment that said "checked against the source, not recalled" had been recalled.
+
 **Share card.** `reel/og.mjs` renders `reel/og.html` to `sell/public/og.png`,
 1200×630 in the page's own tokens; `layout.tsx` sets `metadataBase`, canonical,
 `og:image`, `twitter:image`. `.gitignore` gains `!sell/public/og.png`. Re-run
 `node reel/og.mjs` if the h1 or the strip numbers change.
+
+**A verification round, five more independent passes over the rebuilt page**
+(rules, code, browser QA with Playwright, buyer, design), and what it changed:
+the sprint's score is now stated in *What exists today* ("still matches your
+words against the chapter's points, and grading them with a model is planned,
+not built"), which is what `SYSTEM.md` §1 and the form's Q5 already said and
+the page had not; "hold the line when you argue with it" was cut from the
+chat-window answer, since the offer specifies three follow-ups and nothing
+about a reply to your defence; "197 reps, one for every diagram" now says "a
+first sight of every diagram, and what you failed comes back on top of that",
+because a returned diagram is a 198th rep and the two claims contradicted;
+"The questions people ask" became "Answered by the person building it", since
+nobody has asked yet; the reels wait on their poster under
+`prefers-reduced-motion` and play on a click; the poster attribute the SEO
+commit added is gated on hydration like `preload`, or a light-theme visitor
+fetched four dark posters and then four paper ones; the init script reads
+storage in its own `try`, because with cookies blocked it stamped no theme at
+all and the reels picked the dark cut on a white page; the marker-defs SVG in
+the rep is pinned to 0×0 (`.stage svg { width: 100% }` had stretched it to the
+page width); the header's *Read the book* hides "Read the" under 380px instead
+of wrapping onto three lines; the footer is outside `<main>` so it is the
+contentinfo landmark; and a dozen seams the design pass measured (the price
+meta wrapping at largest text, the prompt flush on the lock box, the price
+grid stretching its left column, the payment hint hugging the wrong button, the
+footer credit wrapping at the measure, three widths of the same button on a
+phone, the FAB's footprint over prose, the rep's prose at 130 characters,
+`re-opens` breaking at its hyphen). Doc drift caught by the rules pass is fixed
+in `SYSTEM.md` (§8's `NEXT_PUBLIC_BUY_URL` paragraph, 13s → 12s, four CTAs, six
+book routes, §6/§12 file map), `DESIGN-SYSTEM.md` (accent *actions*, not fills;
+the strip is a label; sentence-case CTAs vs lowercase controls; the two non-1px
+rules named; caption length) and `AGENTS.md`.
 
 **Not done, and why:** the live Google Form still lists three unbuilt features
 unlabelled and is missing six of README's ten Q5 options: a Forms edit, not
@@ -1506,6 +1544,10 @@ types.
       one back (the brand mark, plus the sidebar home). The asset that gets
       posted is the book; a plain sprint line at chapter end and on the book's
       home (`src/app.js`, no claim beyond what the page makes) closes the loop.
+- [ ] **How is access granted after payment?** "Lifetime access" and "no
+      account" are both on the page; the mechanism (a link to the same email,
+      a login, something else) is not, and a senior engineer notices. Decide
+      with the backend, then say it in step 03.
 - [ ] **Days gated or open?** Whether day N unlocks on its date or all thirty
       are open from 1 September is undecided and therefore unsaid; a buyer with
       an onsite on 15 September asks exactly this. Decide, then say it in

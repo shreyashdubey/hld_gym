@@ -98,7 +98,7 @@ export default function Rep() {
   const again = (e: React.MouseEvent) => {
     e.preventDefault();
     timers.current.forEach(clearTimeout);
-    timers.current = [];
+    timers.current.length = 0;   /* in place: the unmount cleanup holds this array */
     setRevealed(false);
     setRecall("");
     setArmed(-1);
@@ -118,7 +118,9 @@ export default function Rep() {
         <div className={`stage${phase === "idle" ? " dgIdle" : ""}`} ref={stageRef}>
           {showDiagram ? (
             <>
-              <svg width="0" height="0" aria-hidden="true" style={{ position: "absolute" }}>
+              {/* width/height in the style too: .stage svg { width: 100% } beats
+                  the attributes and stretched this to the page width. */}
+              <svg width="0" height="0" aria-hidden="true" style={{ position: "absolute", width: 0, height: 0 }}>
                 <defs>
                   <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
                     markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -178,8 +180,9 @@ export default function Rep() {
         {phase !== "idle" && phase !== "watching" && (
           <div>
             <label className="q" htmlFor="recall">
-              Rebuild it. Name every step of the read path, in order, and say what the app is
-              responsible for.
+              {phase === "locked"
+                ? "Rebuild it. Name every step of the read path, in order, and say what the app is responsible for."
+                : "What you wrote"}
             </label>
             <textarea
               id="recall"

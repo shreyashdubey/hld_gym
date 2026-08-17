@@ -43,19 +43,24 @@ export const SIZE_KEY = "hldsprint_size";
    The hldgym_v1 fallback: the book shares this origin and keeps its theme under
    that key. A reader arriving from a Blueprint book should not land on a Paper
    page, so the book's choice is read before the OS is. Once a toggle is used
-   here, this page's own key wins, as before. */
+   here, this page's own key wins, as before.
+
+   Storage is read inside its own try: with cookies blocked, localStorage
+   throws, and one try around everything meant no theme was stamped at all,
+   so the OS preference was ignored and the reels picked the dark cut on a
+   white page. */
 export const PREFS_INIT_SCRIPT = `
 (function(){
+  var d = document.documentElement, t = null, f = null;
   try {
-    var d = document.documentElement, s = localStorage;
-    var t = s.getItem(${JSON.stringify(THEME_KEY)});
-    if (!t) { try { t = JSON.parse(s.getItem('hldgym_v1') || '{}').theme || null; } catch (e) {} }
-    if (${JSON.stringify(THEMES)}.indexOf(t) < 0) {
-      t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    d.dataset.theme = t;
-    var f = s.getItem(${JSON.stringify(SIZE_KEY)});
-    d.dataset.fs = ${JSON.stringify(SIZES)}.indexOf(f) < 0 ? 'm' : f;
+    t = localStorage.getItem(${JSON.stringify(THEME_KEY)});
+    if (!t) t = JSON.parse(localStorage.getItem('hldgym_v1') || '{}').theme || null;
+    f = localStorage.getItem(${JSON.stringify(SIZE_KEY)});
   } catch (e) {}
+  if (${JSON.stringify(THEMES)}.indexOf(t) < 0) {
+    t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  d.dataset.theme = t;
+  d.dataset.fs = ${JSON.stringify(SIZES)}.indexOf(f) < 0 ? 'm' : f;
 })();
 `.trim();

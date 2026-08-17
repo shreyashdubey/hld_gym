@@ -8,8 +8,11 @@ import { useEffect, useRef, type CSSProperties } from "react";
    sentence. The page claims diagrams beat prose for this material; making that
    claim in prose alone undercuts it.
 
-   Figures are the paper's: at five minutes restudying leads 81 to 75, at one
-   week testing leads 61 to 40. Checked against the source, not recalled.
+   Figures are Experiment 2's, checked against the PDF (Roediger & Karpicke
+   2006, Psychological Science 17(3), "Final Tests"): at five minutes SSSS 83%
+   vs STTT 71%, at one week STTT 61% vs SSSS 40%. The five-minute pair used to
+   read 81/75, which are Experiment 1's numbers (one test vs restudy), mixed
+   into Experiment 2's one-week pair. Symptom of "checked from memory".
 
    Series names sit in a legend under the plot rather than beside the line ends.
    Labels hanging off the right edge forced a wide viewBox, and a wide viewBox
@@ -17,7 +20,7 @@ import { useEffect, useRef, type CSSProperties } from "react";
    diagrams were redrawn to avoid. Everything now lives inside 360 units, so one
    drawing works at both widths. */
 
-const V = { readEarly: 81, readLate: 40, recallEarly: 75, recallLate: 61 };
+const V = { readEarly: 83, readLate: 40, recallEarly: 71, recallLate: 61 };
 
 /* Plot box inside the 360x300 viewBox. */
 const X1 = 86;
@@ -70,7 +73,7 @@ export default function StudyChart() {
       <svg
         viewBox="0 0 360 300"
         role="img"
-        aria-label="Recall after five minutes and after one week. Re-reading falls from 81 percent to 40 percent. Recall practice falls from 75 percent to 61 percent, overtaking it."
+        aria-label="Recall after five minutes and after one week. Re-reading falls from 83 percent to 40 percent. Recall practice falls from 71 percent to 61 percent, overtaking it."
       >
         <line className="chAxis" x1={64} y1={TOP} x2={64} y2={BOT} />
         <line className="chAxis" x1={64} y1={BOT} x2={320} y2={BOT} />
@@ -101,10 +104,10 @@ export default function StudyChart() {
         <circle className="chDot chRecallDot" cx={X1} cy={y(V.recallEarly)} r="4" />
         <circle className="chDot chRecallDot" cx={X2} cy={y(V.recallLate)} r="4" />
 
-        <text className="chVal" x={X1} y={y(V.readEarly) - 12} textAnchor="middle">81</text>
-        <text className="chVal" x={X1} y={y(V.recallEarly) + 20} textAnchor="middle">75</text>
-        <text className="chVal chDim" x={X2} y={y(V.readLate) + 20} textAnchor="middle">40</text>
-        <text className="chVal chHot" x={X2} y={y(V.recallLate) - 12} textAnchor="middle">61</text>
+        <text className="chVal" x={X1} y={y(V.readEarly) - 12} textAnchor="middle">{V.readEarly}</text>
+        <text className="chVal" x={X1} y={y(V.recallEarly) + 20} textAnchor="middle">{V.recallEarly}</text>
+        <text className="chVal chDim" x={X2} y={y(V.readLate) + 20} textAnchor="middle">{V.readLate}</text>
+        <text className="chVal chHot" x={X2} y={y(V.recallLate) - 12} textAnchor="middle">{V.recallLate}</text>
 
         <line className="chLine chRead chKey" x1={64} y1={248} x2={92} y2={248} />
         <text className="chSeries chReadTxt" x={100} y={252}>read it 4 times</text>

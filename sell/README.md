@@ -28,7 +28,7 @@ HLD Gym chapter `p1c06`):
 
 ```
 idle      the diagram is alive: scaffold drawn, a pulse running App → Cache → DB
-watch     it builds itself, 5 narrated steps, ~13s
+watch     it builds itself, 5 narrated steps, ~12s
 lock      it disappears — no scrolling back, the panel shutters over it
 rebuild   you reconstruct it from memory into a textarea
 grade     scored against a 6-key rubric, rows ticking in, misses named
@@ -71,7 +71,7 @@ ships**.
 ## Before going live
 
 1. ~~**Create the reservation form.**~~ Done: `https://forms.gle/hkf5buMLV6PsAomp8`,
-   wired into all three CTAs through `lib/links.ts`. To point them somewhere
+   wired into all four CTAs through `lib/links.ts`. To point them somewhere
    else without editing code:
    ```
    NEXT_PUBLIC_RESERVE_URL=https://forms.gle/<id> npm run publish:book
