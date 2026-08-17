@@ -1259,7 +1259,8 @@ assuming:
 - [ ] **Gumroad product not created.** Not blocking any more: the payment link
       is emailed by hand after a form response, so it only has to exist before
       the first reply goes out.
-- [ ] Not deployed to Vercel yet.
+- [x] **Live at `https://hld-gym.vercel.app/`** (2026-08-17). Book at `/book/`,
+      reel encodes serving from `/reels/`, all three CTAs on the form.
 - [ ] Free book not yet posted to r/leetcode, r/ExperiencedDevs, HN, LinkedIn.
 - [ ] **Reels 02–04 not cut.** Renderer and format exist; each new kernel is a
       new `reelNN.html` against the same five-beat template. Shortlist:

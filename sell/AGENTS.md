@@ -23,6 +23,8 @@ file in the same commit as the code.
 
 ## What this is, in 30 seconds
 
+Live at **https://hld-gym.vercel.app/** since 2026-08-17.
+
 A presell page for a **30-day system design sprint** — the whole 51-chapter book,
 197 reps and 450 reels — $19, starting 1 September
 2026. It carries one playable rep: a diagram teaches itself, **locks**, you
