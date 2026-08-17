@@ -28,6 +28,7 @@ export default function Rep() {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const recallRef = useRef<HTMLTextAreaElement>(null);
   const scoreRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const t = timers.current;
@@ -77,6 +78,34 @@ export default function Rep() {
   const score = hits.filter((h) => h.ok).length;
 
   const showDiagram = phase === "idle" || phase === "watching" || phase === "done";
+  const reduced = () =>
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* Reveal: the diagram returns at the top of the panel, so the panel scrolls
+     back to it. Without this the redraw and its "compare it against what you
+     wrote" line played 1,000px above the viewport, and nobody saw the one
+     moment the demo exists for. */
+  const reveal = () => {
+    setRevealed(true);
+    setPhase("done");
+    setStep(STEPS.length);
+    setArmed(STEPS.length);
+    stageRef.current?.scrollIntoView({ block: "start", behavior: reduced() ? "auto" : "smooth" });
+  };
+
+  /* Back to idle, same rep. A second attempt after reading the answers is the
+     Roediger section's whole thesis, and there was no route to it but reload. */
+  const again = (e: React.MouseEvent) => {
+    e.preventDefault();
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    setRevealed(false);
+    setRecall("");
+    setArmed(-1);
+    setStep(0);
+    setPhase("idle");
+    stageRef.current?.scrollIntoView({ block: "start", behavior: reduced() ? "auto" : "smooth" });
+  };
 
   return (
     <div className="rep">
@@ -86,7 +115,7 @@ export default function Rep() {
       </div>
 
       <div className="repBody">
-        <div className={`stage${phase === "idle" ? " dgIdle" : ""}`}>
+        <div className={`stage${phase === "idle" ? " dgIdle" : ""}`} ref={stageRef}>
           {showDiagram ? (
             <>
               <svg width="0" height="0" aria-hidden="true" style={{ position: "absolute" }}>
@@ -143,7 +172,10 @@ export default function Rep() {
           </div>
         )}
 
-        {phase === "locked" && (
+        {/* The answer stays on the page after submit, read-only: the reveal
+            is "the diagram beside what you wrote", and unmounting the textarea
+            on grade left nothing to compare against. */}
+        {phase !== "idle" && phase !== "watching" && (
           <div>
             <label className="q" htmlFor="recall">
               Rebuild it. Name every step of the read path, in order, and say what the app is
@@ -153,15 +185,20 @@ export default function Rep() {
               id="recall"
               ref={recallRef}
               value={recall}
+              readOnly={phase !== "locked"}
               onChange={(e) => setRecall(e.target.value)}
-              placeholder="Write it the way you’d say it to an interviewer…"
+              placeholder={
+                phase === "locked" ? "Write it the way you’d say it to an interviewer…" : "(left blank)"
+              }
             />
-            <div className="btnRow">
-              <button className="btn" onClick={() => setPhase("graded")}>
-                submit, no going back
-              </button>
-              <span className="hint">rough and honest beats polished and looked-up</span>
-            </div>
+            {phase === "locked" && (
+              <div className="btnRow">
+                <button className="btn" onClick={() => setPhase("graded")}>
+                  submit, no going back
+                </button>
+                <span className="hint">rough and honest beats polished and looked-up</span>
+              </div>
+            )}
           </div>
         )}
 
@@ -224,23 +261,26 @@ export default function Rep() {
 
               {!revealed ? (
                 <div className="btnRow">
-                  <button
-                    className="btn"
-                    onClick={() => {
-                      setRevealed(true);
-                      setPhase("done");
-                      setStep(STEPS.length);
-                      setArmed(STEPS.length);
-                    }}
-                  >
-                    show what the chapter says
+                  <button className="btn" onClick={reveal}>
+                    show the diagram again, and what the chapter says
                   </button>
                 </div>
               ) : (
                 <>
+                  {/* Score-aware, and consistent with step 06: a failed diagram
+                      comes back in days, a nailed one in weeks. It used to say
+                      "the diagram is different every time", which contradicted
+                      the one thing the page says a chat window cannot do. */}
                   <p className="hint" style={{ marginTop: 18 }}>
-                    that was one rep. the sprint is 197 of them in thirty days, one for every
-                    diagram in the book, and the diagram is different every time.
+                    that was one rep: {score} of {RUBRIC.length}. in the sprint{" "}
+                    {score <= 4
+                      ? "a score like that brings this diagram back within days"
+                      : "a score like that sends this diagram weeks out"}
+                    , and the next rep is a different diagram. 197 of them in thirty days, one for
+                    every diagram in the book.{" "}
+                    <a href="#rep" onClick={again}>
+                      run this one again
+                    </a>
                   </p>
                   {/* Sentence case, unlike the rep's own controls: these are the
                       page's two actions, the same ones the hero offers. */}

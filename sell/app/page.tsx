@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import Rep from "@/components/Rep";
 import Reels from "@/components/Reels";
@@ -19,7 +20,11 @@ import { BOOK_URL, PRICE, RESERVE_URL } from "@/lib/links";
       page asking a stranger for money cannot afford to look nervous.
    3. Section order follows the argument: the demo, how it works, why the lock
       works, then the reels as the supporting act, then the book, then the
-      offer. The evidence for the lock sits next to the lock. */
+      offer. The evidence for the lock sits next to the lock.
+   4. Budget: about 1,900 rendered words. A copy pass wanted 1,300 and a buyer
+      pass wanted four more answers (topics, chat window, timeline, trust); the
+      answers won because each was a stated bounce point, and the cuts landed
+      everywhere else. Add a paragraph here only by taking one out. */
 
 /* The book's four parts, from ../src/toc.json. Chapter counts sum to 51 and
    the topics are the chapter titles, compressed: a Xu or DDIA reader can see
@@ -50,9 +55,23 @@ const PARTS = [
   },
 ];
 
+/* Robots directives live here, not in the layout: the layout is shared with the
+   404, where Next already emits noindex, and the two together produced a page
+   claiming both at once. */
+export const metadata: Metadata = {
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: { index: true, follow: true, "max-snippet": -1, "max-image-preview": "large" },
+  },
+};
+
 export default function Home() {
   return (
     <>
+      <a className="skip" href="#rep">
+        Skip to the demo
+      </a>
       <header className="topbar">
         <div className="topbarInner">
           {/* Link because "/" is a route in this app. Every /book/ link below stays
@@ -96,7 +115,7 @@ export default function Home() {
                 </div>
                 <div>
                   <b>197 reps</b>
-                  <span>the whole book</span>
+                  <span>one per diagram</span>
                 </div>
                 <div>
                   <b>1 Sep</b>
@@ -123,7 +142,8 @@ export default function Home() {
                 click it, and refunded in full if the sprint does not ship on 1 September.
               </p>
               <p className="alt">
-                Not ready to buy? <a href={BOOK_URL}>Read all 51 chapters free</a>, no signup.
+                Not ready to buy? <a href={BOOK_URL}>Read all 51 chapters free</a>, no signup, or{" "}
+                <a href="#offer">see everything the $19 buys</a>.
               </p>
             </div>
           </div>
@@ -141,9 +161,10 @@ export default function Home() {
 
         <section>
           <p className="eyebrow">how a rep works</p>
-          <h2>Six steps per rep, and the diagram always disappears.</h2>
+          <h2>Six steps, and the diagram always disappears.</h2>
           <p className="key">
-            Watch it once. Then rebuild it without it, six or seven times a day, for thirty days.
+            Watch a diagram once, then rebuild it without it. Six or seven different diagrams a
+            day, and the ones you fail come back.
           </p>
           <div className="grid2">
             <div>
@@ -226,7 +247,8 @@ export default function Home() {
           <p className="eyebrow">15 a day · 450 across the sprint</p>
           <h2>The revision you will actually do</h2>
           <p className="key">
-            Nobody re-opens a chapter they finished three weeks ago. Everybody watches one more.
+            Ten teach the day&rsquo;s topic. Five bring back one you finished, because nobody
+            re-opens a chapter from three weeks ago and everybody watches one more.
           </p>
           <div className="termbar">
             <div>
@@ -268,9 +290,9 @@ export default function Home() {
               the chapter turns on and shows it happening to something you already understand.
             </p>
             <p className="fact">
-              Not because anyone is a &ldquo;visual learner&rdquo;: that idea does not replicate
-              (Pashler, 2008). Because a reel is the picture the interview asks you to draw, built
-              one piece at a time, short enough that you finish it.
+              Not because anyone is a &ldquo;visual learner&rdquo;: that idea has no evidence
+              behind it (Pashler, 2008). Because a reel is the picture the interview asks you to
+              draw, built one piece at a time, short enough that you finish it.
             </p>
           </Reels>
         </section>
@@ -345,9 +367,10 @@ export default function Home() {
               </p>
               <ul className="plain">
                 <li>
-                  <strong>6 or 7 reps a day, 197 across the sprint</strong>: one for every diagram
-                  in the book. Each is the loop on this page: watch, lock, rebuild from memory in
-                  words, defend, score. About an hour.
+                  <strong>6 or 7 reps a day, 197 across the sprint</strong>: a first sight of every
+                  diagram in the book, and what you failed comes back on top of that. Each is the
+                  loop on this page: watch, lock, rebuild from memory in words, defend, score,
+                  return. About an hour.
                 </li>
                 <li>
                   <strong>An interviewer that pushes back</strong>: three follow-ups per rep,
@@ -389,8 +412,8 @@ export default function Home() {
                 <span className="n">01</span> You answer five questions
               </h4>
               <p>
-                Sixty seconds: when you interview, what you keep failing on, which part of this
-                you want most, and your email. No account, no password, no card.
+                Sixty seconds: when you interview, at what level, where it breaks for you, which
+                part of this you want most, and your email. No account, no password, no card.
               </p>
             </div>
             <div>
@@ -430,8 +453,8 @@ export default function Home() {
                   one-to-one mentoring, no certificate.
                 </li>
                 <li>
-                  <strong>No mock interview with a human.</strong> The interviewer is software,
-                  and it is graded against the chapter rather than against a person&rsquo;s mood.
+                  <strong>No mock interview with a human.</strong> The interviewer is software; it
+                  grades you against the chapter, not against anyone&rsquo;s mood.
                 </li>
                 <li>
                   <strong>Not a subscription</strong>, and not a job guarantee. The book rebuilt
@@ -442,7 +465,7 @@ export default function Home() {
             <div>
               <h3>Before you pay</h3>
               <p className="key">
-                The questions people ask, answered by the person building it.
+                Answered by the person building it, before you spend anything.
               </p>
               <ul className="plain">
                 <li>
@@ -455,9 +478,9 @@ export default function Home() {
                   <strong>Why not quiz myself with a chat window?</strong> You can, for one rep,
                   and you should try it tonight. What a chat window will not do for thirty days:
                   take the diagram off the screen before you answer, keep track of which of 197
-                  diagrams you failed, bring the failed one back on day nine unasked, and hold the
-                  line when you argue with it. That is the part being sold. The explanation is
-                  free, in the book, because explanation is free everywhere now.
+                  diagrams you failed, and bring the failed one back on day nine unasked. That is
+                  the part being sold. The explanation is free, in the book, because explanation is
+                  free everywhere now.
                 </li>
                 <li>
                   <strong>My interview is in the middle of September.</strong> The form asks when

@@ -559,7 +559,9 @@ label.q {
   .termbar > div:nth-child(2n) { border-right: 0; }
 }
 
-#rep { scroll-margin-top: 76px; }
+/* Anchors land under a 61px sticky header without this; #buy is kept for
+   external posts, and the hero's text link goes to #offer. */
+#rep, #offer, #buy, #reels, .stage { scroll-margin-top: 76px; }
 
 /* The spec grid (DESIGN-SYSTEM §5.3): a table as an instrument panel. Used for
    the four parts of the book, which is the sprint's syllabus stated in numbers
@@ -1232,4 +1234,29 @@ footer { padding: 34px 0 70px; }
   .reels { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .reelRail { width: min(100%, 380px); margin: 0 auto; }
   .reelSide { position: static; }
+  /* On a phone the rail is nearly the whole width, so a thumb heading for the
+     offer lands on it. The desktop rules ("a hard flick never skips a reel",
+     no scroll chaining) are for a wheel; here a flick may pass reels and the
+     gesture continues down the page when the rail ends, or the rail is a
+     four-swipe toll between the visitor and the price. */
+  .reelSlide { scroll-snap-stop: normal; }
+  .reelRail { overscroll-behavior: auto; }
 }
+
+/* Off-screen until focused. The book has had one of these since the WCAG pass;
+   this page did not, so a keyboard user tabbed the entire header before
+   reaching anything worth reaching. */
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: 12px 16px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.skip:focus { left: 0; }

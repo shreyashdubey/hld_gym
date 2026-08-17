@@ -38,12 +38,18 @@ export const SIZE_KEY = "hldsprint_size";
 /* Runs before first paint, inlined into <head>. Without it the server-rendered
    page paints the default palette at the default size and then jumps once React
    hydrates. Kept dependency-free and tiny because it blocks rendering by
-   design. */
+   design.
+
+   The hldgym_v1 fallback: the book shares this origin and keeps its theme under
+   that key. A reader arriving from a Blueprint book should not land on a Paper
+   page, so the book's choice is read before the OS is. Once a toggle is used
+   here, this page's own key wins, as before. */
 export const PREFS_INIT_SCRIPT = `
 (function(){
   try {
     var d = document.documentElement, s = localStorage;
     var t = s.getItem(${JSON.stringify(THEME_KEY)});
+    if (!t) { try { t = JSON.parse(s.getItem('hldgym_v1') || '{}').theme || null; } catch (e) {} }
     if (${JSON.stringify(THEMES)}.indexOf(t) < 0) {
       t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }

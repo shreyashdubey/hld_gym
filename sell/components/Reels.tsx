@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { REELS } from "@/lib/reels";
 
 /**
  * The reel feed. Swipe one, get the next, the way a phone feed works, because
@@ -20,23 +21,6 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
  * empty.
  */
 
-type Reel = {
-  id: string;
-  kernel: string;
-  told: string;
-  chapter: string;
-};
-
-const REELS: Reel[] = [
-  { id: "01", kernel: "A lock is a statement about the past.",
-    told: "a hotel keycard", chapter: "consensus and fencing" },
-  { id: "02", kernel: "The read set and the write set must overlap.",
-    told: "three flatmates and a moved dinner", chapter: "quorums" },
-  { id: "03", kernel: "Queueing is refusing slowly.",
-    told: "a coffee counter in a rush", chapter: "backpressure" },
-  { id: "04", kernel: "The cache is a suggestion.",
-    told: "sticky notes and a filing cabinet", chapter: "caching" },
-];
 
 /* The videos are rendered files, not pages, so they cannot adapt to the reader
    the way the rest of the site does: each palette is its own encode. Manim
@@ -177,6 +161,11 @@ export default function Reels({ children }: { children?: React.ReactNode }) {
                  reads as the theme toggle being broken */
               key={cut}
               src={`/reels/reel${r.id}-${cut}.mp4`}
+              /* Frame 0 of the same encode. Without it the three unloaded reels
+                 are empty rectangles until you scroll to them, and the first one
+                 flashes blank while it buffers. Frame 0 is the hook card, so it
+                 gives nothing away. */
+              poster={`/reels/reel${r.id}-${cut}.jpg`}
               muted
               loop
               playsInline

@@ -1,4 +1,5 @@
 import { SITE } from "@/lib/site";
+import { REELS, REEL_DATE, REEL_DURATION } from "@/lib/reels";
 
 /**
  * JSON-LD for the site root.
@@ -19,6 +20,21 @@ import { SITE } from "@/lib/site";
 export const SCHEMA = {
   "@context": "https://schema.org",
   "@graph": [
+    /* One VideoObject per reel actually on the page. Four, not the 450 the
+       sprint promises: structured data describes what is here now. */
+    ...REELS.map((r) => ({
+      "@type": "VideoObject",
+      "@id": `${SITE}/#reel${r.id}`,
+      name: r.kernel,
+      description: r.summary,
+      thumbnailUrl: `${SITE}/reels/reel${r.id}-dark.jpg`,
+      contentUrl: `${SITE}/reels/reel${r.id}-dark.mp4`,
+      uploadDate: REEL_DATE,
+      duration: REEL_DURATION,
+      inLanguage: "en",
+      isFamilyFriendly: true,
+      publisher: { "@id": `${SITE}/#org` },
+    })),
     {
       "@type": "Organization",
       "@id": `${SITE}/#org`,

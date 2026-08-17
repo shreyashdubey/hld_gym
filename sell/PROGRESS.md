@@ -1352,6 +1352,30 @@ in); the FAB was tabbable while invisible (`visibility`) and shared a viewport
 with the rep's buttons and the book button (it now yields to `.pricebox, .rep,
 .bookBtn`). Rail is `role="region"`, space pauses.
 
+**A sixth pass, over the five, found what a closed-document review misses.**
+After the demo, the diagram redrew at the top of the panel, 1,000px above the
+viewport on desktop and 1,550px on a phone, with a narration ("compare it
+against what you actually wrote") nobody saw, and the visitor's own answer had
+been unmounted on submit, so there was nothing to compare against. Now the
+answer stays, read-only, and the reveal button ("show the diagram again, and
+what the chapter says") scrolls the panel back to the diagram: read order is
+diagram, your answer, score, the three answers, the CTA. The closing hint was
+"the diagram is different every time", which contradicted step 06; it is now
+score-aware ("3 of 6. in the sprint a score like that brings this diagram back
+within days") with a *run this one again* link, since a second attempt after
+reading the answers is the Roediger section's whole thesis and there was no
+route to it but reload. Three contradictions the rewrite itself had introduced:
+"Six steps per rep" over a five-step demo, "rebuild it six or seven times a
+day" reading as one diagram, and `197 reps / the whole book` in the strip beside
+*Not the book* in the offer (now `one per diagram`). On phones the reel rail was
+a nested scroller with `overscroll-behavior: contain` and `scroll-snap-stop:
+always`, nearly full width, so a thumb heading for the offer had to swipe
+through four reels; both relax under 860px. `#offer`, `#buy`, `#reels` gain
+`scroll-margin-top`, and the hero's text line links to `#offer`. The theme now
+crosses the origin: the sell page's init script falls back to the book's
+`hldgym_v1` theme before the OS, so a Blueprint reader does not land on a Paper
+page.
+
 **Share card.** `reel/og.mjs` renders `reel/og.html` to `sell/public/og.png`,
 1200×630 in the page's own tokens; `layout.tsx` sets `metadataBase`, canonical,
 `og:image`, `twitter:image`. `.gitignore` gains `!sell/public/og.png`. Re-run
@@ -1363,7 +1387,11 @@ code. Refund after shipping is undecided, so the page still says only "if it
 does not ship". Naming the payment rail in step 02 waits for the rail to exist.
 "The reply … tells you what the first days cover" is a promise the reply has to
 keep. Whether days unlock daily or are all open on 1 September is unstated on
-the page because it is undecided.
+the page because it is undecided. The book still has no route to the sprint
+except its brand mark and sidebar home: a plain line at chapter end ("Read it;
+now rebuild it …") is the highest-leverage edit left, and it belongs to the
+book pipeline (`src/app.js` renderChapter and renderHome), which was being
+edited in parallel and so was left alone here.
 
 ## 2026-08-17 — robots, sitemap, structured data, and the book's missing head
 
@@ -1407,6 +1435,51 @@ and `sitemap.ts` failed with exactly that until it was added.
 1200×630, JSON-LD parsed back out of the shipped HTML with the offer reading
 `19 USD PreOrder`, and every head tag present in `dist/book/index.html`.
 
+## 2026-08-17 — the rest of the SEO surface
+
+**What:** poster frames on the reels, `VideoObject` structured data, a web
+manifest, an apple touch icon, a skip link, cache and security headers, and a
+fix for a 404 that claimed to be indexable.
+
+**The 404 was arguing with itself.** Next emits `noindex` on it automatically,
+and the layout's `index, follow` was inherited on top, so the page shipped both
+tags. Crawlers take the most restrictive reading, so nothing was actually
+mis-indexed, but a page asserting two opposite things is a bug waiting to be
+believed. Robots directives moved to `page.tsx`, which is the page that is
+actually indexable; the layout is shared with the 404 and had no business
+carrying them.
+
+**Poster frames, which are a UX fix before they are an SEO one.** Three of the
+four reels are `preload="none"` and were empty rectangles until scrolled to, and
+the first flashed blank while it buffered. Every encode now ships frame 0 as a
+17–20KB JPEG. Frame 0 is the hook card, so it gives nothing away — a poster
+taken from the end would have shown the kernel, which is the answer.
+
+**`VideoObject` for four reels, not 450.** Structured data describes what is on
+the page today. Each carries a summary written for something that cannot watch
+it, a thumbnail, a duration and an upload date. `uploadDate` is the date the
+files were rendered and is hardcoded: it is a claim about the file, so
+re-stamping it every build would make it a lie that also churns the committed
+`dist/`.
+
+**Headers, in `vercel.json`.** `/reels/*` and `/_next/static/*` get a year and
+`immutable`: both are content-addressed by name, and a repeat visitor was
+otherwise re-downloading 7MB of video. `/book/*` gets `must-revalidate` instead,
+because it is one 4.5MB file rebuilt in place whenever a chapter changes. Plus
+`nosniff`, `Referrer-Policy` and `X-Frame-Options` across everything.
+
+**A skip link.** The book has had one since the WCAG pass; this page did not, so
+a keyboard user tabbed the whole header before reaching anything.
+
+**Also:** `manifest.webmanifest` with `display: browser` and no service worker.
+There is no offline story worth having here, and a cache that can serve a stale
+price is a liability.
+
+**Verified on the built output:** schema parses to four `VideoObject` plus
+`Organization`, `WebSite`, `Book`, `Product`; the 404 now carries `noindex` and
+nothing else; manifest, apple icon and posters all serve with the right content
+types.
+
 ---
 
 ## Open
@@ -1429,6 +1502,10 @@ and `sitemap.ts` failed with exactly that until it was added.
       only if the sprint does not ship; a buyer who wants out on day five gets
       no answer. Say either "no refund after it ships" or "seven days, reply
       to the payment email"; either is better than silence.
+- [ ] **The book does not mention the sprint.** Six routes from `/` to `/book/`,
+      one back (the brand mark, plus the sidebar home). The asset that gets
+      posted is the book; a plain sprint line at chapter end and on the book's
+      home (`src/app.js`, no claim beyond what the page makes) closes the loop.
 - [ ] **Days gated or open?** Whether day N unlocks on its date or all thirty
       are open from 1 September is undecided and therefore unsaid; a buyer with
       an onsite on 15 September asks exactly this. Decide, then say it in
