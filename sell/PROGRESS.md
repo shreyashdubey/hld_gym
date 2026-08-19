@@ -1518,6 +1518,52 @@ price is a liability.
 nothing else; manifest, apple icon and posters all serve with the right content
 types.
 
+## 2026-08-20 — a counter on the door, because zero was unreadable
+
+**What:** `@vercel/analytics` in `app/layout.tsx`, pageviews only. One import,
+one component, one paragraph of comment. `SYSTEM.md` §9 loses its Analytics row.
+
+**Why, and it is not "we should have analytics".** The reservation form had zero
+responses. The book had been posted and the page had been live since 17 August,
+and the site carried no counter of any kind, so that zero had two readings that
+demand opposite work: *people came and did not want it* (fix the offer) versus
+*nobody came* (fix distribution). Three days of work went into the page in that
+blind spot — five verification passes, a design audit, structured data, poster
+frames — all of it improving a conversion rate whose denominator was unknown and
+might have been zero. §9 said to add analytics "if traffic needs attribution";
+the condition had quietly been met.
+
+The paid Vercel usage dashboard was the first thing tried and is paywalled on
+this account. Web Analytics is a separate, free-on-Hobby panel, which is why the
+package is the answer and the dashboard is not.
+
+**How it survives a repo that builds nothing in the cloud.** `vercel.json` sets
+`outputDirectory: dist` with no build command, so an install alone changes
+nothing that ships. The loader is baked into a client chunk by the local
+`npm run publish:book` and lands in the committed `dist/`. Verified there:
+`dist/_next/static/chunks/3dzdqsep0txr3.js` carries the `_vercel/insights` URL,
+and the book (4.4MB) and reel encodes (7.0MB) both survived the `rsync --delete`
+because the two excludes did their job.
+
+**Verified in a browser, not from the DOM alone.** Served the built `dist/` on
+:4173: the script tag is injected at `/_vercel/insights/script.js`, `window.va`
+is defined, and `window.vaq` holds exactly one queued event — the pageview,
+waiting to flush. That path 404s locally and is the only console error, because
+it is a Vercel platform route no static server can answer; it resolves on the
+deployment. Lint clean, 5/5 rubric tests, `grep -c '—' 0`.
+
+**Pageviews only, deliberately.** No `track()` on the three `RESERVE_URL` links
+yet. A click count is a numerator, and the whole point of this change is that
+nobody knows the denominator. Once traffic is a real number, the CTA events are
+the next cut and they are three onClick handlers.
+
+**Not done, and it is the half that matters:** Web Analytics has to be switched
+on in the Vercel project dashboard. Until that toggle flips, the script 404s in
+production exactly as it does locally and collects nothing. This is a click in
+Vercel, not a line in this repo.
+
+---
+
 ---
 
 ## Open
@@ -1533,7 +1579,12 @@ types.
       the first reply goes out.
 - [x] **Live at `https://hld-gym.vercel.app/`** (2026-08-17). Book at `/book/`,
       reel encodes serving from `/reels/`, all three CTAs on the form.
-- [ ] Free book not yet posted to r/leetcode, r/ExperiencedDevs, HN, LinkedIn.
+- [x] **Free book posted** (reported 2026-08-20; venues not recorded here).
+      Whether those posts sent anyone is exactly what the new counter is
+      there to answer, and could not be answered before it.
+- [ ] **Web Analytics not yet enabled in the Vercel dashboard.** The code
+      shipped 2026-08-20; the panel is a toggle in project settings and
+      the script collects nothing until it is on. Free on Hobby.
 - [ ] **Reels 05+ not cut.** Four exist and play on the page. Each new kernel
       is a new `reelNN.html` against the same five-beat template.
 - [ ] **Refund after 1 September is undecided.** The page promises a refund

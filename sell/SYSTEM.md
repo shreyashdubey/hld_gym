@@ -585,7 +585,23 @@ proprietors, and Rishabh Goel is on the Shipyard mentor bench.
 | LLM interviewer | a hand-written probe set demos the mechanic at zero cost and zero downtime risk | when building the real rep engine |
 | Waitlist / email capture | signups measure curiosity; the gate is `≥1 person prepays` | never as a substitute for the payment |
 | Checkout on the site | a payment rail is a merchant account, a product page and a webhook, none of which move the one question. A form plus a hand-sent link takes a real payment today | when the volume makes hand-sending the bottleneck |
-| Analytics | the metric is payments, and Gumroad reports those | if traffic needs attribution |
+
+**Analytics left this table on 2026-08-20, because its trigger fired.** The
+row read *absent; the metric is payments, and Gumroad reports those; add it if
+traffic needs attribution.* That reasoning holds only while the funnel has one
+step. The book was posted, the page had been live for three days, and the
+reservation form had zero responses — and with no counter anywhere on the site,
+zero responses could not be told apart from zero visitors. Those are opposite
+diagnoses: one says the offer is wrong, the other says nobody has seen it, and
+they call for opposite work. Gumroad reports the bottom of the funnel and can
+report nothing about the top.
+
+So `@vercel/analytics` ships pageviews, and nothing else. It is same-origin
+(`/_vercel/insights/*`, a platform route), so no third-party domain is contacted
+and the privacy posture in §6 is unchanged. No custom events on the CTAs yet:
+until a denominator exists, a click count divides by an unknown. The panel is
+free on the Hobby plan up to its event cap; the usage dashboard that reports
+bandwidth is not, and is not what this answers.
 
 **The reservation form is not the waitlist this table forbids.** The difference
 is what happens next: a waitlist ends at the email, and this one exists to send
