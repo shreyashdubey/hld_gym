@@ -87,10 +87,34 @@
   --on-accent: #0b0b0f;
 }
 
+/* Phosphor — the Pip-Boy CRT, carried over from the book with the same tokens.
+   The reserved colour is the yellow-green of the same tube: an orange has no
+   place on a screen that only ever emitted one wavelength, so TE's record-button
+   rule survives even though its hue does not. */
+:root[data-theme="phosphor"] {
+  --paper: #08140d;
+  --panel: #0c2014;
+  --panel-2: #12291a;
+  --ink: #27ff86;
+  --ink-2: #35c97a;
+  --ink-3: #23a85b;   /* 5.03:1 on --panel-2, where #219b54 lands at 4.33 and fails AA */
+  --line: #143d24;
+  --line-strong: #308753;
+  --accent: #b6ff5e;
+  --accent-ink: #c8ff8a;
+  --accent-soft: #1b3310;
+  --good: #4dff94;
+  --good-soft: #0d3a22;
+  --bad: #ff6b5e;
+  --bad-soft: #3a1512;
+  --on-accent: #08140d;
+}
+
 /* An explicit theme sets the UA colour scheme too, so scrollbars, the textarea
    resize grip and selection chrome match the palette on a light OS. The media
    block above covers the unstamped state. */
-:root[data-theme="dark"], :root[data-theme="manim"] { color-scheme: dark; }
+:root[data-theme="dark"], :root[data-theme="manim"],
+:root[data-theme="phosphor"] { color-scheme: dark; }
 :root[data-theme="light"] { color-scheme: light; }
 
 /* Motion. Two curves and nothing else, so everything on the page decelerates
@@ -1052,7 +1076,8 @@ footer { padding: 34px 0 70px; }
   padding: 13px 22px;
 }
 :root[data-theme="dark"] .bookBtn,
-:root[data-theme="manim"] .bookBtn { color: var(--ink); }
+:root[data-theme="manim"] .bookBtn,
+:root[data-theme="phosphor"] .bookBtn { color: var(--ink); }
 .bookBtn::before {
   content: "";
   position: absolute;
@@ -1296,3 +1321,44 @@ footer { padding: 34px 0 70px; }
   text-decoration: none;
 }
 .skip:focus { left: 0; }
+
+/* The tube itself, same treatment as the book's phosphor theme. The glow keys
+   off currentColor so every colour glows in its own wavelength rather than the
+   whole page haloing green. Both overlays are fixed and pointer-events:none, at
+   z-index 200/201 — above the sticky header (20), the reel scrim (30) and the
+   fullscreen reel (100) — so nothing on the page loses a click, including the
+   payment link. */
+:root[data-theme="phosphor"] body {
+  text-shadow: 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+}
+/* curved glass: the edges fall off, with a faint phosphor halo bounced back */
+:root[data-theme="phosphor"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 200;
+  background: radial-gradient(120% 120% at 50% 48%, transparent 52%, rgba(0, 0, 0, 0.5) 100%);
+  box-shadow:
+    inset 0 0 140px rgba(0, 0, 0, 0.55),
+    inset 0 0 18px color-mix(in srgb, var(--ink) 20%, transparent);
+}
+/* scanlines, plus the flicker of a tube that never quite settles */
+:root[data-theme="phosphor"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 201;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, 0.1) 2px 3px);
+  mix-blend-mode: multiply;
+  animation: crt-flicker 0.14s steps(2) infinite;
+}
+@keyframes crt-flicker {
+  0% { opacity: 0.94; }
+  50% { opacity: 1; }
+  100% { opacity: 0.96; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="phosphor"] body::after { animation: none; opacity: 0.97; }
+}

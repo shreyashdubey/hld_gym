@@ -3,19 +3,21 @@
    Both follow the same shape: an ordered list of values, a name per value, and
    a localStorage key. */
 
-export const THEMES = ["light", "dark", "manim"] as const;
+export const THEMES = ["light", "dark", "manim", "phosphor"] as const;
 export type Theme = (typeof THEMES)[number];
 
 export const THEME_GLYPH: Record<Theme, string> = {
   light: "◐",
   dark: "◑",
   manim: "π",
+  phosphor: "◒",
 };
 
 export const THEME_NAME: Record<Theme, string> = {
   light: "Paper",
   dark: "Blueprint",
   manim: "Manim",
+  phosphor: "Phosphor",
 };
 
 export const THEME_KEY = "hldsprint_theme";

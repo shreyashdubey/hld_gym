@@ -845,9 +845,9 @@ function route() {
 }
 window.addEventListener('hashchange', route);
 
-const THEMES = ['light', 'dark', 'manim'];
-const THEME_GLYPH = { light: '◐', dark: '◑', manim: 'π' };
-const THEME_NAME = { light: 'Paper', dark: 'Blueprint', manim: 'Manim' };
+const THEMES = ['light', 'dark', 'manim', 'phosphor'];
+const THEME_GLYPH = { light: '◐', dark: '◑', manim: 'π', phosphor: '◒' };
+const THEME_NAME = { light: 'Paper', dark: 'Blueprint', manim: 'Manim', phosphor: 'Phosphor' };
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   const b = $('#theme-toggle');

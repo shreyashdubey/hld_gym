@@ -1640,3 +1640,67 @@ Vercel, not a line in this repo.
       FastAPI on Railway (matches the stated Python stack, but is the backend
       deferred until first payment). Recommendation on record: route handler
       now, port the prompt and schema unchanged when a real backend exists.
+
+## 2026-08-20 — fourth book theme: phosphor
+
+**What:** `phosphor`, a Pip-Boy CRT theme for the book — near-black green-tinted
+glass, aqua-green phosphor text, yellow-green as the reserved colour. Fourth
+step in the existing theme cycle (`src/style.css`, `src/app.js`,
+`src/template.html`), glyph `◒`.
+
+**Why it is only a token block:** the theme system is one `[data-theme]` block of
+CSS variables plus three list entries — nothing else in the book branches on
+theme, so a new world costs 22 declarations and no new code. Palette ported from
+`~/Desktop/projects/rio-memory/frontend/index.html`, the terminal coach's
+Fallout-style CRT.
+
+**The CRT treatment came with it, after a first pass without it.** The tube is
+the theme — dropped as a paint cost on 280k words, put back on sight, because
+the flat palette reads as "green page", not as a screen. Three parts: a 1px
+glow keyed off `currentColor`, so every colour glows in its own wavelength
+instead of everything haloing green; a fixed vignette for curved glass; fixed
+scanlines at 2-on-1-off under `mix-blend-mode: multiply` with a .14s flicker.
+Both overlays are `position: fixed`, `pointer-events: none`, at z-index 400/401
+— above the topbar (40), the sidebar (50) and the fullscreen diagram (300), and
+they never catch a click. The flicker is off under `prefers-reduced-motion`: a
+7Hz strobe over a reading surface is exactly what a photosensitive reader must
+not be handed.
+
+**Contrast checked, not eyeballed:** body 14.1:1, secondary 8.8:1, muted 5.3:1,
+`--line-strong` 3.6:1 (clears the 3:1 WCAG 1.4.11 asks of control boundaries),
+dark ink on the accent 15.6:1.
+
+**Verified in-browser:** cycle reaches `phosphor` in two clicks from paper, the
+button reads `◒ phosphor`, body computes to `rgb(8,20,13)` on `rgb(39,255,134)`,
+and the chapter diagrams inherit the palette including the highlighted node.
+
+## 2026-08-20 — phosphor on the sell page too
+
+**What:** the same fourth theme on the presale page — token block in
+`app/globals.css`, fourth entry in `THEMES`/`THEME_GLYPH`/`THEME_NAME`
+(`lib/prefs.ts`), and the CRT treatment scoped to `:root[data-theme="phosphor"]`.
+The pre-paint script needed no edit: it validates against `THEMES`, so a fourth
+value was already legal, including the `hldgym_v1` hand-off that carries a
+reader's book theme onto this page.
+
+**Why the palette moved slightly:** the sell page has a `--panel-2` surface the
+book does not. `--ink-3` at `#219b54` reads 4.33:1 there — the same AA failure
+the existing comment records for `#6b6b6b` — so it went to `#23a85b` (5.03:1),
+and `--line-strong` to `#308753` (3.47:1, clearing the 3:1 for control borders).
+Both were pushed back into `src/style.css` so the two products keep one palette.
+
+**Also touched:** `color-scheme: dark` and the `.bookBtn` colour override, both
+of which list themes explicitly — a new dark theme has to join both lists or the
+scrollbars come back white and the free-book button loses its label.
+
+**Verified in the built site, not the dev server:** `npm run publish:book`, then
+served `dist/` and cycled to phosphor — body paints `rgb(8,20,13)`, the overlay
+computes `mix-blend-mode: multiply` at z-index 201, and `elementFromPoint` over
+the rep's *watch* button returns the button, so the two fixed overlays do not
+eat clicks. Reels keep the dark cut, as they do under manim. `tsc --noEmit` and
+`eslint` both clean.
+
+**Symptom worth recognising:** a plain `python3 -m http.server` sends no cache
+headers, and Chrome served the previous `index.html` after a rebuild — the CSS
+was in `dist/` while the page still computed the old rules. A query string or a
+hard reload settles it; the fix is never in the stylesheet.

@@ -26,7 +26,7 @@
 (function(){
   var t = null;
   try { t = JSON.parse(localStorage.getItem('hldgym_v1')||'{}').theme || null; } catch(e){}
-  if (['light','dark','manim'].indexOf(t) < 0) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  if (['light','dark','manim','phosphor'].indexOf(t) < 0) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.documentElement.dataset.theme = t;
 })();
 </script>
@@ -45,9 +45,9 @@
    decoration — orange means "important / this is the part that matters",
    exactly the way TE reserves it for the record button.
 
-   Three themes. paper and black are the TE system in light and dark. manim
-   keeps the 3Blue1Brown palette because that is its own authored world; it
-   inherits the type and the geometry, not the color. */
+   Four themes. paper and black are the TE system in light and dark. manim and
+   phosphor keep palettes that are their own authored worlds; they inherit the
+   type and the geometry, not the color. */
 
 :root {
   --font-ui: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -129,6 +129,62 @@
   --on-accent: #0B0B0F;
   --shadow: none;
   --h0: #16161E; --h1: #1C4652; --h2: #2E7A90; --h3: #43A5BF; --h4: #58C4DD;
+}
+
+/* Phosphor — Pip-Boy CRT, ported from rio-memory's terminal. Green-tinted
+   near-black glass, aqua-green phosphor. The reserved colour moves to the
+   yellow-green of the same tube, because an orange has no place on a screen
+   that only ever emitted one wavelength. The CRT treatment itself — glow,
+   vignette, scanlines, flicker — comes with it, below the token block. */
+[data-theme="phosphor"] {
+  --paper: #08140D;
+  --panel: #0C2014;
+  --ink: #27FF86;
+  --ink-2: #35C97A;
+  --ink-3: #23A85B;
+  --line: #143D24;
+  --line-strong: #308753;
+  --accent: #B6FF5E;
+  --accent-ink: #C8FF8A;
+  --accent-soft: #1B3310;
+  --good: #4DFF94;
+  --good-soft: #0D3A22;
+  --bad: #FF6B5E;
+  --bad-soft: #3A1512;
+  --warm: #E8C25A;
+  --warm-soft: #2C2409;
+  --stamp: #FF6B5E;
+  --on-accent: #08140D;
+  --shadow: none;
+  --h0: #0C2014; --h1: #1B3A15; --h2: #35661F; --h3: #6FA83A; --h4: #B6FF5E;
+}
+/* The tube itself, ported with the palette. The glow keys off currentColor, so
+   every colour glows in its own wavelength instead of everything haloing green.
+   Both overlays are fixed and pointer-events:none — they sit above the topbar
+   (z-index 40), the sidebar (50) and the fullscreen diagram (300) without ever
+   catching a click. */
+[data-theme="phosphor"] body {
+  text-shadow: 0 0 1px color-mix(in srgb, currentColor 45%, transparent);
+}
+/* curved glass: edges fall off, with a faint phosphor halo bounced back in */
+[data-theme="phosphor"] body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 400;
+  background: radial-gradient(120% 120% at 50% 48%, transparent 52%, rgba(0, 0, 0, .5) 100%);
+  box-shadow: inset 0 0 140px rgba(0, 0, 0, .55),
+              inset 0 0 18px color-mix(in srgb, var(--ink) 20%, transparent);
+}
+/* scanlines, plus the slow flicker of a tube that never quite settles */
+[data-theme="phosphor"] body::after {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 401;
+  background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, .10) 2px 3px);
+  mix-blend-mode: multiply;
+  animation: crt-flicker .14s steps(2) infinite;
+}
+@keyframes crt-flicker { 0% { opacity: .94; } 50% { opacity: 1; } 100% { opacity: .96; } }
+/* A 7Hz flicker is exactly what a photosensitive reader must not be given, and
+   nobody reads 280k words through a strobe by choice. */
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="phosphor"] body::after { animation: none; opacity: .97; }
 }
 
 * { box-sizing: border-box; }
@@ -18590,9 +18646,9 @@ function route() {
 }
 window.addEventListener('hashchange', route);
 
-const THEMES = ['light', 'dark', 'manim'];
-const THEME_GLYPH = { light: '◐', dark: '◑', manim: 'π' };
-const THEME_NAME = { light: 'Paper', dark: 'Blueprint', manim: 'Manim' };
+const THEMES = ['light', 'dark', 'manim', 'phosphor'];
+const THEME_GLYPH = { light: '◐', dark: '◑', manim: 'π', phosphor: '◒' };
+const THEME_NAME = { light: 'Paper', dark: 'Blueprint', manim: 'Manim', phosphor: 'Phosphor' };
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   const b = $('#theme-toggle');
