@@ -1611,11 +1611,16 @@ Vercel, not a line in this repo.
       failure retrospective exists across all three Shipyard seasons).
 - [ ] FAULT kill-test emails to HUD and Prime Intellect unsent
       (`shipyard3/06-fault-playbook.md` §5 — 30 minutes, still unrun).
-- [ ] **Playground unspecified.** A live coach that talks while you draw, keeps
-      you thinking aloud, and unsticks you. No spec, no chosen stack, no cost
-      model for realtime audio. Written up in `SYSTEM.md` §1 with the reason it
-      is not first and the copy it would force a re-read of. It appears publicly
-      only as one **planned, not built** option in the reservation form.
+- [x] **Playground unspecified.** ~~A live coach that talks while you draw,
+      keeps you thinking aloud, and unsticks you. No spec, no chosen stack, no
+      cost model for realtime audio.~~ Specified and built:
+      `docs/superpowers/specs/2026-08-21-playground-design.md`, implemented
+      across thirteen tasks in `playground/` and `sell/app/playground/` (see
+      the 2026-08-21 entry above). Cost model for realtime audio still
+      unchecked against live pricing — deliberately deferred to the hosting
+      decision, not to this build — and it still appears publicly only as one
+      **planned, not built** option in the reservation form; the copy in
+      `SYSTEM.md` §1 has not been re-read against what actually shipped.
 - [ ] Python/FastAPI backend: after the first payment, not before.
 - [ ] **LLM grading (designed 2026-08-15, parked — frontend first).** The rubric
       only detects vocabulary, not knowledge: measured 6/6 on nonsense with the
@@ -1704,3 +1709,203 @@ eat clicks. Reels keep the dark cut, as they do under manim. `tsc --noEmit` and
 headers, and Chrome served the previous `index.html` after a rebuild — the CSS
 was in `dist/` while the page still computed the old rules. A query string or a
 hard reload settles it; the fix is never in the stylesheet.
+
+---
+
+## 2026-08-21 — the playground: a fourth pipeline, dictation, a live interviewer, a coach handoff, and the session cap
+
+**One entry for thirteen tasks, not thirteen entries.** `sell/AGENTS.md` calls
+for an entry per unit of work, not per commit, and the unit here is the whole
+playground feature: a self-hosted Python voice service (`playground/`, the
+fourth pipeline, writing nothing into `../dist/`) plus its browser page
+(`sell/app/playground/`) and a mic control folded into the existing rep
+(`sell/components/Rep.tsx`). Spec at
+`docs/superpowers/specs/2026-08-21-playground-design.md`.
+
+**What shipped.** Two modes on one FastAPI service holding the OpenAI key,
+talked to over a self-hosted WebRTC connection (`SmallWebRTCTransport`, no
+vendor lock-in): **dictation** (mic → VAD → STT → data channel, no LLM, no
+TTS, nothing talks back — it fills the existing recall textarea hands-free)
+and **playground** (the same pipeline with an LLM and TTS stage added, a
+live voice interviewer that pushes back on one rep, p1c06, then hands off to
+a coach who has the answer key). Cascaded STT/LLM/TTS throughout, deliberately
+not speech-to-speech — every stage is a normal OpenAI model call the rest of
+the stack can reason about and test. Silero VAD and SmartTurn both run
+locally, no round trip for turn detection. The board (Excalidraw) is read as
+a diffable graph, not a screenshot — nodes and edges in, a one-line "since the
+last update: added Cache, connected App to Cache" summary out — because a
+coach that can name what just changed is the whole reason to build this
+rather than a plain voice memo. The interviewer never sees the rubric or the
+follow-up answers; only the coach does, and only from the moment it takes
+over. `playground/rep.py` is a hand-ported second copy of `sell/lib/rep.ts`
+(Python cannot import TypeScript), and `test_personas.py` fails the build the
+day the two disagree.
+
+**This task's own piece: the session cap.** Voice bills by the minute, so a
+session has to end whether or not anyone remembers to stop it — and it has to
+end in a way that never leaves the learner cut off mid-round with no
+explanation, which is worse than not building the cap at all. `Session` grew
+three methods, all taking `now: float` rather than reading the wall clock
+themselves, so the tests stay deterministic: `start(now)` marks the clock,
+`remaining_secs(now)` is `config.session_cap_secs` before `start()` and never
+goes negative after, `expired(now)` is `remaining_secs(now) <= 0`
+(`playground/tests/test_cap.py`, 5 tests). `server.py` calls `start()` the
+moment a playground worker is built, and a background task
+(`_enforce_cap`) polls the same clock: at 80% of the cap the interviewer
+becomes the coach — persona switched, context refreshed with the answer key,
+TTS re-voiced, and (unlike the interviewer's own `end_round` tool call, which
+has a function-result callback to trigger the next completion for free) an
+explicit `LLMRunFrame()` queued to the worker, because nothing else would ask
+the model to actually speak the handoff. At 100% the connection is cut —
+through `_end_session`, the exact same idempotent teardown the "closed" and
+"failed" connection handlers already use for an ordinary disconnect, not a
+second way to tear a session down. The cap is announced in the page copy
+before a session ever starts (`sell/app/playground/page.tsx`: "Sessions run
+up to 12 minutes. The interviewer hands over to the coach before time is up,
+so you always get the walkthrough."), never sprung at the moment it bites.
+
+**A real bug the cap's own test setup caught.** `_enforce_cap` originally
+polled on a flat 1-second sleep. At the 12-minute default the 80%-mark
+handover window is 144 seconds wide, so a 1-second granularity never mattered
+and every hand-check looked fine. Set the cap to a few seconds instead — which
+the task brief asks for specifically so nobody waits twelve minutes to find
+out — and the handover window shrinks to under a second, smaller than the
+poll interval, and the loop can step clean over it: straight from "not handed
+over yet" to "expired," the interviewer cut off with no coach at all, exactly
+the outcome the cap exists to prevent. Reproduced with a standalone script
+against the real `_enforce_cap` (fakes only for the worker/runner/connection)
+at `session_cap_secs=4`: it hung forever, because a second bug compounded the
+first — the verification script's own `await watcher` on "has the mode
+become coach yet" never returned once the handover never fired. Fixed by
+capping each sleep at the time left until the handover instant itself, not
+just at a flat ceiling, so the loop can never sleep past it. Re-run at
+`session_cap_secs=4` and `session_cap_secs=2`: handover lands within 0.02s of
+the 80% mark, the cut lands within 0.01s of 100%, every time.
+
+**Bugs, recorded by symptom** — the symptom is what a future session
+recognises, not the diff that fixed it:
+
+- Pipecat 1.7.0 moved VAD out of `TransportParams` into a pipeline processor
+  (`VADProcessor`) and turn detection into `UserTurnStrategies`;
+  `PipelineTask` and `PipelineRunner` are both deprecated in favour of
+  `PipelineWorker`/`WorkerRunner`. Anyone following an older tutorial writes
+  code that imports fine and does not run.
+- Server messages must be wrapped in the RTVI envelope
+  (`{"label": "rtvi-ai", "type": "server-message", "data": ...}`) or
+  `@pipecat-ai/small-webrtc-transport` parses the data-channel message off the
+  wire and silently drops it before it reaches `onServerMessage`. **Symptom:
+  you speak, and nothing appears — dictation looks dead.** This shipped
+  undetected through two task reviews because every test in this build ran
+  with the service down; nothing exercised the wire format until a live
+  connection did.
+- `LLMContext.set_messages()` replaces *all* messages, not just the system
+  ones. **Symptom: the interviewer forgets the conversation, and the coach
+  arrives knowing nothing about what was drawn or said** — `Session.push_context`
+  exists specifically to filter-and-splice instead of replacing wholesale.
+- A `VADProcessor` in the pipeline plus a second VAD handed to the user
+  context aggregator (`LLMUserAggregatorParams(vad_analyzer=...)`) builds two
+  Silero instances analysing the same audio, and the upstream STT service
+  transcribes on every stop frame it sees from either one. **Symptom:
+  duplicated transcript lines, and an OpenAI bill roughly double what the
+  session should cost.**
+- Coach-drawn elements carry `customData.author === "coach"`, and the board
+  reader excludes them from what gets read back into context. **Symptom if it
+  breaks: the coach praises components the learner never drew.**
+- The interviewer's context holds no answer key, enforced by
+  `test_personas.py`. **Symptom if it breaks: the interviewer starts
+  helping.**
+- `playground/rep.py` duplicates `sell/lib/rep.ts` because Python cannot
+  import TypeScript; `test_personas.py` parses the `.ts` source and fails the
+  moment the two disagree.
+
+**Two more, found and fixed during this task's own verification, not on the
+original list.** Both are the direct result of actually running the pieces
+together instead of reasoning through them, which is the entire point of this
+task:
+
+- The FastAPI service shipped with no CORS policy. `sell` and `playground`
+  are different origins by design — `:3000` and `:7860` in dev, and a
+  different deployment target in production per `NEXT_PUBLIC_VOICE_URL` — so
+  every browser fetch to `/api/offer` failed preflight before an SDP offer or
+  a mic prompt ever happened. **Symptom: a live, correctly-running service is
+  unreachable from the browser, indistinguishable from the service being
+  down at all.** No earlier task report caught this because none of them had
+  an OpenAI key to bring the service up with in the first place — this task
+  used a syntactically-present-but-invalid key (`sk-broken`) specifically to
+  get far enough to find out. Fixed with `CORSMiddleware(allow_origins=["*"])`
+  in `server.py`; safe here specifically because the service holds no
+  cookie or session to leak and never sets `allow_credentials`.
+- The polling bug described above. **Symptom: with a short-enough cap, the
+  session reaches the cut having never handed over at all** — invisible at
+  the 12-minute default, guaranteed at a test-sized one.
+
+**Verified by causing each of the four failure modes, not by reasoning about
+them:**
+
+1. **Service down.** `npm run dev` alone, playground not running: typed a
+   full answer into the recall textarea, submitted, `recall · 6 of 6` —
+   grading is unaffected. `/playground/` shows "voice service unreachable"
+   with no crash and no hung spinner. Run twice, once before and once after
+   this task's other changes, on a fresh browser context both times. This is
+   the property that has held through every task in this build and had to
+   keep holding after this one; it does.
+2. **Mic denied.** Simulated by rejecting `getUserMedia` from an injected
+   init script (headless Chromium auto-grants a fake device otherwise, so a
+   real deny dialog was not available to test against). With the service
+   fully down, the control correctly settles on "voice is unavailable, type
+   it instead" and typing still works. With the service actually reachable
+   (after the CORS fix, `OPENAI_API_KEY=sk-broken`), the result was different
+   and worth recording plainly: `@pipecat-ai/client-js` catches the
+   `getUserMedia` rejection internally (logged as a warning, "Devices Error
+   (Permission Denied)") and the connection proceeds anyway, without an audio
+   track. `Rep.tsx`'s mic control has no way to see that and shows
+   `◉ listening` — mic "on" — for a session that is not actually capturing
+   anything. This is pre-existing behaviour in `Rep.tsx`/`lib/voice.ts`
+   (tasks 4–5), not touched by this task's file list, and is **not fixed
+   here** — recorded as a symptom for whoever next touches the mic control.
+3. **Bad key.** No real OpenAI key exists anywhere in this build, so this one
+   could not be tested the way the other three were — but a syntactically
+   present, invalid key (`OPENAI_API_KEY=sk-broken`) got further than
+   expected. The service starts, `/health` reports `key_loaded: true`
+   regardless of validity, and `/api/offer` succeeds — the OpenAI client
+   library only validates a key against the network, at the moment of a real
+   call, not at construction. Confirmed live end to end: the interviewer's
+   first real completion attempt returned an actual `401 - Incorrect API key
+   provided`, logged clearly server-side and handled as a non-fatal
+   `ErrorFrame` — the pipeline does not crash. What the brief's stated
+   behaviour asks for — **"the client reports it plainly"** — did not happen:
+   nothing in this codebase relays an `ErrorFrame` to the browser, so the
+   page just sits in its already-`"live"` state (no spinner, but no message
+   either) until the session cap eventually cuts the silent connection.
+   Whether a *genuinely* invalid key (well-formed, rejected only on scope/billing)
+   behaves identically is unverified — no such key was available.
+4. **Session cap.** Verified twice. First, live end to end: real browser,
+   real `uvicorn`, `PLAYGROUND_SESSION_CAP_SECS=8`, `OPENAI_API_KEY=sk-broken`.
+   Server log shows the handoff at t+6.4s (`Switching TTS voice to: [shimmer]`,
+   then a real chat-completions call built from the coach's system prompt,
+   rubric, and probe answers — proof the answer key genuinely reaches the
+   model at handover), the real 401 at t+7.6s, and the cut at t+8.0s
+   (`WorkerRunner 'runner-...': cancelling (reason=connection ended)`) — the
+   same log line an ordinary disconnect produces, confirming the reuse.
+   The browser's own state never left `"live"`; nothing in `page.tsx` reacts
+   to a server-initiated teardown, a second pre-existing gap recorded here
+   without being fixed, since page.tsx's role in this task was only the
+   cap-note copy. Second, against fakes at `session_cap_secs=2` and `4` (see
+   above), to nail the timing precisely and to prove the fix's before/after.
+
+**Never run against the live API, stated plainly, because no OpenAI key was
+available at any point in this build:** VAD tuning by ear, the audible
+handover (the coach's voice actually changing mid-sentence, not just the
+`set_voice()` call being made), the interviewer's refusal to help under
+pressure, the coach's drawing arriving end to end, the three model names
+(`gpt-4o-transcribe`, `gpt-5`, `gpt-4o-mini-tts` — a real 401 confirms
+authentication is checked before the model name, not that the names
+themselves are correct), and the real cost per minute. This repo's first
+standing rule is never to claim the product does something it does not; none
+of the above is claimed to work, only to be wired up correctly by inspection
+and, where a broken key could reach it, by a live but auth-failing call.
+
+**All 87 Python tests pass** (`playground/.venv/bin/python -m unittest
+discover -s playground/tests -t .` from the repo root — 82 before this task,
+5 new in `test_cap.py`), **all 36 `sell` tests pass**, lint is clean, and
+`npm run build` still produces the static export including `/playground`.

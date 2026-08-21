@@ -37,7 +37,7 @@ Context: this is the Project Shipyard S3 build, ending **9 September 2026**.
 Across three seasons only two builders ever got a paying customer; total program
 revenue $450. **Three paying customers wins it.**
 
-## One repo, three pipelines
+## What writes into `../dist/`
 
 | | URL | built by |
 |---|---|---|

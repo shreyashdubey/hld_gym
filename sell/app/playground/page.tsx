@@ -72,9 +72,19 @@ export default function PlaygroundPage() {
     <main className="playground">
       <h1>Playground</h1>
       {state !== "live" && (
-        <button type="button" className="btn" onClick={start} disabled={state === "connecting"}>
-          {state === "unavailable" ? "voice service unreachable" : "start the round"}
-        </button>
+        <>
+          <button type="button" className="btn" onClick={start} disabled={state === "connecting"}>
+            {state === "unavailable" ? "voice service unreachable" : "start the round"}
+          </button>
+          {/* Announced before the session starts, not when the cap bites --
+              see playground/server.py's _enforce_cap and the design's "session
+              cap, announced up front". .hint, not a new .cap-note rule: same
+              muted mono note the rest of the page already uses (task 5). */}
+          <p className="hint">
+            Sessions run up to 12 minutes. The interviewer hands over to the coach before
+            time is up, so you always get the walkthrough.
+          </p>
+        </>
       )}
       <Board
         onGraphChange={onGraphChange}

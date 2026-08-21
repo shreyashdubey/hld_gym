@@ -20,6 +20,11 @@ class Session:
         # assembled, so neither caller (the end_round handler in
         # pipelines.py, the board-update handler in server.py) has to.
         self.context = None
+        # Same story: bound by build_playground_worker once the TTS service
+        # exists, so the session-cap task in server.py can make the coach
+        # handover audible without reaching into pipelines.py's locals.
+        self.tts = None
+        self._started_at: float | None = None
 
     def switch_to_coach(self) -> None:
         self.mode = "coach"
@@ -42,6 +47,24 @@ class Session:
         if summary:
             messages.append({"role": "system", "content": f"Since the last update: {summary}."})
         return messages
+
+    def start(self, now: float) -> None:
+        """Marks the clock start. Takes `now` as an argument rather than
+        reading time.monotonic() itself, same reason config is a dataclass
+        of plain values, not a magic-computed one: a Session under test
+        should never depend on when the test happens to run."""
+        self._started_at = now
+
+    def remaining_secs(self, now: float) -> float:
+        """Never negative -- a caller doing `remaining <= handover_threshold`
+        math shouldn't have to clamp it themselves. config.session_cap_secs
+        before start() is called, since nothing has been spent yet."""
+        if self._started_at is None:
+            return self.config.session_cap_secs
+        return max(0.0, self.config.session_cap_secs - (now - self._started_at))
+
+    def expired(self, now: float) -> bool:
+        return self.remaining_secs(now) <= 0
 
     def push_context(self) -> None:
         """Refresh the system messages (persona + board) at the front of the

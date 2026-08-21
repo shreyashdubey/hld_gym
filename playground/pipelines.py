@@ -164,6 +164,10 @@ def build_playground_worker(
     # only ever change session state, push_context() is the one place that
     # writes it into the live LLMContext. See playground/session.py.
     session.context = context
+    # Same story for the TTS service: bound here so server.py's session-cap
+    # task can re-voice it for the handover without a second OpenAITTSService
+    # of its own, and without server.py reaching into this function's locals.
+    session.tts = tts
 
     llm.register_function("end_round", partial(_end_round, session, tts))
     llm.register_function("draw_diagram", partial(_draw_diagram, connection))
