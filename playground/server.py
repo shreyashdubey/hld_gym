@@ -132,8 +132,15 @@ async def offer(request: OfferRequest, mode: Mode = "dictation") -> dict:
     connection = SmallWebRTCConnection()
     await connection.initialize(sdp=request.sdp, type=request.type)
 
-    config = VoiceConfig.from_env()
     try:
+        # Everything from here down can fail before the connection is ever
+        # registered in _sessions: VoiceConfig.from_env() on a malformed
+        # PLAYGROUND_* env var or the dictation-threshold/distinct-voice
+        # invariants, build_*_worker loading models (two, for playground),
+        # or get_answer(). Any of them must still tear down the
+        # already-initialize()d connection, or it leaks a live peer
+        # connection nothing will ever clean up.
+        config = VoiceConfig.from_env()
         if mode == "playground":
             worker, pg_session = build_playground_worker(connection, config)
 
@@ -142,21 +149,22 @@ async def offer(request: OfferRequest, mode: Mode = "dictation") -> dict:
                 _apply_board_message(pg_session, message)
         else:
             worker = build_dictation_worker(connection, config)
-    except Exception:
-        # build_*_worker loads models (two, for playground) before the
-        # connection is ever registered in _sessions -- if either raises, the
-        # already-initialize()d connection must still be torn down, or it
-        # leaks a live peer connection nothing will ever clean up.
+
+        runner = WorkerRunner(handle_sigint=False)
+        task = asyncio.create_task(runner.run(worker))
+
+        answer = connection.get_answer()
+        _sessions[answer["pc_id"]] = _Session(connection=connection, runner=runner, task=task)
+
+        connection.add_event_handler("closed", _end_session)
+        connection.add_event_handler("failed", _end_session)
+    except BaseException:
+        # BaseException, not Exception: a request cancelled mid-request
+        # raises asyncio.CancelledError, a BaseException -- and loading
+        # SmartTurn plus Silero is exactly the slow window where a client
+        # giving up is most likely. Re-raise once cleanup is done; this
+        # tears down, it does not swallow.
         await connection.disconnect()
         raise
-
-    runner = WorkerRunner(handle_sigint=False)
-    task = asyncio.create_task(runner.run(worker))
-
-    answer = connection.get_answer()
-    _sessions[answer["pc_id"]] = _Session(connection=connection, runner=runner, task=task)
-
-    connection.add_event_handler("closed", _end_session)
-    connection.add_event_handler("failed", _end_session)
 
     return answer

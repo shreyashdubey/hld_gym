@@ -48,6 +48,47 @@ class TestSession(unittest.TestCase):
         self.s.switch_to_coach()
         self.assertEqual(self.s.mode, "coach")
 
+    def test_no_change_summary_message_on_the_first_board_update(self):
+        """The first update has no previous graph to diff against --
+        everything is new, nothing has "just" changed, and BoardContext
+        already encodes that as an empty last_change_summary. No summary
+        message should appear at all, not an empty one."""
+        self.s.board.update({"nodes": [{"id": "a", "label": "App"}], "edges": [], "unreadable": 0})
+        self.assertEqual(len(self.s.system_messages()), 2)  # persona + board, no summary yet
+
+    def test_a_second_board_update_adds_the_change_summary_to_the_context(self):
+        """The whole point of reading the board as a diffable graph rather
+        than a screenshot: what changed is the signal a coach reacts to."""
+        self.s.board.update({"nodes": [{"id": "a", "label": "App"}], "edges": [], "unreadable": 0})
+        self.s.board.update(
+            {
+                "nodes": [{"id": "a", "label": "App"}, {"id": "c", "label": "Cache"}],
+                "edges": [],
+                "unreadable": 0,
+            }
+        )
+        messages = self.s.system_messages()
+        self.assertEqual(len(messages), 3)  # persona + board + change summary
+        self.assertIn("added Cache", messages[-1]["content"])
+
+    def test_the_change_summary_does_not_accumulate_across_pushes(self):
+        """Every call to system_messages() must reflect the diff between the
+        two most recent updates only -- not grow with each call, the way the
+        board message itself never grows across 200 updates."""
+        self.s.board.update({"nodes": [{"id": "a", "label": "App"}], "edges": [], "unreadable": 0})
+        self.s.board.update(
+            {
+                "nodes": [{"id": "a", "label": "App"}, {"id": "c", "label": "Cache"}],
+                "edges": [],
+                "unreadable": 0,
+            }
+        )
+        first_count = len(self.s.system_messages())
+        second_count = len(self.s.system_messages())
+        third_count = len(self.s.system_messages())
+        self.assertEqual(first_count, second_count)
+        self.assertEqual(second_count, third_count)
+
 
 class _FakeLLMContext:
     """Stands in for pipecat's LLMContext -- just enough of the real API
@@ -124,6 +165,24 @@ class TestSessionContextBinding(unittest.TestCase):
         self.s.push_context()
         text = " ".join(m["content"] for m in self.ctx.messages)
         self.assertIn("Cache", text)
+
+    def test_push_context_after_a_second_board_update_carries_the_change_summary(self):
+        """The board message alone is a snapshot; the change summary is the
+        memory of the previous frame. Both must reach the model, not just
+        the one BoardContext already covers with its own tests."""
+        self.s.context = self.ctx
+        self.s.board.update({"nodes": [{"id": "a", "label": "App"}], "edges": [], "unreadable": 0})
+        self.s.push_context()
+        self.s.board.update(
+            {
+                "nodes": [{"id": "a", "label": "App"}, {"id": "c", "label": "Cache"}],
+                "edges": [],
+                "unreadable": 0,
+            }
+        )
+        self.s.push_context()
+        text = " ".join(m["content"] for m in self.ctx.messages)
+        self.assertIn("added Cache", text)
 
 
 if __name__ == "__main__":

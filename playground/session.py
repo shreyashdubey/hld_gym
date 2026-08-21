@@ -29,7 +29,19 @@ class Session:
 
     def system_messages(self) -> list[dict]:
         persona = coach_prompt() if self.mode == "coach" else interviewer_prompt()
-        return [{"role": "system", "content": persona}, *self.board.messages()]
+        messages = [{"role": "system", "content": persona}, *self.board.messages()]
+        # last_change_summary is a computed property, not accumulated state --
+        # it always reflects the diff between the two most recent board
+        # updates, so this never grows across pushes any more than the board
+        # message itself does. Empty (and skipped) on the first update, when
+        # everything is new and nothing has "just" changed -- BoardContext
+        # already encodes that. The design is board-as-diffable-graph, not
+        # board-as-screenshot; a coach that never hears what just changed is
+        # the screenshot we said we weren't building.
+        summary = self.board.last_change_summary
+        if summary:
+            messages.append({"role": "system", "content": f"Since the last update: {summary}."})
+        return messages
 
     def push_context(self) -> None:
         """Refresh the system messages (persona + board) at the front of the

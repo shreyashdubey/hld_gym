@@ -4,12 +4,30 @@ they can be driven directly against stubs here, instead of only being
 exercised implicitly by constructing the whole pipeline."""
 
 import asyncio
+import os
 import unittest
 from types import SimpleNamespace
 
+from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator
+from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
+
 from playground.config import VoiceConfig
-from playground.pipelines import _draw_diagram, _end_round
+from playground.pipelines import _draw_diagram, _end_round, build_playground_worker
 from playground.session import Session
+
+
+def _flatten(processor):
+    """Compound processors (Pipeline, PipelineWorker's own wrapping
+    pipeline) expose their children via .processors; leaves return []. Walk
+    the whole tree so a nested worker/pipeline structure doesn't hide what's
+    actually wired up."""
+    children = getattr(processor, "processors", None)
+    if not children:
+        return [processor]
+    flat = []
+    for child in children:
+        flat.extend(_flatten(child))
+    return flat
 
 
 class _FakeContext:
@@ -101,6 +119,26 @@ class TestDrawDiagram(unittest.TestCase):
         self.assertEqual(sent["type"], "server-message")
         self.assertEqual(sent["data"], {"type": "draw", "topology": topology})
         self.assertEqual(results, [{"drawn": True}])
+
+
+class TestSingleVADSource(unittest.TestCase):
+    """LLMUserAggregatorParams(vad_analyzer=...) would make the aggregator
+    build its own VADController on top of the audio the pipeline's own
+    _vad() VADProcessor stage already analyzes -- a second Silero instance,
+    and a second billed OpenAI transcription per utterance (SegmentedSTTService
+    runs run_stt() on every VADUserStoppedSpeakingFrame it sees, and two VAD
+    sources means two such frames per utterance). That regression is
+    invisible in the rest of the suite -- everything still passes, turn-taking
+    still works, only the bill doubles -- so it needs its own guard."""
+
+    def setUp(self):
+        os.environ["OPENAI_API_KEY"] = "sk-test"
+
+    def test_the_aggregator_owns_no_vad_controller_of_its_own(self):
+        worker, _ = build_playground_worker(SmallWebRTCConnection(), VoiceConfig())
+        aggregators = [p for p in _flatten(worker.pipeline) if isinstance(p, LLMUserAggregator)]
+        self.assertEqual(len(aggregators), 1, "expected exactly one LLMUserAggregator")
+        self.assertIsNone(aggregators[0]._vad_controller)
 
 
 if __name__ == "__main__":
