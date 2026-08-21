@@ -32,8 +32,22 @@ class Session:
         return [{"role": "system", "content": persona}, *self.board.messages()]
 
     def push_context(self) -> None:
-        """Push system_messages() into the bound LLMContext. A no-op until a
-        context is bound, so calling it early (or from a test that never
-        binds one) doesn't crash."""
-        if self.context is not None:
-            self.context.set_messages(self.system_messages())
+        """Refresh the system messages (persona + board) at the front of the
+        bound LLMContext, in place -- everything else (the user/assistant
+        turns, and any in-flight tool_calls/tool pair) survives untouched.
+
+        set_messages() replaces the *whole* list; calling it with just
+        system_messages() would erase the conversation on every board update
+        and again at handover, which is the one thing a coach who is meant to
+        "work from what they actually drew and said" cannot survive. A no-op
+        until a context is bound, so calling it early (or from a test that
+        never binds one) doesn't crash."""
+        if self.context is None:
+            return
+        fresh = self.system_messages()
+
+        def _refresh(msgs: list) -> list:
+            rest = [m for m in msgs if not (isinstance(m, dict) and m.get("role") == "system")]
+            return fresh + rest
+
+        self.context.transform_messages(_refresh)

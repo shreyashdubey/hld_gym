@@ -1,6 +1,8 @@
 """Both pipelines. Dictation is the Playground pipeline with the LLM and TTS
 stages removed, which is the reason they share a service."""
 
+from functools import partial
+
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
@@ -24,7 +26,7 @@ from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from playground.config import VoiceConfig
-from playground.relay import TranscriptRelay
+from playground.relay import TranscriptRelay, server_message
 from playground.session import Session
 
 
@@ -50,7 +52,7 @@ def build_dictation_worker(
         webrtc_connection=connection,
         params=TransportParams(audio_in_enabled=True, audio_out_enabled=False),
     )
-    stt = OpenAISTTService(settings=OpenAISTTService.Settings(model="gpt-4o-transcribe"))
+    stt = OpenAISTTService(settings=OpenAISTTService.Settings(model=config.stt_model))
     pipeline = Pipeline(
         [
             transport.input(),
@@ -102,6 +104,40 @@ END_ROUND = FunctionSchema(
 )
 
 
+async def _end_round(session: Session, tts: OpenAITTSService, params) -> None:
+    """Handler for the end_round tool call: the interviewer becomes the coach,
+    the context is refreshed to admit the answer key, and the handoff is made
+    audible. Module-level (bound to its session/tts via functools.partial in
+    build_playground_worker) so test_pipelines.py can call it directly against
+    a stub tts and a bound fake context -- a dropped switch_to_coach(), a
+    dropped push_context(), or a dropped set_voice() must fail a test, not
+    just look right in a diff."""
+    session.switch_to_coach()
+    session.push_context()
+    # set_voice is deprecated (removed in 2.0.0, TTSUpdateSettingsFrame is
+    # the replacement) but still functional in 1.7.0, and this is the only
+    # place a voice change is needed -- the audible half of the handoff.
+    await tts.set_voice(session.tts_voice())
+    await params.result_callback({"ok": True})
+
+
+async def _draw_diagram(connection: SmallWebRTCConnection, params) -> None:
+    """Handler for the draw_diagram tool call.
+
+    connection.send_app_message, not transport.output().push_frame:
+    push_frame is meant to be called from inside a FrameProcessor's own
+    process_frame(), not from an arbitrary function-call callback: it gates
+    on the processor already having seen a StartFrame (_check_started) and
+    there's no guarantee of that here. The connection is already in scope and
+    already queues if the data channel isn't open yet.
+
+    server_message() wraps this in the rtvi-ai envelope the client's
+    transport requires to bubble a message up to onServerMessage at all --
+    see playground/relay.py."""
+    connection.send_app_message(server_message({"type": "draw", "topology": params.arguments}))
+    await params.result_callback({"drawn": True})
+
+
 def build_playground_worker(
     connection: SmallWebRTCConnection, config: VoiceConfig
 ) -> tuple[PipelineWorker, Session]:
@@ -129,36 +165,24 @@ def build_playground_worker(
     # writes it into the live LLMContext. See playground/session.py.
     session.context = context
 
-    async def on_end_round(params):
-        session.switch_to_coach()
-        session.push_context()
-        # set_voice is deprecated (removed in 2.0.0, TTSUpdateSettingsFrame is
-        # the replacement) but still functional in 1.7.0, and this is the only
-        # place a voice change is needed -- the audible half of the handoff.
-        await tts.set_voice(session.tts_voice())
-        await params.result_callback({"ok": True})
-
-    async def on_draw_diagram(params):
-        # connection.send_app_message, not transport.output().push_frame:
-        # push_frame is meant to be called from inside a FrameProcessor's own
-        # process_frame(), not from an arbitrary function-call callback: it
-        # gates on the processor already having seen a StartFrame
-        # (_check_started) and there's no guarantee of that here. The
-        # connection is already in scope, already queues if the data channel
-        # isn't open yet, and is what TranscriptRelay's own peer -- the
-        # transport's *input* side -- never needed to reach around.
-        connection.send_app_message({"type": "draw", "topology": params.arguments})
-        await params.result_callback({"drawn": True})
-
-    llm.register_function("end_round", on_end_round)
-    llm.register_function("draw_diagram", on_draw_diagram)
+    llm.register_function("end_round", partial(_end_round, session, tts))
+    llm.register_function("draw_diagram", partial(_draw_diagram, connection))
 
     aggregators = LLMContextAggregatorPair(
         context,
+        # No vad_analyzer here: LLMUserAggregatorParams(vad_analyzer=...) makes
+        # the aggregator build its *own* VADController on the same audio the
+        # pipeline's _vad() VADProcessor stage already analyzes -- two Silero
+        # instances per session, and the aggregator's controller broadcasts a
+        # second VADUserStoppedSpeakingFrame that reaches the upstream
+        # SegmentedSTTService (OpenAISTTService) too, which transcribes on
+        # every stop frame it sees: one utterance, two billed transcriptions.
+        # UserTurnController (which drives SmartTurn) reacts to
+        # VADUserStarted/StoppedSpeakingFrame and raw audio regardless of
+        # whether the aggregator owns its own VAD controller -- it gets them
+        # from whatever reaches process_frame() -- so the pipeline's single
+        # _vad() stage is sufficient on its own.
         user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(
-                params=VADParams(stop_secs=config.stop_secs, min_volume=config.min_volume)
-            ),
             # SmartTurn v3's ONNX model ships bundled in the wheel. It is what
             # stops the interviewer cutting in on "...checks the cache first, and".
             user_turn_strategies=UserTurnStrategies(

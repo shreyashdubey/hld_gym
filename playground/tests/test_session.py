@@ -50,14 +50,19 @@ class TestSession(unittest.TestCase):
 
 
 class _FakeLLMContext:
-    """Stands in for pipecat's LLMContext. Records what got pushed, without
-    dragging pipecat's message-schema types into a unit test."""
+    """Stands in for pipecat's LLMContext -- just enough of the real API
+    (transform_messages built on set_messages, exactly like the real
+    LLMContext) to prove push_context() drives it correctly, without dragging
+    pipecat's message-schema types into a unit test."""
 
-    def __init__(self):
-        self.messages = None
+    def __init__(self, messages=None):
+        self.messages = messages or []
 
     def set_messages(self, messages):
         self.messages = messages
+
+    def transform_messages(self, transform):
+        self.set_messages(transform(self.messages))
 
 
 class TestSessionContextBinding(unittest.TestCase):
@@ -77,6 +82,31 @@ class TestSessionContextBinding(unittest.TestCase):
         self.s.context = self.ctx
         self.s.push_context()
         self.assertEqual(self.ctx.messages, self.s.system_messages())
+
+    def test_push_context_preserves_the_conversation(self):
+        """The critical property: set_messages() replaces everything, so
+        push_context() must refresh the system messages in place rather than
+        wipe the user/assistant turns sitting behind them. A board update
+        mid-round -- which the client sends on every debounced graph change --
+        must not give the interviewer amnesia, and the coach must still have
+        what the candidate actually said to work from."""
+        self.ctx.messages = [
+            {"role": "system", "content": "stale persona"},
+            {"role": "user", "content": "I'd cache the read path"},
+            {"role": "assistant", "content": "Why?"},
+        ]
+        self.s.context = self.ctx
+        self.s.push_context()
+        roles = [m["role"] for m in self.ctx.messages]
+        self.assertIn("user", roles)
+        self.assertIn("assistant", roles)
+        self.assertIn(
+            "I'd cache the read path", " ".join(m.get("content", "") for m in self.ctx.messages)
+        )
+        # The stale system message is gone, replaced by the current one --
+        # not merely appended alongside it.
+        self.assertNotIn("stale persona", " ".join(m.get("content", "") for m in self.ctx.messages))
+        self.assertEqual(sum(1 for r in roles if r == "system"), len(self.s.system_messages()))
 
     def test_push_context_after_switching_carries_the_answer_key_into_the_bound_context(self):
         from playground import rep

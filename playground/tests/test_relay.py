@@ -40,8 +40,23 @@ class TestTranscriptRelay(unittest.TestCase):
         )
         messages = [f.message for f in out if hasattr(f, "message")]
         self.assertIn(
-            {"type": "transcript", "text": "the app checks the cache first"}, messages
+            {
+                "label": "rtvi-ai",
+                "type": "server-message",
+                "data": {"type": "transcript", "text": "the app checks the cache first"},
+            },
+            messages,
         )
+
+    def test_the_client_message_carries_the_rtvi_label(self):
+        """@pipecat-ai/small-webrtc-transport only bubbles an inbound message
+        up to onServerMessage when label == "rtvi-ai" -- an unlabelled
+        message is parsed off the wire and then silently dropped. Without
+        this label the browser never sees a transcript at all."""
+        out = run(TranscriptionFrame(text="hi", user_id="u", timestamp="t", finalized=True))
+        messages = [f.message for f in out if hasattr(f, "message")]
+        self.assertEqual(messages[0]["label"], "rtvi-ai")
+        self.assertEqual(messages[0]["type"], "server-message")
 
     def test_interim_transcription_is_not_sent(self):
         """Interim text rewrites itself as the model changes its mind. Appending

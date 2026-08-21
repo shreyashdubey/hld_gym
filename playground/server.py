@@ -6,7 +6,7 @@ are one service rather than two. See docs/superpowers/specs/2026-08-21-playgroun
 
 import asyncio
 import os
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -16,6 +16,9 @@ from pydantic import BaseModel
 
 from playground.config import VoiceConfig
 from playground.pipelines import build_dictation_worker, build_playground_worker
+from playground.session import Session
+
+Mode = Literal["dictation", "playground"]
 
 load_dotenv()
 
@@ -67,11 +70,60 @@ async def _end_session(conn: SmallWebRTCConnection) -> None:
         await session.runner.cancel(reason="connection ended")
 
 
+def _extract_board_graph(message: object) -> dict | None:
+    """Pure parser: a raw connection-level "app-message" payload -> the board
+    graph dict it carries, or None if this isn't a well-formed board update.
+
+    Inbound client messages arrive at connection-level "app-message" as the
+    raw RTVI envelope client.sendClientMessage() produces:
+    {"type": "client-message", "data": {"t": <type>, "d": <data>}} -- not the
+    flattened {"type": ..., **data} shape this looked like it would be. The
+    client sends sendClientMessage("board", {graph}), so the board lives at
+    data["d"]["graph"].
+
+    Module-level and side-effect-free so it can be unit-tested directly --
+    see test_server.py -- rather than only exercised through a live WebRTC
+    connection.
+
+    Returns None both when this isn't a board message at all and when it is
+    one but the graph itself isn't a dict: either way there is nothing safe
+    to hand BoardContext.update(), and the caller must leave the last good
+    board alone rather than replacing it with an empty one."""
+    if not (isinstance(message, dict) and message.get("type") == "client-message"):
+        return None
+    data = message.get("data")
+    if not (isinstance(data, dict) and data.get("t") == "board"):
+        return None
+    payload = data.get("d")
+    graph = payload.get("graph") if isinstance(payload, dict) else None
+    return graph if isinstance(graph, dict) else None
+
+
+def _apply_board_message(session: Session, message: object) -> None:
+    """Handle one inbound app-message for the board, if it is one.
+
+    Session owns push_context() (see playground/session.py) -- this is the
+    second (and last) caller of it, alongside end_round. A malformed or
+    unrelated message is a no-op: BoardContext.update() tolerates a
+    malformed *graph* by design (missing keys, wrong types, junk entries),
+    but a missing/non-dict graph here is a malformed *envelope* one level up,
+    and the fix is to leave the board untouched, not to overwrite a good
+    board with an empty one."""
+    graph = _extract_board_graph(message)
+    if graph is None:
+        return
+    session.board.update(graph)
+    session.push_context()
+
+
 @app.post("/api/offer")
-async def offer(request: OfferRequest, mode: str = "dictation") -> dict:
+async def offer(request: OfferRequest, mode: Mode = "dictation") -> dict:
     """One WebRTC connection per session. mode is a query param
     (?mode=playground), not a body field -- the client picks it before the
-    SDP exchange, see sell/lib/voice.ts."""
+    SDP exchange, see sell/lib/voice.ts. Typed as Literal rather than str so
+    an unrecognised mode is a 422 at the boundary (FastAPI/Pydantic validate
+    it before the handler body runs) instead of silently falling back to
+    dictation -- a mute interviewer with no error is worse than a loud one."""
     if request.pc_id and request.pc_id in _sessions:
         session = _sessions[request.pc_id]
         await session.connection.renegotiate(sdp=request.sdp, type=request.type)
@@ -81,33 +133,22 @@ async def offer(request: OfferRequest, mode: str = "dictation") -> dict:
     await connection.initialize(sdp=request.sdp, type=request.type)
 
     config = VoiceConfig.from_env()
-    if mode == "playground":
-        worker, pg_session = build_playground_worker(connection, config)
+    try:
+        if mode == "playground":
+            worker, pg_session = build_playground_worker(connection, config)
 
-        @connection.event_handler("app-message")
-        async def _on_app_message(conn: SmallWebRTCConnection, message: object) -> None:
-            """Inbound client messages arrive at connection-level "app-message"
-            as the raw RTVI envelope client.sendClientMessage() produces:
-            {"type": "client-message", "data": {"t": <type>, "d": <data>}} --
-            not the flattened {"type": ..., **data} shape this looked like it
-            would be. The client sends sendClientMessage("board", {graph}), so
-            the board lives at data["d"]["graph"].
-
-            BoardContext.update() tolerates a malformed *graph* by design
-            (missing keys, wrong types, junk entries) -- but a missing or
-            non-dict graph here is a malformed *envelope*, one level up, and
-            still must not crash a live session, so it degrades to {}."""
-            if not (isinstance(message, dict) and message.get("type") == "client-message"):
-                return
-            data = message.get("data")
-            if not (isinstance(data, dict) and data.get("t") == "board"):
-                return
-            payload = data.get("d")
-            graph = payload.get("graph") if isinstance(payload, dict) else None
-            pg_session.board.update(graph if isinstance(graph, dict) else {})
-            pg_session.push_context()
-    else:
-        worker = build_dictation_worker(connection, config)
+            @connection.event_handler("app-message")
+            async def _on_app_message(conn: SmallWebRTCConnection, message: object) -> None:
+                _apply_board_message(pg_session, message)
+        else:
+            worker = build_dictation_worker(connection, config)
+    except Exception:
+        # build_*_worker loads models (two, for playground) before the
+        # connection is ever registered in _sessions -- if either raises, the
+        # already-initialize()d connection must still be torn down, or it
+        # leaks a live peer connection nothing will ever clean up.
+        await connection.disconnect()
+        raise
 
     runner = WorkerRunner(handle_sigint=False)
     task = asyncio.create_task(runner.run(worker))
