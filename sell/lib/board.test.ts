@@ -66,3 +66,35 @@ test("an empty board is an empty graph, not a crash", () => {
 test("the marker constant is what the layout module will stamp", () => {
   assert.equal(COACH_AUTHOR, "coach");
 });
+
+import { graphSignature } from "./board.ts";
+
+test("the same graph signs the same", () => {
+  const g = { nodes: [{ id: "a", label: "App" }], edges: [], unreadable: 0 };
+  assert.equal(graphSignature(g), graphSignature(structuredClone(g)));
+});
+
+test("moving a box does not change the signature", () => {
+  // Dragging a node around is not a semantic change and must not wake the coach.
+  const a = extractGraph(scene);
+  const moved = extractGraph(scene.map((e) => ({ ...e, x: 999 } as BoardElement)));
+  assert.equal(graphSignature(a), graphSignature(moved));
+});
+
+test("adding an edge changes the signature", () => {
+  const a = { nodes: [{ id: "a", label: "App" }], edges: [], unreadable: 0 };
+  const b = { ...a, edges: [{ from: "a", to: "a", label: "" }] };
+  assert.notEqual(graphSignature(a), graphSignature(b));
+});
+
+test("renaming a node changes the signature", () => {
+  const a = { nodes: [{ id: "a", label: "App" }], edges: [], unreadable: 0 };
+  const b = { nodes: [{ id: "a", label: "Cache" }], edges: [], unreadable: 0 };
+  assert.notEqual(graphSignature(a), graphSignature(b));
+});
+
+test("element order does not change the signature", () => {
+  const a = { nodes: [{ id: "a", label: "A" }, { id: "b", label: "B" }], edges: [], unreadable: 0 };
+  const b = { nodes: [{ id: "b", label: "B" }, { id: "a", label: "A" }], edges: [], unreadable: 0 };
+  assert.equal(graphSignature(a), graphSignature(b));
+});

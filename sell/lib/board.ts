@@ -69,3 +69,12 @@ export function extractGraph(elements: readonly BoardElement[]): BoardGraph {
 
   return { nodes, edges, unreadable };
 }
+
+/** A stable string for a graph's meaning. Two boards with the same components
+    and the same connections sign identically no matter where they sit on the
+    canvas or what order they were drawn in. */
+export function graphSignature(graph: BoardGraph): string {
+  const nodes = graph.nodes.map((n) => `${n.id}:${n.label}`).sort();
+  const edges = graph.edges.map((e) => `${e.from}>${e.to}:${e.label}`).sort();
+  return JSON.stringify([nodes, edges, graph.unreadable]);
+}
