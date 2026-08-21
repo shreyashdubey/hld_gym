@@ -7,7 +7,7 @@ are one service rather than two. See docs/superpowers/specs/2026-08-21-playgroun
 import asyncio
 import os
 import time
-from typing import Literal, NamedTuple
+from typing import Literal, Mapping, NamedTuple
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -28,6 +28,28 @@ load_dotenv()
 
 app = FastAPI(title="HLD Gym Playground")
 
+
+def _allowed_origins(env: Mapping[str, str] | None = None) -> list[str]:
+    """PLAYGROUND_ALLOWED_ORIGINS, comma-separated -- same env-var convention
+    VoiceConfig.from_env() uses, kept as a standalone function rather than a
+    VoiceConfig field because CORS is an app-wide policy fixed at startup,
+    not a per-session tuning knob VoiceConfig.from_env() re-reads on every
+    /api/offer. Defaults to the two localhost origins `sell` actually runs
+    from in dev (npm run dev is :3000; 127.0.0.1 is the same server, some
+    browsers resolve it separately). A wildcard was the first version of
+    this and was too broad: the service holds no cookie/session to leak (see
+    the comment on app.add_middleware below), but with allow_origins="*"
+    *any* page open in the same browser while this service is running
+    locally could open a session against it and spend the visitor's OpenAI
+    quota, not just sell's own pages. Override to widen this deliberately
+    if the service is ever hosted somewhere other than localhost."""
+    src = os.environ if env is None else env
+    raw = src.get(
+        "PLAYGROUND_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    )
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 # sell and playground are two different origins by design -- localhost:3000
 # vs :7860 in dev, and a different deployment target in production, per
 # NEXT_PUBLIC_VOICE_URL in sell/lib/voice.ts. Found during this task's own
@@ -35,15 +57,15 @@ app = FastAPI(title="HLD Gym Playground")
 # instance of this service before (every earlier task's "service running"
 # checks were reasoned through, not run, for lack of an OpenAI key), and the
 # preflight was rejected outright, before the SDP offer or any mic prompt.
-# allow_origins="*" is safe here specifically because the service holds no
-# cookie/session to leak -- it never sets allow_credentials, and the key
-# that matters (OPENAI_API_KEY) never leaves the server; see /health's own
-# comment. Restricting origins would only recreate the auth this product
-# has deliberately not built yet (root AGENTS.md: "No backend, no auth, no
-# database until someone pays").
+# allow_credentials is never set (default False), so nothing here recreates
+# the auth this product has deliberately not built yet (root AGENTS.md: "No
+# backend, no auth, no database until someone pays") -- allow_origins is
+# still narrowed to _allowed_origins() rather than "*", because a wildcard
+# lets any page a visitor has open spend their OpenAI quota through this
+# service, not just sell's.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

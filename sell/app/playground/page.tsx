@@ -41,7 +41,7 @@ export default function PlaygroundPage() {
   const start = useCallback(async () => {
     setState("connecting");
     try {
-      session.current = await connectVoice({
+      const opened = await connectVoice({
         mode: "playground",
         onMessage: (m) => {
           const msg = m as { type?: string; text?: string; topology?: Topology };
@@ -53,7 +53,19 @@ export default function PlaygroundPage() {
              failed draw leaves the learner's board untouched. */
           if (msg?.type === "draw" && msg.topology) onDraw(msg.topology).catch(() => {});
         },
+        onDisconnect: () => {
+          /* Fires later, only if this exact session ends on its own -- a
+             server-initiated teardown (the session cap) or a fatal service
+             error. A live-looking session that is already dead is exactly
+             the failure this exists to close: drop back to the same honest
+             "unreachable" state a failed connect shows, so the button and
+             the cap-note reappear and typing is still the fallback. */
+          if (session.current !== opened) return;
+          session.current = null;
+          setState("unavailable");
+        },
       });
+      session.current = opened;
       setState("live");
       /* The coach otherwise opens deaf to whatever was drawn before "start" was
          clicked — the natural order for a visitor who draws first, then talks.

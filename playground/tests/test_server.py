@@ -6,7 +6,13 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from playground.config import VoiceConfig
-from playground.server import OfferRequest, _apply_board_message, _extract_board_graph, offer
+from playground.server import (
+    OfferRequest,
+    _allowed_origins,
+    _apply_board_message,
+    _extract_board_graph,
+    offer,
+)
 from playground.session import Session
 
 
@@ -49,6 +55,30 @@ class TestOffer(unittest.TestCase):
         r = self.client.post("/api/offer?mode=bogus", json={"sdp": "x", "type": "offer"})
         self.assertGreaterEqual(r.status_code, 400)
         self.assertLess(r.status_code, 500)
+
+
+class TestAllowedOrigins(unittest.TestCase):
+    """CORS started as allow_origins="*" and was narrowed after this build's
+    own verification showed why: a wildcard lets any page a visitor has open
+    spend their OpenAI quota through a locally-running service, not just
+    sell's. These two properties -- a safe default, and an override that
+    actually overrides -- are what stop that regressing silently."""
+
+    def test_defaults_to_the_two_localhost_dev_origins(self):
+        self.assertEqual(
+            _allowed_origins({}),
+            ["http://localhost:3000", "http://127.0.0.1:3000"],
+        )
+
+    def test_env_override_replaces_the_default_entirely(self):
+        origins = _allowed_origins({"PLAYGROUND_ALLOWED_ORIGINS": "https://hld-gym.vercel.app"})
+        self.assertEqual(origins, ["https://hld-gym.vercel.app"])
+
+    def test_env_override_is_comma_separated_and_trims_whitespace(self):
+        origins = _allowed_origins(
+            {"PLAYGROUND_ALLOWED_ORIGINS": "https://a.example, https://b.example ,,"}
+        )
+        self.assertEqual(origins, ["https://a.example", "https://b.example"])
 
 
 class TestExtractBoardGraph(unittest.TestCase):

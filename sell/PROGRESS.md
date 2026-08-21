@@ -1818,26 +1818,92 @@ recognises, not the diff that fixed it:
   import TypeScript; `test_personas.py` parses the `.ts` source and fails the
   moment the two disagree.
 
-**Two more, found and fixed during this task's own verification, not on the
-original list.** Both are the direct result of actually running the pieces
-together instead of reasoning through them, which is the entire point of this
-task:
+**Two more, found during this task's own verification, not on the original
+list.** Both are the direct result of actually running the pieces together
+instead of reasoning through them, which is the entire point of this task:
 
-- The FastAPI service shipped with no CORS policy. `sell` and `playground`
-  are different origins by design — `:3000` and `:7860` in dev, and a
-  different deployment target in production per `NEXT_PUBLIC_VOICE_URL` — so
-  every browser fetch to `/api/offer` failed preflight before an SDP offer or
-  a mic prompt ever happened. **Symptom: a live, correctly-running service is
-  unreachable from the browser, indistinguishable from the service being
-  down at all.** No earlier task report caught this because none of them had
-  an OpenAI key to bring the service up with in the first place — this task
-  used a syntactically-present-but-invalid key (`sk-broken`) specifically to
-  get far enough to find out. Fixed with `CORSMiddleware(allow_origins=["*"])`
-  in `server.py`; safe here specifically because the service holds no
-  cookie or session to leak and never sets `allow_credentials`.
+- The FastAPI service shipped with no CORS policy at all. `sell` and
+  `playground` are different origins by design — `:3000` and `:7860` in dev,
+  and a different deployment target in production per
+  `NEXT_PUBLIC_VOICE_URL` — so every browser fetch to `/api/offer` failed
+  preflight before an SDP offer or a mic prompt ever happened. **Symptom: a
+  live, correctly-running service is unreachable from the browser,
+  indistinguishable from the service being down at all.** No earlier task
+  report caught this because none of them had an OpenAI key to bring the
+  service up with in the first place — this task used a
+  syntactically-present-but-invalid key (`sk-broken`) specifically to get far
+  enough to find out. First fixed with `CORSMiddleware(allow_origins=["*"])`;
+  **narrowed on review** — see below, that first pass was broader than it
+  needed to be.
 - The polling bug described above. **Symptom: with a short-enough cap, the
   session reaches the cut having never handed over at all** — invisible at
   the 12-minute default, guaranteed at a test-sized one.
+
+**Three more, found the same way and fixed on the same review pass, all
+variations of one defect: the page claiming voice is working when it is
+not.** This repo's first standing rule is never to claim the product does
+something it does not, and the spec's failure-mode section is explicit that a
+denied microphone must drop to text mode and say so out loud — none of the
+three did, and all three are now fixed and re-verified live:
+
+- **Mic denied showed "listening."** `@pipecat-ai/client-js` swallows a
+  `getUserMedia` rejection internally (logged only as a console warning,
+  "Devices Error (Permission Denied)") and lets `connect()` resolve anyway,
+  with no live audio track. **Symptom: the learner speaks, believes it is
+  working, and gets nothing** — the worst of the three, because nothing about
+  it looks broken. Fixed in `lib/voice.ts`: after `connect()` resolves,
+  `client.mediaState.mic.state` (the SDK's own purpose-built per-device
+  status — `connect()` already awaits `initDevices()` to completion first, so
+  it has settled to `"granted"` or an error by the time `connect()` returns)
+  is checked explicitly rather than assumed from a successful connect. Not
+  `"granted"` → disconnect and throw, which every existing caller already
+  catches and falls back to the keyboard for, so `Rep.tsx` and `page.tsx`
+  needed no new branch for this case, only the new check itself.
+- **A server-initiated teardown never reached the page.** State stuck at
+  `"live"`/`"on"` after the *server* ended the session (the cap, most
+  reachably) — a live-looking session that was already dead. Fixed by wiring
+  `PipecatClient`'s own `onDisconnected` callback (already part of the SDK,
+  never listened to before this) in `connectVoice()` to a new
+  `onDisconnect()` option, called by `Rep.tsx`/`page.tsx` to drop back to
+  `"unavailable"`/`"unreachable"` — the same honest state a failed connect
+  already shows. Guarded by a `live` flag so a disconnect the *caller* asked
+  for (the mic toggle's own click-to-stop) never fires it — verified live
+  (below) that a deliberate stop still returns cleanly to "off", not
+  "unavailable".
+- **A fatal server-side error never reached the page.** Investigating this
+  corrected something stated flatly, and wrongly, earlier in this same entry:
+  pipecat's own `RTVIProcessor` already relays *every* `ErrorFrame` to the
+  client as a native RTVI `error` message (`processor.py`: `elif
+  isinstance(frame, ErrorFrame): await self._send_error_frame(frame)`) — the
+  401 in the verification below really was reaching the browser the whole
+  time. The actual gap was one layer up: `PipecatClient` exposes this as an
+  `onError` callback, and nothing in `voice.ts` was listening for it, so the
+  app dropped it silently. **Symptom: a fatal error resolves into a
+  perfectly quiet, still-`"live"`-looking page — not a hang, worse, an
+  active-looking session doing nothing.** Fixed the same way as the teardown
+  above and through the same path, per the review's own instruction not to
+  build a second mechanism: `onError` now calls `client.disconnect()` itself
+  (this app has no retry UX and no error taxonomy — any relayed service error
+  is treated as fatal to the session, full stop) and the resulting
+  `onDisconnected` does the actual notifying. No server-side change was
+  needed for this one at all.
+
+**CORS narrowed, on review.** `allow_origins=["*"]` was right that the
+service holds no cookie or session to leak, but wrong about the actual risk:
+a wildcard means *any* page open in the same browser while this service is
+running locally — not just `sell`'s — can open a session against it and
+spend the visitor's own OpenAI quota. `server.py` now reads
+`PLAYGROUND_ALLOWED_ORIGINS`, a comma-separated list, same env-var convention
+`VoiceConfig.from_env()` already uses, defaulting to the two localhost
+origins `sell` actually runs from (`http://localhost:3000`,
+`http://127.0.0.1:3000`) — a standalone `_allowed_origins()` function rather
+than a new `VoiceConfig` field, since CORS is an app-wide policy fixed at
+startup, not a per-session tuning knob re-read on every `/api/offer`. Three
+tests in `test_server.py` cover the default, an override replacing it
+entirely, and comma/whitespace handling. Verified directly with `curl`:
+`Origin: http://localhost:3000` gets `access-control-allow-origin:
+http://localhost:3000` back; `Origin: https://evil.example` gets no
+CORS header at all, which is what makes the browser refuse the response.
 
 **Verified by causing each of the four failure modes, not by reasoning about
 them:**
@@ -1853,45 +1919,56 @@ them:**
    init script (headless Chromium auto-grants a fake device otherwise, so a
    real deny dialog was not available to test against). With the service
    fully down, the control correctly settles on "voice is unavailable, type
-   it instead" and typing still works. With the service actually reachable
-   (after the CORS fix, `OPENAI_API_KEY=sk-broken`), the result was different
-   and worth recording plainly: `@pipecat-ai/client-js` catches the
-   `getUserMedia` rejection internally (logged as a warning, "Devices Error
-   (Permission Denied)") and the connection proceeds anyway, without an audio
-   track. `Rep.tsx`'s mic control has no way to see that and shows
-   `◉ listening` — mic "on" — for a session that is not actually capturing
-   anything. This is pre-existing behaviour in `Rep.tsx`/`lib/voice.ts`
-   (tasks 4–5), not touched by this task's file list, and is **not fixed
-   here** — recorded as a symptom for whoever next touches the mic control.
+   it instead" and typing still works, as before. With the service actually
+   reachable (`OPENAI_API_KEY=sk-broken`) — the case that used to show
+   `◉ listening` for a session hearing nothing — the control now correctly
+   settles on the same "voice is unavailable... type it instead" state, still
+   enabled, still retryable; typed a full answer and submitted, `recall · 5
+   of 6` (a deliberately slightly-off answer), grading unaffected. Also
+   checked the case this fix must not break: with the mic genuinely granted
+   (no injected rejection), the control reaches real `◉ listening`, and a
+   *deliberate* second click — the toggle's own stop — returns cleanly to
+   `◎ speak it` with the ordinary "or type it" copy, not "unavailable"; the
+   `live`-flag guard in `connectVoice()` is what keeps a caller-requested
+   disconnect from being mistaken for an involuntary one.
 3. **Bad key.** No real OpenAI key exists anywhere in this build, so this one
-   could not be tested the way the other three were — but a syntactically
-   present, invalid key (`OPENAI_API_KEY=sk-broken`) got further than
-   expected. The service starts, `/health` reports `key_loaded: true`
-   regardless of validity, and `/api/offer` succeeds — the OpenAI client
-   library only validates a key against the network, at the moment of a real
-   call, not at construction. Confirmed live end to end: the interviewer's
-   first real completion attempt returned an actual `401 - Incorrect API key
-   provided`, logged clearly server-side and handled as a non-fatal
-   `ErrorFrame` — the pipeline does not crash. What the brief's stated
-   behaviour asks for — **"the client reports it plainly"** — did not happen:
-   nothing in this codebase relays an `ErrorFrame` to the browser, so the
-   page just sits in its already-`"live"` state (no spinner, but no message
-   either) until the session cap eventually cuts the silent connection.
-   Whether a *genuinely* invalid key (well-formed, rejected only on scope/billing)
-   behaves identically is unverified — no such key was available.
-4. **Session cap.** Verified twice. First, live end to end: real browser,
-   real `uvicorn`, `PLAYGROUND_SESSION_CAP_SECS=8`, `OPENAI_API_KEY=sk-broken`.
-   Server log shows the handoff at t+6.4s (`Switching TTS voice to: [shimmer]`,
-   then a real chat-completions call built from the coach's system prompt,
-   rubric, and probe answers — proof the answer key genuinely reaches the
-   model at handover), the real 401 at t+7.6s, and the cut at t+8.0s
-   (`WorkerRunner 'runner-...': cancelling (reason=connection ended)`) — the
-   same log line an ordinary disconnect produces, confirming the reuse.
-   The browser's own state never left `"live"`; nothing in `page.tsx` reacts
-   to a server-initiated teardown, a second pre-existing gap recorded here
-   without being fixed, since page.tsx's role in this task was only the
-   cap-note copy. Second, against fakes at `session_cap_secs=2` and `4` (see
-   above), to nail the timing precisely and to prove the fix's before/after.
+   still could not be tested the way the other three were — but
+   `OPENAI_API_KEY=sk-broken` again got further than expected, and further
+   than the first pass through this task found. The service starts, `/health`
+   reports `key_loaded: true` regardless of validity, and `/api/offer`
+   succeeds — the OpenAI client library only validates a key against the
+   network, at the moment of a real call, not at construction. Confirmed live
+   end to end, and re-verified after the fix: the interviewer's first real
+   completion attempt returned an actual `401 - Incorrect API key provided`.
+   The brief's stated behaviour — **"the client reports it plainly"** — now
+   holds, but the earlier claim in this same entry that nothing relays the
+   error was wrong and is corrected above: pipecat's `RTVIProcessor` was
+   already forwarding it as a native RTVI `error` message the whole time; the
+   app just wasn't listening. With `onError` now wired, the browser closes
+   the connection itself within milliseconds of the 401 (log timestamps: peer
+   connection established 21:18:40.854, the 401 logged at 21:18:48.191, the
+   connection already `closed` at 21:18:48.213 — about 7.36s after connect,
+   under the 8s cap this run used, so the client's own reaction beat the
+   cap's to it) and the page settles on "voice service unreachable." Whether
+   a *genuinely* invalid key (well-formed, rejected only on scope/billing)
+   relays the same way is unverified — no such key was available, though the
+   mechanism (any `ErrorFrame`, regardless of cause) does not depend on which
+   kind of failure produced it.
+4. **Session cap.** Verified twice on the first pass (live end to end and
+   against fakes — see above and below), then re-verified live a third time
+   after items 2-3's fixes landed, using the same real browser + real
+   `uvicorn` + `PLAYGROUND_SESSION_CAP_SECS=8` + `OPENAI_API_KEY=sk-broken`
+   setup: handover and the answer key reaching the coach's context, same as
+   before; this time the browser's own `state` also correctly left `"live"`
+   and settled on "voice service unreachable" (confirmed ~13s after clicking
+   "start the round," well past the 8s cap) instead of sticking on `"live"`
+   forever, which is what it did before `page.tsx` was wired to
+   `onDisconnect`. In this run the *error* relay closed the connection first
+   (see item 3), so this exercised the same client-side `onDisconnected`
+   handler the cap's own cut would use if a session ran long enough to be cut
+   with no error ahead of it — a scenario this build's lack of a real OpenAI
+   key cannot produce, since the coach's forced handoff always attempts a
+   real completion and always fails the same way with `sk-broken`.
 
 **Never run against the live API, stated plainly, because no OpenAI key was
 available at any point in this build:** VAD tuning by ear, the audible
@@ -1905,7 +1982,24 @@ standing rule is never to claim the product does something it does not; none
 of the above is claimed to work, only to be wired up correctly by inspection
 and, where a broken key could reach it, by a live but auth-failing call.
 
-**All 87 Python tests pass** (`playground/.venv/bin/python -m unittest
+**No automated test for the `lib/voice.ts` changes, and that is a real gap,
+not an oversight.** `_allowed_origins()` got three cheap tests because it is a
+pure function of an env mapping. `connectVoice()`'s new logic — the
+`mediaState.mic` check, the `live`-flagged `onDisconnected`/`onError`
+wiring — is not: it is a thin wrapper around `@pipecat-ai/client-js`'s own
+`PipecatClient`, constructed directly inside the function, and `sell` has no
+mocking infrastructure (`npm test` is plain `node:test` against `lib/*.ts`,
+nothing component- or SDK-level is mocked anywhere in this repo — `Rep.tsx`
+and `voice.ts` have never had unit tests, verified live in every task that
+touched them instead, same as this one). Checked whether that's actually
+true or just assumed: `connectVoice` doesn't take an injectable client
+factory, and adding one only to make a test possible would be a
+purpose-built seam that exists for no reason but the test, not a reflection
+of anything the function itself needs — the honest move as recorded, verified
+live above, three separate ways with a real browser and a real service.
+
+**All 90 Python tests pass** (`playground/.venv/bin/python -m unittest
 discover -s playground/tests -t .` from the repo root — 82 before this task,
-5 new in `test_cap.py`), **all 36 `sell` tests pass**, lint is clean, and
-`npm run build` still produces the static export including `/playground`.
+5 in `test_cap.py`, 3 more in `test_server.py` for `_allowed_origins`),
+**all 36 `sell` tests pass**, lint is clean, and `npm run build` still
+produces the static export including `/playground`.

@@ -125,6 +125,19 @@ export default function Rep() {
             setRecall((prev) => appendTranscript(prev, msg.text as string));
           }
         },
+        onDisconnect: () => {
+          /* Fires later, only if this exact session ends on its own -- a
+             server-initiated teardown (the session cap) or a fatal service
+             error. The deliberate-stop path above already clears
+             session.current and sets "off" before it disconnects, so this
+             only ever fires for a teardown nobody here asked for. A session
+             the toggle has since moved on from (a manual stop, or a fresh
+             rep that re-armed micGen) must not have its honest
+             "unavailable" stamped over whatever is current now. */
+          if (session.current !== opened) return;
+          session.current = null;
+          setMic("unavailable");
+        },
       });
       if (micGen.current !== startedAs) {
         /* This promise belongs to a rep that is no longer current — either
