@@ -39,6 +39,26 @@ test("an unbound arrow is dropped rather than invented", () => {
   assert.equal(extractGraph(loose).edges.length, 1);
 });
 
+test("a half-placed arrow (dragged off one node, never dropped on a target) is dropped", () => {
+  // startBinding set, endBinding absent — the scenario the drop-don't-invent
+  // rule actually exists for, not just a fully unbound stroke.
+  const app = extractGraph(scene).nodes.find((n) => n.label === "App")!;
+  const halfStart = [
+    ...scene,
+    { id: "half-start", type: "arrow", startBinding: { elementId: app.id } } as BoardElement,
+  ];
+  assert.equal(extractGraph(halfStart).edges.length, 1);
+});
+
+test("the mirror case — endBinding set, startBinding absent — is also dropped", () => {
+  const cache = extractGraph(scene).nodes.find((n) => n.label === "Cache")!;
+  const halfEnd = [
+    ...scene,
+    { id: "half-end", type: "arrow", endBinding: { elementId: cache.id } } as BoardElement,
+  ];
+  assert.equal(extractGraph(halfEnd).edges.length, 1);
+});
+
 test("an empty board is an empty graph, not a crash", () => {
   assert.deepEqual(extractGraph([]), { nodes: [], edges: [], unreadable: 0 });
 });

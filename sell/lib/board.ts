@@ -61,6 +61,10 @@ export function extractGraph(elements: readonly BoardElement[]): BoardGraph {
       label: labelOf.get(e.id) ?? "",
     }));
 
+  /* Counts freehand strokes only — the coach's "I can't read that squiggle"
+     line is specifically about handwriting, not about every element that
+     failed to become a node or edge (an orphaned text label, an image, a
+     frame). Widening this count would make that spoken line wrong. */
   const unreadable = live.filter((e) => e.type === "freedraw").length;
 
   return { nodes, edges, unreadable };
