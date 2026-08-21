@@ -1782,6 +1782,39 @@ just at a flat ceiling, so the loop can never sleep past it. Re-run at
 `session_cap_secs=4` and `session_cap_secs=2`: handover lands within 0.02s of
 the 80% mark, the cut lands within 0.01s of 100%, every time.
 
+**A second real bug in the same function, found on review, not by this
+build's own live runs.** `_enforce_cap`'s handover branch gated only on its
+own local `handed_over` flag, never on the session's actual mode — but a
+round can reach coach mode *before* the cap fires, through the interviewer's
+own `end_round` tool call, which runs independently of the cap, and nothing
+ends the connection when it does. A live session already in coach mode when
+the 80% mark arrives is therefore routine, not exotic. The branch would
+re-run `switch_to_coach()`/`push_context()` (harmless — both are
+idempotent) but also force-queue a *second, unprompted* `LLMRunFrame` with
+no user turn behind it: the coach interjecting out of nowhere
+mid-conversation. **Symptom if it breaks again: the coach cuts in on its own
+during a normal exchange, for no reason the transcript explains.** None of
+this task's own live runs could hit it — every one used a short cap
+specifically to exercise the cap itself, so `end_round` never got the chance
+to fire first. Fixed by gating the whole block (not just `handed_over`) on
+`pg_session.mode != "coach"`.
+
+**`_enforce_cap` had zero regression coverage until this same review pass.**
+`test_cap.py` only covers the pure `Session` methods; the scheduling and
+polling logic — where the flat-interval bug above was found and fixed — had
+been verified once, live, and with a throwaway script, and then left with no
+test at either level. `Session`'s injected clock and the worker/connection
+being trivially fakeable (exactly what the throwaway script already did)
+made this the same call as `_allowed_origins()` below, just with more at
+stake: committed as `TestEnforceCap` in `test_server.py` (3 tests, real
+timing, ~2.5s total) — handover before the cut, a `session_cap_secs=0.5`
+cap still getting a handover rather than a bare cut (the flat-poll bug's
+exact regression case), and a session already in coach mode getting no
+second run frame (this bug's regression case). Mutation-tested the second
+one directly: reverting the `pg_session.mode` gate back to `handed_over`
+alone fails `test_a_session_already_in_coach_mode_gets_no_second_run_frame`
+with an extra queued `LLMRunFrame` in the diff — confirmed, then reverted.
+
 **Bugs, recorded by symptom** — the symptom is what a future session
 recognises, not the diff that fixed it:
 
@@ -1905,6 +1938,21 @@ entirely, and comma/whitespace handling. Verified directly with `curl`:
 http://localhost:3000` back; `Origin: https://evil.example` gets no
 CORS header at all, which is what makes the browser refuse the response.
 
+**`PLAYGROUND_ALLOWED_ORIGINS="*"` undid the whole fix, found on the same
+review.** Garbage, whitespace, and trailing commas all degrade safely to a
+smaller list — but `"*"`, the standard "allow everything" convention and the
+first thing anyone reaching for a wildcard would type, was accepted verbatim
+and handed straight to `CORSMiddleware`, which treats it as allow-all.
+**Symptom if it breaks again: the origin allowlist exists in the code and in
+this entry, and is silently worth nothing.** `_allowed_origins()` now raises
+`ValueError` if `"*"` appears anywhere in the parsed list (bare, or mixed
+with real origins) — failing loudly at import time, before any session
+exists, which is free and is the honest behaviour for a security setting.
+Two new tests cover both cases; also confirmed directly, setting
+`PLAYGROUND_ALLOWED_ORIGINS=*` and importing `playground.server`, that the
+module now refuses to load at all, with a message naming the actual risk,
+instead of starting up wide open.
+
 **Verified by causing each of the four failure modes, not by reasoning about
 them:**
 
@@ -1998,8 +2046,9 @@ purpose-built seam that exists for no reason but the test, not a reflection
 of anything the function itself needs — the honest move as recorded, verified
 live above, three separate ways with a real browser and a real service.
 
-**All 90 Python tests pass** (`playground/.venv/bin/python -m unittest
+**All 95 Python tests pass** (`playground/.venv/bin/python -m unittest
 discover -s playground/tests -t .` from the repo root — 82 before this task,
-5 in `test_cap.py`, 3 more in `test_server.py` for `_allowed_origins`),
-**all 36 `sell` tests pass**, lint is clean, and `npm run build` still
-produces the static export including `/playground`.
+5 in `test_cap.py`, 3 in `test_server.py` for `_allowed_origins`, 2 more
+there for the `"*"` rejection, 3 more for `TestEnforceCap`), **all 36 `sell`
+tests pass**, lint is clean, and `npm run build` still produces the static
+export including `/playground`.

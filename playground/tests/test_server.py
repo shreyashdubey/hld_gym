@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -8,9 +9,12 @@ from fastapi.testclient import TestClient
 from playground.config import VoiceConfig
 from playground.server import (
     OfferRequest,
+    _Session,
     _allowed_origins,
     _apply_board_message,
+    _enforce_cap,
     _extract_board_graph,
+    _sessions,
     offer,
 )
 from playground.session import Session
@@ -79,6 +83,19 @@ class TestAllowedOrigins(unittest.TestCase):
             {"PLAYGROUND_ALLOWED_ORIGINS": "https://a.example, https://b.example ,,"}
         )
         self.assertEqual(origins, ["https://a.example", "https://b.example"])
+
+    def test_a_bare_wildcard_is_rejected_not_silently_widened(self):
+        """"*" degrades the whole guard back to allow-everything -- garbage
+        and stray whitespace/commas all fail safe to a smaller list, but this
+        one value is the standard "allow everything" convention and the
+        first thing anyone reaching for it would type, so it must raise
+        rather than pass through to CORSMiddleware verbatim."""
+        with self.assertRaises(ValueError):
+            _allowed_origins({"PLAYGROUND_ALLOWED_ORIGINS": "*"})
+
+    def test_a_wildcard_mixed_with_real_origins_is_also_rejected(self):
+        with self.assertRaises(ValueError):
+            _allowed_origins({"PLAYGROUND_ALLOWED_ORIGINS": "http://localhost:3000,*"})
 
 
 class TestExtractBoardGraph(unittest.TestCase):
@@ -240,6 +257,95 @@ class TestConnectionLeakGuard(unittest.TestCase):
                 with self.assertRaises(asyncio.CancelledError):
                     asyncio.run(offer(self.request))
         self.assertEqual(self.fake.disconnect_calls, 1)
+
+
+class _FakeCapRunner:
+    def __init__(self):
+        self.cancel_calls = []
+        self.cancelled_at = None
+
+    async def cancel(self, reason=None):
+        self.cancel_calls.append(reason)
+        self.cancelled_at = time.monotonic()
+
+
+class _FakeCapWorker:
+    def __init__(self):
+        self.queued = []
+        self.queued_at = None
+
+    async def queue_frames(self, frames):
+        self.queued.append(list(frames))
+        if self.queued_at is None:
+            self.queued_at = time.monotonic()
+
+
+class _FakeCapConnection:
+    def __init__(self, pc_id):
+        self.pc_id = pc_id
+
+
+class _FakeTTS:
+    """Same double as test_pipelines.py's -- duplicated rather than
+    imported so this test module doesn't reach into another one's
+    internals."""
+
+    def __init__(self):
+        self.voice = None
+
+    async def set_voice(self, voice):
+        self.voice = voice
+
+
+class TestEnforceCap(unittest.TestCase):
+    """_enforce_cap is the scheduling half of the session cap -- Session's
+    own start/remaining_secs/expired are pure and covered by test_cap.py,
+    but the polling loop that calls them is where the real bug in this
+    build lived (a flat sleep interval that could step clean over a short
+    handover window). Session's clock is real time.monotonic() here, not a
+    fake -- that bug is exactly the kind of scheduling defect a mocked clock
+    would never exercise -- so these run for real, for about a second each,
+    against a real short cap rather than the 12-minute default."""
+
+    def _run(self, session):
+        session.tts = _FakeTTS()
+        session.start(now=time.monotonic())
+        connection = _FakeCapConnection(f"pc-{id(session)}")
+        runner = _FakeCapRunner()
+        worker = _FakeCapWorker()
+        _sessions[connection.pc_id] = _Session(connection=connection, runner=runner, task=None)
+        asyncio.run(_enforce_cap(connection, worker, session))
+        return worker, runner
+
+    def test_the_handover_happens_before_the_cut(self):
+        session = Session(VoiceConfig(session_cap_secs=1.0))
+        worker, runner = self._run(session)
+        self.assertEqual(session.mode, "coach")
+        self.assertEqual(len(worker.queued), 1)
+        self.assertEqual(runner.cancel_calls, ["connection ended"])
+        self.assertLess(worker.queued_at, runner.cancelled_at)
+
+    def test_a_very_short_cap_still_gets_a_handover_not_a_bare_cut(self):
+        """The regression test for the bug this task found: a flat 1s poll
+        ceiling could step clean over a handover window narrower than a
+        second and reach expiry having never handed over at all."""
+        session = Session(VoiceConfig(session_cap_secs=0.5))
+        worker, runner = self._run(session)
+        self.assertEqual(session.mode, "coach")
+        self.assertEqual(len(worker.queued), 1)
+
+    def test_a_session_already_in_coach_mode_gets_no_second_run_frame(self):
+        """end_round switches a session to coach independently of the cap,
+        and nothing ends the connection when it does -- reaching the
+        handover mark already in coach mode is routine, not exotic. The cap
+        must not force a second, unprompted completion with no user turn
+        behind it: the coach interjecting out of nowhere mid-conversation."""
+        session = Session(VoiceConfig(session_cap_secs=1.0))
+        session.switch_to_coach()  # end_round already ran, before the cap fired
+        worker, runner = self._run(session)
+        self.assertEqual(session.mode, "coach")
+        self.assertEqual(worker.queued, [])
+        self.assertEqual(runner.cancel_calls, ["connection ended"])
 
 
 if __name__ == "__main__":

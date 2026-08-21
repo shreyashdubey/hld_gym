@@ -42,12 +42,23 @@ def _allowed_origins(env: Mapping[str, str] | None = None) -> list[str]:
     *any* page open in the same browser while this service is running
     locally could open a session against it and spend the visitor's OpenAI
     quota, not just sell's own pages. Override to widen this deliberately
-    if the service is ever hosted somewhere other than localhost."""
+    if the service is ever hosted somewhere other than localhost -- but "*"
+    itself is rejected outright, raising here at import time (before any
+    session exists, so failing loudly is free): it is the one value that
+    silently undoes this whole guard, and it is also the first thing anyone
+    reaching for "allow everything" would type. List the real origins."""
     src = os.environ if env is None else env
     raw = src.get(
         "PLAYGROUND_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
     )
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if "*" in origins:
+        raise ValueError(
+            'PLAYGROUND_ALLOWED_ORIGINS="*" is rejected: a wildcard lets any '
+            "page a visitor has open spend their OpenAI quota through this "
+            "service. List the origins that should be allowed, explicitly."
+        )
+    return origins
 
 
 # sell and playground are two different origins by design -- localhost:3000
@@ -147,6 +158,17 @@ async def _enforce_cap(
     tear a session down. Idempotent for the same reason theirs is: if the
     learner hangs up on their own first, _end_session has already popped
     this pc_id, and calling it again here is a no-op.
+
+    Gated on pg_session.mode, not just the local handed_over flag: end_round
+    switches a session to coach mode on its own, independently of the cap,
+    and nothing ends the connection when it does -- a round that finishes
+    itself well before 80% of the cap elapses is routine, not exotic. Without
+    the mode check, arriving at the handover mark already in coach mode would
+    still queue a second, unprompted LLMRunFrame with no user turn behind
+    it: the coach interjecting out of nowhere mid-conversation. switch_to_coach()
+    and push_context() are harmless to re-run (idempotent), but the run frame
+    is not, so the whole block -- not just handed_over -- is skipped once the
+    session is already there.
     """
     handover_at = pg_session.config.session_cap_secs * 0.2  # remaining_secs at 80% elapsed
     handed_over = False
@@ -156,14 +178,15 @@ async def _enforce_cap(
             break
         remaining = pg_session.remaining_secs(now)
         if not handed_over and remaining <= handover_at:
-            pg_session.switch_to_coach()
-            pg_session.push_context()
-            if pg_session.tts is not None:
-                await pg_session.tts.set_voice(pg_session.tts_voice())
-            # Nothing else prompts the LLM here -- unlike end_round, there's
-            # no function-call result to trigger the next completion, so the
-            # handover has to be asked for explicitly.
-            await worker.queue_frames([LLMRunFrame()])
+            if pg_session.mode != "coach":
+                pg_session.switch_to_coach()
+                pg_session.push_context()
+                if pg_session.tts is not None:
+                    await pg_session.tts.set_voice(pg_session.tts_voice())
+                # Nothing else prompts the LLM here -- unlike end_round,
+                # there's no function-call result to trigger the next
+                # completion, so the handover has to be asked for explicitly.
+                await worker.queue_frames([LLMRunFrame()])
             handed_over = True
         sleep_for = remaining if handed_over else min(remaining, remaining - handover_at)
         await asyncio.sleep(min(sleep_for, 1.0) if sleep_for > 0 else 0.05)
