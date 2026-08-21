@@ -46,7 +46,12 @@ export default function PlaygroundPage() {
         onMessage: (m) => {
           const msg = m as { type?: string; text?: string; topology?: Topology };
           if (msg?.type === "transcript" && msg.text) setSaid((s) => [...s, msg.text!]);
-          if (msg?.type === "draw" && msg.topology) onDraw(msg.topology);
+          /* topology is a model tool-call payload, not user input — it arrives
+             malformed eventually (missing nodes/edges, wrong types). Catch and
+             drop rather than throwing into an unhandled rejection: nothing in
+             onDraw mutates the scene before layoutTopology finishes, so a
+             failed draw leaves the learner's board untouched. */
+          if (msg?.type === "draw" && msg.topology) onDraw(msg.topology).catch(() => {});
         },
       });
       setState("live");

@@ -41,6 +41,16 @@ export function layoutTopology(topology: Topology, offsetX: number): ExcalidrawS
 
   dagre.layout(g);
 
+  /* label.text below makes convertToExcalidrawElements auto-generate a bound
+     text child for each box (and each labelled arrow) — that child does not
+     inherit customData.author from its container; only the box/arrow itself
+     carries the coach tag. Harmless today only because extractGraph never
+     walks text elements directly for exclusion — it filters nodes/edges by
+     type first, and a label is looked up by containerId only for an id
+     already in that filtered, coach-excluded set. If the extractor is ever
+     widened to read text elements on their own, this reopens the exact bug
+     the tagging exists to prevent: the coach reading its own diagram back as
+     the learner's. */
   const boxes: ExcalidrawSkeleton[] = topology.nodes.map((n) => {
     const { x, y } = g.node(n.id);
     return {
