@@ -1,10 +1,12 @@
+import asyncio
 import os
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from playground.config import VoiceConfig
-from playground.server import _apply_board_message, _extract_board_graph
+from playground.server import OfferRequest, _apply_board_message, _extract_board_graph, offer
 from playground.session import Session
 
 
@@ -141,6 +143,73 @@ class TestApplyBoardMessage(unittest.TestCase):
         _apply_board_message(self.session, {"type": "server-message"})
         self.assertEqual(self.session.board.messages(), [])
         self.assertEqual(self.session.context.messages, [])
+
+
+class _FakeConnection:
+    """Stands in for SmallWebRTCConnection -- same house style as
+    _FakeContext/_FakeTTS/_FakeConnection in test_pipelines.py. offer()
+    constructs SmallWebRTCConnection() by name from its own module
+    namespace, so patching playground.server.SmallWebRTCConnection to
+    return this is enough to drive the connection-leak guard directly: no
+    TestClient, no aiortc, no real SDP handshake."""
+
+    def __init__(self):
+        self.disconnect_calls = 0
+
+    async def initialize(self, sdp, type):
+        pass
+
+    async def disconnect(self):
+        self.disconnect_calls += 1
+
+    def event_handler(self, name):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+    def add_event_handler(self, name, handler):
+        pass
+
+    def get_answer(self):
+        return {"pc_id": "fake-pc-id"}
+
+
+class TestConnectionLeakGuard(unittest.TestCase):
+    """Both guards in offer() exist to stop a leaked peer connection
+    holding an OpenAI audio stream open, which bills per minute. Prove it
+    directly rather than trusting the diff -- this build has repeatedly
+    shown untested code regresses silently."""
+
+    def setUp(self):
+        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        self.fake = _FakeConnection()
+        self.request = OfferRequest(sdp="x", type="offer")
+
+    def test_a_config_failure_after_initialize_closes_the_connection(self):
+        """VoiceConfig.from_env() raises on a malformed PLAYGROUND_* env
+        var or the dictation-threshold/distinct-voice invariants -- after
+        the connection is already initialize()d. The guard must still tear
+        it down."""
+        with patch("playground.server.SmallWebRTCConnection", return_value=self.fake):
+            with patch.object(VoiceConfig, "from_env", side_effect=ValueError("bad env")):
+                with self.assertRaises(ValueError):
+                    asyncio.run(offer(self.request))
+        self.assertEqual(self.fake.disconnect_calls, 1)
+
+    def test_a_cancellation_during_the_worker_build_closes_the_connection_and_propagates(self):
+        """asyncio.CancelledError is a BaseException, not an Exception --
+        loading SmartTurn plus Silero is exactly the slow window where a
+        client giving up mid-request is most likely. The guard must still
+        tear the connection down, and must not swallow the cancellation."""
+        with patch("playground.server.SmallWebRTCConnection", return_value=self.fake):
+            with patch(
+                "playground.server.build_dictation_worker",
+                side_effect=asyncio.CancelledError(),
+            ):
+                with self.assertRaises(asyncio.CancelledError):
+                    asyncio.run(offer(self.request))
+        self.assertEqual(self.fake.disconnect_calls, 1)
 
 
 if __name__ == "__main__":
