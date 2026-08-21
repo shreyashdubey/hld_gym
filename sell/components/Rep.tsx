@@ -33,11 +33,16 @@ export default function Rep() {
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const session = useRef<VoiceSession | null>(null);
-  /* Flipped true the instant the rep leaves "locked" and read by toggleMic
-     after its await, below. Without it a connect that resolves after the
-     visitor has already submitted would assign session.current and flip mic
-     to "on" with nothing left watching the phase to close it again. */
-  const connectCancelled = useRef(false);
+  /* A generation counter, not a boolean: WATCH_S (~14s) is shorter than a
+     connect can take to fail (measured ~15s against nothing listening), so a
+     visitor can leave "locked", finish an entire second rep, and re-enter
+     "locked" — rearming a boolean cancel flag back to false — before rep 1's
+     stale connect settles. toggleMic captures the generation it started
+     under; only a match after the await means the promise still belongs to
+     the rep that opened it. Incremented on every entry to "locked" *and* on
+     every teardown, so both a fresh rep and a mid-rep exit invalidate
+     whatever was in flight before them. */
+  const micGen = useRef(0);
   const recallRef = useRef<HTMLTextAreaElement>(null);
   const scoreRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -58,9 +63,13 @@ export default function Rep() {
      silently pre-fill the next attempt's answer instead. */
   useEffect(() => {
     if (phase !== "locked") return;
-    connectCancelled.current = false;
+    micGen.current++;
     return () => {
-      connectCancelled.current = true;
+      // micGen is a plain counter, not a ref to a rendered DOM node — the
+      // rule's stale-ref concern (and its "copy to a variable" fix) doesn't
+      // apply, and nothing but this effect ever writes to it.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      micGen.current++;
       if (session.current) {
         void session.current.disconnect().catch(() => {});
         session.current = null;
@@ -107,6 +116,7 @@ export default function Rep() {
       return;
     }
     setMic("connecting");
+    const startedAs = micGen.current;
     try {
       const opened = await connectVoice({
         onMessage: (m) => {
@@ -116,10 +126,12 @@ export default function Rep() {
           }
         },
       });
-      if (connectCancelled.current) {
-        /* The rep left "locked" while this connect was still in flight — the
-           phase effect above already reset mic/session. Close what just
-           opened instead of resurrecting either one. */
+      if (micGen.current !== startedAs) {
+        /* This promise belongs to a rep that is no longer current — either
+           the same "locked" was left mid-connect, or a whole second rep ran
+           and re-entered "locked" before this one settled. Either way, close
+           what just opened and touch nothing that belongs to the rep on
+           screen now: no session.current, no setMic. */
         void opened.disconnect().catch(() => {});
         return;
       }
@@ -127,8 +139,10 @@ export default function Rep() {
       setMic("on");
     } catch {
       /* Mic denied, or the service is not running. Either way the keyboard is
-         right there and still works — say so, do not show a dead control. */
-      if (!connectCancelled.current) setMic("unavailable");
+         right there and still works — say so, do not show a dead control.
+         Same generation check: a late failure from an abandoned rep must not
+         paint "unavailable" over a rep the visitor never touched the mic in. */
+      if (micGen.current === startedAs) setMic("unavailable");
     }
   }, []);
 
