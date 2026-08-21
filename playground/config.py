@@ -34,6 +34,11 @@ class VoiceConfig:
                 f"pauses longer than someone talking (got {self.dictation_stop_secs} "
                 f"<= {self.stop_secs})"
             )
+        if self.interviewer_voice == self.coach_voice:
+            raise ValueError(
+                "interviewer_voice and coach_voice must differ: the handoff must be "
+                f"audible or it reads as the interviewer going soft (got both '{self.interviewer_voice}')"
+            )
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "VoiceConfig":
@@ -44,5 +49,13 @@ class VoiceConfig:
             raw = src.get(prefix + f.name.upper())
             if raw is None:
                 continue
-            kwargs[f.name] = float(raw) if f.type is float else raw
+            if f.type is float or f.type == 'float':
+                try:
+                    kwargs[f.name] = float(raw)
+                except ValueError as e:
+                    raise ValueError(
+                        f"Failed to parse {prefix + f.name.upper()}={raw!r} as float"
+                    ) from e
+            else:
+                kwargs[f.name] = raw
         return cls(**kwargs)

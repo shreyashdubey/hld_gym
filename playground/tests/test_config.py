@@ -29,6 +29,22 @@ class TestVoiceConfig(unittest.TestCase):
         c = VoiceConfig.from_env({"OPENAI_API_KEY": "sk-x"})
         self.assertEqual(c.stop_secs, VoiceConfig().stop_secs)
 
+    def test_rejects_the_two_personas_sharing_a_voice(self):
+        """Explicit construction with identical voices must fail, catching
+        regressions through from_env or any other path."""
+        with self.assertRaises(ValueError) as ctx:
+            VoiceConfig(interviewer_voice="onyx", coach_voice="onyx")
+        self.assertIn("interviewer_voice", str(ctx.exception))
+        self.assertIn("coach_voice", str(ctx.exception))
+
+    def test_from_env_rejects_malformed_float(self):
+        """Malformed float input must report the field and env var name."""
+        with self.assertRaises(ValueError) as ctx:
+            VoiceConfig.from_env({"PLAYGROUND_STOP_SECS": "not_a_number"})
+        exc_msg = str(ctx.exception)
+        self.assertIn("PLAYGROUND_STOP_SECS", exc_msg)
+        self.assertIn("not_a_number", exc_msg)
+
 
 if __name__ == "__main__":
     unittest.main()
