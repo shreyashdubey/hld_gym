@@ -74,8 +74,14 @@ test("the same graph signs the same", () => {
   assert.equal(graphSignature(g), graphSignature(structuredClone(g)));
 });
 
-test("moving a box does not change the signature", () => {
-  // Dragging a node around is not a semantic change and must not wake the coach.
+test("dragging a box produces an identical graph", () => {
+  // Not a signature test — extractGraph is what makes this hold. BoardElement
+  // carries no position field, so a moved element differs from the original
+  // only in a property extractGraph never reads, and the two graphs come out
+  // byte-identical, in the same order. This test cannot fail against any
+  // graphSignature; it can only fail once BoardGraph grows a coordinate and
+  // extractGraph starts emitting it — at which point it forces a deliberate
+  // choice about whether dragging should wake the coach.
   const a = extractGraph(scene);
   const moved = extractGraph(scene.map((e) => ({ ...e, x: 999 } as BoardElement)));
   assert.equal(graphSignature(a), graphSignature(moved));
@@ -97,4 +103,33 @@ test("element order does not change the signature", () => {
   const a = { nodes: [{ id: "a", label: "A" }, { id: "b", label: "B" }], edges: [], unreadable: 0 };
   const b = { nodes: [{ id: "b", label: "B" }, { id: "a", label: "A" }], edges: [], unreadable: 0 };
   assert.equal(graphSignature(a), graphSignature(b));
+});
+
+test("edge order does not change the signature", () => {
+  // Needs two edges: with only one, dropping the edge .sort() is unobservable.
+  const a = {
+    nodes: [],
+    edges: [{ from: "a", to: "b", label: "x" }, { from: "b", to: "c", label: "y" }],
+    unreadable: 0,
+  };
+  const b = {
+    nodes: [],
+    edges: [{ from: "b", to: "c", label: "y" }, { from: "a", to: "b", label: "x" }],
+    unreadable: 0,
+  };
+  assert.equal(graphSignature(a), graphSignature(b));
+});
+
+test("relabelling an edge changes the signature", () => {
+  // Renaming an arrow from GET to write is a real change to the diagram.
+  const a = { nodes: [], edges: [{ from: "a", to: "b", label: "GET" }], unreadable: 0 };
+  const b = { nodes: [], edges: [{ from: "a", to: "b", label: "write" }], unreadable: 0 };
+  assert.notEqual(graphSignature(a), graphSignature(b));
+});
+
+test("a new scribble changes the signature", () => {
+  // A freehand mark the extractor can't read is still a change worth a "what's that?".
+  const a = { nodes: [], edges: [], unreadable: 0 };
+  const b = { nodes: [], edges: [], unreadable: 1 };
+  assert.notEqual(graphSignature(a), graphSignature(b));
 });
