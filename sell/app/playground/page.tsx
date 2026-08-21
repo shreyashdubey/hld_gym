@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import Board from "@/components/Board";
 import { connectVoice, type VoiceSession } from "@/lib/voice";
 import { extractGraph, type BoardElement, type BoardGraph } from "@/lib/board";
+import { layoutTopology, type Topology } from "@/lib/layout";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
 export default function PlaygroundPage() {
@@ -17,14 +18,35 @@ export default function PlaygroundPage() {
     session.current?.send("board", { graph });
   }, []);
 
+  /* The coach draws in its own lane, beside the candidate's work, never on top
+     of it: offset past the right edge of everything already on the board.
+
+     @excalidraw/excalidraw has a single entry point that touches `window` at
+     module scope (see the Board.tsx comment on the dynamic Excalidraw import),
+     so convertToExcalidrawElements is loaded here, at call time, rather than
+     hoisted to a module-scope import — hoisting it crashes the static export's
+     prerender of this page with "window is not defined". */
+  const onDraw = useCallback(async (topology: Topology) => {
+    const api = excalidrawAPI.current;
+    if (!api) return;
+    const { convertToExcalidrawElements } = await import("@excalidraw/excalidraw");
+    const existing = api.getSceneElements();
+    const rightEdge = existing.reduce((max, el) => Math.max(max, el.x + el.width), 0);
+    const skeleton = layoutTopology(topology, rightEdge + 160);
+    api.updateScene({
+      elements: [...existing, ...convertToExcalidrawElements(skeleton as never)],
+    });
+  }, []);
+
   const start = useCallback(async () => {
     setState("connecting");
     try {
       session.current = await connectVoice({
         mode: "playground",
         onMessage: (m) => {
-          const msg = m as { type?: string; text?: string };
+          const msg = m as { type?: string; text?: string; topology?: Topology };
           if (msg?.type === "transcript" && msg.text) setSaid((s) => [...s, msg.text!]);
+          if (msg?.type === "draw" && msg.topology) onDraw(msg.topology);
         },
       });
       setState("live");
@@ -39,7 +61,7 @@ export default function PlaygroundPage() {
     } catch {
       setState("unavailable");
     }
-  }, []);
+  }, [onDraw]);
 
   return (
     <main className="playground">
