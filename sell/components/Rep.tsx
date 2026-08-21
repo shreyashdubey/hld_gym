@@ -33,6 +33,11 @@ export default function Rep() {
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const session = useRef<VoiceSession | null>(null);
+  /* Flipped true the instant the rep leaves "locked" and read by toggleMic
+     after its await, below. Without it a connect that resolves after the
+     visitor has already submitted would assign session.current and flip mic
+     to "on" with nothing left watching the phase to close it again. */
+  const connectCancelled = useRef(false);
   const recallRef = useRef<HTMLTextAreaElement>(null);
   const scoreRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -42,8 +47,27 @@ export default function Rep() {
     return () => t.forEach(clearTimeout);
   }, []);
 
-  // Leaving the tab with the mic open shouldn't leave a call running.
-  useEffect(() => () => void session.current?.disconnect(), []);
+  /* The mic's lifetime is the "locked" phase, not the component's — Rep never
+     unmounts. Entering locked arms a fresh connect; leaving it (submit, "run
+     this one again", or an unmount that in practice never happens) tears down
+     whatever is open or in flight. Without this a session left open after
+     "submit, no going back" keeps calling setRecall, and hits/score below are
+     recomputed from recall on every render, not snapshotted at grade time —
+     so the score would keep changing after the one thing the lock promises is
+     that it can't. A session left open across "run this one again" would
+     silently pre-fill the next attempt's answer instead. */
+  useEffect(() => {
+    if (phase !== "locked") return;
+    connectCancelled.current = false;
+    return () => {
+      connectCancelled.current = true;
+      if (session.current) {
+        void session.current.disconnect().catch(() => {});
+        session.current = null;
+      }
+      setMic("off");
+    };
+  }, [phase]);
 
   /* No reduced-motion branch. An earlier one jumped straight to the finished
      diagram and locked 1.2s later, which removed the teaching, not the motion:
@@ -74,14 +98,17 @@ export default function Rep() {
      the button below, which only locks out mid-connect. */
   const toggleMic = useCallback(async () => {
     if (session.current) {
-      await session.current.disconnect();
+      // Local state resets first, unconditionally: a hung or rejected
+      // disconnect must not strand the toggle "on" with no way back.
+      const live = session.current;
       session.current = null;
       setMic("off");
+      void live.disconnect().catch(() => {});
       return;
     }
     setMic("connecting");
     try {
-      session.current = await connectVoice({
+      const opened = await connectVoice({
         onMessage: (m) => {
           const msg = m as { type?: string; text?: string };
           if (msg?.type === "transcript" && msg.text) {
@@ -89,11 +116,19 @@ export default function Rep() {
           }
         },
       });
+      if (connectCancelled.current) {
+        /* The rep left "locked" while this connect was still in flight — the
+           phase effect above already reset mic/session. Close what just
+           opened instead of resurrecting either one. */
+        void opened.disconnect().catch(() => {});
+        return;
+      }
+      session.current = opened;
       setMic("on");
     } catch {
       /* Mic denied, or the service is not running. Either way the keyboard is
          right there and still works — say so, do not show a dead control. */
-      setMic("unavailable");
+      if (!connectCancelled.current) setMic("unavailable");
     }
   }, []);
 
