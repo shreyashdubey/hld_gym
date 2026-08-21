@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { PROBES, RUBRIC, STEPS, STEP_MS, LEAD_MS, LOCK_MS, WATCH_S, REP_TITLE, verdictFor } from "@/lib/rep";
 import { BOOK_URL, PRICE, RESERVE_URL } from "@/lib/links";
+import { appendTranscript } from "@/lib/dictation";
+import { connectVoice, type VoiceSession } from "@/lib/voice";
 import { DiagramNarrow, DiagramWide } from "./Diagram";
 
 type Phase = "idle" | "watching" | "locked" | "graded" | "done";
@@ -23,9 +25,14 @@ export default function Rep() {
   const [step, setStep] = useState(0);
   const [armed, setArmed] = useState(-1);
   const [recall, setRecall] = useState("");
+  /* off/connecting/on/unavailable, not a boolean: "unavailable" carries its
+     own honest copy (below), and collapsing it into "off" would let the
+     control quietly imply the mic just hasn't been tried yet. */
+  const [mic, setMic] = useState<"off" | "connecting" | "on" | "unavailable">("off");
   const [revealed, setRevealed] = useState(false);
 
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const session = useRef<VoiceSession | null>(null);
   const recallRef = useRef<HTMLTextAreaElement>(null);
   const scoreRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -34,6 +41,9 @@ export default function Rep() {
     const t = timers.current;
     return () => t.forEach(clearTimeout);
   }, []);
+
+  // Leaving the tab with the mic open shouldn't leave a call running.
+  useEffect(() => () => void session.current?.disconnect(), []);
 
   /* No reduced-motion branch. An earlier one jumped straight to the finished
      diagram and locked 1.2s later, which removed the teaching, not the motion:
@@ -56,6 +66,35 @@ export default function Rep() {
       t += STEP_MS;
     });
     timers.current.push(setTimeout(() => setPhase("locked"), t + LOCK_MS));
+  }, []);
+
+  /* A second click always retries. A visitor whose service was slow to start,
+     or who denied the mic prompt and changed their mind, is not left stuck on
+     "unavailable" with no route back but a reload — see the disabled guard on
+     the button below, which only locks out mid-connect. */
+  const toggleMic = useCallback(async () => {
+    if (session.current) {
+      await session.current.disconnect();
+      session.current = null;
+      setMic("off");
+      return;
+    }
+    setMic("connecting");
+    try {
+      session.current = await connectVoice({
+        onMessage: (m) => {
+          const msg = m as { type?: string; text?: string };
+          if (msg?.type === "transcript" && msg.text) {
+            setRecall((prev) => appendTranscript(prev, msg.text as string));
+          }
+        },
+      });
+      setMic("on");
+    } catch {
+      /* Mic denied, or the service is not running. Either way the keyboard is
+         right there and still works — say so, do not show a dead control. */
+      setMic("unavailable");
+    }
   }, []);
 
   /* On grade, focus moves to the scorecard, not past it. Focusing the first
@@ -194,6 +233,24 @@ export default function Rep() {
                 phase === "locked" ? "Write it the way you’d say it to an interviewer…" : "(left blank)"
               }
             />
+            {phase === "locked" && (
+              <div className="btnRow">
+                <button
+                  type="button"
+                  className="dictate-btn"
+                  onClick={toggleMic}
+                  disabled={mic === "connecting"}
+                  aria-pressed={mic === "on"}
+                >
+                  {mic === "on" ? "◉ listening" : mic === "connecting" ? "connecting…" : "◎ speak it"}
+                </button>
+                <span className="hint">
+                  {mic === "unavailable"
+                    ? "Voice is unavailable right now — type it instead, the scoring is identical."
+                    : "Or type it. Both are graded the same way."}
+                </span>
+              </div>
+            )}
             {phase === "locked" && (
               <div className="btnRow">
                 <button className="btn" onClick={() => setPhase("graded")}>
