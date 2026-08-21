@@ -9,6 +9,43 @@ B = {
     "unreadable": 0,
 }
 
+# A cache-aside diagram (App reads through Cache and DB) and the same board
+# with Cache -- and both its edges -- erased.
+CACHE_ASIDE = {
+    "nodes": [
+        {"id": "a", "label": "App"},
+        {"id": "c", "label": "Cache"},
+        {"id": "d", "label": "DB"},
+    ],
+    "edges": [
+        {"from": "a", "to": "c", "label": "GET"},
+        {"from": "a", "to": "d", "label": "GET"},
+    ],
+    "unreadable": 0,
+}
+CACHE_REMOVED = {
+    "nodes": [{"id": "a", "label": "App"}, {"id": "d", "label": "DB"}],
+    "edges": [{"from": "a", "to": "d", "label": "GET"}],
+    "unreadable": 0,
+}
+# Same nodes as B, but the edge between them is erased -- an edge removal
+# with no node removal, to isolate that case from CACHE_REMOVED's node loss.
+EDGE_REMOVED = {
+    "nodes": [{"id": "a", "label": "App"}, {"id": "c", "label": "Cache"}],
+    "edges": [],
+    "unreadable": 0,
+}
+# From CACHE_ASIDE: Cache is removed *and* a Queue is added in the same step.
+MIXED_ADD_AND_REMOVE = {
+    "nodes": [
+        {"id": "a", "label": "App"},
+        {"id": "d", "label": "DB"},
+        {"id": "q", "label": "Queue"},
+    ],
+    "edges": [{"from": "a", "to": "d", "label": "GET"}],
+    "unreadable": 0,
+}
+
 
 class TestBoardContext(unittest.TestCase):
     def test_starts_with_no_messages(self):
@@ -94,6 +131,101 @@ class TestBoardContext(unittest.TestCase):
         text = b.messages()[0]["content"]
         self.assertIn("Cache", text)
         self.assertIn("GET", text)
+
+    # --- removals: the summary must not be deaf to deletions ---
+
+    def test_a_removed_component_is_reported(self):
+        """Deleting Cache from a cache-aside diagram must not be silent --
+        it's either a correction or a mistake, and a coach should react."""
+        b = BoardContext()
+        b.update(CACHE_ASIDE)
+        b.update(CACHE_REMOVED)
+        summary = b.last_change_summary
+        self.assertIn("removed", summary)
+        self.assertIn("Cache", summary)
+
+    def test_a_removed_connection_is_reported_without_a_node_removal(self):
+        """Erasing just the edge between two nodes that both still exist is
+        a distinct case from a node disappearing -- isolate it."""
+        b = BoardContext()
+        b.update(B)
+        b.update(EDGE_REMOVED)
+        summary = b.last_change_summary
+        self.assertIn("disconnected", summary)
+        self.assertIn("App", summary)
+        self.assertIn("Cache", summary)
+        self.assertNotIn("removed", summary)
+
+    def test_a_mixed_update_reports_both_the_addition_and_the_removal(self):
+        b = BoardContext()
+        b.update(CACHE_ASIDE)
+        b.update(MIXED_ADD_AND_REMOVE)
+        summary = b.last_change_summary
+        self.assertIn("added", summary)
+        self.assertIn("Queue", summary)
+        self.assertIn("removed", summary)
+        self.assertIn("Cache", summary)
+
+    # --- malformed boards must degrade, not crash a live session ---
+
+    def test_missing_unreadable_key_does_not_crash(self):
+        b = BoardContext()
+        b.update({"nodes": [], "edges": []})
+        self.assertEqual(len(b.messages()), 1)
+
+    def test_completely_empty_graph_does_not_crash(self):
+        b = BoardContext()
+        b.update({})
+        self.assertEqual(len(b.messages()), 1)
+        self.assertIn("none yet", b.messages()[0]["content"])
+
+    def test_a_node_without_a_label_does_not_crash(self):
+        b = BoardContext()
+        b.update({"nodes": [{"id": "x"}], "edges": [], "unreadable": 0})
+        text = b.messages()[0]["content"]
+        self.assertIn("(unlabelled)", text)
+
+    def test_an_edge_without_a_label_does_not_crash(self):
+        b = BoardContext()
+        b.update(
+            {
+                "nodes": [{"id": "a", "label": "App"}, {"id": "c", "label": "Cache"}],
+                "edges": [{"from": "a", "to": "c"}],
+                "unreadable": 0,
+            }
+        )
+        text = b.messages()[0]["content"]
+        self.assertIn("App -> Cache", text)
+
+    def test_a_node_missing_its_id_is_skipped_not_fatal(self):
+        b = BoardContext()
+        b.update({"nodes": [{"label": "Ghost"}, {"id": "a", "label": "App"}], "edges": [], "unreadable": 0})
+        text = b.messages()[0]["content"]
+        self.assertIn("App", text)
+        self.assertNotIn("Ghost", text)
+
+    def test_an_edge_missing_an_endpoint_is_skipped_not_fatal(self):
+        b = BoardContext()
+        b.update(
+            {
+                "nodes": [{"id": "a", "label": "App"}],
+                "edges": [{"from": "a", "label": "GET"}],
+                "unreadable": 0,
+            }
+        )
+        self.assertEqual(len(b.messages()), 1)
+        self.assertNotIn("Connections", b.messages()[0]["content"])
+
+    # --- unlabelled wording must match between the render and the summary ---
+
+    def test_unlabelled_node_wording_matches_in_render_and_summary(self):
+        b = BoardContext()
+        b.update({"nodes": [{"id": "a"}], "edges": [], "unreadable": 0})
+        b.update({"nodes": [{"id": "a"}, {"id": "q"}], "edges": [], "unreadable": 0})
+        rendered = b.messages()[0]["content"]
+        summary = b.last_change_summary
+        self.assertIn("(unlabelled)", rendered)
+        self.assertIn("(unlabelled)", summary)
 
 
 if __name__ == "__main__":

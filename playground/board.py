@@ -4,6 +4,8 @@ Appending each update would put two hundred copies of a diagram in a ten-minute
 session's context and bill for every one of them.
 """
 
+UNLABELLED = "(unlabelled)"
+
 
 class BoardContext:
     def __init__(self) -> None:
@@ -20,42 +22,86 @@ class BoardContext:
 
     @property
     def last_change_summary(self) -> str:
-        """One line naming what appeared since the previous update. Empty on the
-        first update, when everything is new and nothing has 'just' changed."""
+        """One line naming what appeared or disappeared since the previous
+        update. Empty on the first update, when everything is new and
+        nothing has 'just' changed."""
         if self._previous is None or self._graph is None:
             return ""
-        before = {n["id"] for n in self._previous["nodes"]}
-        added = [n["label"] or n["id"] for n in self._graph["nodes"] if n["id"] not in before]
-        before_edges = {(e["from"], e["to"]) for e in self._previous["edges"]}
-        new_edges = [e for e in self._graph["edges"] if (e["from"], e["to"]) not in before_edges]
+        before_nodes, before_edges = self._nodes(self._previous), self._edges(self._previous)
+        after_nodes, after_edges = self._nodes(self._graph), self._edges(self._graph)
+
+        before_ids = {n["id"] for n in before_nodes}
+        after_ids = {n["id"] for n in after_nodes}
+        names_before = {n["id"]: self._name(n) for n in before_nodes}
+        names_after = {n["id"]: self._name(n) for n in after_nodes}
+
+        added = [names_after[n["id"]] for n in after_nodes if n["id"] not in before_ids]
+        removed = [names_before[n["id"]] for n in before_nodes if n["id"] not in after_ids]
+
+        before_edge_keys = {(e["from"], e["to"]) for e in before_edges}
+        after_edge_keys = {(e["from"], e["to"]) for e in after_edges}
+        new_edges = [e for e in after_edges if (e["from"], e["to"]) not in before_edge_keys]
+        gone_edges = [e for e in before_edges if (e["from"], e["to"]) not in after_edge_keys]
+
         parts = []
         if added:
             parts.append("added " + ", ".join(added))
+        if removed:
+            parts.append("removed " + ", ".join(removed))
         if new_edges:
-            names = {n["id"]: (n["label"] or n["id"]) for n in self._graph["nodes"]}
             parts.append(
                 "connected "
-                + ", ".join(f"{names.get(e['from'], '?')}->{names.get(e['to'], '?')}" for e in new_edges)
+                + ", ".join(
+                    f"{names_after.get(e['from'], '?')} to {names_after.get(e['to'], '?')}"
+                    for e in new_edges
+                )
+            )
+        if gone_edges:
+            parts.append(
+                "disconnected "
+                + ", ".join(
+                    f"{names_before.get(e['from'], '?')} to {names_before.get(e['to'], '?')}"
+                    for e in gone_edges
+                )
             )
         return "; ".join(parts)
 
     @staticmethod
-    def _render(graph: dict) -> str:
-        names = {n["id"]: (n["label"] or "(unlabelled)") for n in graph["nodes"]}
+    def _name(node: dict) -> str:
+        return node.get("label") or UNLABELLED
+
+    @staticmethod
+    def _nodes(graph: dict) -> list[dict]:
+        """Nodes that can actually be referenced: dicts carrying an id.
+        Anything else is dropped rather than crashing a live session."""
+        return [n for n in (graph.get("nodes") or []) if isinstance(n, dict) and "id" in n]
+
+    @staticmethod
+    def _edges(graph: dict) -> list[dict]:
+        """Edges that can actually be drawn: dicts carrying both endpoints."""
+        return [
+            e for e in (graph.get("edges") or []) if isinstance(e, dict) and "from" in e and "to" in e
+        ]
+
+    @classmethod
+    def _render(cls, graph: dict) -> str:
+        nodes, edges = cls._nodes(graph), cls._edges(graph)
+        names = {n["id"]: cls._name(n) for n in nodes}
         lines = ["The candidate's whiteboard right now:"]
         lines.append("Components: " + (", ".join(names.values()) or "none yet"))
-        if graph["edges"]:
+        if edges:
             lines.append(
                 "Connections: "
                 + ", ".join(
                     f"{names.get(e['from'], '?')} -> {names.get(e['to'], '?')}"
-                    + (f" ({e['label']})" if e["label"] else "")
-                    for e in graph["edges"]
+                    + (f" ({e['label']})" if e.get("label") else "")
+                    for e in edges
                 )
             )
-        if graph["unreadable"]:
+        unreadable = graph.get("unreadable") or 0
+        if unreadable:
             lines.append(
-                f"There are {graph['unreadable']} freehand marks you cannot read. "
+                f"There are {unreadable} freehand marks you cannot read. "
                 "Ask what they are rather than guessing."
             )
         return "\n".join(lines)
