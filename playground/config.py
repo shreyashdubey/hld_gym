@@ -27,6 +27,13 @@ class VoiceConfig:
     interviewer_voice: str = "onyx"
     coach_voice: str = "shimmer"
 
+    # Playground model names. Unverified against the live API — no key to
+    # check them with — so each is overridable here (PLAYGROUND_STT_MODEL /
+    # PLAYGROUND_LLM_MODEL / PLAYGROUND_TTS_MODEL) without a code change.
+    stt_model: str = "gpt-4o-transcribe"
+    llm_model: str = "gpt-5"
+    tts_model: str = "gpt-4o-mini-tts"
+
     def __post_init__(self) -> None:
         if self.dictation_stop_secs <= self.stop_secs:
             raise ValueError(

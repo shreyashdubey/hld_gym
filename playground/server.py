@@ -15,7 +15,7 @@ from pipecat.workers.runner import WorkerRunner
 from pydantic import BaseModel
 
 from playground.config import VoiceConfig
-from playground.pipelines import build_dictation_worker
+from playground.pipelines import build_dictation_worker, build_playground_worker
 
 load_dotenv()
 
@@ -68,8 +68,10 @@ async def _end_session(conn: SmallWebRTCConnection) -> None:
 
 
 @app.post("/api/offer")
-async def offer(request: OfferRequest) -> dict:
-    """One WebRTC connection per session. mode=dictation for now."""
+async def offer(request: OfferRequest, mode: str = "dictation") -> dict:
+    """One WebRTC connection per session. mode is a query param
+    (?mode=playground), not a body field -- the client picks it before the
+    SDP exchange, see sell/lib/voice.ts."""
     if request.pc_id and request.pc_id in _sessions:
         session = _sessions[request.pc_id]
         await session.connection.renegotiate(sdp=request.sdp, type=request.type)
@@ -78,7 +80,35 @@ async def offer(request: OfferRequest) -> dict:
     connection = SmallWebRTCConnection()
     await connection.initialize(sdp=request.sdp, type=request.type)
 
-    worker = build_dictation_worker(connection, VoiceConfig.from_env())
+    config = VoiceConfig.from_env()
+    if mode == "playground":
+        worker, pg_session = build_playground_worker(connection, config)
+
+        @connection.event_handler("app-message")
+        async def _on_app_message(conn: SmallWebRTCConnection, message: object) -> None:
+            """Inbound client messages arrive at connection-level "app-message"
+            as the raw RTVI envelope client.sendClientMessage() produces:
+            {"type": "client-message", "data": {"t": <type>, "d": <data>}} --
+            not the flattened {"type": ..., **data} shape this looked like it
+            would be. The client sends sendClientMessage("board", {graph}), so
+            the board lives at data["d"]["graph"].
+
+            BoardContext.update() tolerates a malformed *graph* by design
+            (missing keys, wrong types, junk entries) -- but a missing or
+            non-dict graph here is a malformed *envelope*, one level up, and
+            still must not crash a live session, so it degrades to {}."""
+            if not (isinstance(message, dict) and message.get("type") == "client-message"):
+                return
+            data = message.get("data")
+            if not (isinstance(data, dict) and data.get("t") == "board"):
+                return
+            payload = data.get("d")
+            graph = payload.get("graph") if isinstance(payload, dict) else None
+            pg_session.board.update(graph if isinstance(graph, dict) else {})
+            pg_session.push_context()
+    else:
+        worker = build_dictation_worker(connection, config)
+
     runner = WorkerRunner(handle_sigint=False)
     task = asyncio.create_task(runner.run(worker))
 
