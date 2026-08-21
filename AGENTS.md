@@ -1,13 +1,14 @@
 # HLD Gym — repo guide
 
-One repo, three pipelines, one deployment.
+One repo, four pipelines, one deployment.
 
 ```
-build.py     src/     →  dist/book/index.html     the book, 51 chapters, free
-sell/        next     →  dist/                    the sell page, site root
-reel/        scenes   →  dist/reels/*.mp4         the reel feed
-                          ↑
-                    Vercel serves this directory, with no build command
+build.py     src/       →  dist/book/index.html     the book, 51 chapters, free
+sell/        next       →  dist/                    the sell page, site root
+reel/        scenes     →  dist/reels/*.mp4         the reel feed
+playground/  pipecat    →  (not deployed)           the voice service, local only
+                            ↑
+                      Vercel serves this directory, with no build command
 ```
 
 **Deploying is `git push` on this repo.** `vercel.json` sets
@@ -24,6 +25,9 @@ writes to its own subtree and never clears the others:
   both produced by entirely different pipelines.
 - `reel/make.sh` writes only `dist/reels/`.
 
+**`playground/` writes nothing into `dist/`.** It is a service, not a build step,
+and it is not part of the deployment.
+
 ## Where to look
 
 | you are changing | read first |
@@ -32,6 +36,7 @@ writes to its own subtree and never clears the others:
 | a chapter | `STYLE_GUIDE.md`, exemplar `src/chapters/p0c01.*` |
 | a reel | `reel/` header comments; `docs/kernels.md` for the source material |
 | anything visual | `sell/DESIGN-SYSTEM.md` |
+| the voice service | `playground/README.md`, then `docs/superpowers/specs/2026-08-21-playground-design.md` |
 
 `sell/PROGRESS.md` is the dated log for the whole product. Every unit of work
 gets an entry: what shipped, why it was built that way, how it works. Bugs are
