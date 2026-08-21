@@ -17,15 +17,23 @@ export type VoiceSession = {
     keyboard rather than showing a control that claims to be listening while
     hearing nothing. onDisconnect fires at most once, later, if a session that
     connected successfully then ends on its own: a server-initiated teardown
-    (the session cap) or a fatal service error relayed over RTVI's own error
-    channel. Never fires for a disconnect the caller asked for itself via
-    session.disconnect() — callers react to it exactly as they react to
-    connectVoice() throwing, so there is one failure path, not two. */
+    (the session cap, a clean "closed") or a fatal service error relayed over
+    RTVI's own error channel. Never fires for a disconnect the caller asked
+    for itself via session.disconnect() — callers react to it exactly as they
+    react to connectVoice() throwing, so there is one failure path, not two.
+
+    onDisconnect's reason distinguishes the two: "error" only when RTVI's own
+    onError fired first (a relayed ErrorFrame — a bad key, a dead model),
+    "ended" for every other server-initiated teardown, which today means the
+    session cap's own clean cut. A cap-ended session is not a failure — the
+    interviewer already handed over to the coach before it cut — and a caller
+    that reported it the same way it reports a real error would be telling a
+    visitor a working feature was down. */
 export async function connectVoice(opts: {
   url?: string;
   mode?: "dictation" | "playground";
   onMessage: (message: unknown) => void;
-  onDisconnect: () => void;
+  onDisconnect: (reason: "ended" | "error") => void;
 }): Promise<VoiceSession> {
   const base = opts.url ?? VOICE_URL;
   const mode = opts.mode ?? "dictation";
@@ -34,6 +42,11 @@ export async function connectVoice(opts: {
   // client's own teardown (which fires onDisconnected too) never re-reports
   // a session the caller has already moved on from.
   let live = false;
+  // Set by onError, read by onDisconnected -- onError always closes the
+  // connection itself (see below), and onDisconnected is what actually
+  // notifies the caller, so this is the one place that knows which of the
+  // two happened.
+  let errored = false;
   const client = new PipecatClient({
     transport: new SmallWebRTCTransport({ connectionUrl: `${base}/api/offer?mode=${mode}` }),
     enableMic: true,
@@ -43,7 +56,7 @@ export async function connectVoice(opts: {
       onDisconnected: () => {
         if (!live) return;
         live = false;
-        opts.onDisconnect();
+        opts.onDisconnect(errored ? "error" : "ended");
       },
       onError: () => {
         // A service error relayed to the client is treated as fatal to this
@@ -54,6 +67,7 @@ export async function connectVoice(opts: {
         // burning the rest of the cap on a service already known to be
         // broken; onDisconnected above does the actual notifying once that
         // completes.
+        errored = true;
         void client.disconnect().catch(() => {});
       },
     },

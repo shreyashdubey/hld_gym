@@ -3,8 +3,6 @@ stages removed, which is the reason they share a service."""
 
 from functools import partial
 
-from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -65,45 +63,6 @@ def build_dictation_worker(
     return PipelineWorker(pipeline, params=PipelineParams(enable_metrics=True))
 
 
-DRAW_DIAGRAM = FunctionSchema(
-    name="draw_diagram",
-    description=(
-        "Draw a diagram beside the candidate's work. Give topology only — never "
-        "positions, the client lays it out."
-    ),
-    properties={
-        "nodes": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"id": {"type": "string"}, "label": {"type": "string"}},
-                "required": ["id", "label"],
-            },
-        },
-        "edges": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "from": {"type": "string"},
-                    "to": {"type": "string"},
-                    "label": {"type": "string"},
-                },
-                "required": ["from", "to"],
-            },
-        },
-    },
-    required=["nodes", "edges"],
-)
-
-END_ROUND = FunctionSchema(
-    name="end_round",
-    description="End the interview and hand over to the coach.",
-    properties={"reason": {"type": "string"}},
-    required=["reason"],
-)
-
-
 async def _end_round(session: Session, tts: OpenAITTSService, params) -> None:
     """Handler for the end_round tool call: the interviewer becomes the coach,
     the context is refreshed to admit the answer key, and the handoff is made
@@ -159,10 +118,17 @@ def build_playground_worker(
     )
 
     context = LLMContext(messages=session.system_messages())
-    context.set_tools(ToolsSchema(standard_tools=[END_ROUND, DRAW_DIAGRAM]))
+    # session.tools() is END_ROUND-only in interview mode (the session's
+    # starting mode) -- the interviewer never gets draw_diagram. See
+    # playground/session.py: push_context() re-sets this on every mode
+    # switch, so the coach picks up DRAW_DIAGRAM the same way it picks up
+    # the answer key, and this initial call is the only other place tools
+    # are ever set.
+    context.set_tools(session.tools())
     # Session owns the context from here: switch_to_coach() and board.update()
     # only ever change session state, push_context() is the one place that
-    # writes it into the live LLMContext. See playground/session.py.
+    # writes it (messages and tools both) into the live LLMContext. See
+    # playground/session.py.
     session.context = context
     # Same story for the TTS service: bound here so server.py's session-cap
     # task can re-voice it for the handover without a second OpenAITTSService

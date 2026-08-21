@@ -151,12 +151,16 @@ class _FakeContext:
 
     def __init__(self):
         self.messages = []
+        self.tools = None
 
     def set_messages(self, messages):
         self.messages = messages
 
     def transform_messages(self, transform):
         self.set_messages(transform(self.messages))
+
+    def set_tools(self, tools):
+        self.tools = tools
 
 
 class TestApplyBoardMessage(unittest.TestCase):
@@ -202,6 +206,10 @@ class _FakeConnection:
 
     def __init__(self):
         self.disconnect_calls = 0
+        # Real SmallWebRTCConnection.pc_id is what get_answer()["pc_id"]
+        # echoes back and what _enforce_cap's `connection.pc_id in _sessions`
+        # reads -- both need the same value here.
+        self.pc_id = "fake-pc-id"
 
     async def initialize(self, sdp, type):
         pass
@@ -219,7 +227,7 @@ class _FakeConnection:
         pass
 
     def get_answer(self):
-        return {"pc_id": "fake-pc-id"}
+        return {"pc_id": self.pc_id}
 
 
 class TestConnectionLeakGuard(unittest.TestCase):
@@ -257,6 +265,78 @@ class TestConnectionLeakGuard(unittest.TestCase):
                 with self.assertRaises(asyncio.CancelledError):
                     asyncio.run(offer(self.request))
         self.assertEqual(self.fake.disconnect_calls, 1)
+
+
+class _FakeWorkerRunner:
+    """Stands in for WorkerRunner -- offer() only ever calls .run(worker) on
+    it and passes handle_sigint as a kwarg; neither needs to do anything
+    real for a test that only cares about the order _sessions gets written
+    in."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def run(self, worker):
+        return
+
+
+class TestCapTaskRegistrationOrder(unittest.TestCase):
+    """_enforce_cap's own `while connection.pc_id in _sessions` reads
+    _sessions on its very first iteration. offer() used to create the cap
+    task and *then* write _sessions[pc_id] -- correct only because nothing
+    awaited in between the two lines, so the cap task's first step could
+    never run before the write landed. An await introduced between them
+    later (trivial, and invisible in a diff) would make that condition false
+    on entry, and the cap would silently never enforce. offer() now writes
+    _sessions[pc_id] first and fills in cap_task with _replace() once it
+    exists. Proven here by checking _sessions state from inside the mocked
+    _enforce_cap's own call, not by timing -- timing is exactly what let the
+    old order look correct."""
+
+    def setUp(self):
+        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        self.fake = _FakeConnection()
+        self.request = OfferRequest(sdp="x", type="offer")
+
+    def test_the_session_is_registered_before_the_cap_task_runs(self):
+        seen: dict[str, bool] = {}
+
+        async def fake_enforce_cap(connection, worker, pg_session):
+            seen["registered"] = connection.pc_id in _sessions
+
+        fake_session = Session(VoiceConfig())
+
+        async def scenario():
+            answer = await offer(self.request, mode="playground")
+            # asyncio.create_task only schedules _enforce_cap's coroutine;
+            # it needs one trip round the loop to actually take its first
+            # step. Do that here, inside the same running loop, rather than
+            # relying on asyncio.run()'s own shutdown-time task cancellation
+            # (which can cancel a not-yet-started task before it ever runs a
+            # single line, and would make this test pass for the wrong
+            # reason -- an empty `seen`, not a proven ordering).
+            await asyncio.sleep(0)
+            return answer
+
+        answer = None
+        try:
+            with patch("playground.server.SmallWebRTCConnection", return_value=self.fake):
+                with patch(
+                    "playground.server.build_playground_worker",
+                    return_value=(object(), fake_session),
+                ):
+                    with patch("playground.server.WorkerRunner", _FakeWorkerRunner):
+                        with patch(
+                            "playground.server._enforce_cap", side_effect=fake_enforce_cap
+                        ):
+                            answer = asyncio.run(scenario())
+            self.assertTrue(
+                seen.get("registered"),
+                "the cap task ran before the session was registered in _sessions",
+            )
+        finally:
+            if answer is not None:
+                _sessions.pop(answer["pc_id"], None)
 
 
 class _FakeCapRunner:
@@ -333,6 +413,19 @@ class TestEnforceCap(unittest.TestCase):
         worker, runner = self._run(session)
         self.assertEqual(session.mode, "coach")
         self.assertEqual(len(worker.queued), 1)
+
+    def test_the_handover_narrows_a_bound_context_to_draw_diagram(self):
+        """The cap's handover branch calls switch_to_coach() then
+        push_context(), the exact same pair end_round's handler calls (see
+        test_pipelines.py's TestEndRound) -- proof the tool narrowing is a
+        property of Session, not something each caller has to remember to
+        do. An interviewer that can draw can show the candidate the
+        structure the round exists to measure."""
+        session = Session(VoiceConfig(session_cap_secs=1.0))
+        session.context = _FakeContext()
+        self._run(session)
+        names = {t.name for t in session.context.tools.standard_tools}
+        self.assertEqual(names, {"draw_diagram"})
 
     def test_a_session_already_in_coach_mode_gets_no_second_run_frame(self):
         """end_round switches a session to coach independently of the cap,

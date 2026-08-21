@@ -1738,8 +1738,12 @@ coach that can name what just changed is the whole reason to build this
 rather than a plain voice memo. The interviewer never sees the rubric or the
 follow-up answers; only the coach does, and only from the moment it takes
 over. `playground/rep.py` is a hand-ported second copy of `sell/lib/rep.ts`
-(Python cannot import TypeScript), and `test_personas.py` fails the build the
-day the two disagree.
+(Python cannot import TypeScript), and `test_personas.py`'s
+`TestNoDriftFromTheFrontend` fails the moment the two disagree — REP_TITLE
+included as of the fix-wave entry below. That guard only runs when someone
+runs the Python suite by hand, though: there is no CI, and nothing in
+`sell`'s own `npm run build` touches `playground/` at all, so "fails" means
+"fails whenever this is next run," not "fails the build."
 
 **This task's own piece: the session cap.** Voice bills by the minute, so a
 session has to end whether or not anyone remembers to stop it — and it has to
@@ -2052,3 +2056,123 @@ discover -s playground/tests -t .` from the repo root — 82 before this task,
 there for the `"*"` rejection, 3 more for `TestEnforceCap`), **all 36 `sell`
 tests pass**, lint is clean, and `npm run build` still produces the static
 export including `/playground`.
+
+---
+
+**Fix wave, from a whole-branch review of the thirteen tasks above.** One
+pass, applied together rather than as separate entries, because every finding
+traces back to the same feature. Two were load-bearing enough to block a
+publish; the rest are correctness and honesty cleanups the review also found.
+
+**The unfinished Playground would have gone live on the next publish.**
+`next build` happily emits `out/playground/index.html` — it is a route like
+any other — and `publish:book`'s rsync had no exclude for it, so the next
+`npm run publish:book` would have put a public `/playground/` on the sales
+page with `NEXT_PUBLIC_VOICE_URL` unset in production, meaning the page
+would announce a session and then never be able to connect. The spec is
+explicit that nothing goes on the sales page until §9 and *What you are not
+buying* are re-read line by line, and that re-read has not happened.
+Fixed with a third `--exclude 'playground/'` in `publish:book` — verified by
+building `sell` and dry-running the exact rsync command both with and
+without the new exclude: without it, `dist/playground/` gains six files
+(`index.html` among them); with it, the dry-run plan contains zero mentions
+of `playground` and `git status` shows no change under `dist/` at all. Root
+`AGENTS.md` reworded the line that hid this: "`playground/` writes nothing
+into `dist/`" was true of the Python service and misleading as written,
+since the client half (`sell/app/playground/`) is part of `sell`'s own build
+and would ship without the exclude — `sell/AGENTS.md`'s hard rules gained the
+matching bullet.
+
+**The interviewer could call `draw_diagram`.** `context.set_tools()` was
+called once, at pipeline-build time, with both `END_ROUND` and
+`DRAW_DIAGRAM` in the list, and nothing ever narrowed it afterward — the
+same class of bug as the interviewer holding the answer key: an interviewer
+that can draw can show the candidate the structure the round exists to
+measure. Moved the decision into `Session`, the one place mode already
+lives: `Session.tools()` returns `end_round`-only in interview mode and
+`draw_diagram`-only in coach mode, and `push_context()` — already the one
+place that writes mode-driven state into the live `LLMContext` — now calls
+`context.set_tools(self.tools())` alongside its existing message refresh.
+Both existing callers that flip the mode (the `end_round` handler in
+`pipelines.py`, the cap's handover branch in `server.py`) get the narrowed
+list for free, with no code change at either call site. Ten new tests cover
+both orderings (a context bound while still in interview mode, and one
+already bound before a live switch to coach) and both real call sites
+(`_end_round` and the cap's `_enforce_cap`), against both the real
+`LLMContext`/`ToolsSchema` (via a real `build_playground_worker`) and the
+suite's fakes. Mutated `Session.tools()` to always return both tools: 8
+tests failed across `test_session.py`, `test_pipelines.py`, and
+`test_server.py`. Reverted.
+
+**The Playground page conflated a finished round with a dead service.**
+Every terminal state — a session that ran its course and handed over to the
+coach before the cap cut it, a fatal service error, and a denied
+microphone — rendered the same "voice service unreachable." The spec
+requires a denied mic to say so out loud, and this repo's first standing
+rule is never to claim the product does something it does not; reporting a
+*working* round's normal end as a dead service is exactly that claim, just
+in the other direction. `sell/lib/voice.ts`'s `onDisconnect` now carries a
+reason (`"error"` only when RTVI's own `onError` fired first; `"ended"`
+otherwise), and `page.tsx` catches `connectVoice`'s specific
+`Error("microphone unavailable")` separately from any other connect
+failure. Four states now render distinct, honest copy: `idle`/`connecting`,
+`denied`, `unavailable`, and `ended` — matching the honesty `Rep.tsx`'s own
+mic control already had, extended with the one distinction dictation never
+needed: telling a completed round apart from a broken one.
+
+**The "12 minutes" copy was already wrong once, live, in this same build's
+own verification** (task 13's run used an 8-second cap under a page that
+said twelve minutes). The cap is `PLAYGROUND_SESSION_CAP_SECS`,
+env-configurable, and `sell` is a static export with no way to read that
+value at build time. Chose the smaller correct fix: reworded the copy to a
+claim that holds regardless of the configured cap ("Sessions run for a
+capped length...") rather than fetching the real number from `/health` at
+runtime. `/health` returning the cap was the other option on the table, and
+would have been more precise, but it adds a runtime dependency (a fetch on
+mount, a loading state, a fallback for when it fails — which in production,
+with `NEXT_PUBLIC_VOICE_URL` unset, is *every* time) to solve a problem that
+doesn't need the exact number, only a copy that's true. `/health`'s own
+gap — it exists, reports `key_loaded`, and has no caller anywhere — stands as
+recorded, not closed by this pass.
+
+**The cap task was created before its session was registered.** `offer()`
+built `cap_task = asyncio.create_task(_enforce_cap(...))` and only assigned
+`_sessions[pc_id]` afterward — correct today only because nothing awaits
+between the two lines, so the scheduled task can't take its first step
+before the assignment lands. Add an `await` later (an easy, invisible
+change) and `_enforce_cap`'s own `while connection.pc_id in _sessions` reads
+false on entry, and the cap silently never runs. `offer()` now writes
+`_sessions[pc_id]` first, with `cap_task=None`, then creates the cap task
+and fills it in with `_Session._replace()`. Covered by
+`TestCapTaskRegistrationOrder`, which drives the real `offer()` (fakes for
+the connection, `build_playground_worker`, and `WorkerRunner`) and checks
+`_sessions` state from inside a mocked `_enforce_cap`'s own call, not by
+timing — timing is exactly what let the old order look correct. Mutated
+`offer()` back to the old order plus an explicit `await asyncio.sleep(0)`
+between the two lines (simulating the regression the comment describes):
+the new test failed. Reverted.
+
+**`sell/lib/rep.ts` had no pointer to its second copy, and the drift guard
+didn't cover `REP_TITLE`.** `playground/rep.py` is a hand-port because
+Python cannot import TypeScript, and `test_personas.py`'s
+`TestNoDriftFromTheFrontend` is what stops the two disagreeing silently —
+but nothing in `rep.ts` said so, and the guard itself only ever compared
+`RUBRIC`'s labels and `PROBES`, never `REP_TITLE`, which is the one value
+the interviewer prompt actually interpolates. Added a comment at the top of
+`rep.ts` pointing at `playground/rep.py` and the drift test, and a fourth
+test, `test_rep_title_matches_rep_ts`, alongside the other two. Also
+corrected this same entry, above: it previously said the drift test "fails
+the build the day the two disagree" — there is no build that runs the
+Python suite, no CI, and `sell`'s own `npm run build` never touches
+`playground/`, so that was never true and has been reworded to what is.
+
+**Verification for this pass:** full suites both sides — 105 Python tests
+(95 before, +10: 3 in `test_pipelines.py`, 4 in `test_session.py`, 2 in
+`test_server.py`, 1 in `test_personas.py`), 36 `sell` tests (unchanged, none
+of this pass's `.tsx`/`.ts` changes have dedicated unit coverage — the same
+documented gap noted above for `voice.ts`, now also true of `page.tsx`'s new
+state logic, exercised by `tsc --noEmit` and `eslint` passing clean but not
+by a test that could fail on its own) — `npm run lint` and `tsc --noEmit`
+both clean, `npm run build` still ends `○ (Static)` and still emits
+`/playground`, and the rsync dry-run above confirms it stays out of
+`dist/`.

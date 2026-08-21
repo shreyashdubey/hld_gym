@@ -38,6 +38,18 @@ class TestSession(unittest.TestCase):
         self.s.switch_to_coach()
         self.assertEqual(self.s.mode, "coach")
 
+    def test_the_interviewer_only_has_end_round(self):
+        """An interviewer that can draw can show the candidate the structure
+        the round exists to measure -- the same class of bug as the
+        interviewer holding the answer key."""
+        names = {t.name for t in self.s.tools().standard_tools}
+        self.assertEqual(names, {"end_round"})
+
+    def test_the_coach_only_has_draw_diagram(self):
+        self.s.switch_to_coach()
+        names = {t.name for t in self.s.tools().standard_tools}
+        self.assertEqual(names, {"draw_diagram"})
+
     def test_the_board_rides_along_in_both_modes(self):
         self.s.board.update({"nodes": [{"id": "a", "label": "Cache"}], "edges": [], "unreadable": 0})
         self.assertIn("Cache", " ".join(m["content"] for m in self.s.system_messages()))
@@ -94,16 +106,21 @@ class _FakeLLMContext:
     """Stands in for pipecat's LLMContext -- just enough of the real API
     (transform_messages built on set_messages, exactly like the real
     LLMContext) to prove push_context() drives it correctly, without dragging
-    pipecat's message-schema types into a unit test."""
+    pipecat's message-schema types into a unit test. set_tools records what
+    it was given rather than validating it, same reasoning."""
 
     def __init__(self, messages=None):
         self.messages = messages or []
+        self.tools = None
 
     def set_messages(self, messages):
         self.messages = messages
 
     def transform_messages(self, transform):
         self.set_messages(transform(self.messages))
+
+    def set_tools(self, tools):
+        self.tools = tools
 
 
 class TestSessionContextBinding(unittest.TestCase):
@@ -158,6 +175,29 @@ class TestSessionContextBinding(unittest.TestCase):
         text = " ".join(m["content"] for m in self.ctx.messages)
         for probe in rep.PROBES:
             self.assertIn(probe["a"], text)
+
+    def test_push_context_installs_end_round_only_before_any_switch(self):
+        """An interviewer that can draw can show the candidate the structure
+        the round exists to measure. Ordering: context bound while still in
+        interview mode -- the state build_playground_worker is always in at
+        construction."""
+        self.s.context = self.ctx
+        self.s.push_context()
+        names = {t.name for t in self.ctx.tools.standard_tools}
+        self.assertEqual(names, {"end_round"})
+
+    def test_push_context_narrows_to_draw_diagram_after_switching(self):
+        """Same property, the other ordering: context already bound, then a
+        live switch_to_coach() -- the end_round handler's and the cap
+        handover's actual call order. Both handler call sites get this for
+        free through push_context(); this is the property they rely on."""
+        self.s.context = self.ctx
+        self.s.push_context()  # interviewer's tools installed first, as above
+        self.s.switch_to_coach()
+        self.s.push_context()
+        names = {t.name for t in self.ctx.tools.standard_tools}
+        self.assertEqual(names, {"draw_diagram"})
+        self.assertNotIn("end_round", names)
 
     def test_push_context_after_a_board_update_carries_the_board_into_the_bound_context(self):
         self.s.context = self.ctx

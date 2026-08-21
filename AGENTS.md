@@ -24,9 +24,24 @@ writes to its own subtree and never clears the others:
   thing stopping `--delete` from wiping 4.6MB of book and the reel encodes**,
   both produced by entirely different pipelines.
 - `reel/make.sh` writes only `dist/reels/`.
+- `publish:book` also carries a third exclude, `--exclude 'playground/'`, for
+  a different reason than the two above: nothing would be *wiped* by dropping
+  it, `out/playground/` would simply start landing in `dist/playground/` and
+  go live on the next `git push`. It stays until someone deliberately decides
+  Playground belongs on the sales page — see the note below and the design
+  spec's "Deliberately unresolved". Whoever makes that call reverses this
+  exclude on purpose, not by accident.
 
-**`playground/` writes nothing into `dist/`.** It is a service, not a build step,
-and it is not part of the deployment.
+**The `playground/` *service* — the Python directory — writes nothing into
+`dist/`.** It holds the OpenAI key, is not a build step, and is not part of
+the deployment; the diagram above is talking about this half. Playground's
+*browser* half is a different story and does not live in this directory at
+all: `sell/app/playground/` is one of `sell`'s own routes, so `next build`
+emits `out/playground/index.html` exactly like every other page on the site,
+and `sell`'s `publish:book` would ship it to `dist/playground/`, public, on
+the sales page — unless excluded, which it currently is (see above). Read
+"one repo, four pipelines" as pipeline boundaries, not directory boundaries:
+this is the one pipeline whose output is split across two directories.
 
 ## Where to look
 

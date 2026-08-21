@@ -32,16 +32,22 @@ def _flatten(processor):
 
 class _FakeContext:
     """Same double as test_session.py / test_server.py -- transform_messages
-    built on set_messages, exactly like the real LLMContext."""
+    built on set_messages, exactly like the real LLMContext. set_tools just
+    records what it was given, so a test can check which tool push_context()
+    installed without a real ToolsSchema/FunctionSchema round-trip."""
 
     def __init__(self):
         self.messages = []
+        self.tools = None
 
     def set_messages(self, messages):
         self.messages = messages
 
     def transform_messages(self, transform):
         self.set_messages(transform(self.messages))
+
+    def set_tools(self, tools):
+        self.tools = tools
 
 
 class _FakeTTS:
@@ -104,6 +110,17 @@ class TestEndRound(unittest.TestCase):
         asyncio.run(_end_round(self.session, self.tts, params))
         self.assertEqual(results, [{"ok": True}])
 
+    def test_the_handover_installs_the_drawing_tool_and_drops_end_round(self):
+        """An interviewer that can draw can show the candidate the structure
+        the round exists to measure -- the same class of bug as the
+        interviewer holding the answer key. push_context() (called by
+        _end_round via switch_to_coach()) must narrow the tool list to
+        draw_diagram alone, not just add it alongside end_round."""
+        params, _ = _params()
+        asyncio.run(_end_round(self.session, self.tts, params))
+        names = {t.name for t in self.session.context.tools.standard_tools}
+        self.assertEqual(names, {"draw_diagram"})
+
 
 class TestDrawDiagram(unittest.TestCase):
     def test_sends_the_topology_wrapped_in_the_rtvi_envelope(self):
@@ -139,6 +156,32 @@ class TestSingleVADSource(unittest.TestCase):
         aggregators = [p for p in _flatten(worker.pipeline) if isinstance(p, LLMUserAggregator)]
         self.assertEqual(len(aggregators), 1, "expected exactly one LLMUserAggregator")
         self.assertIsNone(aggregators[0]._vad_controller)
+
+
+class TestToolModeSplit(unittest.TestCase):
+    """An interviewer that can draw can show the candidate the structure the
+    round exists to measure -- the same class of bug as the interviewer
+    holding the answer key. Session.tools() is the one place the tool list
+    is decided (see playground/session.py); this exercises it through the
+    real build_playground_worker + real LLMContext, both orderings: fresh
+    build (interview mode) and after a live switch to coach."""
+
+    def setUp(self):
+        os.environ["OPENAI_API_KEY"] = "sk-test"
+
+    def test_a_freshly_built_worker_gives_the_interviewer_end_round_only(self):
+        _, session = build_playground_worker(SmallWebRTCConnection(), VoiceConfig())
+        names = {t.name for t in session.context.tools.standard_tools}
+        self.assertEqual(names, {"end_round"})
+        self.assertNotIn("draw_diagram", names)
+
+    def test_switching_to_coach_installs_draw_diagram_and_drops_end_round(self):
+        _, session = build_playground_worker(SmallWebRTCConnection(), VoiceConfig())
+        session.switch_to_coach()
+        session.push_context()
+        names = {t.name for t in session.context.tools.standard_tools}
+        self.assertEqual(names, {"draw_diagram"})
+        self.assertNotIn("end_round", names)
 
 
 if __name__ == "__main__":

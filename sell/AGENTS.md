@@ -84,6 +84,12 @@ from the DOM, "the animation is visible" is not, and they are different claims.
 - **`--exclude 'book/'` and `--exclude 'reels/'` stay in `publish:book`.** They
   are the only thing stopping `rsync --delete` from wiping a 4.6MB book and the
   reel encodes, both produced by different pipelines.
+- **`--exclude 'playground/'` stays in `publish:book` too**, for a different
+  reason: `app/playground/` is a route like any other, so `next build` emits
+  it into `out/` and this rsync would otherwise ship it straight to the live
+  sales page. It stays excluded until someone reads `SYSTEM.md` §1 and the
+  design spec's "Deliberately unresolved" and decides Playground belongs
+  there — see `../AGENTS.md`.
 - **Diagram draw lengths come from endpoint coordinates, never
   `getTotalLength()`** — it returns 0 on a hidden element and breaks the
   wide/narrow swap. `SYSTEM.md` §3.

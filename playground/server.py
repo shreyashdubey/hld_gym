@@ -281,14 +281,24 @@ async def offer(request: OfferRequest, mode: Mode = "dictation") -> dict:
         task = asyncio.create_task(runner.run(worker))
 
         answer = connection.get_answer()
-        cap_task = (
-            asyncio.create_task(_enforce_cap(connection, worker, pg_session))
-            if pg_session is not None
-            else None
-        )
+        # Registered before the cap task is created, not after: _enforce_cap's
+        # `while connection.pc_id in _sessions` reads _sessions on its very
+        # first iteration, and asyncio.create_task only *schedules* the
+        # coroutine -- it does not run any of it before the next `await`
+        # yields control back to the loop. The old order (create_task, then
+        # assign into _sessions) only worked because nothing awaited in
+        # between; add one later and the cap task would find its own pc_id
+        # missing on entry and exit immediately, silently never enforcing
+        # the cap. cap_task itself is filled in with _replace() just below,
+        # once it exists -- _enforce_cap doesn't read it, only server.py's
+        # own teardown paths do, and none of those can run before this
+        # function returns.
         _sessions[answer["pc_id"]] = _Session(
-            connection=connection, runner=runner, task=task, cap_task=cap_task
+            connection=connection, runner=runner, task=task, cap_task=None
         )
+        if pg_session is not None:
+            cap_task = asyncio.create_task(_enforce_cap(connection, worker, pg_session))
+            _sessions[answer["pc_id"]] = _sessions[answer["pc_id"]]._replace(cap_task=cap_task)
 
         connection.add_event_handler("closed", _end_session)
         connection.add_event_handler("failed", _end_session)

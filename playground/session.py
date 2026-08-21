@@ -4,9 +4,65 @@ The switch is one-way on purpose: a coach that can turn back into an
 interviewer mid-explanation is just an inconsistent voice.
 """
 
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
 from playground.board import BoardContext
 from playground.config import VoiceConfig
 from playground.personas import coach_prompt, interviewer_prompt
+
+# Tool schemas live here, not in pipelines.py, for the same reason the
+# prompts live in personas.py: Session is the one place mode lives, and
+# which tool a mode gets is a property of the mode, not of pipeline wiring.
+# See the session-state table in
+# docs/superpowers/specs/2026-08-21-playground-design.md --
+# end_round belongs to the interviewer, draw_diagram belongs to the coach.
+# This used to be one fixed list handed to context.set_tools() once, at
+# pipeline-build time, and never narrowed again -- which meant an
+# interviewer that could call draw_diagram, the same class of bug as an
+# interviewer holding the answer key: it can show the candidate the
+# structure the round exists to measure. Session.tools() is the one place
+# that decides, so both callers that flip the mode (the end_round handler in
+# pipelines.py, the cap's handover branch in server.py) get the narrowed
+# list for free through push_context(), rather than each having to remember
+# to narrow it themselves.
+DRAW_DIAGRAM = FunctionSchema(
+    name="draw_diagram",
+    description=(
+        "Draw a diagram beside the candidate's work. Give topology only — never "
+        "positions, the client lays it out."
+    ),
+    properties={
+        "nodes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}, "label": {"type": "string"}},
+                "required": ["id", "label"],
+            },
+        },
+        "edges": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "from": {"type": "string"},
+                    "to": {"type": "string"},
+                    "label": {"type": "string"},
+                },
+                "required": ["from", "to"],
+            },
+        },
+    },
+    required=["nodes", "edges"],
+)
+
+END_ROUND = FunctionSchema(
+    name="end_round",
+    description="End the interview and hand over to the coach.",
+    properties={"reason": {"type": "string"}},
+    required=["reason"],
+)
 
 
 class Session:
@@ -31,6 +87,13 @@ class Session:
 
     def tts_voice(self) -> str:
         return self.config.coach_voice if self.mode == "coach" else self.config.interviewer_voice
+
+    def tools(self) -> ToolsSchema:
+        """The tool list for the current mode. Interviewer gets end_round
+        only; coach gets draw_diagram only -- never both at once, and never
+        the drawing tool before the switch. See the module docstring."""
+        schema = DRAW_DIAGRAM if self.mode == "coach" else END_ROUND
+        return ToolsSchema(standard_tools=[schema])
 
     def system_messages(self) -> list[dict]:
         persona = coach_prompt() if self.mode == "coach" else interviewer_prompt()
@@ -70,6 +133,12 @@ class Session:
         """Refresh the system messages (persona + board) at the front of the
         bound LLMContext, in place -- everything else (the user/assistant
         turns, and any in-flight tool_calls/tool pair) survives untouched.
+        Also re-sets the tool list for the current mode, which is why this
+        is the one place -- alongside pipelines.py's initial construction --
+        that ever calls context.set_tools(): a mode switch with no board
+        update in between must still narrow the tools, and a board update
+        with no mode switch just re-asserts the same list, which is
+        harmless.
 
         set_messages() replaces the *whole* list; calling it with just
         system_messages() would erase the conversation on every board update
@@ -86,3 +155,4 @@ class Session:
             return fresh + rest
 
         self.context.transform_messages(_refresh)
+        self.context.set_tools(self.tools())

@@ -3,6 +3,13 @@
    In the product these follow-ups are generated against the learner's actual
    answer; here they are written in advance, which the page says out loud. */
 
+/* This file has a second copy: playground/rep.py. Python cannot import
+   TypeScript, so the voice service's interviewer/coach prompts hand-port
+   REP_TITLE, RUBRIC's labels, and PROBES from here. Change one, change
+   both, or playground/tests/test_personas.py's TestNoDriftFromTheFrontend
+   fails the next time the Python suite runs (there is no CI, so "the next
+   time" means "whenever someone remembers to run it" -- see PROGRESS.md). */
+
 /* The chapter id, not "rep 07": a numbered rep implies six others exist, and the
    heading above the panel says there is one. The id is checkable in the book. */
 export const REP_TITLE = "p1c06 · cache-aside read path";

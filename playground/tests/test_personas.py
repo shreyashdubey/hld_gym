@@ -36,6 +36,17 @@ class TestNoDriftFromTheFrontend(unittest.TestCase):
     """Python cannot import sell/lib/rep.ts, so the rubric exists twice. This is
     the guard that stops the two copies quietly disagreeing."""
 
+    def test_rep_title_matches_rep_ts(self):
+        """REP_TITLE is what the interviewer prompt interpolates
+        (test_the_interviewer_still_knows_the_question above uses the
+        Python copy alone) -- it drifted out of this guard's reach when the
+        rubric/probe checks were added, the same class of gap as either of
+        those would leave if it went unchecked."""
+        source = REP_TS.read_text()
+        match = re.search(r'export const REP_TITLE = "([^"]+)"', source)
+        self.assertIsNotNone(match, "REP_TITLE not found in rep.ts")
+        self.assertEqual(match.group(1), rep.REP_TITLE)
+
     def test_rubric_labels_match_rep_ts(self):
         source = REP_TS.read_text()
         block = source.split("export const RUBRIC")[1].split("];")[0]
