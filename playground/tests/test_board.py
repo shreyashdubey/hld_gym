@@ -227,6 +227,37 @@ class TestBoardContext(unittest.TestCase):
         self.assertIn("(unlabelled)", rendered)
         self.assertIn("(unlabelled)", summary)
 
+    # --- a label can be any JSON shape over the wire; it must stringify, not crash ---
+
+    def test_an_int_label_renders_as_a_string_not_a_crash(self):
+        b = BoardContext()
+        b.update({"nodes": [{"id": "a", "label": 123}], "edges": [], "unreadable": 0})
+        self.assertIn("123", b.messages()[0]["content"])
+
+    def test_a_list_label_renders_as_a_string_not_a_crash(self):
+        b = BoardContext()
+        b.update({"nodes": [{"id": "a", "label": ["x", "y"]}], "edges": [], "unreadable": 0})
+        self.assertIn("x", b.messages()[0]["content"])
+
+    def test_a_dict_label_renders_as_a_string_not_a_crash(self):
+        b = BoardContext()
+        b.update({"nodes": [{"id": "a", "label": {"weird": True}}], "edges": [], "unreadable": 0})
+        self.assertIn("weird", b.messages()[0]["content"])
+
+    def test_a_non_string_label_appears_in_the_change_summary_too(self):
+        """The rendered text and the change summary share _name -- a
+        non-string label must not crash either path, and both must agree."""
+        b = BoardContext()
+        b.update(A)
+        b.update(
+            {
+                "nodes": [{"id": "a", "label": "App"}, {"id": "q", "label": 456}],
+                "edges": [],
+                "unreadable": 0,
+            }
+        )
+        self.assertIn("456", b.last_change_summary)
+
 
 if __name__ == "__main__":
     unittest.main()

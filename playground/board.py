@@ -68,7 +68,11 @@ class BoardContext:
 
     @staticmethod
     def _name(node: dict) -> str:
-        return node.get("label") or UNLABELLED
+        """The label, coerced to a string. A board arrives as untyped JSON
+        from a browser; a label can be any shape. Falsy or missing reads as
+        unlabelled -- everything else is stringified, never fatal."""
+        label = node.get("label")
+        return str(label) if label else UNLABELLED
 
     @staticmethod
     def _nodes(graph: dict) -> list[dict]:
