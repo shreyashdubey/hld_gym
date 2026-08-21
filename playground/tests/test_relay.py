@@ -50,6 +50,18 @@ class TestTranscriptRelay(unittest.TestCase):
         messages = [f.message for f in out if hasattr(f, "message")]
         self.assertEqual(messages, [])
 
+    def test_non_finalized_transcription_frame_is_not_sent(self):
+        """TranscriptionFrame(finalized=False) -- not InterimTranscriptionFrame --
+        is the actual shape a non-finalized transcription takes. It is inert
+        today because SegmentedSTTService force-sets finalized=True on
+        everything it emits, but the guard must still hold on its own: it stops
+        being inert the moment the STT service is swapped for a streaming one."""
+        out = run(
+            TranscriptionFrame(text="the app che", user_id="u", timestamp="t", finalized=False)
+        )
+        messages = [f.message for f in out if hasattr(f, "message")]
+        self.assertEqual(messages, [])
+
     def test_the_original_frame_still_flows_downstream(self):
         """The relay observes; it must not swallow. Playground needs the same
         frame to reach the context aggregator."""
