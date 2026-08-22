@@ -1238,7 +1238,7 @@ details[open] > summary { margin-bottom: 8px; }
 
 <h2>Palantir: the decomp round</h2>
 
-<p>Palantir invented a round the rest of the industry doesn't have, and it's the one that ended Priya's loop in the cold open. The <strong>decomposition interview</strong> — "decomp" — hands you a vague <em>operational</em> problem, not a software prompt. Real examples candidates report: track the spread of an infection through a contact network. Assign airline gates at a hub airport. Plan the response to a flood. There is no clean answer, no expected architecture, and — this is the part that disorients people — often no explicit request to build software at all.</p>
+<p>Palantir invented a round the rest of the industry doesn't have. The <strong>decomposition interview</strong> — "decomp" — hands you a vague <em>operational</em> problem, not a software prompt. Real examples candidates report: track the spread of an infection through a contact network. Assign airline gates at a hub airport. Plan the response to a flood. There is no clean answer, no expected architecture, and — this is the part that disorients people — often no explicit request to build software at all.</p>
 
 <p>What's graded is everything that happens <em>before</em> architecture: <strong>requirements discovery</strong> (what actually matters here? what does "track" even mean?), <strong>stakeholder identification</strong> (who touches this system — nurses entering cases, epidemiologists querying clusters, an operations center making quarantine calls?), <strong>data modeling</strong> (what are the entities and relationships — people, contacts, test results, time — and how do they change?), and <strong>v1 prioritization</strong> (of everything you could build, what's the smallest version that helps someone tomorrow?).</p>
 
@@ -1454,7 +1454,7 @@ details[open] > summary { margin-bottom: 8px; }
 
 <p>Mechanics, one level deep: the two sides use slow asymmetric cryptography (public/private key math) to agree on a shared secret, then switch to fast symmetric encryption for the actual data. The negotiation costs round trips: TLS 1.2 needed two extra; <strong>TLS 1.3 got it to one</strong>, with session resumption for repeat visitors — even a "0-RTT" mode that sends the first request alongside the handshake.</p>
 
-<p>Now total the bill for our Sydney user's first request, at ~200 ms per round trip: DNS (cold) ≈ one trip, TCP = one, TLS 1.3 = one, then the HTTP request itself = one more. Four round trips ≈ 800 ms before the first response byte — for a server that "responds in 50 ms." A real page then fetches dozens of images and scripts on top. There are your missing seconds, and no server optimization will find them, because they were never on the server.</p>
+<p>Now total the bill for a Sydney user's first request, at ~200 ms per round trip: DNS (cold) ≈ one trip, TCP = one, TLS 1.3 = one, then the HTTP request itself = one more. Four round trips ≈ 800 ms before the first response byte — for a server whose own dashboards show a 50 ms response. A real page then fetches dozens of images and scripts on top. That is where the missing seconds go, and no server optimization will find them, because they were never on the server.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 400" role="img" aria-label="Ladder diagram of TCP, TLS and HTTP round trips between a client in Sydney and a server in Virginia">
@@ -1789,7 +1789,7 @@ Cache-Control: max-age=60
 
 <h2>Idempotency keys: making retries safe when it matters most</h2>
 
-<p>Back to the double-charge. The root problem: a timeout is not an answer — it's the <em>absence</em> of one. After a timed-out POST, exactly one of three things is true: the request never arrived; it arrived and is still executing; it finished and the response was lost. The client cannot tell these apart from outside. Not retrying risks a lost order. Retrying risks a duplicate. GET, PUT, and DELETE escape the dilemma — idempotent, retry freely. POST is the problem child, and "charge this card" is a POST.</p>
+<p>Now the case where a retry costs money. The root problem: a timeout is not an answer — it's the <em>absence</em> of one. After a timed-out POST, exactly one of three things is true: the request never arrived; it arrived and is still executing; it finished and the response was lost. The client cannot tell these apart from outside. Not retrying risks a lost order. Retrying risks a duplicate. GET, PUT, and DELETE escape the dilemma — idempotent, retry freely. POST is the problem child, and "charge this card" is a POST.</p>
 
 <p>The fix: make POST idempotent by hand. The client generates a unique <strong>idempotency key</strong> — a random UUID — for each <em>logical operation</em> (this checkout, this transfer) and sends it as a header: <code>Idempotency-Key: 8e03978e-40d5-...</code>. Crucially, retries reuse the <em>same</em> key; a fresh key per attempt would defeat the whole mechanism. Server side: if the key is new, record it, execute, and store the response (status and body) against the key. If the key has been seen and the operation finished, skip execution and replay the stored response, byte for byte. Now a timed-out payment can be retried with zero fear: either the first attempt never landed and this one executes, or it landed and the client gets the original receipt back. Both paths end in exactly one charge.</p>
 
@@ -1970,7 +1970,7 @@ Cache-Control: max-age=60
 
 <h2>From requirements to tables</h2>
 
-<p>Data modeling starts before any SQL. Read your requirements and underline two kinds of words. The <strong>nouns</strong> become entities — the things your system remembers: users, movies, shows, seats, bookings. The <strong>verbs</strong> become queries — the questions your system must answer fast: "show me tonight's shows for this movie", "is seat F7 taken?", "list my bookings, newest first."</p>
+<p>Data modeling starts before any SQL, and the rest of this chapter hangs off it in one chain: requirements become tables, normalization edits those tables, the queries the tables must answer become indexes, and the writes that touch several at once become transactions. Read your requirements and underline two kinds of words. The <strong>nouns</strong> become entities — the things your system remembers: users, movies, shows, seats, bookings. The <strong>verbs</strong> become queries — the questions your system must answer fast: "show me tonight's shows for this movie", "is seat F7 taken?", "list my bookings, newest first."</p>
 
 <p>Entities give you tables. Verbs give you indexes and shape. A schema designed from nouns alone is a filing cabinet nobody can search; a schema designed from verbs alone is a pile of query-shaped caches with no source of truth. You need both, in that order: model the entities honestly, then check every important query has a fast path through them.</p>
 
@@ -2036,13 +2036,13 @@ Cache-Control: max-age=60
 
 <h2>Indexes: the sorted phone book</h2>
 
-<p>Back to the nine-second query. Without an index, the database's only move is a <strong>full table scan</strong> — read all 20 million rows, keep the matches. The fix is the same one humans invented for phone books: <em>keep a sorted copy, and search by jumping, not reading</em>.</p>
+<p>Take the "my bookings" query against 20 million rows. Without an index, the database's only move is a <strong>full table scan</strong> — read every row, keep the matches. The fix is the same one humans invented for phone books: <em>keep a sorted copy, and search by jumping, not reading</em>.</p>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>A B-tree index is a phone book. Nobody finds "Sharma" by reading from page one — you open near the back, see "Patel", jump forward, see "Singh", step back, done: five glances instead of a hundred thousand entries, because <em>sorted data lets you halve the search space with every look</em>. And a composite index is exactly a phone book's sort order: last name, then first name. Finding "Sharma, Priya" is instant. Finding <em>everyone named Priya regardless of surname</em> is hopeless in the same book — Priyas are scattered across every surname. The book's order only helps if your question starts with the first column of the sort.</p>
 </div>
 
-<p>Concretely, a <strong>B-tree</strong> is a tree of fixed-size pages (blocks of ~8KB). The leaf pages at the bottom hold every indexed value in sorted order, each with a pointer to its actual row. The pages above are a thinning pyramid of signposts: "keys up to M are down-left, after M down-right." Because each page holds hundreds of keys, the tree is astonishingly shallow — <strong>three to four levels cover hundreds of millions of rows</strong>. A lookup walks root → branch → leaf → row: about four page reads, and the top levels are so hot they permanently live in RAM. That's the entire trick. Not magic — logarithms plus a sorted copy you paid to maintain.</p>
+<p>Concretely, a <strong>B-tree</strong> is a tree of fixed-size pages (blocks of ~8KB). The leaf pages at the bottom hold every indexed value in sorted order, each with a pointer to its actual row. The pages above are a thinning pyramid of signposts: "keys up to M are down-left, after M down-right." Because each page holds hundreds of keys, the tree is astonishingly shallow — <strong>three to four levels cover hundreds of millions of rows</strong>. A lookup walks root → branch → leaf → row: about four page reads instead of twenty million row reads — seconds of scanning become milliseconds — and the top levels are so hot they permanently live in RAM. That's the entire trick. Not magic — logarithms plus a sorted copy you paid to maintain.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="B-tree structure: a root page, branch pages, and sorted leaf pages pointing to rows">
@@ -3518,7 +3518,7 @@ width, height, created_at, ...</code></pre>
 
 <h2>Leader-follower: one boss, obedient copies</h2>
 
-<p>The most common design, behind almost every Postgres and MySQL deployment you'll ever touch, is <strong>leader-follower replication</strong> (also primary/replica, or the older master/slave). One machine is the <strong>leader</strong>: it accepts every write. The others are <strong>followers</strong>: full copies that typically serve reads but never accept a write directly from a client.</p>
+<p>The most common design for keeping copies in sync, behind almost every Postgres and MySQL deployment you'll ever touch, is <strong>leader-follower replication</strong> (also primary/replica, or the older master/slave). One machine is the <strong>leader</strong>: it accepts every write. The others are <strong>followers</strong>: full copies that typically serve reads but never accept a write directly from a client.</p>
 
 <p>How do followers stay in sync? Every time the leader commits a change, it appends a record of that change to an ordered, append-only file — Postgres calls it the write-ahead log (WAL), MySQL calls it the binlog. Followers hold an open connection to the leader, stream that log, and replay each entry in the exact order the leader wrote it. Same starting state, same changes, same order — each follower converges to a byte-for-byte copy. This is <strong>log shipping</strong>, and the log-of-ordered-changes idea will follow you through this whole book (it's also the soul of Kafka, Chapter 3.17).</p>
 
@@ -3741,7 +3741,7 @@ width, height, created_at, ...</code></pre>
 
 <div class="takeaways"><div class="box-tag">Takeaways</div>
 <ul>
-<li>One copy of your data is a countdown timer: disks fail at 1–2% a year, so at scale machine death is routine, and replication is the only defense.</li>
+<li>One copy of your data is a countdown timer: disks fail at 1–2% a year and whole sites go dark at once, so at scale machine death is routine, and replication is the only defense.</li>
 <li>Leader-follower is the workhorse: all writes go to one leader, which appends changes to an ordered log that followers stream and replay to stay identical copies.</li>
 <li>Sync vs async vs semi-sync is a durability-versus-latency budget: async can lose acknowledged writes when the leader dies; semi-sync to one nearby follower buys "on two machines before we say saved" for about a millisecond.</li>
 <li>Replication lag causes real user-facing bugs — the vanishing comment — fixed by policy, not patches: read-your-writes (pin to leader or track log positions) and monotonic reads (session stickiness).</li>
@@ -3764,7 +3764,7 @@ width, height, created_at, ...</code></pre>
 
 <p>There are two ways to slice a database, and they're not equals.</p>
 
-<p><strong>Vertical partitioning</strong> cuts by table (or column): <code>users</code> to one machine, <code>photos</code> to another, <code>likes</code> to a third. Companies do this first because it's easy — no routing logic. But look at what it buys: your biggest table still lives on one machine. In your photo app, <code>photos</code> IS the 6 TB monster. Vertical partitioning moved the monster into its own room; it didn't make it smaller. It buys months, not years — and it quietly kills SQL joins between the tables you separated.</p>
+<p><strong>Vertical partitioning</strong> cuts by table (or column): <code>users</code> to one machine, <code>photos</code> to another, <code>likes</code> to a third. Companies do this first because it's easy — no routing logic. But look at what it buys: your biggest table still lives on one machine. In your photo app, <code>photos</code> is the monster — 6 TB on its own, growing 400 GB a month. Vertical partitioning moved the monster into its own room; it didn't make it smaller. It buys months, not years — and it quietly kills SQL joins between the tables you separated.</p>
 
 <p><strong>Horizontal partitioning</strong> — sharding — cuts by <em>row</em>. Every machine gets the same schema but a different slice of the rows. Add machines, each slice shrinks. This is the cut that scales without a ceiling, and it's what the rest of this chapter is about.</p>
 
@@ -4172,7 +4172,7 @@ width, height, created_at, ...</code></pre>
 
 <p><strong>Eventual consistency:</strong> the default of the internet. The only promise: if writes stop, all replicas converge to the same value, eventually — usually within milliseconds to seconds. Meanwhile, any read may be stale. The bug report: "the like count says 41, I refresh, it says 40, I refresh, 41 again." For a like count, nobody files that bug. That's the point — for most data, eventual is fine and nobody notices.</p>
 
-<p><strong>Read-your-writes:</strong> a targeted upgrade — <em>you</em> always see <em>your own</em> writes; other people's may lag. The bug when it's missing is the most famous one in replication: Priya posts a comment, the write goes to the primary database, her next page load reads from a replica that's two seconds behind, and her comment is <em>gone</em>. She posts it again. Now there are two. Users don't file this as "replication lag" — they file it as "your app ate my comment," and they're right. Common fixes: pin a user's reads to the primary for a few seconds after they write, or have the client remember the version it wrote and demand at-least-that-fresh reads.</p>
+<p><strong>Read-your-writes:</strong> a targeted upgrade — <em>you</em> always see <em>your own</em> writes; other people's may lag. The bug when it's missing is the most famous one in replication: a user, Priya, posts a comment, the write goes to the primary database, her next page load reads from a replica that's two seconds behind, and her comment is <em>gone</em>. She posts it again. Now there are two. Users don't file this as "replication lag" — they file it as "your app ate my comment," and they're right. Common fixes: pin a user's reads to the primary for a few seconds after they write, or have the client remember the version it wrote and demand at-least-that-fresh reads.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 230" role="img" aria-label="A read-your-writes violation caused by reading a lagging replica">
@@ -4254,11 +4254,11 @@ width, height, created_at, ...</code></pre>
 </tbody>
 </table>
 
-<p>One more twist. A <em>strict</em> quorum refuses a write when the data's designated home nodes are unreachable — CP behavior. A <strong>sloppy quorum</strong> says: if Priya's cart normally lives on nodes A, B, C and node C is unreachable, write to substitute node D instead, and attach a note — "this belongs to C; deliver it when C comes back." That note-and-return mechanism is called <strong>hinted handoff</strong>. Availability goes way up: writes succeed as long as <em>any</em> W nodes are alive, anywhere. The price: while the hint sits on D, your overlap math is broken — a read of A, B, C can miss the newest write because it's living at D's house. Sloppy quorums are an explicit AP move: never refuse the write, tolerate a window of missable data.</p>
+<p>One more twist. A <em>strict</em> quorum refuses a write when the data's designated home nodes are unreachable — CP behavior. A <strong>sloppy quorum</strong> says: if a shopping cart normally lives on nodes A, B, C and node C is unreachable, write to substitute node D instead, and attach a note — "this belongs to C; deliver it when C comes back." That note-and-return mechanism is called <strong>hinted handoff</strong>. Availability goes way up: writes succeed as long as <em>any</em> W nodes are alive, anywhere. The price: while the hint sits on D, your overlap math is broken — a read of A, B, C can miss the newest write because it's living at D's house. Sloppy quorums are an explicit AP move: never refuse the write, tolerate a window of missable data.</p>
 
 <h2>When both sides wrote: conflict resolution</h2>
 
-<p>Choose availability — or sloppy quorums, or async replication — and eventually the inevitable happens: two replicas accept <em>different</em> writes to the <em>same</em> key, and then meet. Both have version "8" of Priya's cart, and they disagree. Someone has to decide what the truth is. There are three honest strategies, and one of them is a trap painted like a strategy.</p>
+<p>Choose availability — or sloppy quorums, or async replication — and eventually the inevitable happens: two replicas accept <em>different</em> writes to the <em>same</em> key, and then meet. Both have version "8" of the same cart, and they disagree. Someone has to decide what the truth is. There are three honest strategies, and one of them is a trap painted like a strategy.</p>
 
 <p><strong>Last-writer-wins (LWW):</strong> stamp every write with a timestamp; when copies conflict, keep the latest stamp, discard the rest. It's simple, automatic, and let's say the quiet part loudly: <strong>LWW silently deletes data your system already acknowledged.</strong> The "losing" write was accepted, confirmed to a user, and is now gone — no error, no log line, no trace. Worse, the winner is chosen by server clocks, and server clocks disagree: even machines that sync over NTP (the internet's clock-synchronization protocol) commonly drift milliseconds apart, and badly configured ones drift seconds. A node with a fast clock wins conflicts with writes from the "future." Cassandra resolves conflicts this way by default, and Jepsen — an independent test project that tortures databases with induced partitions and publishes the wreckage — famously demonstrated it dropping acknowledged writes under contention. LWW is a fine choice when losing a conflicting write costs nothing — a device's "last seen location," a cache entry. It is a disaster for carts, counters, and documents, and choosing it there is choosing silent data loss.</p>
 
@@ -4362,7 +4362,7 @@ width, height, created_at, ...</code></pre>
 
 <h2>The only question that matters: what does the response depend on?</h2>
 
-<p>Every piece of work in a handler is either <strong>synchronous</strong> — the user's response depends on its result — or <strong>asynchronous</strong> — it must happen, but not before you reply. The test: <em>if this step silently took ten minutes, would the response I just sent become a lie?</em></p>
+<p>Take a checkout handler that charges the card, writes the order row, calls an email provider for a confirmation, renders a PDF invoice, pings the warehouse and updates analytics before it replies. Every piece of that work is either <strong>synchronous</strong> — the user's response depends on its result — or <strong>asynchronous</strong> — it must happen, but not before you reply. The test: <em>if this step silently took ten minutes, would the response I just sent become a lie?</em></p>
 
 <ul>
 <li><strong>Charge the card:</strong> yes — "confirmed" while the charge might fail is a lie. Sync.</li>
@@ -4371,7 +4371,7 @@ width, height, created_at, ...</code></pre>
 <li><strong>Invoice PDF, warehouse ping, analytics:</strong> no, no, no. Async, async, async.</li>
 </ul>
 
-<p>So the handler becomes: charge, write, drop four small job messages onto a queue, reply. The user waits ~350 ms instead of 3.5 s. And when the email provider melts, checkout doesn't notice — the email jobs just sit in the queue until it recovers.</p>
+<p>So the handler becomes: charge, write, drop four small job messages onto a queue, reply. Run one after another those six steps cost the user about 3.5 s of spinner; now the reply comes back in ~350 ms. And when the email provider melts — its API slowing to 30 seconds, then timing out — checkout doesn't notice, because the email jobs just sit in the queue until it recovers.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 310" role="img" aria-label="Timeline comparing synchronous checkout to asynchronous checkout with a queue">
@@ -4439,7 +4439,7 @@ width, height, created_at, ...</code></pre>
 
 <p>A message queue has three roles. A <dfn>producer</dfn> writes a small message — "send confirmation for order 8213" — and moves on. A <dfn>broker</dfn> (the queue system itself) stores that message durably, on disk, usually replicated, so a crash doesn't eat it. A <dfn>consumer</dfn> (a worker) pulls messages and does the actual work at its own pace. Producer and consumer never talk directly, and that gap is the whole point.</p>
 
-<p>The gap buys three kinds of decoupling. <strong>Time:</strong> the consumer can be down for ten minutes and nothing is lost — messages wait. <strong>Rate:</strong> producers can burst at 50,000 messages a second while consumers steadily chew through 5,000; the queue holds the difference. <strong>Failure:</strong> a sick consumer no longer makes the producer's request fail — exactly what saved our checkout above.</p>
+<p>The gap buys three kinds of decoupling. <strong>Time:</strong> the consumer can be down for ten minutes and nothing is lost — messages wait. <strong>Rate:</strong> producers can burst at 50,000 messages a second while consumers steadily chew through 5,000; the queue holds the difference. <strong>Failure:</strong> a sick consumer no longer makes the producer's request fail — exactly what keeps the checkout handler above alive when its email provider melts.</p>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>A restaurant kitchen runs on a queue: the ticket rail. The waiter (producer) clips an order to the rail and goes straight back to the dining room — they don't stand at the stove until the biryani is done. Cooks (consumers) pull tickets at the pace the stove allows. When the 8pm rush hits, the rail fills instead of the kitchen collapsing; when a cook steps out, tickets wait instead of vanishing. Add a cook, and the rail drains faster — no waiter changes anything. Where the analogy breaks: a rail is small and visible, so overload is obvious. A real queue can silently grow to millions of messages — which is why monitoring queue depth becomes non-negotiable later in this chapter.</p>
@@ -7125,7 +7125,7 @@ COMMIT;</code></pre>
 
 <h2>Traffic is a power law wearing a uniform costume</h2>
 
-<p>Every sharding scheme you learned makes a quiet assumption: each key gets roughly the same amount of attention. Reality never cooperates. Real traffic follows a <strong>power law</strong> — a distribution where a tiny fraction of items gets a huge fraction of the attention. A few accounts have millions of followers while the median has a hundred. One post goes viral while a billion others get four likes. One enterprise tenant in your B2B product generates 40% of all API calls. One product page carries the flash sale.</p>
+<p>Every sharding scheme you learned — consistent hashing from chapter 1.9 included — makes a quiet assumption: each key gets roughly the same amount of attention. Reality never cooperates. Real traffic follows a <strong>power law</strong> — a distribution where a tiny fraction of items gets a huge fraction of the attention. A few accounts have millions of followers while the median has a hundred. One post goes viral while a billion others get four likes. One enterprise tenant in your B2B product generates 40% of all API calls. One product page carries the flash sale.</p>
 
 <p>The numbers are brutal. On social platforms it's routine for the top 1% of keys to receive well over 90% of reads. So "perfectly balanced by key count" and "perfectly balanced by load" are different universes. Your hash function solved the first. The second is this chapter.</p>
 
@@ -7137,9 +7137,9 @@ COMMIT;</code></pre>
 
 <h2>What "hot" looks like — and why your dashboard lies</h2>
 
-<p>Here's what happens mechanically. One partition serves the hot key. Its CPU pins, its request queue backs up, and latency climbs — not just for the hot key, but for <em>every</em> key that happens to live on that partition. Innocent-bystander users, sharded onto partition 23 by pure hash luck, now see multi-second responses for their own boring profiles. Meanwhile the sibling partitions idle.</p>
+<p>Here's what happens mechanically. One partition serves the hot key. Its CPU pins, its request queue backs up, and latency climbs — not just for the hot key, but for <em>every</em> key that happens to live on that partition. Innocent-bystander users, sharded onto that same partition by pure hash luck, now see multi-second responses for their own boring profiles. Meanwhile the sibling partitions idle.</p>
 
-<p>Now the trap: your fleet-average dashboard. Average CPU across 64 partitions where one is at 100% and the rest at 5%? About 6.5%. Green. Average latency, when most requests still hit cold partitions? Looks fine. But if partition 23 serves 30% of live traffic (which is the whole point — it's hot), then 30% of your requests are slow, your p99 has exploded, and your p90 is next. <strong>Aggregate metrics are averages, and averages hide exactly the thing you need to see.</strong></p>
+<p>Now the trap: your fleet-average dashboard. Average CPU across 64 partitions where one is at 100% and the rest at 5%? About 6.5%. Green. Average latency, when most requests still hit cold partitions? Looks fine. But if that one hot partition serves 30% of live traffic (which is the whole point — it's hot), then 30% of your requests are slow, your p99 has exploded, and your p90 is next. <strong>Aggregate metrics are averages, and averages hide exactly the thing you need to see.</strong></p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="Heat map of 16 partitions where one is saturated while the rest idle">
@@ -7182,7 +7182,7 @@ COMMIT;</code></pre>
 
 <p>For a <strong>read-hot</strong> key, the first answer is the boring one from chapter 1.6: cache it. Forty million people opening one profile don't need forty million database reads — the profile changes rarely. A cache with even a 5-second TTL absorbs virtually all of that heat: one database read per 5 seconds instead of thousands per second.</p>
 
-<p>But run the numbers before declaring victory, because the hot key follows you into the cache. Your cache cluster is itself sharded by key — so all traffic for the celebrity's key lands on <em>one</em> cache node. A single Redis node handles on the order of 100K ops/sec; a truly viral key can see over a million reads/sec. Congratulations: you moved the hot partition from the database into Redis. Same fire, more expensive building.</p>
+<p>But run the numbers before declaring victory, because the hot key follows you into the cache. Your cache cluster is itself sharded by key — so all traffic for the hot key lands on <em>one</em> cache node. A single Redis node handles on the order of 100K ops/sec; a truly viral key can see over a million reads/sec. Congratulations: you moved the hot partition from the database into Redis. Same fire, more expensive building.</p>
 
 <p>The senior finish is a <strong>local L1 cache</strong>: a small in-process cache (just a hash map with TTLs) inside each app server, holding only the few dozen hottest keys — fed by that top-K list from your detection layer. Now 200 app servers each answer from their own RAM, the Redis shard sees 200 refresh requests every few seconds instead of a million reads, and nobody melts. The cost: staleness of a few seconds, and 200 servers that may briefly disagree. For a follower count or a profile photo, nobody notices. For an account balance, this rung is not available — which is exactly the kind of caveat to say out loud.</p>
 
@@ -7203,7 +7203,7 @@ COMMIT;</code></pre>
   <text class="dg-txt-s" x="58" y="251">L1: hot keys, 2s TTL</text>
   <rect class="dg-node-alt" x="480" y="110" width="200" height="80" rx="8"/>
   <text class="dg-txt" x="494" y="140">Cache shard holding</text>
-  <text class="dg-txt" x="494" y="160">the celebrity key</text>
+  <text class="dg-txt" x="494" y="160">the one hot key</text>
   <line class="dg-edge" x1="220" y1="67" x2="480" y2="135" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="220" y1="151" x2="480" y2="150" marker-end="url(#arrow)"/>
   <line class="dg-edge" x1="220" y1="235" x2="480" y2="165" marker-end="url(#arrow)"/>
@@ -7328,7 +7328,7 @@ COMMIT;</code></pre>
 <p>Everything so far is you, the engineer, spotting heat and applying a fix. The final rung builds reflexes into the platform: <strong>load-aware partitioning</strong>, where the system itself watches per-partition heat and splits or relocates hot ranges automatically instead of trusting hash arithmetic; and <strong>request coalescing</strong> (Discord's trick from earlier — often called "singleflight"), where a thousand concurrent identical reads collapse into one database query whose answer is shared by all thousand waiters. Coalescing deserves special respect: it caps read amplification at the source, works even for cache misses, and costs almost nothing.</p>
 
 <div class="box story"><div class="box-tag">War story — DynamoDB splits the heat</div>
-<p>Amazon's DynamoDB enforces hard per-partition limits: 3,000 read capacity units and 1,000 write capacity units per second, per partition. For years, a hot key meant throttling errors even when the table as a whole had capacity to spare — the classic "fleet is bored, one partition is drowning." DynamoDB's answer, rolled out through 2018–2019 and on by default for every table, is <strong>adaptive capacity</strong>: the system detects sustained heat on a partition and reacts on its own. It shifts throughput allowance toward the hot partition instantly, and if heat persists it performs a "split for heat" — dividing the hot partition into two, each on separate hardware. In the extreme case, AWS documents that a single relentlessly hot item can end up <em>isolated in a partition of its own</em>, getting the full 3,000/1,000 to itself. The celebrity literally gets a private server. The design lesson: even a database run by one of the best infrastructure teams on Earth cannot make the hot-key problem disappear — the per-item ceiling still exists — but a platform that detects and splits automatically turns a 3am page into a non-event. That's the end state your own architecture should aspire to.</p>
+<p>Amazon's DynamoDB enforces hard per-partition limits: 3,000 read capacity units and 1,000 write capacity units per second, per partition. For years, a hot key meant throttling errors even when the table as a whole had capacity to spare: the fleet bored, one partition drowning. DynamoDB's answer, rolled out through 2018–2019 and on by default for every table, is <strong>adaptive capacity</strong>: the system detects sustained heat on a partition and reacts on its own. It shifts throughput allowance toward the hot partition instantly, and if heat persists it performs a "split for heat" — dividing the hot partition into two, each on separate hardware. In the extreme case, AWS documents that a single relentlessly hot item can end up <em>isolated in a partition of its own</em>, getting the full 3,000/1,000 to itself. The celebrity literally gets a private server. The design lesson: even a database run by one of the best infrastructure teams on Earth cannot make the hot-key problem disappear — the per-item ceiling still exists — but a platform that detects and splits automatically turns a 3am page into a non-event. That's the end state your own architecture should aspire to.</p>
 </div>
 
 <p>One more grim scenario completes the picture: the partition is on fire <em>right now</em>, and the real fix is splitting it — which means moving live data off a machine that's already at 100%. Resharding under fire is a zero-downtime migration problem: dual writes, backfill, verified cutover, and the discipline to contain the heat with rungs 1 and 6 first so the migration itself doesn't tip the node over. Chapter 2.11 is that playbook; here, just know the sequence — contain first, split calmly second.</p>
@@ -7429,7 +7429,7 @@ COMMIT;</code></pre>
 
 <p><strong>Act three: the retries arrive.</strong> Every client that timed out tries again. If clients retry 3 times, each original request becomes up to 4 attempts. Your load just quadrupled — at the exact moment your capacity is at its worst. This is the cruelest property of naive retries: they cost nothing when the system is healthy and multiply load precisely when it is sick.</p>
 
-<p><strong>Act four: the starvation spreads.</strong> Meanwhile, in every service that calls the slow dependency, threads are parked waiting for answers. Thread pools are finite — say 200 threads per server. When all 200 are stuck waiting on the payment provider, that server cannot serve <em>anything</em>, including the product pages that never touch payments. This is why "one dependency got slow" becomes "the whole site is down": the slowness travels through shared thread pools, connection pools, and memory.</p>
+<p><strong>Act four: the starvation spreads.</strong> Meanwhile, in every service that calls the slow dependency, threads are parked waiting for answers. Thread pools are finite — say 200 threads per server. When all 200 are stuck waiting on a slow payment provider, that server cannot serve <em>anything</em>, including the product pages that never touch payments. This is why "one dependency got slow" becomes "the whole site is down": the slowness travels through shared thread pools, connection pools, and memory.</p>
 
 <p><strong>Act five: nothing can recover.</strong> Even when the original fault heals, the accumulated queues and swarming retries keep every service pinned at maximum load. The outage now sustains itself. Someone has to break the loop by hand.</p>
 
@@ -7468,7 +7468,7 @@ COMMIT;</code></pre>
   <line class="dg-edge" x1="200" y1="174" x2="160" y2="174" marker-end="url(#arrow)"/>
   <path class="dg-zone" d="M 615 150 C 560 100, 360 92, 288 80" marker-end="url(#arrow)"/>
   <text class="dg-bad" x="330" y="118">retry load re-enters the queue</text>
-  <text class="dg-txt-s" x="20" y="235">Users sent 2.2x traffic. The backend received 9x. The difference was self-inflicted.</text>
+  <text class="dg-txt-s" x="20" y="235">Worked example: users sent 2.2x traffic, the backend received 9x. Self-inflicted.</text>
 </svg>
 <figcaption>The cascade is a loop, not a line. Retries feed the queue that caused the timeouts that caused the retries.</figcaption>
 </figure>
@@ -7560,7 +7560,7 @@ COMMIT;</code></pre>
 
 <p>Failing fast is only half the value. The other half is the <strong>fallback</strong>: what you return while the breaker is open. Options, in rough order of preference: a cached or stale copy of the data; a sensible default (an empty "recommended for you" row); a degraded response ("payments are busy, your order is saved and will process shortly"); or an honest, <em>instant</em> error. Even the bare error is a win — it answers in microseconds instead of burning a thread for 800ms, which keeps <em>your</em> thread pool alive and gives the sick dependency silence in which to recover.</p>
 
-<p>Which brings us to the cold open's mystery: why did product pages die when only payments were slow? Because every request, payment-related or not, drew threads from the same pool. The fix is <strong>bulkheads</strong>: give each dependency its own small, isolated resource pool — its own threads, connections, or a semaphore cap on concurrent calls. If payments gets 20 threads out of 200, then when payments hangs, it exhausts its 20 and the other 180 keep serving product pages. The name comes from ships: watertight compartments so one breach floods one section, not the hull.</p>
+<p>Which brings us back to act four: why did product pages die when only payments were slow? Because every request, payment-related or not, drew threads from the same pool. The fix is <strong>bulkheads</strong>: give each dependency its own small, isolated resource pool — its own threads, connections, or a semaphore cap on concurrent calls. If payments gets 20 threads out of 200, then when payments hangs, it exhausts its 20 and the other 180 keep serving product pages. The name comes from ships: watertight compartments so one breach floods one section, not the hull.</p>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>The name "circuit breaker" is borrowed from your house's electrical panel, and the borrow is honest with one twist. The breaker in your wall exists because the alternative — wires overheating inside your walls until they ignite — is catastrophically worse than the inconvenience of a dark kitchen. It converts "invisible slow-burning disaster" into "visible instant failure," which is exactly what the software version does: an open breaker turns a thread-eating slow death into a clean, fast, obvious error. The twist: your wall breaker protects only <em>your house</em>, and a human must walk over and reset it. The software breaker protects both sides — the caller's threads and the struggling dependency's remaining capacity — and half-open is its built-in electrician, probing on a timer to see whether it's safe to reset.</p>
@@ -7897,7 +7897,7 @@ COMMIT;</code></pre>
 
 <p>Alerting has a philosophy, and it fits in two lines. <strong>Page on symptoms, not causes.</strong> <strong>Every page must be actionable.</strong></p>
 
-<p>A symptom is user pain: checkout success rate dropping, feed p99 doubling, messages not delivering. A cause is machinery: CPU at 85%, one pod restarting, disk at 70%. The 2:47am story that opened this chapter is the philosophy violated in both directions at once — a cause-based page with no user impact and no action to take (CPU spiked, so what?), and real user pain with no page at all, because nobody had an alert on the symptom "users can't pay." Causes belong on dashboards, where you consult them <em>after</em> a symptom fires, to diagnose. Symptoms belong on pagers. The test for every alert you keep: when this fires at 3am, is there a specific action the on-call takes? If the honest answer is "look at it and go back to bed," delete the page or demote it to a ticket. An alert nobody acts on isn't an alert — it's a lullaby.</p>
+<p>A symptom is user pain: checkout success rate dropping, feed p99 doubling, messages not delivering. A cause is machinery: CPU at 85%, one pod restarting, disk at 70%. The story that opened this chapter is the philosophy violated in both directions at once — noise with no action to take, and real pain with no page at all. Causes belong on dashboards, where you consult them <em>after</em> a symptom fires, to diagnose. Symptoms belong on pagers. The test for every alert you keep: when this fires at 3am, is there a specific action the on-call takes? If the honest answer is "look at it and go back to bed," delete the page or demote it to a ticket. An alert nobody acts on isn't an alert — it's a lullaby.</p>
 
 <div class="box story"><div class="box-tag">War story — Knight Capital's 97 unread alarms</div>
 <p>On August 1, 2012, Knight Capital — then handling a sizable share of all US stock trading — deployed new order-routing code to its eight SMARS trading servers. A technician missed one server. That eighth machine still ran a piece of code called Power Peg, dead since 2003, and the new deployment reused an old feature flag that switched the zombie code back on. When markets opened at 9:30am, the eighth server began firing millions of unintended orders into the market. It took 45 minutes to stop, moved prices across roughly 150 stocks, and left Knight with about $460 million in losses — the firm collapsed into a rescue acquisition within a year. The observability detail is the painful part, documented in the SEC's order: starting at 8:01am — <em>89 minutes before the market opened</em> — an internal system sent 97 automated emails to Knight staff flagging an error, "Power Peg disabled," on the exact server that was about to malfunction. Nobody acted, and the SEC noted why: the emails weren't designed as alerts, just informational messages nobody was assigned to read. Ninety-seven warnings, zero pages, no kill switch, and a 17-year-old company gone in 45 minutes. This is what "every alert must be actionable, and someone must own it" costs when it's violated: an unowned, unactionable alert is indistinguishable from silence.</p>
@@ -8100,13 +8100,13 @@ COMMIT;</code></pre>
 
 <p>Everything a stream processing framework does is making that for-loop crash-proof and shardable. The hash map becomes <strong>keyed state</strong>: the framework partitions the stream by key (same consistent-hashing idea as p1c09), so all events for <code>video_42</code> land on the same worker, and that worker's slice of the map is stored durably, not just in memory. The "where do I resume" question becomes checkpointing, which gets its own section. Kafka is the substrate that makes all of it possible — because the log lets any reader rewind, the processor gets cheap time travel, and recovery becomes "rewind and replay" instead of "hope."</p>
 
-<p>Quick sizing instinct, because numbers decide whether any of this is even hard: your app does 50M views/day — about 600 events/sec average, call it 5,000/sec at peak. A single modest Flink or Kafka Streams job eats that without noticing. State: 10M videos times ~100 bytes of counter state is 1 GB — fits on one machine. So for this system, <em>throughput is not the interesting problem; correctness is</em>. Late data, duplicates, and recovery are where the design lives. (At 4 billion events/sec — hold that thought for the Alibaba story — the sizing math flips and throughput becomes the design.)</p>
+<p>Quick sizing instinct, because numbers decide whether any of this is even hard: a video app does 50M views/day — about 600 events/sec average, call it 5,000/sec at peak. A single modest Flink or Kafka Streams job eats that without noticing. State: 10M videos times ~100 bytes of counter state is 1 GB — fits on one machine. So for this system, <em>throughput is not the interesting problem; correctness is</em>. Late data, duplicates, and recovery are where the design lives. (At 4 billion events/sec — hold that thought for the Alibaba story — the sizing math flips and throughput becomes the design.)</p>
 
 <h2>Two clocks: event time vs processing time</h2>
 
 <p>A user watches your video on a train. At 11:58 the train enters a tunnel; the phone loses signal and buffers the view event. At 12:40 signal returns and the event uploads. Question: which hour's count does that view belong to?</p>
 
-<p>There are two clocks in every pipeline. <strong>Event time</strong> is when the thing actually happened: 11:58, stamped on the event by the phone. <strong>Processing time</strong> is when your server got around to seeing it: 12:40. The naive Redis-counter hack counts by processing time — the view lands in the 12:00–13:00 bucket, which is simply wrong. For a rough ops graph, who cares. For billing, ad reporting, or anything a finance team reads, event time is the only defensible answer, and interviewers deliberately pick those domains.</p>
+<p>There are two clocks in every pipeline. <strong>Event time</strong> is when the thing actually happened: 11:58, stamped on the event by the phone. <strong>Processing time</strong> is when your server got around to seeing it: 12:40. A counter you increment on arrival counts by processing time — the view lands in the 12:00–13:00 bucket, which is simply wrong. For a rough ops graph, who cares. For billing, ad reporting, or anything a finance team reads, event time is the only defensible answer, and interviewers deliberately pick those domains.</p>
 
 <p>But event time creates a nasty puzzle. If events can arrive 42 minutes late, when do you dare say "the 11:00–12:00 count is done"? Wait forever and you're a batch job again. This is the latency-vs-completeness dial, and the industry's knob for it is the <strong>watermark</strong>: a marker flowing through the stream that asserts <em>"we believe all events with event time up to T have now arrived."</em> When the watermark passes the end of a window, the window fires — computes its result and emits it. A common recipe: watermark = the latest event time seen so far, minus a slack for out-of-orderness. Slack of 30 seconds means you're betting events arrive at most 30 seconds out of order.</p>
 
@@ -8192,7 +8192,7 @@ COMMIT;</code></pre>
 
 <h2>State, checkpoints, and not losing count</h2>
 
-<p>Every window above is <strong>state</strong>: partial counts sitting in the processor's keyed store, waiting for the watermark. Kill the process and that's potentially millions of half-finished windows gone. The recovery story is what separates a real stream processor from your Redis hack, and it has two halves.</p>
+<p>Every window above is <strong>state</strong>: partial counts sitting in the processor's keyed store, waiting for the watermark. Kill the process and that's potentially millions of half-finished windows gone. The recovery story is what separates a real stream processor from a counter living in one process's memory, and it has two halves.</p>
 
 <p>Half one: <strong>checkpoints</strong>. Periodically — say every 30 seconds — the framework snapshots all state to durable storage (S3, HDFS), along with the log offsets that state corresponds to. The naive way is to pause the world, dump everything, resume: unacceptable at any real throughput. The elegant way is the <strong>Chandy-Lamport idea</strong> (1985, and Flink's checkpointing is a descendant of it): take a consistent snapshot of a running system <em>without stopping it</em>. The source injects a <strong>barrier</strong> — a special marker — into the stream, right after, say, offset 4,182. The barrier flows along with the data. When an operator sees the barrier, it snapshots its own state <em>at that moment</em> and forwards the barrier downstream. Since every operator snapshots at the same logical point — "I have processed everything before the barrier and nothing after" — the collected pieces form one consistent picture of the whole pipeline, taken while the pipeline kept running.</p>
 
@@ -8240,7 +8240,7 @@ COMMIT;</code></pre>
 
 <h2>Replay: the superpower you're actually buying</h2>
 
-<p>Two weeks after launch you discover the sessionization logic has a bug: sessions split wrongly at midnight. Every session metric for 14 days is wrong. In the Redis-counter world this is a shrug and an apology. In the kappa world it's a runbook: deploy the fixed job as a <em>second</em> instance reading from the offset of 14 days ago, writing to a new table. It replays history at full speed — replay typically runs at 10–50x the live rate, so two weeks of data might take a few hours. When it catches up to now, flip readers to the new table, retire the old job. Same trick for schema evolution: want a new field aggregated? Replay history through the new code and the past gets the new field too, as if it had always existed.</p>
+<p>Two weeks after launch you discover the sessionization logic has a bug: sessions split wrongly at midnight. Every session metric for 14 days is wrong. With a counter that only knows the present, this is a shrug and an apology. In the kappa world it's a runbook: deploy the fixed job as a <em>second</em> instance reading from the offset of 14 days ago, writing to a new table. It replays history at full speed — replay typically runs at 10–50x the live rate, so two weeks of data might take a few hours. When it catches up to now, flip readers to the new table, retire the old job. Same trick for schema evolution: want a new field aggregated? Replay history through the new code and the past gets the new field too, as if it had always existed.</p>
 
 <p>This is the property you're really buying with the log-plus-stream-job architecture, and it comes with a bill you must name: <strong>your recompute horizon equals your log retention</strong>. Keep 7 days of Kafka and you can only replay 7 days; the bug found on day 14 is only half-fixable. That's why real platforms use tiered storage (Kafka offloading older segments to object storage) or archive every event to a data lake — cheap S3 bytes are what keep the "replay anything" promise honest. Retention is a budget line, not a footnote.</p>
 
@@ -8415,7 +8415,7 @@ COMMIT;</code></pre>
 
 <h2>HyperLogLog: counting a crowd in 12KB</h2>
 
-<p>Back to the dashboard from the cold open. A Bloom filter can't help — it answers "seen before?", not "how many distinct?". Counting uniques exactly means remembering every ID you've seen, and we already priced that: hundreds of gigabytes.</p>
+<p>Second question, and the ads dashboard is where it bites: unique viewers per campaign, live, across 4 million campaigns. A Bloom filter can't help — it answers "seen before?", not "how many distinct?". Counting uniques exactly means remembering every ID you've seen, and that price is brutal — a campaign with 20 million distinct users runs ~600MB as a real hash set, so the top thousand campaigns alone pass half a terabyte.</p>
 
 <p>HyperLogLog (HLL) counts distinct items in a fixed ~12KB with a typical error under 1%. The intuition is a bar bet. Hash every user ID — a good hash makes the output look like random coin flips. Now watch for rare patterns: a hash starting with one zero bit happens half the time; starting with twenty zero bits happens once in a million. So if the <em>rarest</em> pattern you've ever observed is 20 leading zeros, you've probably seen around a million distinct values. Duplicates change nothing — the same ID gives the same hash — which is precisely why HLL counts <em>distinct</em> for free.</p>
 
@@ -8490,13 +8490,13 @@ COMMIT;</code></pre>
 
 <h3>Mergeability: why sketches love sharded systems</h3>
 
-<p>Look at that last column — it's the quiet superpower. Your impressions are sharded across 8 Kafka partitions and 8 consumers (chapter p1c09 made sure of that). Each consumer counts distinct users locally. Now produce one global number. Sum the 8 counts? Wrong — the same user appears on multiple shards, and you double-count. Exact fix? Every shard ships its full ID set to one machine: you're back to hundreds of gigabytes moving over the network.</p>
+<p>Look at that last column — it's the quiet superpower. Take the ads dashboard again: impressions are sharded across 8 Kafka partitions and 8 consumers (chapter p1c09 made sure of that). Each consumer counts distinct users locally. Now produce one global number. Sum the 8 counts? Wrong — the same user appears on multiple shards, and you double-count. Exact fix? Every shard ships its full ID set to one machine: you're back to hundreds of gigabytes moving over the network.</p>
 
 <p>Sketches merge <em>losslessly</em>. Two HLLs with the same bucket layout: take the per-bucket max, and the result is <em>exactly</em> the HLL one machine would have built seeing every event — merging costs 12KB of network, and the error doesn't compound. Blooms merge by OR-ing bits; CMS grids by adding cells. Merge is commutative and associative, so region rollups and hour-into-day rollups just work. One subtlety worth volunteering: replayed events (streams get replayed; chapter p2c09) are harmless to a Bloom or an HLL — same item, same bits, same buckets — but <em>inflate</em> a CMS, which counts occurrences. "HLL is replay-safe, CMS isn't" is a sentence that visibly separates levels.</p>
 
 <h2>Gossip: how a cluster knows who's alive without a boss</h2>
 
-<p>Switch problems. Same trade, different question. You run a 1,000-node Cassandra-style cluster. Every node needs to know which peers are up, which are down, and who owns which token ranges (the slices of the keyspace each node serves) — otherwise it can't route requests. Who keeps that list?</p>
+<p>Switch problems. Same trade, one level up: gossip gives up certainty about who is alive, on purpose, in a direction it can defend, and buys constant per-node cost with it. You run a 1,000-node Cassandra-style cluster. Every node needs to know which peers are up, which are down, and who owns which token ranges (the slices of the keyspace each node serves) — otherwise it can't route requests. Who keeps that list?</p>
 
 <p>A central health-checker is the obvious answer and the wrong one at this scale: it's a single point of failure (checker dies → the cluster is blind), and "who health-checks the health-checker" never ends. All-to-all heartbeats — everyone pings everyone every second — is 1,000 × 999 ≈ a million messages per second of pure overhead, growing with N². A consensus store like ZooKeeper works for tens of nodes, but a thousand watchers hammering one quorum on every membership change becomes its own outage.</p>
 
@@ -8882,7 +8882,7 @@ COMMIT;</code></pre>
 
 <h2>Boss level: reshard 4 → 16, while hot</h2>
 
-<p>Back to the cold open, because this is the version interviewers reach for when they want senior-or-above signal. Changing the shard <em>key</em> or shard <em>count</em> is the hardest migration there is: the data's home address changes, every row moves, and the routing layer — the code deciding which shard holds user 7,204,911 — must agree with reality at every instant. Here's the full walk, with the rollback at each step, exactly as you'd narrate it at a whiteboard.</p>
+<p>The version interviewers reach for when they want senior-or-above signal is a live <code>users</code> table sharded four ways that has to become sixteen. Changing the shard <em>key</em> or shard <em>count</em> is the hardest migration there is: the data's home address changes, every row moves, and the routing layer — the code deciding which shard holds user 7,204,911 — must agree with reality at every instant. Here's the full walk, with the rollback at each step, exactly as you'd narrate it at a whiteboard.</p>
 
 <p><strong>Step 0 — exploit the math.</strong> Going 4 → 16 is a multiply-by-4, and that's not an accident. With modulo routing, every user on shard <code>user_id % 4 = 1</code> can only land on new shards 1, 5, 9, or 13 — <code>x % 4 = 1</code> forces <code>x % 16</code> into that set. Each old shard splits cleanly into four children; no row ever crosses between old shards. (This is the same instinct as consistent hashing in Chapter 1.9: choose a scheme where growth means <em>splitting</em>, not <em>reshuffling</em>.) Say this in the interview — it cuts the problem's size by 75% before any machinery appears.</p>
 
@@ -8907,7 +8907,7 @@ COMMIT;</code></pre>
 <p>Calibration, so you neither undershoot nor gold-plate. At the senior bar, an interviewer hearing "we need to change this live" expects you to <strong>volunteer</strong>, unprompted:</p>
 
 <ul>
-<li>The four phases by name, in order — and "no maintenance window" justified with a number (SLO math or global traffic), not with fashion.</li>
+<li>The four phases by name, in order — and "no maintenance window" justified with a number, not with fashion: a 99.95% SLO is ~22 minutes a month, so a four-hour window spends a year of it, and there is no 2 a.m. anyway when 2 a.m. in Virginia is mid-morning in Mumbai.</li>
 <li>Dual-write discipline: which store is the source of truth, write ordering, what happens when the second write fails — and the crash-between-writes gap, with outbox/CDC named as the honest fix.</li>
 <li>Backfill as arithmetic plus three adjectives: <em>how long</em> at what rate, rate-limited against replica lag, resumable via checkpoints, idempotent with a version check against newer dual writes.</li>
 <li>Verification as a metric with a gate — shadow reads, mismatch counter, "~0 for days" — never "then we test it carefully."</li>
@@ -9283,13 +9283,9 @@ COMMIT;</code></pre>
 
 <p>This problem is a favorite at Meta and Google because it looks cute and is secretly brutal. It has a clean crux, it punishes "just use a database," and it rewards letting numbers make the decisions. Let's play it at the senior bar: commit, justify, find the fire early.</p>
 
-<div class="box story"><div class="box-tag">War story — Google Suggest: four years from demo to homepage</div>
-<p>Autocomplete at Google didn't arrive as a roadmap item. In 2004 a Google engineer, Kevin Gibbs, built it in 20% time — the one-day-a-week personal-project budget Google handed engineers — and it shipped that year as an experiment on Google Labs, the company's public sandbox for half-finished ideas. Anyone could try it. And then it sat there. It took until 2008 for suggestions to become standard under the search box on google.com. Four years, for a feature you could demo in an afternoon. The delay wasn't product indecision: a Labs toy serving curious visitors and a system eating roughly ten times google.com's query traffic at <em>lower</em> latency than search itself are not the same machine. The idea was cheap; making it survive the scale was the entire job. That gap — trivial feature, brutal scale — is exactly what this interview question measures.</p>
-</div>
-
 <h2>Requirements: scope it before it scopes you</h2>
 
-<p>First move, out loud: shrink the problem and get agreement.</p>
+<p>First move in the interview, out loud: shrink the problem — top completions for a prefix, at search-engine scale — and get agreement.</p>
 
 <p><strong>Functional:</strong></p>
 <ul>
@@ -9303,7 +9299,7 @@ COMMIT;</code></pre>
 <p><strong>Non-functional, with numbers I'm committing to:</strong></p>
 <ul>
 <li><strong>p99 latency under 100 ms</strong>, keystroke to rendered suggestion. (p99 = the slowest 1 request in 100 — the tail users actually notice.) Below ~100 ms feels instant; above it, the dropdown visibly lags the fingers and users stop trusting it.</li>
-<li><strong>Scale:</strong> assume 5 billion searches/day on the parent search product — a round number, said out loud, agreed with the interviewer, and used for every calculation after.</li>
+<li><strong>Scale:</strong> assume 5 billion searches/day on the parent search product — a round number, said out loud, agreed with your interviewer, and used for every calculation after.</li>
 <li><strong>Availability over freshness:</strong> suggestions may be minutes or hours stale, but the box should almost never be empty and never be slow. Stale is mildly imperfect; laggy feels broken.</li>
 </ul>
 
@@ -9318,6 +9314,10 @@ COMMIT;</code></pre>
 <p>10 × 60K = <strong>600,000 requests/sec average. Past a million at peak.</strong></p>
 
 <p>Sit with that. Autocomplete serves <em>an order of magnitude more traffic than the search engine it decorates</em>, with a <em>tighter</em> latency budget — and the budget is mostly pre-spent: on a mobile network the round trip alone can eat 50–80 ms of our 100, before the browser has drawn a pixel. What's left for the server is maybe 10–20 ms, a million times per second.</p>
+
+<div class="box story"><div class="box-tag">War story — Google Suggest: four years from demo to homepage</div>
+<p>Autocomplete at Google didn't arrive as a roadmap item. In 2004 a Google engineer, Kevin Gibbs, built it in 20% time — the one-day-a-week personal-project budget Google handed engineers — and it shipped that year as an experiment on Google Labs, the company's public sandbox for half-finished ideas. Anyone could try it. And then it sat there. It took until 2008 for suggestions to become standard under the search box on google.com. Four years, for a feature you could demo in an afternoon. The delay wasn't product indecision: a Labs toy serving curious visitors and a system eating roughly ten times google.com's query traffic at <em>lower</em> latency than search itself are not the same machine. The idea was cheap; making it survive the scale was the entire job. That gap — trivial feature, brutal scale — is exactly what this interview question measures.</p>
+</div>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="One search for pizza generates five suggestion requests, one per keystroke">
@@ -9629,7 +9629,7 @@ ORDER BY freq DESC LIMIT 10;</code></pre>
 <p><strong>Non-functional — and these carry the design:</strong></p>
 
 <ul>
-<li><strong>Priority classes exist and are sacred.</strong> I'll commit to three: <strong>P0 critical</strong> (OTPs, security alerts, fraud warnings) delivered in under 30 seconds, end to end. <strong>P1 transactional</strong> ("order shipped," "you were mentioned") within 2 minutes. <strong>P2 bulk</strong> (marketing, digests) within hours, best effort. A P2 blast must never delay a P0 message. This is the requirement the cold open violated.</li>
+<li><strong>Priority classes exist and are sacred.</strong> I'll commit to three: <strong>P0 critical</strong> (OTPs, security alerts, fraud warnings) delivered in under 30 seconds, end to end. <strong>P1 transactional</strong> ("order shipped," "you were mentioned") within 2 minutes. <strong>P2 bulk</strong> (marketing, digests) within hours, best effort. A P2 blast must never delay a P0 message. This is the requirement a single shared queue quietly violates.</li>
 <li><strong>Never lose a P0.</strong> Once the auth service hands us an OTP, "we dropped it" is not an acceptable outcome. That means durable queues and at-least-once delivery.</li>
 <li><strong>No duplicates the user can blame us for.</strong> At-least-once means retries; retries mean the same notification can be attempted twice. We need deduplication so a retry doesn't buzz the phone twice.</li>
 <li><strong>Respect the user:</strong> preferences, quiet hours, and a rate cap — no user gets more than N bulk notifications a day, no matter how many campaigns marketing runs.</li>
@@ -9813,7 +9813,7 @@ ORDER BY freq DESC LIMIT 10;</code></pre>
 
 <h2>Deep dive 2 — priority isolation: the 2FA lane is physically separate</h2>
 
-<p>Back to the cold open. The instinctive fix is a priority <em>field</em>: one queue, sort critical first. In a distributed queue that's somewhere between hard and fake — Kafka partitions are FIFO, and even with a priority-supporting broker, 40M enqueued messages ahead of you means the sort itself is the bottleneck, and one slow bulk consumer still holds shared resources. I'll commit to <strong>physical isolation</strong>: per channel, separate queues per priority class, separate worker pools, separate provider budgets.</p>
+<p>Back to the OTP stuck behind the campaign. The instinctive fix is a priority <em>field</em>: one queue, sort critical first. In a distributed queue that's somewhere between hard and fake — Kafka partitions are FIFO, and even with a priority-supporting broker, 40M enqueued messages ahead of you means the sort itself is the bottleneck, and one slow bulk consumer still holds shared resources. I'll commit to <strong>physical isolation</strong>: per channel, separate queues per priority class, separate worker pools, separate provider budgets.</p>
 
 <ul>
 <li><code>sms.critical</code> drains through dedicated SMS workers with a <em>reserved</em> slice of provider throughput — say 200 of our 1,000 msg/sec is untouchable by anything else.</li>
@@ -9917,7 +9917,7 @@ ORDER BY freq DESC LIMIT 10;</code></pre>
 
 <h2>Failure modes and operations</h2>
 
-<p><strong>The incident pattern to design against</strong> is exactly the cold open — the marketing blast that melts 2FA. It's an entire genre of outage: a bulk producer saturates a shared resource (queue, worker pool, provider quota) and the highest-stakes traffic in the company dies quietly behind it. Priority isolation is the structural fix; the operational fixes on top: campaigns ramp (1% → 10% → 100% with delivery-rate checks between stages), an audience-size threshold above which a send requires a second human approval, and a per-campaign kill switch that stops queued sends — the queue is per-campaign-taggable precisely so a bad blast can be surgically drained.</p>
+<p><strong>The incident pattern to design against</strong> is the marketing blast that melts 2FA. It's an entire genre of outage: a bulk producer saturates a shared resource (queue, worker pool, provider quota) and the highest-stakes traffic in the company dies quietly behind it. Priority isolation is the structural fix; the operational fixes on top: campaigns ramp (1% → 10% → 100% with delivery-rate checks between stages), an audience-size threshold above which a send requires a second human approval, and a per-campaign kill switch that stops queued sends — the queue is per-campaign-taggable precisely so a bad blast can be surgically drained.</p>
 
 <div class="box story"><div class="box-tag">War story — Hawaii's false missile alert</div>
 <p>On January 13, 2018, at 8:07am, phones across Hawaii buzzed with: "BALLISTIC MISSILE THREAT INBOUND TO HAWAII. SEEK IMMEDIATE SHELTER. THIS IS NOT A DRILL." There was no missile. A shift-change drill was running at the Hawaii Emergency Management Agency, and the warning officer on duty missed the "exercise, exercise, exercise" cue on the recorded message, thought the threat was real, and chose the <em>live</em> alert from a drop-down menu where the drill option and the real one sat side by side, separated only by a confirmation click. The FCC's investigation faulted the ambiguous drill and the menu — and found a deeper failure: the correction went out <strong>38 minutes later</strong>, because no pre-scripted "false alarm" message existed in the system and officials had to compose and authorize one while the state panicked. The fixes are a notification-platform checklist: two-person confirmation for the highest-stakes sends, test environments that physically cannot reach production audiences, and — the one everyone forgets — a pre-built correction path, because a notification system has no undo. You cannot recall a million buzzes. You can only be fast with the follow-up, and only if you built it before you needed it.</p>
@@ -10112,7 +10112,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 <p>This is the hard part the question was invented to probe. Delivery over a flaky network isn't made reliable by hoping the network behaves — it's made reliable by a <em>ladder of acknowledgments</em>, each rung a distinct promise from a distinct party, plus retries that are safe to repeat. Every tick in the WhatsApp UI is a rung of a distributed-systems protocol. Candidates who treat ticks as UI polish fail this question; candidates who can say precisely <em>what each tick proves, who sends it, and what happens if it never comes</em> pass at the senior level. Spend your time here.</p>
 </div>
 
-<p>Rung one: <strong>client → server</strong>. A's phone sends the message and starts a retry timer. Until the server's ack arrives, the phone keeps the message in local storage and resends — after 2 seconds, 4, 8 — surviving app restarts, tunnels, and tower switches. The single tick ✓ means exactly one thing: <em>the server has this message durably</em>. Which forces the golden rule: <strong>persist before you ack</strong>. Write to Cassandra (and the recipient's inbox), then ack. Never the reverse. An ack-then-persist server that crashes in the gap has lied: the phone shows ✓, deletes its local copy, and the hospital message is gone forever with a checkmark on it.</p>
+<p>Rung one: <strong>client → server</strong>. A's phone sends the message and starts a retry timer. Until the server's ack arrives, the phone keeps the message in local storage and resends — after 2 seconds, 4, 8 — surviving app restarts, tunnels, and tower switches. The single tick ✓ means exactly one thing: <em>the server has this message durably</em>. Which forces the golden rule: <strong>persist before you ack</strong>. Write to Cassandra (and the recipient's inbox), then ack. Never the reverse. An ack-then-persist server that crashes in the gap has lied: the phone shows ✓, deletes its local copy, and a message the sender was told was safe is gone forever with a checkmark on it.</p>
 
 <p>But retries create a new bug: if the <em>ack</em> gets lost, the phone resends a message the server already has. Duplicate. This is exactly what Chapter 2.2 solved with idempotency keys, and here the key is <code>client_msg_id</code> — a UUID the <em>phone</em> generates at send time. The server keeps a short-lived dedup record (id → seq, TTL a day or so); a resend of a known id gets the same ack back and writes nothing. Retries plus idempotent ids turn flaky networks from a correctness problem into a mere latency problem. That sentence is worth saying verbatim at the whiteboard.</p>
 
@@ -10156,7 +10156,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 
 <h3>Ordering: timestamps lie, sequences don't</h3>
 
-<p>Now the second half of the crux. Suppose we order messages by the phone's clock. A's phone runs 40 seconds fast (phone clocks drift, and users change them). A writes "yes", B writes "wait, no" — and half the group sees them swapped. Worse: a phone coming online sends a message composed an hour ago. Client timestamps are opinions, not facts. Display them; never sort by them.</p>
+<p>Now the second promise. Suppose we order messages by the phone's clock. A's phone runs 40 seconds fast (phone clocks drift, and users change them). A writes "yes", B writes "wait, no" — and half the group sees them swapped. Worse: a phone coming online sends a message composed an hour ago. Client timestamps are opinions, not facts. Display them; never sort by them.</p>
 
 <p>The fix is the one we already smuggled in: the server assigns each message a <strong>per-conversation sequence number</strong> at durable-write time. Like the ticket machine at a deli counter — your place in line is decided at the counter, not by when you left home. Order is decided once, centrally; every device sorts by <code>seq</code> forever after, and a client holding 41 and 43 <em>knows</em> it has a gap and asks for 42. Gap-free numbering needs a single writer per conversation: shard conversations across message-service instances by consistent hashing (Chapter 1.9), so one instance owns convo 9 and increments its counter — with a fencing token (Chapter 2.3) so a stale owner can't hand out duplicates during failover.</p>
 
@@ -10359,13 +10359,13 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 
 <p>Second number: <strong>the fanout multiplication.</strong> Fanout is the copying step — one post fanning out into many follower feeds — so pushing a post means one write per follower. An average account has ~200 followers, so 1.2K posts/sec becomes ~240K tiny cache writes/sec, maybe a million at peak. A sharded Redis fleet shrugs at that; each write is a few microseconds of list-push. So far, push looks great.</p>
 
-<p>Then I do the celebrity row of the table, because follower counts are a power law (Chapter 2.6) — almost everyone has a few hundred followers, a handful of accounts have tens of millions, and the average is a lie told by the tail: a 100M-follower account posts once, and that's <strong>100 million writes for one tap</strong>. At a generous 1M writes/sec of fanout capacity, one post occupies the entire fleet for 100 seconds. Ronaldo's 600M followers: ten minutes of everything we own, and every ordinary user's post queued behind it. Also: 100M copies of a post ID at ~20 bytes each is 2 GB of RAM duplicated per celebrity post — most of it for followers who won't even open the app today. <strong>This is the number that forces a hybrid design</strong>, and I say so now: "push for normal accounts, pull for celebrities — I'll deep-dive the threshold later."</p>
+<p>Then I do the celebrity row of the table, because follower counts are a power law (Chapter 2.6) — almost everyone has a few hundred followers, a handful of accounts have tens of millions, and the average is a lie told by the tail: a 100M-follower account posts once, and that's <strong>100 million writes for one tap</strong>. At a generous 1M writes/sec of fanout capacity, one post occupies the entire fleet for 100 seconds. A Ronaldo-sized Instagram account at 600M followers: ten minutes of everything we own, and every ordinary user's post queued behind it. Also: 100M copies of a post ID at ~20 bytes each is 2 GB of RAM duplicated per celebrity post — most of it for followers who won't even open the app today. <strong>This is the number that forces a hybrid design</strong>, and I say so now: "push for normal accounts, pull for celebrities — I'll deep-dive the threshold later."</p>
 
 <p>One more sizing check, because it decides what the feed cache stores: 500M active users × 300 feed entries × 16 bytes per entry (post ID plus a timestamp) ≈ <strong>2.4 TB of RAM</strong> — about 40 Redis shards. Perfectly buildable, but only because I'm storing post <em>IDs</em>, not post bodies, and only for <em>active</em> users. Store full posts and it's hundreds of terabytes. The estimate just made two design decisions for me.</p>
 
 <h2>API and data model: quick, then move</h2>
 
-<p>This is the Product Architecture section, so I'm precise but fast:</p>
+<p>This is the part the Product Architecture flavor of the round grades hardest (Chapter 0.2), so I'm precise but fast:</p>
 
 <ul>
 <li><code>POST /v1/media</code> → returns an upload URL for blob storage and a <code>media_id</code>. The client uploads bytes directly to blob storage, not through my app servers (Chapter 1.7).</li>
@@ -10375,7 +10375,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 <li><code>POST /v1/follows</code> with <code>{followee_id}</code>.</li>
 </ul>
 
-<p>Each feed item comes back <strong>fully hydrated</strong>: post body, author name and avatar, like/comment counts, CDN URLs for media. One request paints the screen. And I name the client behaviors Meta grades in this flavor: render the cached last page instantly on app open while fetching fresh behind it; show a "new posts" pill instead of yanking the scroll position; bump the like count optimistically on tap and reconcile later; prefetch the next page when the user nears the bottom.</p>
+<p>Each feed item comes back <strong>fully hydrated</strong>: post body, author name and avatar, like/comment counts, CDN URLs for media. One request paints the screen. And I name the client behaviors Meta grades in the Product Architecture flavor: render the cached last page instantly on app open while fetching fresh behind it; show a "new posts" pill instead of yanking the scroll position; bump the like count optimistically on tap and reconcile later; prefetch the next page when the user nears the bottom.</p>
 
 <p>Data model: a <code>users</code> table; a <code>follows</code> table that I need in <em>both directions</em> — "who do I follow" (for building feeds) and "who follows X" (for fanout) — so it's stored twice, sharded by each key (Chapter 1.9); a <code>posts</code> table sharded by <code>author_id</code> with time-sortable IDs (Chapter 1.14), which means "recent posts by author X" is one cheap indexed read. Hold that thought — that per-author recent-posts index is called the author's <strong>outbox</strong>, and it's about to matter enormously.</p>
 
@@ -10494,7 +10494,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 <h2>Deep dive 1: the fanout decision</h2>
 
 <div class="box crux"><div class="box-tag">The crux</div>
-<p>Push or pull is not a style preference — it's forced by the shape of the follow graph, and the follow graph is a power law. Pull-for-everyone dies on reads: 200K feed requests/sec × ~400 followed accounts each = 80 million outbox reads per second, most of them recomputing the same merge they computed five minutes ago. Push-for-everyone dies on writes: one celebrity post = 100M+ writes, minutes of total fleet capacity for one tap. Neither pure strategy survives, so the design must be hybrid — and the senior signal is <em>where you put the threshold and why</em>. This is the burning room. If you take one thing from this chapter into the interview, take this paragraph.</p>
+<p>Push or pull is not a style preference — it's forced by the shape of the follow graph, and the follow graph is a power law. Pull-for-everyone dies on reads: 200K feed requests/sec × ~400 followed accounts each = 80 million outbox reads per second, most of them recomputing the same merge they computed five minutes ago. Push-for-everyone dies on writes: one celebrity post = 100M+ writes, minutes of total fleet capacity for one tap. Neither pure strategy survives, so the design must be hybrid — and the senior signal is <em>where you put the threshold and why</em>. This is the room that's on fire. If you take one thing from this chapter into the interview, take this paragraph.</p>
 </div>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
@@ -10538,7 +10538,7 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 
 <h2>Deep dive 2: ranking, without pretending to be an ML engineer</h2>
 
-<p>Meta probes ranking on this question almost every time, and the E5 move is to be honest about the boundary: I don't design the model — I design the <em>system the model lives in</em>, which means candidate generation, a latency budget, feature freshness, and a fallback. That answer scores better than bluffing about neural architectures, because it's the answer of someone who'd actually operate this.</p>
+<p>Meta probes ranking on this question almost every time, and the senior (E5) move is to be honest about the boundary: I don't design the model — I design the <em>system the model lives in</em>, which means candidate generation, a latency budget, feature freshness, and a fallback. That answer scores better than bluffing about neural architectures, because it's the answer of someone who'd actually operate this.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="Ranking funnel: candidates filtered, scored by ML service, diversity rules applied, with chronological fallback on scorer timeout">
@@ -11210,7 +11210,7 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 <p>Everything so far is plumbing a strong mid-level candidate can assemble. The reason this question exists is here: two devices edit the same file while disconnected, and the system must converge without human-invisible data loss. There is no clever algorithm that merges two arbitrary binary edits correctly — a .docx is a zip file; "merging" two zips byte-wise produces garbage. So the design goal is not to be smart. It is to <em>detect</em> concurrency reliably, <em>refuse</em> to guess, and <em>preserve both versions</em> where the human can see them. The mechanism is a base-version check at the linearization point plus the conflicted-copy pattern. Get this right and the rest of the chapter is engineering; get it wrong and you built a data-loss machine with great bandwidth efficiency.</p>
 </div>
 
-<p>Walk the scenario precisely. <code>thesis.docx</code> is at version 7 everywhere. Laptop A (the plane) edits offline. Desktop B (the library) edits offline. Both hold the same fact: "my edit is based on v7." A lands first: commits with base_version&nbsp;7, server sees current&nbsp;=&nbsp;7, accepts, current becomes 8. B commits with base_version&nbsp;7 — but current is now 8. <strong>The base-version check is a compare-and-swap:</strong> "advance 7→my-version only if still 7." It fails. That failure <em>is</em> the concurrency detector: B's edit provably did not see A's edit, so these are concurrent, not sequential.</p>
+<p>Walk the scenario precisely. <code>thesis.docx</code> is at version 7 everywhere. Laptop A (on a plane) edits offline. Desktop B (at a library desk) edits offline. Both hold the same fact: "my edit is based on v7." A lands first: commits with base_version&nbsp;7, server sees current&nbsp;=&nbsp;7, accepts, current becomes 8. B commits with base_version&nbsp;7 — but current is now 8. <strong>The base-version check is a compare-and-swap:</strong> "advance 7→my-version only if still 7." It fails. That failure <em>is</em> the concurrency detector: B's edit provably did not see A's edit, so these are concurrent, not sequential.</p>
 
 <p>Now the committed policy: <strong>never last-write-wins, never silent merge — fork.</strong> B's client receives the 409, downloads v8, and commits its own local content as a <em>new file</em>: <code>thesis (B's conflicted copy 2026-08-14).docx</code>. Both versions now exist side by side in the folder on every device; the human — the only agent that understands thesis semantics — merges. This is Dropbox's actual documented behavior, right down to the filename format with the device name and date baked in so you can tell at a glance which machine and when.</p>
 
@@ -11222,10 +11222,10 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
   <text class="dg-txt" x="38" y="143">thesis.docx</text>
   <text class="dg-txt-s" x="38" y="161">v7 everywhere</text>
   <rect class="dg-node" x="250" y="30" width="170" height="56" rx="8"/>
-  <text class="dg-txt" x="266" y="53">Laptop A (plane)</text>
+  <text class="dg-txt" x="266" y="53">Laptop A</text>
   <text class="dg-txt-s" x="266" y="71">edits offline, base v7</text>
   <rect class="dg-node" x="250" y="210" width="170" height="56" rx="8"/>
-  <text class="dg-txt" x="266" y="233">Desktop B (library)</text>
+  <text class="dg-txt" x="266" y="233">Desktop B</text>
   <text class="dg-txt-s" x="266" y="251">edits offline, base v7</text>
   <rect class="dg-good" x="510" y="30" width="190" height="56" rx="8"/>
   <text class="dg-txt" x="526" y="53">commit(base=7): OK</text>
@@ -11392,7 +11392,7 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 <li><strong>Browse events</strong> and view a venue's <strong>seat map</strong> with live-ish availability.</li>
 <li><strong>Hold seats</strong>: a user selects seats and gets them reserved for a short window while they pay.</li>
 <li><strong>Pay and confirm</strong>: complete payment, receive a ticket.</li>
-<li><strong>Virtual waiting room</strong> for high-demand on-sales — the Coldplay drop is a stated requirement, not an edge case.</li>
+<li><strong>Virtual waiting room</strong> for high-demand on-sales — a stadium-show drop is a stated requirement, not an edge case.</li>
 </ul>
 
 <p>Out of scope, said explicitly: resale marketplace, dynamic pricing, venue entry scanning, search. "Fair?" — and the interviewer nods.</p>
@@ -11402,7 +11402,7 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 <ul>
 <li><strong>Never sell the same seat twice.</strong> An invariant, not a target — I'd rather show an error than oversell. This one sentence shapes the whole design.</li>
 <li><strong>Hold window: 10 minutes.</strong> Long enough to type a card number, short enough that abandoned carts don't strangle inventory.</li>
-<li><strong>Drop shape:</strong> 10 million users in the first minutes for roughly 50,000 seats. Degrade gracefully, never collapse.</li>
+<li><strong>Drop shape:</strong> 10 million users in the first minutes for roughly 50,000 seats — and on the hottest seat, four thousand claims inside the same second. Degrade gracefully, never collapse.</li>
 <li><strong>Browse can be seconds stale; purchase must be strongly consistent.</strong> Different consistency per component — the Part 1 CAP lesson paying rent.</li>
 <li><strong>Fairness and bot resistance.</strong> A drop where scripts get every seat is a product failure even if the database was perfectly correct.</li>
 </ul>
@@ -12512,7 +12512,7 @@ X-RateLimit-Reset: 1755162032</code></pre>
 <h2>Deep dive 1: exactly one scheduler fires the job</h2>
 
 <div class="box crux"><div class="box-tag">The crux</div>
-<p>This is the question the problem was invented to probe. You need multiple scanners — one is a single point of failure, and the midnight wave needs parallel hands. But two scanners running <code>SELECT … WHERE next_run_at &lt;= now()</code> in the same second see <em>the same due jobs</em>, and both will happily fire them. Every duplicate-charge horror story starts here. You must make "claim this due job" an atomic, arbitrated act — and you must know what happens when a claimer dies holding claims. Interviewers who ask this problem are mostly grading this one answer: naive scan = fail, global lock = mediocre, row-level claim or leader+fencing, argued honestly = senior.</p>
+<p>This is what the problem was invented to probe. You need multiple scanners — one is a single point of failure, and the midnight wave needs parallel hands. But two scanners running <code>SELECT … WHERE next_run_at &lt;= now()</code> in the same second see <em>the same due jobs</em>, and both will happily fire them. Every duplicate-charge horror story starts here. You must make "claim this due job" an atomic, arbitrated act — and you must know what happens when a claimer dies holding claims. Interviewers who ask this problem are mostly grading this one answer: naive scan = fail, global lock = mediocre, row-level claim or leader+fencing, argued honestly = senior.</p>
 </div>
 
 <p>The committed answer: <strong>let the database arbitrate, with <code>SELECT … FOR UPDATE SKIP LOCKED</code></strong>. Every scanner runs the same loop, once per second:</p>
@@ -12641,9 +12641,9 @@ COMMIT;  -- then enqueue the run_ids</code></pre>
 
 <h2>Deep dive 3: time policies — misfires, priorities, DAGs</h2>
 
-<p><strong>Misfire policy.</strong> The scheduler tier was down for 10 minutes — deploy gone wrong, database failover, whatever. It's 09:10 and the index holds thousands of jobs stamped 09:00. What now? There is no universal answer, which is exactly why it's per-job config with three values. <code>RUN_NOW</code>: fire late, once — right for "send the digest"; 9:10 is fine. <code>SKIP</code>: recompute <code>next_run_at</code>, catch the next occurrence — right for high-frequency work like a <code>*/5</code> cache refresh, where a late run is worthless because a fresh one is 3 minutes away. <code>CATCH_UP</code>: fire once per <em>missed occurrence</em> — right only for jobs whose payload is parameterized by the period, like "generate the statement for hour X"; skipping leaves a hole in the ledger. My committed defaults: <code>RUN_NOW</code> if we're within one schedule interval of the miss, <code>SKIP</code> beyond that, <code>CATCH_UP</code> strictly opt-in — because an accidental catch-up after a long outage is a self-inflicted thundering herd of stale work. (Quartz calls this the misfire threshold; every mature scheduler grows this knob, so put it in the API on day one.)</p>
+<p><strong>Misfire policy.</strong> The scheduler tier was down for 10 minutes — deploy gone wrong, database failover, whatever. It's 09:10 and the index holds thousands of jobs stamped 09:00. What now? There is no universal answer, which is exactly why it's per-job config with three values. <code>RUN_NOW</code>: fire late, once — right for a daily digest; 9:10 is fine. <code>SKIP</code>: recompute <code>next_run_at</code>, catch the next occurrence — right for high-frequency work like a <code>*/5</code> cache refresh, where a late run is worthless because a fresh one is 3 minutes away. <code>CATCH_UP</code>: fire once per <em>missed occurrence</em> — right only for jobs whose payload is parameterized by the period, like "generate the statement for hour X"; skipping leaves a hole in the ledger. My committed defaults: <code>RUN_NOW</code> if we're within one schedule interval of the miss, <code>SKIP</code> beyond that, <code>CATCH_UP</code> strictly opt-in — because an accidental catch-up after a long outage is a self-inflicted thundering herd of stale work. (Quartz calls this the misfire threshold; every mature scheduler grows this knob, so put it in the API on day one.)</p>
 
-<p><strong>Priorities.</strong> The certificate-rotation job must not queue behind 200,000 bulk thumbnail re-encodes. Committed design: three queues — <code>critical</code>, <code>default</code>, <code>bulk</code> — with <em>dedicated worker pools</em>, not one pool doing strict priority-order polling. Strict priority starves: a busy critical queue means bulk work waits forever, and "forever" always eventually includes something that mattered. Dedicated pools guarantee every tier a floor of capacity; critical's pool is simply provisioned so its queue depth stays near zero.</p>
+<p><strong>Priorities.</strong> A certificate-rotation job must not queue behind 200,000 bulk thumbnail re-encodes. Committed design: three queues — <code>critical</code>, <code>default</code>, <code>bulk</code> — with <em>dedicated worker pools</em>, not one pool doing strict priority-order polling. Strict priority starves: a busy critical queue means bulk work waits forever, and "forever" always eventually includes something that mattered. Dedicated pools guarantee every tier a floor of capacity; critical's pool is simply provisioned so its queue depth stays near zero.</p>
 
 <p><strong>DAG dependencies</strong> — one section, deliberately not the spine. "Run <code>build_ledger</code> after <code>pull_orders</code>, <code>pull_refunds</code>, and <code>pull_fx_rates</code> all succeed" — the Airflow shape. Layer it <em>above</em> the core: a <code>dependencies</code> table, and a completion event for every finished run. When a parent succeeds, atomically decrement the child's unmet-dependency counter; the decrement that hits zero triggers the child through the same <code>run-now</code> path a human would use. Fan-in is just "counter reaches zero exactly once" — the decrement must be a conditional DB update, not a read-then-write, or two parents finishing simultaneously both see 1 and neither fires the child. Validate at submission time with a depth-first search and reject cycles outright — <code>A→B→A</code> is a deadlock you detect at write time for free or debug in production at great expense. The senior note: the core scheduler stays completely unaware of DAGs; it fires jobs, and one of its consumers happens to be a dependency engine. That layering is why the core stays testable.</p>
 
@@ -12766,7 +12766,7 @@ COMMIT;  -- then enqueue the run_ids</code></pre>
 
 <h2>Requirements: pin down what "trending" means before you build anything</h2>
 
-<p>"Trending" is the vaguest word in the prompt and I want it nailed down in the first two minutes, because two very different products hide inside it.</p>
+<p>"Trending" is the vaguest word in the interviewer's prompt and I want it nailed down in the first two minutes, because two very different products hide inside it.</p>
 
 <p><strong>Functional, committed:</strong></p>
 
@@ -14994,7 +14994,7 @@ DEL  key                -&gt; OK</code></pre>
 
 <h2>Requirements: what "monitoring" must promise (minutes 0–5)</h2>
 
-<p>Scope it out loud: "I'll build metric ingestion from customer hosts and services, dashboard queries, and alerting. Metrics only — logs and distributed tracing are separate products, and I'll actually use that separation as a design tool later. Out of scope: billing, the UI itself, anomaly detection. Fair?"</p>
+<p>Today's prompt is the dashboard you have promised at the end of every design in this book &mdash; a metrics and monitoring platform at Datadog or Prometheus scale. Scope it out loud: "I'll build metric ingestion from customer hosts and services, dashboard queries, and alerting. Metrics only — logs and distributed tracing are separate products, and I'll actually use that separation as a design tool later. Out of scope: billing, the UI itself, anomaly detection. Fair?"</p>
 
 <p>Functional: agents on customer machines push numeric measurements with names and labels; users query them for dashboards ("p99 latency for checkout, by region, last 6 hours"); users define alert rules that page a human when a condition holds.</p>
 
@@ -15245,7 +15245,7 @@ DEL  key                -&gt; OK</code></pre>
 
 <h2>The self-dependency rule: monitor from outside the blast radius (minutes 40–42)</h2>
 
-<p>Now the requirement I flagged in minute two. A monitoring platform that shares fate with what it monitors is a smoke detector wired to the house mains: it dies in exactly the fire it exists to announce. So the platform runs in its <strong>own failure domain</strong> — separate accounts, separate clusters, ideally separate regions from the monitored infrastructure; it must never depend on the customer's databases, queues, or service mesh. Internally the same razor applies one level down: the component that delivers pages depends on almost nothing — if every TSDB shard is dead, "evaluate stream, send page" must still work, and the final notification hop rides an independent third-party path, because a pager that depends on the platform it reports on has the same disease one layer deeper.</p>
+<p>Now the requirement I flagged in the scoping list. A monitoring platform that shares fate with what it monitors is a smoke detector wired to the house mains: it dies in exactly the fire it exists to announce. So the platform runs in its <strong>own failure domain</strong> — separate accounts, separate clusters, ideally separate regions from the monitored infrastructure; it must never depend on the customer's databases, queues, or service mesh. Internally the same razor applies one level down: the component that delivers pages depends on almost nothing — if every TSDB shard is dead, "evaluate stream, send page" must still work, and the final notification hop rides an independent third-party path, because a pager that depends on the platform it reports on has the same disease one layer deeper.</p>
 
 <p>The agent is the last line. When intake is unreachable, agents keep collecting and spool to their local disk buffer — say 30 minutes — because the customer's incident review will want the data measured <em>during</em> our outage. On reconnect, agents send the freshest points first (alerting needs <em>now</em>, not twenty minutes ago) and trickle the backlog behind them, rate-limited by intake so that 100K agents flushing simultaneously don't become the retry stampede of chapter 2.7 and kill the intake that just recovered.</p>
 
@@ -15807,7 +15807,7 @@ DEL  key                -&gt; OK</code></pre>
 <p>Scope out loud first: "I'll build PUT, GET, DELETE and HEAD by key, prefix LIST with pagination, multipart upload, versioning, and light lifecycle rules — tier to cold storage, expire old versions. Out of scope: IAM, cross-region replication, anything query-in-place. Fair?"</p>
 
 <ul>
-<li><strong>Durability: 99.999999999% per object per year.</strong> This one line generates the entire design. Everything else is negotiable; this is the product.</li>
+<li><strong>Durability: eleven nines — 99.999999999% per object per year.</strong> Ten million objects, one lost every ten thousand years. This one line generates the entire design. Everything else is negotiable; this is the product.</li>
 <li><strong>Availability: 99.99% for GET.</strong> Mind the gap between those two numbers — fifty minutes of downtime a year is survivable, losing one customer's wedding photos is not. Durability outranks availability, and that ordering settles several arguments later.</li>
 <li><strong>Survive losing a whole availability zone</strong> with zero data loss and zero read unavailability. Not "recover from" — <em>survive</em>, serving reads throughout.</li>
 <li><strong>Strong read-after-write.</strong> A successful PUT is immediately visible to any client's next GET, and to LIST. (Real S3 was eventually consistent for overwrites and listings until December 2020; we're building the after version.)</li>
@@ -16239,7 +16239,7 @@ DEL  key                -&gt; OK</code></pre>
 
 <p><strong>2. Transcode compute.</strong> One modern CPU core encodes 1080p H.264 at roughly real time on a sane preset. A full ladder — lower rungs are cheap, the top rung isn't — costs maybe 3 core-hours per source hour for H.264. A modern codec like AV1 costs on the order of 10x that. So the cheap codec alone: 720,000 × 3 = 2.16 million core-hours per day ÷ 24 = <strong>~90,000 cores running flat out, forever, in steady state</strong> — before any backlog, before AV1, before a single re-encode campaign.</p>
 
-<p><strong>3. Egress and the bill.</strong> Use the Netflix side for this one, because the numbers are public-ish: 300 million-plus paid memberships × two hours of viewing a day = 600 million viewing-hours/day. At an average 4 Mbps (4K pulls 15, phones pull 1) that's 1.8 GB per hour → <strong>~1 exabyte delivered per day</strong>, ~100 Tbps averaged out and several times that at evening peak. Now price it: commercial CDN list prices run several cents per GB, so assume you negotiate brutally down to 1 cent. An exabyte is a billion GB → <strong>$10 million a day, ~$4 billion a year</strong>, against Netflix's 2024 revenue of roughly $39 billion. A tenth of the company's revenue, spent on someone else's bandwidth.</p>
+<p><strong>3. Egress and the bill.</strong> Use Netflix for this one, because the numbers are public-ish: 300 million-plus paid memberships × two hours of viewing a day = 600 million viewing-hours/day. At an average 4 Mbps (4K pulls 15, phones pull 1) that's 1.8 GB per hour → <strong>~1 exabyte delivered per day</strong>, ~100 Tbps averaged out and several times that at evening peak. Now price it: commercial CDN list prices run several cents per GB, so assume you negotiate brutally down to 1 cent. An exabyte is a billion GB → <strong>$10 million a day, ~$4 billion a year</strong>, against Netflix's 2024 revenue of roughly $39 billion. A tenth of the company's revenue, spent on someone else's bandwidth.</p>
 
 <p>Now the three decisions those numbers just made, said plainly:</p>
 
@@ -17595,7 +17595,7 @@ POST /v1/batch  {requests[]} → job_id            (the cheap tier)</code></pre>
 <li><strong>Retrieval latency:</strong> under 100 ms p95 for the full retrieve-and-rerank stage. The LLM will take 1–3 seconds to write the answer; retrieval must not be the story.</li>
 <li><strong>Throughput:</strong> 5,000 retrievals/sec at peak across all tenants.</li>
 <li><strong>Freshness:</strong> a new or edited document is retrievable within 5 minutes.</li>
-<li><strong>Quality:</strong> measurable. Recall@10 ≥ 95% on a labeled evaluation set — and yes, I'm going to spend real time on how we measure that, because an unmeasured RAG system is a hallucination machine with extra steps.</li>
+<li><strong>Quality:</strong> measurable. Recall@10 ≥ 95% on a labeled evaluation set — and yes, I'm going to spend real time on how we measure that, because retrieval quality gates the model's honesty: hand a RAG system — retrieval-augmented generation, the model answering from documents we give it — the wrong paragraphs and it doesn't error, it composes a fluent, cited, <strong>wrong</strong> answer. Unmeasured, it's a hallucination machine with extra steps.</li>
 <li><strong>Isolation:</strong> tenant A's documents never appear in tenant B's results. Not "rarely." Never.</li>
 </ul>
 
@@ -17696,7 +17696,7 @@ POST /v1/batch  {requests[]} → job_id            (the cheap tier)</code></pre>
 <h2>Deep dive 1: ANN — a billion vectors in ten milliseconds (minutes 20–31)</h2>
 
 <div class="box crux"><div class="box-tag">The crux</div>
-<p>This is the hard part the question was invented to probe. Exact nearest-neighbor search at 1B vectors is computationally impossible within our latency budget, so every real system approximates — and approximation drags you into a three-way tug-of-war: <strong>recall</strong> (what fraction of the true nearest neighbors you actually find) vs <strong>latency</strong> (how much of the index you can afford to touch per query) vs <strong>memory</strong> (what the index costs to hold). Pull any corner and the other two move. Every index family — graphs, clusters, disk-based — is just a different stance in this triangle, and the senior move is to name the triangle, pick a stance for <em>these</em> numbers, and say what it costs.</p>
+<p>This is the hard part the interview question is invented to probe. Exact nearest-neighbor search at 1B vectors is computationally impossible within our latency budget, so every real system approximates — and approximation drags you into a three-way tug-of-war: <strong>recall</strong> (what fraction of the true nearest neighbors you actually find) vs <strong>latency</strong> (how much of the index you can afford to touch per query) vs <strong>memory</strong> (what the index costs to hold). Pull any corner and the other two move. Every index family — graphs, clusters, disk-based — is just a different stance in this triangle, and the senior move is to name the triangle, pick a stance for <em>these</em> numbers, and say what it costs.</p>
 </div>
 
 <p><strong>Option one: HNSW</strong> — Hierarchical Navigable Small World graphs, the index inside most modern vector databases. Every vector is a node connected to a few dozen near neighbors. Search greedily walks the graph: from an entry point, repeatedly hop to whichever neighbor is closest to the query, until no neighbor improves. The "hierarchical" part fixes greedy search's slowness: stack multiple layers, where the top layer holds a tiny sample of nodes with long-range links and each lower layer gets denser, down to layer 0 which holds everything.</p>
