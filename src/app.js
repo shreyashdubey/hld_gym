@@ -966,11 +966,18 @@ function renderBoss(part) {
   if (!p) { location.hash = '#home'; return; }
   const pool = p.chapters.filter(c => isReady(c.id)).flatMap(c => chQuiz(c.id));
   const hard = pool.filter(q => q.level >= 2);
-  const qs = (hard.length >= 20 ? hard : pool).sort(() => Math.random() - 0.5).slice(0, 20);
+  const tech = (hard.length >= 20 ? hard : pool).sort(() => Math.random() - 0.5);
+  /* Only cards the reader has already earned. A boss round is a test of what you
+     hold, not a first meeting — and an unearned card here would hand over its
+     answer outside the gate. */
+  const chIds = new Set(p.chapters.map(c => c.id));
+  const hist = allCards().filter(c => chIds.has(c.chapter) && cardEarned(c.id))
+    .sort(() => Math.random() - 0.5).slice(0, 6);
+  const qs = [...tech.slice(0, 20 - hist.length), ...hist].sort(() => Math.random() - 0.5);
   const best = S.boss[part]?.best;
   VIEW.innerHTML = `<div class="content"><p class="eyebrow">Part ${p.n} — ${p.title}</p>
     <h1 class="ch-title">Boss battle</h1>
-    <p>${qs.length} questions sampled from the whole part. 25 minutes on the clock (it won’t stop you — it’s telling you the truth about interview pace). Pass at 80%.${best !== undefined ? ` Best so far: <b>${best}%</b>.` : ''}</p>
+    <p>${qs.length} questions sampled from the whole part${hist.length ? `, including ${hist.length} history card${hist.length > 1 ? 's' : ''} you have earned` : ''}. 25 minutes on the clock (it won’t stop you — it’s telling you the truth about interview pace). Pass at 80%.${best !== undefined ? ` Best so far: <b>${best}%</b>.` : ''}</p>
     <p><button class="btn" id="start">Enter the arena</button></p>
     <div class="timer" id="timer" hidden></div><div class="q-zone"></div></div>`;
   const zone = VIEW.querySelector('.q-zone');
@@ -983,23 +990,28 @@ function renderBoss(part) {
       if (left < 0) timerEl.style.color = 'var(--bad)';
     }, 1000);
     let answered = 0, right = 0;
-    qs.forEach((q, i) => zone.appendChild(renderQuizItem(q, ok => {
-      answered++; if (ok) right++;
-      gradeItem(q.id, ok);
-      if (answered === qs.length) {
-        clearInterval(tick);
-        const pct = Math.round(100 * right / qs.length);
-        const rec = S.boss[part] = S.boss[part] || {};
-        const firstPass = pct >= 80 && !rec.passed;
-        rec.best = Math.max(rec.best || 0, pct); if (pct >= 80) rec.passed = true; save();
-        const sum = document.createElement('div');
-        sum.className = 'q-summary' + (pct >= 80 ? ' pass' : '');
-        sum.innerHTML = pct >= 80 ? `<b>${pct}%</b> — boss down. <span class="stamp big">Part ${p.n} cleared</span>` : `<b>${pct}%</b> — the boss wins this round. Check the review queue and come back.`;
-        zone.appendChild(sum);
-        if (firstPass) addXP(200, `Part ${p.n} boss`);
-        sum.scrollIntoView({ behavior: 'smooth' });
-      }
-    }, `Q${i + 1}/${qs.length}`)));
+    qs.forEach((q, i) => {
+      const cb = ok => {
+        answered++; if (ok) right++;
+        gradeItem(q.id, ok);
+        if (answered === qs.length) {
+          clearInterval(tick);
+          const pct = Math.round(100 * right / qs.length);
+          const rec = S.boss[part] = S.boss[part] || {};
+          const firstPass = pct >= 80 && !rec.passed;
+          rec.best = Math.max(rec.best || 0, pct); if (pct >= 80) rec.passed = true; save();
+          const sum = document.createElement('div');
+          sum.className = 'q-summary' + (pct >= 80 ? ' pass' : '');
+          sum.innerHTML = pct >= 80 ? `<b>${pct}%</b> — boss down. <span class="stamp big">Part ${p.n} cleared</span>` : `<b>${pct}%</b> — the boss wins this round. Check the review queue and come back.`;
+          zone.appendChild(sum);
+          if (firstPass) addXP(200, `Part ${p.n} boss`);
+          sum.scrollIntoView({ behavior: 'smooth' });
+        }
+      };
+      zone.appendChild(q.kind === 'card'
+        ? renderCard(q, cb)
+        : renderQuizItem(q, cb, `Q${i + 1}/${qs.length}`));
+    });
   };
 }
 
