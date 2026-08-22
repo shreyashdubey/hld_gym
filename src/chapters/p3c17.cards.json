@@ -5,46 +5,46 @@
       "id": "p3c17-c1",
       "suit": "person",
       "asset": "assets/p3c17-person.svg",
-      "title": "Mendel Rosenblum and John Ousterhout",
-      "sub": "1991 · UC Berkeley, Sprite project",
-      "year": 1991,
-      "prompt": "In Sprite LFS, where does the permanent copy of a file's data live, and where does the index that finds it live?",
-      "answer": "Both are in the log. The log is the only structure on disk; the indexing information sits inside the log, so a file is read back out of the log itself rather than out of a separate random-access structure.",
-      "body": "Storage for the Sprite network operating system, at Berkeley. Their premise was demographic, not clever: memory was getting cheap, caches were absorbing reads, so disk traffic would become writes — and writes are only slow when they seek. So make every write an append and never seek again.",
-      "cite": "lfs1991"
+      "title": "Mohan, Haderle, Lindsay, Pirahesh and Schwarz",
+      "sub": "1992 · IBM Almaden Research Center and Santa Teresa Laboratory, San Jose",
+      "year": 1992,
+      "prompt": "Before ARIES, what were these five actually spending their time on, and what did it turn up in code that had already shipped to customers?",
+      "answer": "Reading the thin documentation and the source of System R, SQL/DS, DB2/MVS and IMS to work out how each one's recovery really behaved. It turned up significant design bugs in System R roughly ten years after its product version, SQL/DS, was released.",
+      "body": "Four at Almaden, Don Haderle at IBM's Santa Teresa lab across town. Not a clean-sheet team: archaeologists in IBM's own transaction code. Mohan later wrote that most of them had not been IBMers during the System R days, which let them look with a fresh perspective.",
+      "cite": "mohan1999"
     },
     {
       "id": "p3c17-c2",
       "suit": "incident",
-      "title": "The cleaner eats the win",
-      "sub": "USENIX Winter 1995 · Harvard and UC Berkeley",
-      "year": 1995,
-      "prompt": "Seltzer's TPC-B sweep: at what disk utilization had LFS's advantage over FFS already vanished, and what did the cleaner cost at that point?",
-      "answer": "48% utilization — the advantage was gone that early. The cleaner cost a 34% performance degradation, erasing the roughly 50% advantage LFS held with the cleaner switched off.",
-      "body": "Margo Seltzer and five co-authors ran 4.4BSD-LFS against the 4.4BSD Fast File System on TPC-B, a check-cashing benchmark, sweeping disk utilization. Cleaner off, LFS won handily. Cleaner on, the line flattened onto FFS. No money was ever priced. And TPC-B was not even the workload LFS was built for: the 1991 paper aimed at small files.",
-      "cite": "seltzer1995"
+      "title": "The undo that undid nothing",
+      "sub": "Figure 16 of the 1992 paper · selective redo meets record-level locking",
+      "year": 1992,
+      "prompt": "A page takes update 20 from a transaction that will be rolled back, then update 30 from one that commits. Selective redo replays only 30. What breaks when the undo pass reaches 20?",
+      "answer": "Redoing 30 pushed that page's LSN past 20. Undo decides by comparing the page's LSN against the log record's, so it undoes update 20 — which the page never received. The paper's figure labels the outcome ERROR?!",
+      "body": "No outage and no price tag: a latent correctness hole in recovery code that had shipped. The authors' fix is not a smarter rule but abandoning selectivity, and they note that running undo before redo does not rescue it. Skip one record and a page's position stops describing the page.",
+      "cite": "aries1992"
     },
     {
       "id": "p3c17-c3",
       "suit": "artifact",
-      "title": "The Design and Implementation of a Log-Structured File System",
-      "sub": "Rosenblum & Ousterhout · SOSP '91",
-      "year": 1991,
-      "prompt": "Which two venues published this paper, and how far apart? (Aggregators often list only one.)",
-      "answer": "The 13th ACM Symposium on Operating Systems Principles in 1991, and ACM Transactions on Computer Systems 10(1), February 1992, pages 26-52. The camera-ready itself says it will appear in both.",
-      "body": "Open the PDF. Section 3.3 defines segment cleaning in three steps: read a number of segments into memory, identify the live data, write the live data back to a smaller number of clean segments. Sprite LFS used segments of either 512 kilobytes or one megabyte.",
-      "cite": "lfs1991"
+      "title": "ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging",
+      "sub": "Mohan, Haderle, Lindsay, Pirahesh, Schwarz · ACM TODS 17(1), March 1992",
+      "year": 1992,
+      "prompt": "Open the paper. During the redo pass, which updates get replayed, and what single comparison decides whether any one of them is actually applied to a page?",
+      "answer": "All of them, including updates by transactions already known to be losers. An update is redone only if the affected page's page-LSN is less than the log record's LSN, and no logging is performed while redoing — so replay is idempotent by arithmetic.",
+      "body": "ACM Transactions on Database Systems 17(1), March 1992, pages 94-162 — the range is printed on the paper's own first page, not borrowed from an index. Section 1 states the rule the rest rests on: log records for a change must be on stable storage before the changed page may overwrite its old version.",
+      "cite": "aries1992"
     },
     {
       "id": "p3c17-c4",
       "suit": "ripple",
-      "title": "LSM trees, and the bill Kafka still pays",
-      "sub": "O'Neil, Cheng, Gawlick, O'Neil · Acta Informatica, 1996",
-      "year": 1996,
-      "prompt": "What did the LSM-tree authors take from LFS, and which specific LFS cost did they claim their structure avoids?",
-      "answer": "They took the idea of always writing multi-page blocks to new locations, and the name. They claim LSM blocks are freed whole on the trailing edge of the rolling merge, so reuse costs no extra I/O — where LFS blocks are only partly freed, forcing a read and a write to reclaim.",
-      "body": "The paper that named a whole storage family after Rosenblum and Ousterhout's. Kafka's segment files plus log compaction are the same bargain wearing a retention policy: appends are free, reclaiming space is not, and you pay in rewritten bytes either way. Read your retention config as a cleaning budget.",
-      "cite": "lsmtree1996"
+      "title": "Every derived store that carries an offset",
+      "sub": "Mohan's VLDB 1999 retrospective · the implementation list",
+      "year": 1999,
+      "prompt": "Name two things on Mohan's 1999 list of ARIES implementations that are not databases, and say what a Kafka consumer's committed offset is the same object as.",
+      "answer": "The NT file system and MQSeries, IBM's messaging and queuing product; Encina's recoverable file system counts too. A committed offset is a page-LSN — a derived store recording its own position in the log, so a restart replays exactly the suffix it is missing.",
+      "body": "The list runs past databases into a file system and a message queue, because the shape is not a database trick. Kafka makes the move once more and keeps the positions in a log of their own: __consumer_offsets, compacted to the latest value per key.",
+      "cite": "mohan1999"
     }
   ]
 }

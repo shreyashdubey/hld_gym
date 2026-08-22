@@ -6,7 +6,7 @@
 
 <h2>Requirements: what "monitoring" must promise (minutes 0–5)</h2>
 
-<p>Scope it out loud: "I'll build metric ingestion from customer hosts and services, dashboard queries, and alerting. Metrics only — logs and distributed tracing are separate products, and I'll actually use that separation as a design tool later. Out of scope: billing, the UI itself, anomaly detection. Fair?"</p>
+<p>Today's prompt is the dashboard you have promised at the end of every design in this book &mdash; a metrics and monitoring platform at Datadog or Prometheus scale. Scope it out loud: "I'll build metric ingestion from customer hosts and services, dashboard queries, and alerting. Metrics only — logs and distributed tracing are separate products, and I'll actually use that separation as a design tool later. Out of scope: billing, the UI itself, anomaly detection. Fair?"</p>
 
 <p>Functional: agents on customer machines push numeric measurements with names and labels; users query them for dashboards ("p99 latency for checkout, by region, last 6 hours"); users define alert rules that page a human when a condition holds.</p>
 
@@ -257,7 +257,7 @@
 
 <h2>The self-dependency rule: monitor from outside the blast radius (minutes 40–42)</h2>
 
-<p>Now the requirement I flagged in minute two. A monitoring platform that shares fate with what it monitors is a smoke detector wired to the house mains: it dies in exactly the fire it exists to announce. So the platform runs in its <strong>own failure domain</strong> — separate accounts, separate clusters, ideally separate regions from the monitored infrastructure; it must never depend on the customer's databases, queues, or service mesh. Internally the same razor applies one level down: the component that delivers pages depends on almost nothing — if every TSDB shard is dead, "evaluate stream, send page" must still work, and the final notification hop rides an independent third-party path, because a pager that depends on the platform it reports on has the same disease one layer deeper.</p>
+<p>Now the requirement I flagged in the scoping list. A monitoring platform that shares fate with what it monitors is a smoke detector wired to the house mains: it dies in exactly the fire it exists to announce. So the platform runs in its <strong>own failure domain</strong> — separate accounts, separate clusters, ideally separate regions from the monitored infrastructure; it must never depend on the customer's databases, queues, or service mesh. Internally the same razor applies one level down: the component that delivers pages depends on almost nothing — if every TSDB shard is dead, "evaluate stream, send page" must still work, and the final notification hop rides an independent third-party path, because a pager that depends on the platform it reports on has the same disease one layer deeper.</p>
 
 <p>The agent is the last line. When intake is unreachable, agents keep collecting and spool to their local disk buffer — say 30 minutes — because the customer's incident review will want the data measured <em>during</em> our outage. On reconnect, agents send the freshest points first (alerting needs <em>now</em>, not twenty minutes ago) and trickle the backlog behind them, rate-limited by intake so that 100K agents flushing simultaneously don't become the retry stampede of chapter 2.7 and kill the intake that just recovered.</p>
 

@@ -1,17 +1,15 @@
-<div class="box origin"><div class="box-tag">Berkeley, 1991</div>
-  <p class="origin-seam">Some file systems already had a log. None of them trusted it.</p>
+<div class="box origin"><div class="box-tag" data-cite="aries1992">San Jose, 1992</div>
+  <p class="origin-seam">After a crash, the disk was not the database.</p>
 
-  <p>The log was a scratchpad. Write the change there so a crash cannot leave the disk half-updated, then copy it to where the data really lived — a random-access structure, updated in place. Two writes per change.</p>
+  <p data-cite="aries1992">Pages reached disk whenever the buffer manager chose. Some held uncommitted changes. Others lacked changes from transactions that had committed and told the user so — commit forces the log, not the pages. Nothing on the page said which.</p>
 
-  <p>Mendel Rosenblum and John Ousterhout deleted the second write. In Sprite LFS, <span class="fact" data-cite="lfs1991">"there is no other structure on disk."</span> The index lives inside the log. The payoff: Sprite LFS could use <span class="fact" data-cite="lfs1991 lfstocs1992">70% of disk bandwidth</span> for writing, where Unix file systems typically managed <span class="fact" data-cite="lfs1991">5-10%</span>.</p>
+  <p>The obvious repair is selective redo: replay only what's missing. Mohan, Haderle, Lindsay, Pirahesh and Schwarz showed it cannot hold. Every page stores the log position of the last record applied to it: one log, thousands of pages, each at its own point. Skip a record and that number lies. <span class="fact" data-cite="aries1992">"By not repeating history, the page-LSN is no longer a true indicator of the current state of the page."</span> Undo then reverses an update the page never took.</p>
 
-  <p>Then the bill. You cannot punch a hole in the middle of a log, so they cut it into segments and ran a segment cleaner that rewrites the live data out of fragmented ones. Keeping free space, they wrote, <span class="fact" data-cite="lfs1991">"is the most difficult challenge in the design of a log-structured file system."</span></p>
+  <p>ARIES, their answer, stopped being clever. From the last checkpoint, redo everything in order, including work it knows must be undone — <span class="fact" data-cite="aries1992">"even the missing updates of the so-called loser transactions"</span> — then undo. Reading a record never consumes it; restart is itself restartable. That <span class="fact" data-cite="aries1992">"reestablishes the state of the database as of the time of the system failure."</span> The store is demoted: a stale view of a log prefix that carries the number saying which prefix. <span class="fact" data-cite="mohan1999">By 1999 it had reached DB2, NTFS and MQSeries</span>.</p>
 
-  <p>In <span class="fact" data-cite="seltzer1995">1995</span> Margo Seltzer ran BSD-LFS against the Fast File System on TPC-B. Without the cleaner LFS was <span class="fact" data-cite="seltzer1995">"approximately 50% better"</span> than FFS. With it, <span class="fact" data-cite="seltzer1995">"any performance advantage of LFS is already lost at a file system utilization of only 48%."</span> Afterward, <span data-cite="oustercritique">Ousterhout published a critique of the measurements.</span> <span data-cite="seltzerresponse">Seltzer published a response.</span></p>
-
-  <p>The idea won anyway; <span data-cite="lsmtree1996">LSM trees are named after it</span>. A store whose truth is a log must reclaim its own space, and that work is not a feature you add — it is the rent.</p>
+  <p>One thing no replay can rebuild: whatever an acknowledgement outran on its way to stable storage.</p>
 </div>
 
 <div class="feynman" data-key="p3c17-o1">
-  <p class="fey-prompt">Where does that rent land in a system you have to size? Write it first.</p>
+  <p class="fey-prompt">Your store is built by consuming a log; its disk copy is stale by an unknown amount. What must it write beside the data? Write it first.</p>
 </div>

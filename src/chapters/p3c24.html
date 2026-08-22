@@ -14,7 +14,7 @@
 <li><strong>Retrieval latency:</strong> under 100 ms p95 for the full retrieve-and-rerank stage. The LLM will take 1–3 seconds to write the answer; retrieval must not be the story.</li>
 <li><strong>Throughput:</strong> 5,000 retrievals/sec at peak across all tenants.</li>
 <li><strong>Freshness:</strong> a new or edited document is retrievable within 5 minutes.</li>
-<li><strong>Quality:</strong> measurable. Recall@10 ≥ 95% on a labeled evaluation set — and yes, I'm going to spend real time on how we measure that, because an unmeasured RAG system is a hallucination machine with extra steps.</li>
+<li><strong>Quality:</strong> measurable. Recall@10 ≥ 95% on a labeled evaluation set — and yes, I'm going to spend real time on how we measure that, because retrieval quality gates the model's honesty: hand a RAG system — retrieval-augmented generation, the model answering from documents we give it — the wrong paragraphs and it doesn't error, it composes a fluent, cited, <strong>wrong</strong> answer. Unmeasured, it's a hallucination machine with extra steps.</li>
 <li><strong>Isolation:</strong> tenant A's documents never appear in tenant B's results. Not "rarely." Never.</li>
 </ul>
 
@@ -115,7 +115,7 @@
 <h2>Deep dive 1: ANN — a billion vectors in ten milliseconds (minutes 20–31)</h2>
 
 <div class="box crux"><div class="box-tag">The crux</div>
-<p>This is the hard part the question was invented to probe. Exact nearest-neighbor search at 1B vectors is computationally impossible within our latency budget, so every real system approximates — and approximation drags you into a three-way tug-of-war: <strong>recall</strong> (what fraction of the true nearest neighbors you actually find) vs <strong>latency</strong> (how much of the index you can afford to touch per query) vs <strong>memory</strong> (what the index costs to hold). Pull any corner and the other two move. Every index family — graphs, clusters, disk-based — is just a different stance in this triangle, and the senior move is to name the triangle, pick a stance for <em>these</em> numbers, and say what it costs.</p>
+<p>This is the hard part the interview question is invented to probe. Exact nearest-neighbor search at 1B vectors is computationally impossible within our latency budget, so every real system approximates — and approximation drags you into a three-way tug-of-war: <strong>recall</strong> (what fraction of the true nearest neighbors you actually find) vs <strong>latency</strong> (how much of the index you can afford to touch per query) vs <strong>memory</strong> (what the index costs to hold). Pull any corner and the other two move. Every index family — graphs, clusters, disk-based — is just a different stance in this triangle, and the senior move is to name the triangle, pick a stance for <em>these</em> numbers, and say what it costs.</p>
 </div>
 
 <p><strong>Option one: HNSW</strong> — Hierarchical Navigable Small World graphs, the index inside most modern vector databases. Every vector is a node connected to a few dozen near neighbors. Search greedily walks the graph: from an entry point, repeatedly hop to whichever neighbor is closest to the query, until no neighbor improves. The "hierarchical" part fixes greedy search's slowness: stack multiple layers, where the top layer holds a tiny sample of nodes with long-range links and each lower layer gets denser, down to layer 0 which holds everything.</p>

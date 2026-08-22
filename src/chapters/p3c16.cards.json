@@ -45,6 +45,28 @@
       "body": "Scaling Memcache at Facebook, NSDI '13: \"As is, memcached provides no server-to-server coordination; it is an in-memory hash table running on a single server.\" So configuration, aggregation and routing all had to be built outside the server — in the client library, or a proxy. The cache never learns it is a cluster.",
       "answer": "No server-to-server coordination; the server stays an in-memory hash table on one machine. Routing and the hash ring live in the client library or a proxy such as mcrouter, never in the cache.",
       "cite": "nishtala2013"
+    },
+    {
+      "id": "p3c16-c5",
+      "suit": "incident",
+      "title": "The repair loop that took the site off",
+      "sub": "23 September 2010 · Facebook",
+      "year": 2010,
+      "prompt": "On 23 September 2010 Facebook's automated repairer found an invalid configuration value in the cache and did exactly what it was built to do. Who wrote the postmortem, why did correcting the bad value fail to end the outage, and what finally stopped it?",
+      "body": "Every client saw the invalid value and tried to fix it — each fix a database query, \"hundreds of thousands of queries a second.\" Errors from the drowning cluster were read as fresh invalidity, so clients deleted the key and asked again. Robert Johnson: \"We had entered a feedback loop that didn't allow the databases to recover.\"",
+      "answer": "Robert Johnson. The repair path ran through the database it was already drowning: query errors were interpreted as invalid values, so clients deleted the cache key and re-queried — self-sustaining even after the bad value was fixed. It ended only by stopping all traffic to the cluster, which meant turning the site off; about 2.5 hours down.",
+      "cite": "johnson2010"
+    },
+    {
+      "id": "p3c16-c6",
+      "suit": "artifact",
+      "title": "The to-do slide that asked for a hash ring",
+      "sub": "November 2004 · Danga Interactive",
+      "year": 2004,
+      "prompt": "LiveJournal's client picked a server with CRC32(key) % num_buckets. Which November 2004 deck can you open to find that limitation already on its author's own wish list, in what words, and what did that cache hold at the time?",
+      "body": "\"Inside LiveJournal's Backend\", Fitzpatrick and Phillips, November 2004: 28 instances on ten hosts, none dedicated, 30 GB cached, 90-93% hit rate, ~100,000 queries/second at peaks. The future-work slide already asks to \"grow/shrink memcached farm at run-time\" — because num_buckets is baked into every key's address.",
+      "answer": "\"Inside LiveJournal's Backend\" (Fitzpatrick and Phillips, Danga Interactive, November 2004). Its future-work slide asks to \"grow/shrink memcached farm at run-time\". The cache was 28 instances on ten non-dedicated hosts, 30 GB, 90-93% hit rate, ~100,000 queries/second at peaks.",
+      "cite": "danga2004backend"
     }
   ]
 }

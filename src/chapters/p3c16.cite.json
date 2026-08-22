@@ -95,6 +95,25 @@
         "'If a memcached server fails entirely, hit rates in the gutter pool generally exceed 35% in under 4 minutes and often approach 50%.'",
         "'Gutter accounts for approximately 1% of the memcached servers'"
       ]
+    },
+    "johnson2010": {
+      "type": "postmortem",
+      "title": "More Details on Today’s Outage",
+      "author": "Robert Johnson",
+      "year": 2010,
+      "date": "2010-09-23",
+      "url": "https://engineering.fb.com/2010/09/23/uncategorized/more-details-on-today-s-outage/",
+      "checked": "2026-08-22",
+      "quote": "To make matters worse, every time a client got an error attempting to query one of the databases it interpreted it as an invalid value, and deleted the corresponding cache key. This meant that even after the original problem had been fixed, the stream of queries continued. As long as the databases failed to service some of the requests, they were causing even more requests to themselves. We had entered a feedback loop that didn’t allow the databases to recover.",
+      "supports": [
+        "byline block reads 'POSTED ON SEPTEMBER 23, 2010 TO Uncategorized' / 'More Details on Today’s Outage' / 'By Robert Johnson'; first-party Facebook (now Meta) engineering post, migrated from the original facebook.com note",
+        "'Early today Facebook was down or unreachable for many of you for approximately 2.5 hours. This is the worst outage we’ve had in over four years'",
+        "'The intent of the automated system is to check for configuration values that are invalid in the cache and replace them with updated values from the persistent store. This works well for a transient problem with the cache, but it doesn’t work when the persistent store is invalid.'",
+        "'Today we made a change to the persistent copy of a configuration value that was interpreted as invalid. This meant that every single client saw the invalid value and attempted to fix it. Because the fix involves making a query to a cluster of databases, that cluster was quickly overwhelmed by hundreds of thousands of queries a second.'",
+        "'The way to stop the feedback cycle was quite painful – we had to stop all traffic to this database cluster, which meant turning off the site.'",
+        "'for now we’ve turned off the system that attempts to correct configuration values. We’re exploring new designs for this configuration system following design patterns of other systems at Facebook that deal more gracefully with feedback loops and transient spikes.'",
+        "the post is the whole of the public record: it names no dollar figure, no query count for the recovery, and no date for restoring the config system"
+      ]
     }
   },
   "unverified": [
@@ -106,6 +125,9 @@
     "Who performed the Perl-to-C rewrite. The first commit's memcached.c is authored by Fitzpatrick; Vorobey's contributions in the repository begin the following day.",
     "How long glibc malloc survived in production before the slab allocator replaced it. Fitzpatrick's 2004 accounts give 'about a week' (Linux Journal) and 'glibc malloc died after 7~8 days' (danga deck), but neither dates that window, and the repository leaves only three days between the first commit (27 May 2003) and the slab allocator (30 May 2003). No duration appears in the prose or on a card.",
     "That LiveJournal could not afford more database hardware in 2003. Fitzpatrick states the opposite - 'Yes, I could've replaced all our databases with 64-bit machines with much more memory, but recall that I'm stubborn and frugal' - so the refusal is framed as a choice, not a budget.",
-    "That the cache was free. The Nov 2004 deck gives 'none dedicated, whatever has extra memory', but the Linux Journal article says they 'buy extra memory for any old machine that can take it', so the prose claims no new machines, not zero cost."
+    "That the cache was free. The Nov 2004 deck gives 'none dedicated, whatever has extra memory', but the Linux Journal article says they 'buy extra memory for any old machine that can take it', so the prose claims no new machines, not zero cost.",
+    "Any monetary cost of the 23 September 2010 Facebook outage. Johnson's postmortem gives duration only - 'approximately 2.5 hours' - and no revenue, traffic or dollar figure, so the prose prices the outage in downtime and in the site being switched off, not in currency.",
+    "Which cache tier held the invalid configuration value in September 2010, and whether it was memcached. Johnson writes only 'the cache' and 'a cluster of databases'; no primary source located names the product, so the prose does not either.",
+    "That the 2010 feedback loop caused Facebook's lease mechanism. Nishtala 2013 describes leases without dating them or referring to this incident, so no causal chain is drawn between the cold open and the in-chapter war story."
   ]
 }

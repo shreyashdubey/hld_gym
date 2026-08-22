@@ -1,17 +1,17 @@
 <div class="box origin"><div class="box-tag">RBS Group, June 2012</div>
 <p class="origin-seam">A bank's day ends when the overnight batch finishes, not when the branches close.</p>
 
-<p>The batch applies the day's withdrawals, deposits, clearing and standing orders <span class="fact" data-cite="fca2014">"in the correct sequence"</span>, and is done only when every balance is final. On <span class="fact" data-cite="fca2014">Sunday 17 June</span> Technology Services, the RBS Group's central IT function, upgraded the scheduler behind NatWest and Ulster Bank from <span class="fact" data-cite="fca2014">Version 1 to Version 2A</span>. Monday night's run limped. Tuesday they rolled it back — and nobody had tested rolling back 2A. They had tested rolling back 2.</p>
+<p>One mainframe scheduler ran that batch for NatWest and Ulster Bank. It queued each job and ensured <span class="fact" data-cite="fca2014">"each job is processed in the correct sequence."</span> Nothing in it ever had to decide <em>which</em> machine fired a due job: there was only one.</p>
 
-<p>Jobs stopped appearing: <span class="fact" data-cite="fca2014">"a significant number of jobs failed to appear in the batch queues and the unprocessed batch jobs began to multiply."</span></p>
+<p>On Tuesday <span class="fact" data-cite="fca2014">19 June</span> Technology Services <span class="fact" data-cite="fca2014">"backed out the software upgrade"</span> on that scheduler — and <span class="fact" data-cite="fca2014 pra2014">"a significant number of jobs failed to appear in the batch queues"</span>.</p>
 
-<p>There was no replay button. Staff re-loaded jobs by hand, in order, because out of order gives wrong balances and wrong interest. By <span class="fact" data-cite="fca2014">21 June</span> Ulster Bank was over a day behind, so the next night's batch began before the current one finished, colliding in the same queues.</p>
+<p>There was no replay button. Support staff <span class="fact" data-cite="fca2014">"focused on manually re-loading jobs into the batch queues"</span>: by hand, in sequence, because out of order gives wrong balances and wrong interest — while every midnight stacked a fresh batch on the one they had not cleared.</p>
 
-<p><span class="fact" data-cite="fca2014">6.5 million</span> customers. Missed mortgages, unmet payrolls, cards declined abroad. <span class="fact" data-cite="fca2014">£70.3 million</span> in redress, <span class="fact" data-cite="fca2014">£42 million</span> from the FCA, <span class="fact" data-cite="pra2014">£14 million</span> from the PRA. An internal audit had named the risk of a batch scheduler failure <span class="fact" data-cite="fca2014">twenty-two months earlier</span>.</p>
+<p><span class="fact" data-cite="fca2014">6.5 million</span> customers found out what a hand-replayed batch leaves behind. The banks <span class="fact" data-cite="fca2014">"had not processed their standing orders on time"</span>, had applied <span class="fact" data-cite="fca2014">"incorrect credit and debit interest"</span>, and had left <span class="fact" data-cite="fca2014">"duplicated entries on their statements"</span>. <span class="fact" data-cite="fca2014">£70.3 million</span> went back in redress.</p>
 
-<p>Ulster Bank's scheduler returned to full functionality on <span class="fact" data-cite="fca2014">10 July</span>. Nothing waited for them: every midnight stacked a fresh batch on the one they had not cleared.</p>
+<p>One statement could carry both halves: a payment that never went out, and lower down the same payment made twice. A re-loaded job carried nothing that said it was not the job that had already run.</p>
 </div>
 
 <div class="feynman" data-key="p3c11-o1">
-<p class="fey-prompt">You are the candidate: "design a job scheduler — cron, but distributed." Which failure would you name first? Write it before you read on.</p>
+<p class="fey-prompt">You are the candidate: "design a job scheduler — cron, but distributed. Millions of jobs, a fleet of machines." Zero fires and two fires just landed in one account. Which should your design make impossible, and which merely survivable? Write it first.</p>
 </div>

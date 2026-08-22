@@ -1,17 +1,15 @@
-<div class="box origin"><div class="box-tag">LiveJournal, 2003</div>
-<p class="origin-seam">The databases were the emergency. The cure was for sale.</p>
+<div class="box origin"><div class="box-tag">Facebook, 2010</div>
+<p class="origin-seam">The cache had a repair system. The repair ran through the database.</p>
 
-<p>The fix was 64-bit database machines with more memory. Brad Fitzpatrick would not buy them: <span class="fact" data-cite="fitzpatrick2004lj">"recall that I'm stubborn and frugal."</span> What he had free was idle RAM across <span class="fact" data-cite="fitzpatrick2004lj">40+ Web nodes</span>, and, <span class="fact" data-cite="fitzpatrick2004lj">"sick of how painful it is to cache efficiently in mod_perl applications"</span>, he spent that instead.</p>
+<p>An automated system watched the cache for invalid configuration values and refetched them from the persistent store. Robert Johnson's postmortem names the assumption: it <span class="fact" data-cite="johnson2010">"works well for a transient problem with the cache, but it doesn't work when the persistent store is invalid."</span></p>
 
-<p>On <span class="fact" data-cite="fitzpatrick2003commit">27 May 2003</span> he committed <span class="fact" data-cite="fitzpatrick2003commit">1,195 lines</span> of C under the message <span class="fact" data-cite="fitzpatrick2003commit">"committing memcached"</span>. Its README states the design in one clause: <span class="fact" data-cite="fitzpatrick2003commit">"it should never go to disk, or you've lost the whole point of it."</span></p>
+<p>On <span class="fact" data-cite="johnson2010">23 September 2010</span> a change made the stored copy of one value read as invalid. Now <span class="fact" data-cite="johnson2010">"every single client saw the invalid value and attempted to fix it"</span> — and every fix was a database query. The cluster took <span class="fact" data-cite="johnson2010">"hundreds of thousands of queries a second."</span></p>
 
-<p>Every absence follows: no durability, no replication, no auth. Three days later Anatoly Vorobey swapped in power-of-two slab classes and <span class="fact" data-cite="vorobey2003slab">"always allocate slabs of 1MB"</span> — the page your cache still fights over. And no membership: <span class="fact" data-cite="fitzpatrick2004lj">"Each Memcached instance is totally independent, and does not communicate with the others."</span> Nothing knows the cluster, so the client hashes the key <span class="fact" data-cite="danga2004backend"><code>% num_buckets</code></span>.</p>
+<p>Then the loop closed. A client whose query errored read that as one more invalid value and <span class="fact" data-cite="johnson2010">"deleted the corresponding cache key"</span> — so it missed again, and queried again. Refilling <em>was</em> the load, and it fed itself: <span class="fact" data-cite="johnson2010">"even after the original problem had been fixed, the stream of queries continued."</span></p>
 
-<p>By <span class="fact" data-cite="danga2004backend">November 2004</span> that was LiveJournal's whole cache: <span class="fact" data-cite="danga2004backend">28 instances</span> on <span class="fact" data-cite="danga2004backend">ten hosts, none dedicated</span>, holding <span class="fact" data-cite="danga2004backend">30 GB</span> at a <span class="fact" data-cite="danga2004backend">90-93% hit rate</span>, <span class="fact" data-cite="danga2004backend">~100,000 queries/second at peaks</span>. It cost no new machines.</p>
-
-<p>And <code>num_buckets</code> could not change. His own <span class="fact" data-cite="danga2004backend">2004</span> to-do slide already asked to <span class="fact" data-cite="danga2004backend">"grow/shrink memcached farm at run-time"</span> — adding one box rehashes nearly every key, and the miss storm lands on the databases the cache exists to spare.</p>
+<p>A miss is supposed to cost one database read. It costs one read only while the database can still answer. Under that line a cold cache refills through the thing its own misses buried, so time stops helping; the outage outlives its cause. Facebook was dark about <span class="fact" data-cite="johnson2010">2.5 hours</span>. The only exit was removing the traffic: <span class="fact" data-cite="johnson2010">"we had to stop all traffic to this database cluster, which meant turning off the site."</span></p>
 </div>
 
 <div class="feynman" data-key="p3c16-o1">
-<p class="fey-prompt">You build the cache now — no Redis, no Memcached. Which 2003 deletion would you keep, and which would you pay to undo?</p>
+<p class="fey-prompt">You build the cache now — no Redis, no Memcached, clock running. What has to be true of the database behind you before a lost key is "just a miss"?</p>
 </div>

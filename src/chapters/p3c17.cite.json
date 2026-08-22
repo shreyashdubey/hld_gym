@@ -1,137 +1,76 @@
 {
   "chapter": "p3c17",
   "sources": {
-    "lfs1991": {
+    "aries1992": {
       "type": "paper",
-      "title": "The Design and Implementation of a Log-Structured File System",
-      "author": "Mendel Rosenblum and John K. Ousterhout",
-      "year": 1991,
-      "venue": "Proceedings of the 13th ACM Symposium on Operating Systems Principles (SOSP '91). Camera-ready PDF, page footers dated July 24, 1991.",
-      "url": "https://people.eecs.berkeley.edu/~brewer/cs262/LFS.pdf",
-      "checked": "2026-08-22",
-      "quote": "a log-structured file system stores data permanently in the log: there is no other structure on disk.",
-      "additional_quotes": [
-        "Even when the overhead for cleaning is included, Sprite LFS can use 70% of the disk bandwidth for writing, whereas Unix file systems typically can use only 5-10%.",
-        "For a log-structured file system to operate efficiently, it must ensure that there are always large extents of free space available for writing new data. This is the most difficult challenge in the design of a log-structured file system.",
-        "In this paper we present a solution based on large extents called segments, where a segment cleaner process continually regenerates empty segments by compressing the live data from heavily fragmented segments.",
-        "This paper will appear in the Proceedings of the 13th ACM Symposium on Operating Systems Principles and the February 1992 ACM Transactions on Computer Systems.",
-        "The process of copying live data out of a segment is called segment cleaning.",
-        "Sprite LFS currently uses segment sizes of either 512 kilobytes or one megabyte.",
-        "Mendel Rosenblum and John K. Ousterhout / Electrical Engineering and Computer Sciences, Computer Science Division / University of California / Berkeley, CA 94720",
-        "In designing a log-structured file system we decided to focus on the efficiency of small-file accesses, and leave it to hardware designers to improve bandwidth for large-file accesses.",
-        "The notion of logging is not new, and a number of recent file systems have incorporated a log as an auxiliary structure to speed up writes and crash recovery[2, 3]. However, these other systems use the log only for temporary storage; the permanent home for information is in a traditional random-access storage structure on disk."
-      ],
-      "supports": [
-        "the log is the only on-disk structure, not a recovery aid",
-        "70% of disk bandwidth for writing against 5-10% for Unix file systems",
-        "free space is the hardest problem in the design",
-        "segments and the segment cleaner",
-        "SOSP '91 venue, and the February 1992 TOCS reprint",
-        "Sprite LFS was aimed at small-file office and engineering workloads, not transaction processing",
-        "some, not all, contemporary file systems kept a log, and only as an auxiliary structure"
-      ]
-    },
-    "lfstocs1992": {
-      "type": "paper",
-      "title": "The Design and Implementation of a Log-Structured File System (ACM Transactions on Computer Systems 10(1), February 1992, pages 26-52)",
-      "author": "Mendel Rosenblum and John K. Ousterhout",
+      "title": "ARIES: A Transaction Recovery Method Supporting Fine-Granularity Locking and Partial Rollbacks Using Write-Ahead Logging",
+      "author": "C. Mohan (IBM Almaden Research Center), Don Haderle (IBM Santa Teresa Laboratory), Bruce Lindsay, Hamid Pirahesh and Peter Schwarz (IBM Almaden Research Center)",
       "year": 1992,
-      "venue": "ACM Transactions on Computer Systems, Vol. 10, No. 1, February 1992, Pages 26-52",
-      "url": "https://web.stanford.edu/~ouster/cgi-bin/papers/lfs.pdf",
+      "venue": "ACM Transactions on Database Systems, Vol. 17, No. 1, March 1992, Pages 94-162. Page-range line read off the PDF's own first page, not an index.",
+      "url": "https://cs.stanford.edu/people/chrismre/cs345/rl/aries.pdf",
       "checked": "2026-08-22",
-      "quote": "These write cost figures imply that the cleaning overhead limits the long-term write performance to about 70% of the maximum sequential write bandwidth.",
+      "quote": "We introduce the paradigm of repeating history to redo all missing updates before performing the rollbacks of the loser transactions during restart after a system failure.",
       "additional_quotes": [
-        "The log is the only structure on disk; it contains indexing information so that files can be read back from the log efficiently.",
-        "Even when the overhead for cleaning is included, Sprite LFS can use 70% of the disk bandwidth for writing, whereas Unix file systems typically can use only 5 - 10%.",
-        "Even though the overall disk capacity utilizations ranged from 11 - 75%, more than half of the segments cleaned were totally empty."
+        "ARIES uses a log sequence number in each page to correlate the state of a page with respect to logged updates of that page.",
+        "Whenever a page is updated and a log record is written, the LSN of the log record is placed in the page-LSN field of the updated page.",
+        "Transaction status is also stored in the log and no transaction can be considered complete until its committed status and all its log data are safely recorded on stable storage by forcing the log up to the transaction's commit log record's LSN.",
+        "This allows a restart recovery procedure to recover any transactions that completed successfully but whose updated pages were not physically written to nonvolatile storage before the failure of the system.",
+        "The WAL protocol asserts that the log records representing changes to some data must already be on stable storage before the changed data is allowed to replace the previous version of that data on nonvolatile storage.",
+        "During restart recovery (see Figure 6), ARIES first scans the log, starting from the first record of the last checkpoint, up to the end of the log.",
+        "This is done for the updates of all transactions, including the updates of those transactions that had neither committed nor reached the in-doubt state of two-phase commit by the time of the system failure (i.e., even the missing updates of the so-called loser transactions are redone).",
+        "This essentially reestablishes the state of the database as of the time of the system failure.",
+        "A log record's update is redone if the affected page's page-LSN is less than the log record's LSN.",
+        "No logging is performed when updates are redone.",
+        "By not repeating history, the page-LSN is no longer a true indicator of the current state of the page.",
+        "causes the undo pass to perform the undo of the former update even though it is not present in the page",
+        "Reversing the order of the selective redo and the undo passes will not solve the problem either.",
+        "a bounded amount of logging is ensured during rollbacks even in the face of repeated failures during restart or of nested rollbacks",
+        "ARIES (Algorithm for Recovery and Isolation Exploiting Semantics) [the scanned TODS PDF OCRs \"Recovery\" as \"Recouery\"; singular \"Algorithm\" is the paper's own]",
+        "ARIES has been implemented, to varying degrees, in IBM's OS/2TM Extended Edition Database Manager, DB2, Workstation Data Save Facility/VM, Starburst and QuickSilver, and in the University of Wisconsin's EXODUS and Gamma database machine.",
+        "ACM Transactions on Database Systems, Vol. 17, No. 1, March 1992."
       ],
       "supports": [
-        "the 70% figure is measured on production Sprite LFS file systems, not only simulated",
-        "the journal version of the same paper"
+        "at crash time a committed transaction's changes may exist only in the log, because commit forces the log but does not force the pages",
+        "every page stores the LSN of the last log record applied to it — a position in the log held by the derived store",
+        "redo is conditional on page-LSN < record LSN, which makes replay idempotent and writes no log",
+        "selective redo breaks under fine-granularity locking: skipping a record makes the page-LSN a false statement about the page, and undo then reverses an update the page never received",
+        "repeating history redoes even the losers' updates, and that reestablishes the pre-crash state",
+        "restart is itself restartable — repeated failures during restart are handled",
+        "the WAL protocol, and the March 1992 TODS venue and page range",
+        "the 1992 paper does not claim DB2 repeated history: §10.1 contrasts 'systems like DB2 that do not repeat history but perform selective redo', while the abstract lists DB2 among implementations 'to varying degrees'"
       ]
     },
-    "seltzer1995": {
+    "mohan1999": {
       "type": "paper",
-      "title": "File System Logging Versus Clustering: A Performance Comparison",
-      "author": "Margo Seltzer, Keith A. Smith, Hari Balakrishnan, Jacqueline Chang, Sara McMains, Venkata Padmanabhan",
-      "year": 1995,
-      "venue": "USENIX 1995 Technical Conference, New Orleans, LA, January 1995 — the venue is not on the PDF's front matter; the paper's own reference [2] names it, and Ousterhout's critique calls it \"the Winter 1995 USENIX Conference\".",
-      "url": "https://www.seltzer.com/assets/publications/File-System-Logging-versus-Clustering-A-Performance-Comparison.pdf",
+      "title": "Repeating History Beyond ARIES",
+      "author": "C. Mohan, IBM Almaden Research Center",
+      "year": 1999,
+      "venue": "Proceedings of the 25th VLDB Conference, Edinburgh, Scotland, 1999",
+      "url": "https://www.vldb.org/conf/1999/P1.pdf",
       "checked": "2026-08-22",
-      "quote": "The good news is that this performance is comparable to FFS, but the unfortunate result is that any performance advantage of LFS is already lost at a file system utilization of only 48%.",
+      "quote": "In ARIES, the concept of repeating history turned out to be an important paradigm.",
       "additional_quotes": [
-        "In the absence of the cleaner, LFS provides approximately 50% better performance than FFS.",
-        "The introduction of the cleaner changes the results substantially. At a file system utilization of 48%, LFS performance is comparable to FFS, yielding a performance degradation of 34% due to the cleaner.",
-        "We examine LFS cleaner performance in a transaction processing environment and find that cleaner overhead reduces LFS performance by more than 33% when the disk is 50% full.",
-        "Cleaning overhead can degrade LFS performance by more than 34% in a transaction processing environment.",
-        "The TPC-B benchmark simulates a check-cashing application [13].",
-        "Margo Seltzer, Keith A. Smith / Harvard University / Hari Balakrishnan, Jacqueline Chang, Sara McMains, Venkata Padmanabhan / University of California, Berkeley",
-        "Figure 7. Transaction processing performance. While LFS can potentially provide dramatically improved performance, when the cleaner runs, its performance is comparable to FFS."
+        "Many of the algorithms summarized in this paper have been implemented to varying degrees in numerous products and research prototypes like Starburst extensible DBMS [HCLMW90], OS/2 Extended Edition Database Manager [ChMy88], DB2/390 [JMNT97], DB2 UDB for Unix, Windows and OS/2, Encina transaction processing monitor and recoverable file system, Microsoft SQL Server and NT file system, Gamma database machine [DGSBH90], EXODUS extensible DBMS [FZTCD92], Shore persistent object system [CDFHM94], Paradise GIS system, PREDATOR object-relational DBMS, MQSeries transactional messaging and queuing product [MoDi94], SQL/DS [ChGY81], ADSTAR Distributed Storage Manager (ADSM) [CaRH95], Lotus Domino/Notes R5 [Mohan99], QuickSilver distributed operating system [CMSW93], and VM Shared File System [StNC91].",
+        "Commercially, the WAL approach has been much more widely adopted than the shadow-page technique.",
+        "we had to be courageous to try to justify spending time on examining not only the paltry documentation but also the code of System R, SQL/DS, DB2/MVS and even IMS to try to understand everything about how their CC&R worked",
+        "Finding significant design bugs in System R ten years after the release of the product version of it (SQL/DS) was not considered, by some colleagues, to be a worthwhile exercise!",
+        "Since most of us were not IBMers during the System R days, we were able to look at the problems with a fresh perspective.",
+        "ARIES has been covered in many database textbooks and tutorials",
+        "the invention of the ARIES (Algorithms for Recovery and Isolation Exploiting Semantics) family of CC&R algorithms"
       ],
       "supports": [
-        "without the cleaner LFS beat FFS by approximately 50%",
-        "with the cleaner, at 48% utilization, a 34% degradation and the advantage gone",
-        "the workload was TPC-B on 4.4BSD-LFS against the 4.4BSD Fast File System"
-      ]
-    },
-    "oustercritique": {
-      "type": "blog",
-      "title": "A Critique of Seltzer's LFS Measurements",
-      "author": "John Ousterhout",
-      "year": 1995,
-      "url": "https://www.seltzer.com/assets/publications/ouster_critique2.html",
-      "checked": "2026-08-22",
-      "confidence": "secondary",
-      "quote": "Thus, of the three main results sections (Sections 3, 4, and 5) only the results in Section 3 are completely reliable;  the others should be taken with a grain of salt.",
-      "additional_quotes": [
-        "The paper \"File System Logging Versus Clustering: A Performance Comparison\", by Margo Seltzer et al., appears in the Winter 1995 USENIX Conference.",
-        "The measurements in Section 4 are counter-intuitive, and the back-of-the-envelope calculations used to support those measurements are incorrect. At present neither Seltzer nor I can explain the measurements."
-      ],
-      "supports": [
-        "Ousterhout published a public critique of the measurements"
-      ]
-    },
-    "seltzerresponse": {
-      "type": "blog",
-      "title": "A Response to Ousterhout's Critique of LFS Measurements",
-      "author": "Margo Seltzer et al.",
-      "year": 1995,
-      "url": "https://www.seltzer.com/assets/publications/ouster_critique1_rebuttal.html",
-      "checked": "2026-08-22",
-      "confidence": "secondary",
-      "quote": "John Ousterhout has posted a web page questioning measurements in the 1995 Usenix paper Logging versus Clustering: A Performance Evaluation. This page responds to the issues raised by Ousterhout.",
-      "additional_quotes": [
-        "To date, we are aware of no technical inaccuracies in the paper.",
-        "The simulated results presented in Figure 4 of the TOCS paper are for the greedy cleaning algorithm.  This is not the cleaning algorithm implemented in either Sprite-LFS or BSD-LFS"
-      ],
-      "supports": [
-        "Seltzer published a response; each page disputes the other's reading and neither concedes"
-      ]
-    },
-    "lsmtree1996": {
-      "type": "paper",
-      "title": "The Log-Structured Merge-Tree (LSM-Tree)",
-      "author": "Patrick O'Neil, Edward Cheng, Dieter Gawlick, Elizabeth O'Neil",
-      "year": 1996,
-      "venue": "Acta Informatica 33(4), June 1996, pages 351-385 (Crossref/publisher metadata). The PDF read is the preprint, headed \"To be published: Acta Informatica\".",
-      "url": "https://www.cs.umb.edu/~poneil/lsmtree.pdf",
-      "checked": "2026-08-22",
-      "quote": "The idea of always writing multi-page blocks to new locations was inspired by the Log-Structured File System devised by Rosenblum and Ousterhout [23], from which the Log-Structured Merge-tree takes its name.",
-      "additional_quotes": [
-        "In the Log-Structured File System, the reuse of old blocks involves significant I/O because blocks are typically only partially freed up, so reuse requires a block read and block write. In the LSM-Tree, blocks are totally freed up on the trailing edge of the rolling merge, so no extra I/O is involved."
-      ],
-      "supports": [
-        "LSM trees take their name and their write-to-new-locations idea from LFS",
-        "the LSM authors name LFS's reclamation cost as the thing they route around"
+        "the shipped list reaches past databases: Microsoft SQL Server and the NT file system, Encina's recoverable file system, MQSeries",
+        "WAL beat shadow paging commercially",
+        "before ARIES the group was reading the code of System R, SQL/DS, DB2/MVS and IMS, and found design bugs in System R ten years after SQL/DS shipped",
+        "the 1999 spelling of the acronym is plural, Algorithms, where the 1992 paper's is singular"
       ]
     }
   },
   "unverified": [
-    "The publication dates of the two web pages in the exchange. Neither 'A Critique of Seltzer's LFS Measurements' nor 'A Response to Ousterhout's Critique of LFS Measurements' carries a date; both are dated 1995 here from the paper they argue about. The archived critique gives Ousterhout's address as john.ousterhout@scriptics.com, and Scriptics postdates 1995, so the copy that survives was revised after the exchange.",
-    "That the argument was never formally settled. Both pages exist and neither concedes, but no source read here says the question was closed.",
-    "Whether Sprite LFS or BSD-LFS was ever the default file system of a shipped release, and what happened to BSD-LFS maintenance afterwards.",
-    "Any dollar figure. None of the sources price the outcome; the cost was the design losing the workload it was aimed at.",
-    "Keith Bostic's role. He co-authored the 1993 BSD-LFS paper cited as [10] by Seltzer 1995, but that paper was not opened here, so he is not named in the story.",
-    "Whether cleaning ever got cheaper after 1995. Later work attacks exactly that — Seltzer 1995's own reference [2] is \"Heuristic Cleaning Algorithms in LFS\" — and no source read here settles it, so the story claims only that a log-structured store must pay for its own reclamation, not that the price never fell."
+    "Any dollar figure. Neither source prices a recovery bug, an outage or the engineering effort; the consequence these papers record is adoption, not money, and no cost is claimed in the prose.",
+    "The exact date on which the selective-redo flaw was found, and whether it ever corrupted a customer database in the field. Mohan 1999 says design bugs were found in System R ten years after SQL/DS shipped, but names no incident and no date, so the story treats the Figure 16 scenario as an argument in the paper, not as a reported outage.",
+    "Which release of DB2 first shipped ARIES, and in what year. The 1992 paper lists DB2 among implementations 'to varying degrees' yet §10.1 of the same paper contrasts 'systems like DB2 that do not repeat history but perform selective redo'; Mohan 1999 lists DB2/390 and DB2 UDB but gives no version-and-date. The prose therefore dates the DB2/NTFS/MQSeries list to the 1999 retrospective and claims nothing about 1992-era DB2.",
+    "Whether Microsoft's NTFS and SQL Server implementations were derived from the ARIES papers or arrived at independently. Mohan 1999 lists them as implementations of algorithms summarised in his paper; no Microsoft source was opened here. The prose names only what the 1999 list holds and no longer names SQL Server.",
+    "That Kafka's designers took anything from ARIES. The page-LSN / consumer-offset correspondence in card c4 is a structural identity the reader can check, not a claimed line of influence, and no source read here connects the two."
   ]
 }
