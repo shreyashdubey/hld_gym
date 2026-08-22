@@ -17805,6 +17805,11 @@ POST /v1/batch  {requests[]} → job_id            (the cheap tier)</code></pre>
 
 const TOC = JSON.parse(document.getElementById('toc-data').textContent);
 const QUIZ = JSON.parse(document.getElementById('quiz-data').textContent); // {chapterId: [items]}
+const CARDS = JSON.parse(document.getElementById('cards-data').textContent); // {chapterId: [cards]}
+/* One engine, two compiled outputs. build.py stamps the mode onto <body>; the
+   book output ships an empty CARDS and no data-origin templates, so every
+   origins branch below is dead code there rather than a second code path. */
+const ORIGINS = document.body.dataset.mode === 'origins';
 
 /* ---------- state ---------- */
 const KEY = 'hldgym_v1';
@@ -17860,6 +17865,8 @@ TOC.parts.forEach(p => p.chapters.forEach((c, i) => CHAPTERS.push({ ...c, part: 
 const chById = id => CHAPTERS.find(c => c.id === id);
 const isReady = id => !!document.querySelector(`template[data-ch="${id}"]`);
 const chQuiz = id => QUIZ[id] || [];
+const hasOrigin = id => ORIGINS && !!document.querySelector(`template[data-origin="${id}"]`);
+const chCards = id => (ORIGINS && CARDS[id]) || [];
 const mastered = id => (S.levels[id] || {})[3] >= 80;
 
 /* ---------- xp, rank, streak ---------- */
@@ -18457,6 +18464,18 @@ function initDiagrams(root) {
   });
 }
 
+/* The style guide defines a cold open as the paragraphs before the first <h2>.
+   That makes the swap mechanical: drop everything up to the first heading, put
+   the origin story there instead. A chapter with no .origin.html is untouched,
+   which is why partial coverage is always shippable. */
+function swapColdOpen(body, id) {
+  const tpl = document.querySelector(`template[data-origin="${id}"]`);
+  if (!tpl) return;
+  const first = body.querySelector('h2');
+  while (body.firstChild && body.firstChild !== first) body.removeChild(body.firstChild);
+  body.insertBefore(tpl.content.cloneNode(true), first);
+}
+
 function renderChapter(id) {
   const c = chById(id);
   const tpl = document.querySelector(`template[data-ch="${id}"]`);
@@ -18476,6 +18495,7 @@ function renderChapter(id) {
   </div>`;
   const body = VIEW.querySelector('.ch-body');
   body.appendChild(tpl.content.cloneNode(true));
+  if (ORIGINS) swapColdOpen(body, id);
   initDiagrams(body);
 
   // feynman blocks

@@ -70,8 +70,10 @@ def test_no_unreplaced_placeholders():
 def test_origin_fragment_reaches_origins_only():
     book = (ROOT / "dist" / "book" / "index.html").read_text()
     origins = (ROOT / "dist" / "origins" / "index.html").read_text()
-    assert 'data-origin="p2c03"' in origins, "origin fragment missing from /origins"
-    assert 'data-origin="' not in book, "origin fragment leaked into /book"
+    # match the emitted element, not the bare attribute: app.js ships in both
+    # outputs and its `template[data-origin="..."]` selector is not a fragment
+    assert '<template data-origin="p2c03">' in origins, "origin fragment missing from /origins"
+    assert "<template data-origin" not in book, "origin fragment leaked into /book"
 
 
 def _validate(html, kind):
@@ -80,6 +82,7 @@ def _validate(html, kind):
     sys.path.insert(0, str(ROOT))
     import build
     build.errors.clear()
+    build.warnings.clear()
     build.validate_html("ptest", html, kind)
     return list(build.errors)
 
@@ -110,8 +113,19 @@ def test_event_handler_attributes_rejected_everywhere():
 
 def test_event_handler_attributes_are_case_insensitive():
     for kind in ("chapter", "origin"):
-        assert _validate(f'<p onClick="alert(1)">x</p>', kind), f"onClick not caught in {kind}"
-        assert _validate(f'<p ONMOUSEOVER="x">y</p>', kind), f"ONMOUSEOVER not caught in {kind}"
+        assert _validate('<p onClick="alert(1)">x</p>', kind), f"onClick not caught in {kind}"
+        assert _validate('<p ONMOUSEOVER="x">y</p>', kind), f"ONMOUSEOVER not caught in {kind}"
+
+
+def test_uppercase_img_tag_still_enforces_origin_rules():
+    """Same bug class as the event-handler case-sensitivity fix, one line up:
+    if kind detection is case-sensitive, so is everything gated behind it."""
+    assert _validate('<p><IMG SRC="/other/x.webp"></p>', "origin"), \
+        "uppercase IMG must still enforce assets/ + alt in origin fragments"
+    assert _validate('<p><Img src="assets/x.webp"></p>', "origin"), \
+        "mixed-case Img must still require a non-empty alt"
+    assert _validate('<p><IMG src="assets/x.webp" alt="d"></p>', "chapter"), \
+        "uppercase IMG must still be forbidden in chapter fragments"
 
 
 CARD_OK = {
