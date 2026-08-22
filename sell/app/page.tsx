@@ -6,7 +6,7 @@ import StudyChart from "@/components/StudyChart";
 import FreeBookFab from "@/components/FreeBookFab";
 import BookButton from "@/components/BookButton";
 import { TextSizeToggle, ThemeToggle } from "@/components/Toggles";
-import { BOOK_URL, ORIGINS_URL, PRICE, RESERVE_URL } from "@/lib/links";
+import { BOOK_URL, PRICE, RESERVE_URL } from "@/lib/links";
 
 /* Copy rules for this page.
 
@@ -346,33 +346,30 @@ export default function Home() {
             paywall, and no plans for one. Open any chapter and judge the sprint by it.
           </p>
 
-          {/* Origins is a second front door on the same text, not a second book, and
-              the copy has to say so in the first line or a visitor reads "two things
-              to finish" and finishes neither. Every number here is counted off the
+          {/* This described two front doors until 2026-08-23. It described them
+              accurately and nobody understood it: readers asked which one to
+              read, and the second door was never linked from the built page
+              anyway. There is one book now. Every number is counted off the
               built file, not planned: 36 .origin.html, 189 sources across the
-              cite.json set, 26 photographs and 46 marks in the 72 shipped figures,
-              150 cards. The 15 that open the old way are stated because a reader who
-              hits one and was told "51" has been misled. */}
+              cite.json set, 26 photographs and 46 marks in the 72 shipped
+              figures, 150 cards. The 15 chapters that open on a scene instead
+              are stated because a reader who hits one after being told "51
+              histories" has been misled. */}
           <div className="split2">
             <div>
-              <h3>Two ways in, one book</h3>
+              <h3>It opens on what actually happened</h3>
               <p className="key">
-                Same 51 chapters, same 197 diagrams, same words. What changes is how a chapter
-                opens.
+                <strong>36 of the 51 chapters</strong> start with the real incident that forced the
+                mechanism into its shape. The other fifteen open on a scene.
               </p>
               <p>
-                <strong>The book</strong> opens a chapter on a scene: a system under load and a
-                call to make. Then it teaches the mechanism.
-              </p>
-              <p>
-                <strong>Origins</strong> opens <strong>36 of the 51</strong> on the real thing that
-                happened instead. Named people, named companies, a date, and a source you can go
-                and read. The mechanism arrives as somebody&rsquo;s fix for a bad night, which is
-                what it was. The other fifteen open the way the book does.
+                Named people, named companies, a date, and a source you can go and read. The
+                mechanism arrives as somebody&rsquo;s fix for a bad night, which is what it was.
+                Then the chapter teaches it properly.
               </p>
             </div>
             <div>
-              <h3>What the story-first read adds</h3>
+              <h3>What is in there</h3>
               <p className="key">Counted off the built file, not promised. Open it and check.</p>
               <ul className="plain">
                 <li>
@@ -395,9 +392,6 @@ export default function Home() {
 
           <div className="btnRow">
             <BookButton>Read the free book, no signup</BookButton>
-            <a className="btn ghost" href={ORIGINS_URL}>
-              Read it story-first
-            </a>
           </div>
         </section>
 
@@ -522,7 +516,7 @@ export default function Home() {
               </p>
               <ul className="plain">
                 <li>
-                  <strong>What exists today?</strong> The book, all of it, both ways to read it. The rep
+                  <strong>What exists today?</strong> The book, all 51 chapters, with 36 histories. The rep
                   on this page,
                   hand-built: its follow-ups were written in advance and its score is keyword
                   matching. In the sprint the follow-ups are generated against your answer; the

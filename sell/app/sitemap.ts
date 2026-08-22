@@ -7,13 +7,14 @@ import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 
-/* Three URLs, because the site has three pages. /book/ and /origins/ are static
- * files written by different pipelines, which Next knows nothing about, so they
- * are listed by hand rather than discovered.
+/* Two URLs, because the site has two pages. /book/ is a static file written by
+ * build.py, which Next knows nothing about, so it is listed by hand rather than
+ * discovered. /origins/ was listed here until 2026-08-23; it now 301s to /book/
+ * (see vercel.json) and a sitemap should list destinations, not redirects.
  *
  * No lastModified: it would be re-stamped on every build and show up as a diff
  * in the committed dist/ whether or not anything changed. An untrue lastmod is
  * worse than none, and Google discounts the field anyway. */
 export default function sitemap(): MetadataRoute.Sitemap {
-  return [{ url: `${SITE}/` }, { url: `${SITE}/book/` }, { url: `${SITE}/origins/` }];
+  return [{ url: `${SITE}/` }, { url: `${SITE}/book/` }];
 }

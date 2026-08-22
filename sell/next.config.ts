@@ -21,8 +21,6 @@ if (process.env.NODE_ENV === "development") {
   nextConfig.rewrites = async () => [
     { source: "/book", destination: "/book/index.html" },
     { source: "/book/", destination: "/book/index.html" },
-    { source: "/origins", destination: "/origins/index.html" },
-    { source: "/origins/", destination: "/origins/index.html" },
   ];
 }
 

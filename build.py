@@ -13,25 +13,25 @@ ASSETS = SRC / "assets"
 DIST = ROOT / "dist"
 SITE = "https://hld-gym.vercel.app"
 
-MODES = {
-    "book": {
-        "dir": "book",
-        "title": "HLD Gym: system design for senior interviews, free and complete",
-        "desc": "A free, complete system design book for senior interviews. 51 chapters, "
-                "197 animated diagrams and 1,278 questions, covering Meta, Google, Palantir "
-                "and Anthropic loops. No signup, no paywall.",
-        "og_title": "HLD Gym: system design for senior interviews",
-        "og_desc": "51 chapters, 197 animated diagrams, 1,278 questions. Free, no signup.",
-    },
-    "origins": {
-        "dir": "origins",
-        "title": "Origins: where every idea in system design actually came from",
-        "desc": "The same 51 chapters, each opening on the real dated event that forced "
-                "the mechanism into its shape. Real people, real incidents, real sources. "
-                "Free, no signup.",
-        "og_title": "Origins — system design, told as the history it actually is",
-        "og_desc": "Every idea traced to the room it came from. Free, no signup.",
-    },
+# One book, one URL. There were two outputs until 2026-08-23: /book with
+# invented scene openers and /origins with the real histories layered over the
+# same 51 chapters. Readers could not tell what the difference was and the
+# second door was never linked from anywhere, so the plain one is gone and the
+# story-first one inherited /book - the address the sell page links, the
+# sitemap lists, and search has already indexed. data-mode stays "origins"
+# because that is the flag app.js reads to turn on cards, the timeline, and the
+# cold-open swap.
+MODE = {
+    "dir": "book",
+    "data_mode": "origins",
+    "title": "HLD Gym: system design for senior interviews, free and complete",
+    "desc": "A free, complete system design book for senior interviews. 51 chapters, "
+            "197 animated diagrams and 1,278 questions, covering Meta, Google, Palantir "
+            "and Anthropic loops. 36 chapters open on the real dated incident that forced "
+            "the mechanism into its shape. No signup, no paywall.",
+    "og_title": "HLD Gym: system design for senior interviews",
+    "og_desc": "51 chapters, 197 animated diagrams, 1,278 questions, and 36 real "
+               "histories. Free, no signup.",
 }
 
 ALLOWED_TAGS = set("p h2 h3 ul ol li strong em code pre table thead tbody tr th td figure figcaption "
@@ -63,10 +63,11 @@ IMAGE_EXTS = {".svg", ".webp", ".png", ".jpg", ".jpeg", ".avif", ".gif"}
 
 # An inline figure, the only construct allowed to put an <img> in a chapter.
 # THIS REGEX IS LOAD-BEARING, AND SO IS THE NO-NESTING RULE IN validate_html.
-# The book render strips figures with this non-greedy match; if a <figure> could
-# contain another <figure>, `.*?</figure>` would close on the inner tag and
-# silently swallow the rest of the chapter into the strip. The validator is what
-# makes this safe, which is why the nesting check is an error and not a warning.
+# Figures are matched out of the prose with this non-greedy pattern before the
+# text is validated and word-counted; if a <figure> could contain another
+# <figure>, `.*?</figure>` would close on the inner tag and silently swallow the
+# rest of the chapter. The validator is what makes this safe, which is why the
+# nesting check is an error and not a warning.
 FIGURE_RE = re.compile(r'<figure\b[^>]*\bdata-mode="origins"[^>]*>.*?</figure>', re.S | re.I)
 # Matched the same lenient way as FACT_SPAN below: attribute order and extra
 # classes are a style question, the credit class is the contract.
@@ -271,9 +272,9 @@ def validate_html(cid, html, kind="chapter"):
     # through. Cheap to close, and permitting <img> is exactly when it matters.
     if re.search(r'<[^>]+\son[a-z]+\s*=', html, re.IGNORECASE): err(f"{cid}: event handler attribute forbidden")
     # No <figure> inside a <figure>, both kinds. This is the check that makes
-    # FIGURE_RE's non-greedy strip safe in the book render - see the comment on
-    # FIGURE_RE. Load-bearing, not cosmetic: without it a nested figure closes
-    # the match early and the strip deletes the remainder of the chapter.
+    # FIGURE_RE's non-greedy match safe - see the comment on FIGURE_RE.
+    # Load-bearing, not cosmetic: without it a nested figure closes the match
+    # early and everything after it is read as prose.
     depth = 0
     for m in re.finditer(r'</?figure\b', html, re.I):
         depth += -1 if m.group(0)[1] == "/" else 1
@@ -513,23 +514,18 @@ def validate_cites(cid, html, side, cards):
             err(f"{cid}: fact '{txt[:40]}' dates {min(years)} to {k}, published {sy} "
                 f"(a source cannot report an event later than itself)")
 
-def render(mode, toc, templates, quiz_all, cards_all, origins, entries=None, shipped=()):
-    """Compose one output. `mode` keys into MODES and lands on <body data-mode>,
-    which is how app.js knows which view it is running as."""
-    m = MODES[mode]
+def render(toc, templates, quiz_all, cards_all, origins, entries=None, shipped=()):
+    """Compose the output. MODE['data_mode'] lands on <body data-mode>, which is
+    how app.js knows which features to turn on."""
+    m = MODE
     canonical = f"{SITE}/{m['dir']}/"
     tpl = (SRC / "template.html").read_text()
     body = "\n".join(templates)
     n_diagrams = body.count('<figure class="diagram"')
-    if mode == "book":
-        # Inline figures are an /origins feature; /book is unchanged by them.
-        # Stripped from this local copy only - src/chapters/ is never rewritten.
-        # Safe because validate_html rejects a nested <figure>; see FIGURE_RE.
-        body = FIGURE_RE.sub("", body)
     if origins:
         body += "\n" + "\n".join(origins.values())
     return (tpl
-        .replace("{{MODE}}", mode)
+        .replace("{{MODE}}", m["data_mode"])
         .replace("{{PAGE_TITLE}}", m["title"])
         .replace("{{PAGE_DESC}}", m["desc"])
         .replace("{{CANONICAL}}", canonical)
@@ -541,7 +537,7 @@ def render(mode, toc, templates, quiz_all, cards_all, origins, entries=None, shi
         .replace("<!--{{CHAPTER_TEMPLATES}}-->", body)
         .replace("/*{{TOC_JSON}}*/", json.dumps(toc).replace("</", "<\\/"))
         .replace("/*{{QUIZ_JSON}}*/", json.dumps(quiz_all).replace("</", "<\\/"))
-        .replace("/*{{CARDS_JSON}}*/", json.dumps(cards_all if mode == "origins" else {}).replace("</", "<\\/"))
+        .replace("/*{{CARDS_JSON}}*/", json.dumps(cards_all).replace("</", "<\\/"))
         .replace("/*{{APP_JS}}*/", (SRC / "app.js").read_text().replace("</script", "<\\/script")))
 
 def main():
@@ -633,23 +629,20 @@ def main():
     if check_only: return
 
     entries = load_manifests()
-    # What each mode ships: /origins copies the referenced assets, /book copies
-    # none, and the credits block is generated from exactly that list.
+    # The credits block is generated from exactly the files that get copied, so
+    # it cannot claim an image the output does not ship.
     shipped = (sorted(p for p in referenced if p.is_relative_to(ASSETS.resolve()))
                if ASSETS.exists() else [])
 
-    for mode, m in MODES.items():
-        out = DIST / m["dir"] / "index.html"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(render(mode, toc, templates, quiz_all, cards_all,
-                              origins if mode == "origins" else {},
-                              entries, shipped if mode == "origins" else []))
-        print(f"Built {out} ({out.stat().st_size / 1024:.0f} KB, {ready} chapters)")
+    out = DIST / MODE["dir"] / "index.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render(toc, templates, quiz_all, cards_all, origins, entries, shipped))
+    print(f"Built {out} ({out.stat().st_size / 1024:.0f} KB, {ready} chapters)")
 
-        if mode == "origins" and ASSETS.exists():
-            dest = out.parent / "assets"
-            n = len(copy_assets(ASSETS, dest, referenced))
-            print(f"  copied {n} asset(s) → {dest}")
+    if ASSETS.exists():
+        dest = out.parent / "assets"
+        n = len(copy_assets(ASSETS, dest, referenced))
+        print(f"  copied {n} asset(s) → {dest}")
 
 if __name__ == "__main__":
     main()

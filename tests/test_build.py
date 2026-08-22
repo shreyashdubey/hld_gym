@@ -9,31 +9,44 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def test_publish_excludes_origins():
-    """sell's publish:book runs rsync --delete. Without an origins exclude it
-    deletes dist/origins/ wholesale on the next publish. Same trap the root
-    AGENTS.md documents for book/ and reels/."""
+def test_publish_excludes_other_pipelines():
+    """sell's publish:book runs rsync --delete. Every directory another pipeline
+    writes into dist/ needs an exclude or the next publish deletes it wholesale.
+    origins/ was on this list until 2026-08-23, when the two book outputs became
+    one and dist/origins/ stopped existing."""
     pkg = json.loads((ROOT / "sell" / "package.json").read_text())
     publish = pkg["scripts"]["publish:book"]
     assert "--delete" in publish, "publish:book no longer uses --delete; this test is stale"
-    for d in ("book/", "reels/", "playground/", "origins/"):
+    for d in ("book/", "reels/", "playground/"):
         assert f"--exclude '{d}'" in publish, f"publish:book is missing --exclude '{d}'"
 
 
-def test_vercel_has_origins_headers():
+def test_vercel_has_book_headers():
     cfg = json.loads((ROOT / "vercel.json").read_text())
-    block = next((h for h in cfg["headers"] if h["source"] == "/origins/(.*)"), None)
-    assert block, "vercel.json has no cache rule for /origins/"
+    block = next((h for h in cfg["headers"] if h["source"] == "/book/(.*)"), None)
+    assert block, "vercel.json has no cache rule for /book/"
     # not 'immutable': asset filenames are not content-hashed, so an immutable
     # rule would pin a stale image permanently
     values = {h["key"]: h["value"] for h in block["headers"]}
     assert values.get("Cache-Control") == "public, max-age=0, must-revalidate", \
-        f"/origins/ Cache-Control is {values.get('Cache-Control')!r}"
+        f"/book/ Cache-Control is {values.get('Cache-Control')!r}"
 
 
-def test_sitemap_lists_origins():
+def test_vercel_redirects_the_retired_origins_url():
+    """/origins/ was live and in the sitemap. Deleting the directory without a
+    redirect 404s every link and index entry pointing at it."""
+    cfg = json.loads((ROOT / "vercel.json").read_text())
+    r = next((r for r in cfg.get("redirects", []) if r["source"].startswith("/origins/")), None)
+    assert r, "vercel.json has no redirect for the retired /origins/ URL"
+    assert r["destination"].startswith("/book/"), f"/origins/ points at {r['destination']!r}"
+    assert r.get("permanent") is True, "the /origins/ redirect must be a 301, not a 307"
+
+
+def test_sitemap_lists_the_book_and_not_origins():
     sm = (ROOT / "sell" / "app" / "sitemap.ts").read_text()
-    assert "/origins/" in sm, "sitemap.ts does not list /origins/"
+    body = sm.split("export default function sitemap")[1]
+    assert "/book/" in body, "sitemap.ts does not list /book/"
+    assert "/origins/" not in body, "sitemap.ts still lists /origins/, which now 301s"
 
 
 def test_vercel_catchall_headers_stay_last():
@@ -42,29 +55,28 @@ def test_vercel_catchall_headers_stay_last():
         "the catch-all security-header block must remain last in vercel.json"
 
 
-def test_both_outputs_exist():
-    """One build produces both views. The book keeps its own path and identity."""
+def test_the_one_output_exists():
+    """One build, one output. The second one at dist/origins/ was retired on
+    2026-08-23; if it comes back, something is building the old two-mode loop."""
     book = ROOT / "dist" / "book" / "index.html"
-    origins = ROOT / "dist" / "origins" / "index.html"
     assert book.exists(), "dist/book/index.html missing — run python3 build.py"
-    assert origins.exists(), "dist/origins/index.html missing"
+    assert not (ROOT / "dist" / "origins").exists(), \
+        "dist/origins/ is back — the two-mode build was meant to be one"
 
 
-def test_outputs_carry_distinct_modes():
+def test_output_runs_in_origins_mode():
+    """The surviving output is the story-first one at the book's URL, so
+    data-mode is 'origins' (the flag app.js reads) while the path is /book/."""
     book = (ROOT / "dist" / "book" / "index.html").read_text()
-    origins = (ROOT / "dist" / "origins" / "index.html").read_text()
-    assert '<body data-mode="book">' in book, "book output has no data-mode=book"
-    assert '<body data-mode="origins">' in origins, "origins output has no data-mode=origins"
-    assert "hld-gym.vercel.app/book/" in book
-    assert "hld-gym.vercel.app/origins/" in origins, "origins canonical still points at /book/"
-    assert "/origins/" not in book.split("</head>")[0], "book <head> leaked an origins URL"
+    assert '<body data-mode="origins">' in book, "output has no data-mode=origins"
+    assert "hld-gym.vercel.app/book/" in book, "canonical is not /book/"
+    assert "/origins/" not in book.split("</head>")[0], "<head> leaked a retired origins URL"
 
 
 def test_no_unreplaced_placeholders():
-    for p in ("dist/book/index.html", "dist/origins/index.html"):
-        html = (ROOT / p).read_text()
-        left = re.findall(r"\{\{[A-Z_]+\}\}", html)
-        assert not left, f"{p} has unreplaced placeholders: {sorted(set(left))}"
+    html = (ROOT / "dist" / "book" / "index.html").read_text()
+    left = re.findall(r"\{\{[A-Z_]+\}\}", html)
+    assert not left, f"unreplaced placeholders: {sorted(set(left))}"
 
 
 def _a_shipping_origin():
@@ -77,14 +89,12 @@ def _a_shipping_origin():
     return cf.name.split(".")[0], json.loads(cf.read_text())["cards"][0]["id"]
 
 
-def test_origin_fragment_reaches_origins_only():
+def test_origin_fragments_reach_the_book():
     book = (ROOT / "dist" / "book" / "index.html").read_text()
-    origins = (ROOT / "dist" / "origins" / "index.html").read_text()
     cid, _ = _a_shipping_origin()
-    # match the emitted element, not the bare attribute: app.js ships in both
-    # outputs and its `template[data-origin="..."]` selector is not a fragment
-    assert f'<template data-origin="{cid}">' in origins, "origin fragment missing from /origins"
-    assert "<template data-origin" not in book, "origin fragment leaked into /book"
+    # match the emitted element, not the bare attribute: app.js's
+    # `template[data-origin="..."]` selector is not a fragment
+    assert f'<template data-origin="{cid}">' in book, "origin fragment missing from the book"
 
 
 def _validate(html, kind):
@@ -298,12 +308,10 @@ def test_cards_object_instead_of_list_fails_cleanly():
     assert build.errors, "a 'cards' object instead of a list should fail, not crash"
 
 
-def test_cards_reach_origins_only():
+def test_cards_reach_the_book():
     book = (ROOT / "dist" / "book" / "index.html").read_text()
-    origins = (ROOT / "dist" / "origins" / "index.html").read_text()
     _, card = _a_shipping_origin()
-    assert f'"{card}"' in origins, "cards missing from /origins"
-    assert f'"{card}"' not in book, "cards leaked into /book"
+    assert f'"{card}"' in book, "cards missing from the book"
 
 
 CITE_OK = {
@@ -435,12 +443,12 @@ def test_unverified_non_list_fails_cleanly():
     assert errs, "a non-list 'unverified' should fail, not crash"
 
 
-def test_referenced_assets_reach_origins():
+def test_referenced_assets_reach_the_book():
     """Was test_assets_copied_to_origins, which asserted that *every* file in
     src/assets/ ships - the assertion that put licences.json on the open
     internet. What must ship is what a card or an origin story points at."""
     src = ROOT / "src" / "assets"
-    dst = ROOT / "dist" / "origins" / "assets"
+    dst = ROOT / "dist" / "book" / "assets"
     refs = set()
     for f in (ROOT / "src" / "chapters").iterdir():
         if f.name.endswith((".cards.json", ".origin.html")):
@@ -449,7 +457,7 @@ def test_referenced_assets_reach_origins():
     if not refs:
         return  # nothing wired up yet; the missing-asset test below is the real guard
     for r in sorted(refs):
-        assert (dst / r).exists(), f"{r} is referenced but missing from dist/origins/assets/"
+        assert (dst / r).exists(), f"{r} is referenced but missing from dist/book/assets/"
 
 
 def test_missing_asset_is_a_build_error():
@@ -462,7 +470,7 @@ def test_missing_asset_is_a_build_error():
 
 def test_check_assets_rejects_path_traversal():
     """src="assets/../../build.py" passed both the prefix check and the
-    existence check, then was never copied into dist/origins/assets/ - a
+    existence check, then was never copied into dist/book/assets/ - a
     broken image the build called fine."""
     sys.path.insert(0, str(ROOT))
     import build
@@ -619,12 +627,12 @@ def test_working_file_does_not_reach_dist():
 def test_shipped_assets_contain_no_working_files():
     """The same guard against the real built site, not a fixture."""
     build = _build()
-    dst = ROOT / "dist" / "origins" / "assets"
+    dst = ROOT / "dist" / "book" / "assets"
     if not dst.exists():
-        return  # nothing built; test_both_outputs_exist is the guard for that
+        return  # nothing built; test_the_one_output_exists is the guard for that
     stray = sorted(p.name for p in dst.rglob("*")
                    if p.is_file() and p.suffix.lower() not in build.IMAGE_EXTS)
-    assert not stray, f"non-image working files reached dist/origins/assets/: {stray}"
+    assert not stray, f"non-image working files reached dist/book/assets/: {stray}"
 
 
 def test_referenced_svg_does_reach_dist():
@@ -781,42 +789,29 @@ def test_figcaption_credit_survives_entities_and_wrapping():
         assert not errs, errs
 
 
-def _render_both(templates):
+def _render(templates):
     build = _build()
-    toc = {"parts": []}
-    return (build.render("book", toc, templates, {}, {}, {}),
-            build.render("origins", toc, templates, {}, {}, {}))
+    return build.render({"parts": []}, templates, {}, {}, {})
 
 
-def test_book_render_strips_figures_and_origins_keeps_them():
+def test_render_keeps_inline_figures():
+    """There was a second render that stripped these out, for the /book output
+    that shipped no images. That output is gone; every figure now reaches the
+    page it was written for."""
     fig = ('<figure class="fig" data-mode="origins">'
            '<img src="assets/photo/x.jpg" alt="A face" width="4" height="5">'
            '<figcaption>A sentence. <span class="credit">C</span></figcaption></figure>')
     tpl = [f'<template data-ch="ptest"><h2>H</h2><p>before</p>{fig}<p>after</p></template>']
-    book, origins = _render_both(tpl)
-    assert "assets/photo/x.jpg" not in book, "the book render kept an inline figure"
-    assert "A sentence." not in book, "the book render kept a figcaption"
-    assert "<p>before</p><p>after</p>" in book, \
-        "the strip removed more than the figure — check FIGURE_RE is non-greedy"
-    assert "assets/photo/x.jpg" in origins, "the origins render dropped the figure"
-    assert "A sentence." in origins, "the origins render dropped the figcaption"
-
-
-def test_book_strip_stops_at_the_figures_own_close_tag():
-    """The non-greedy match is only safe because nesting is rejected. A diagram
-    figure after an inline figure must survive the strip untouched."""
-    fig = ('<figure class="fig" data-mode="origins">'
-           '<img src="assets/photo/x.jpg" alt="A face" width="4" height="5">'
-           '<figcaption>S. <span class="credit">C</span></figcaption></figure>')
-    tpl = [f'<template data-ch="ptest">{fig}<figure class="diagram"><svg/></figure></template>']
-    book, _ = _render_both(tpl)
-    assert '<figure class="diagram">' in book, "the strip swallowed a following diagram figure"
+    html = _render(tpl)
+    assert "assets/photo/x.jpg" in html, "the render dropped an inline figure"
+    assert "A sentence." in html, "the render dropped a figcaption"
+    assert "<p>before</p>" in html and "<p>after</p>" in html, "the render ate surrounding prose"
 
 
 def test_credits_block_reflects_only_what_ships():
-    """/book copies no assets directory, so it ships no image files and gets no
-    credits block at all. An empty table there is a claim about images that are
-    not on the page."""
+    """A build that ships no image files gets no credits block at all. An empty
+    table is a claim about images that are not on the page. This was /book's
+    normal state until the two outputs merged; it is now the fixture case."""
     build = _build()
     with tempfile.TemporaryDirectory() as td:
         saved = build.ASSETS
