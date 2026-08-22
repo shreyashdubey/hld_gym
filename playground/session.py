@@ -9,7 +9,7 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 
 from playground.board import BoardContext
 from playground.config import VoiceConfig
-from playground.personas import coach_prompt, interviewer_prompt
+from playground.personas import coach_prompt, diagnostic_prompt, interviewer_prompt
 
 # Tool schemas live here, not in pipelines.py, for the same reason the
 # prompts live in personas.py: Session is the one place mode lives, and
@@ -115,7 +115,12 @@ class Session:
         return ToolsSchema(standard_tools=[schema])
 
     def system_messages(self) -> list[dict]:
-        persona = coach_prompt() if self.mode == "coach" else interviewer_prompt()
+        if self.mode == "coach":
+            persona = coach_prompt()
+        elif self.kind == "diagnostic":
+            persona = diagnostic_prompt()
+        else:
+            persona = interviewer_prompt()
         messages = [{"role": "system", "content": persona}, *self.board.messages()]
         # last_change_summary is a computed property, not accumulated state --
         # it always reflects the diff between the two most recent board

@@ -3,7 +3,9 @@ import re
 import unittest
 
 from playground import rep
-from playground.personas import coach_prompt, interviewer_prompt
+from playground.config import VoiceConfig
+from playground.personas import coach_prompt, diagnostic_prompt, interviewer_prompt
+from playground.session import Session
 
 REP_TS = pathlib.Path(__file__).resolve().parents[2] / "sell" / "lib" / "rep.ts"
 
@@ -62,6 +64,28 @@ class TestNoDriftFromTheFrontend(unittest.TestCase):
         # drifted in content, not just count. Compare the text too.
         self.assertEqual(questions, [p["q"] for p in rep.PROBES])
         self.assertEqual(answers, [p["a"] for p in rep.PROBES])
+
+
+class TestDiagnosticPrompt(unittest.TestCase):
+    def test_the_diagnostic_interviewer_is_starved_of_the_answer_key(self):
+        # Same invariant as the sprint interviewer: a model holding the
+        # answers leaks them the moment a candidate sounds stuck, and then
+        # the round graded nothing.
+        prompt = diagnostic_prompt()
+        self.assertNotIn(rep.KERNEL, prompt)
+        for label in rep.RUBRIC_LABELS:
+            self.assertNotIn(label, prompt)
+        for probe in rep.PROBES:
+            self.assertNotIn(probe["a"], prompt)
+
+    def test_it_still_names_the_rep_and_end_round(self):
+        prompt = diagnostic_prompt()
+        self.assertIn(rep.REP_TITLE, prompt)
+        self.assertIn("end_round", prompt)
+
+    def test_a_diagnostic_session_uses_the_diagnostic_prompt(self):
+        s = Session(VoiceConfig(), kind="diagnostic")
+        self.assertIn(diagnostic_prompt(), s.system_messages()[0]["content"])
 
 
 if __name__ == "__main__":
