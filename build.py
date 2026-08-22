@@ -7,8 +7,30 @@ ROOT = Path(__file__).parent
 SRC = ROOT / "src"
 CH = SRC / "chapters"
 # The sprint presell page owns dist/ root (and so the site root); the book
-# lives one level down at /book.
-OUT = ROOT / "dist" / "book" / "index.html"
+# lives one level down at /book, and its story-first twin at /origins.
+DIST = ROOT / "dist"
+SITE = "https://hld-gym.vercel.app"
+
+MODES = {
+    "book": {
+        "dir": "book",
+        "title": "HLD Gym: system design for senior interviews, free and complete",
+        "desc": "A free, complete system design book for senior interviews. 51 chapters, "
+                "197 animated diagrams and 1,278 questions, covering Meta, Google, Palantir "
+                "and Anthropic loops. No signup, no paywall.",
+        "og_title": "HLD Gym: system design for senior interviews",
+        "og_desc": "51 chapters, 197 animated diagrams, 1,278 questions. Free, no signup.",
+    },
+    "origins": {
+        "dir": "origins",
+        "title": "Origins: where every idea in system design actually came from",
+        "desc": "The same 51 chapters, each opening on the real dated event that forced "
+                "the mechanism into its shape. Real people, real incidents, real sources. "
+                "Free, no signup.",
+        "og_title": "Origins — system design, told as the history it actually is",
+        "og_desc": "Every idea traced to the room it came from. Free, no signup.",
+    },
+}
 
 ALLOWED_TAGS = set("p h2 h3 ul ol li strong em code pre table thead tbody tr th td figure figcaption "
                    "svg g rect circle ellipse line path polyline polygon text tspan defs marker title "
@@ -78,10 +100,35 @@ def validate_quiz(cid, data):
         if n < lo[lv]: err(f"{cid}: only {n} level-{lv} questions (want {lo[lv]}+)")
     return items
 
+def render(mode, toc, templates, quiz_all, cards_all, origins):
+    """Compose one output. `mode` keys into MODES and lands on <body data-mode>,
+    which is how app.js knows which view it is running as."""
+    m = MODES[mode]
+    canonical = f"{SITE}/{m['dir']}/"
+    tpl = (SRC / "template.html").read_text()
+    body = "\n".join(templates)
+    if mode == "origins":
+        body += "\n" + "\n".join(origins.values())
+    return (tpl
+        .replace("{{MODE}}", mode)
+        .replace("{{PAGE_TITLE}}", m["title"])
+        .replace("{{PAGE_DESC}}", m["desc"])
+        .replace("{{CANONICAL}}", canonical)
+        .replace("{{OG_TITLE}}", m["og_title"])
+        .replace("{{OG_DESC}}", m["og_desc"])
+        .replace("/*{{FONTS_CSS}}*/", font_css())
+        .replace("/*{{STYLE_CSS}}*/", (SRC / "style.css").read_text())
+        .replace("<!--{{CHAPTER_TEMPLATES}}-->", body)
+        .replace("/*{{TOC_JSON}}*/", json.dumps(toc).replace("</", "<\\/"))
+        .replace("/*{{QUIZ_JSON}}*/", json.dumps(quiz_all).replace("</", "<\\/"))
+        .replace("/*{{CARDS_JSON}}*/", json.dumps(cards_all if mode == "origins" else {}).replace("</", "<\\/"))
+        .replace("/*{{APP_JS}}*/", (SRC / "app.js").read_text().replace("</script", "<\\/script")))
+
 def main():
     check_only = "--check" in sys.argv
     toc = json.loads((SRC / "toc.json").read_text())
     templates, quiz_all = [], {}
+    cards_all, origins = {}, {}   # Tasks 4 and 3 fill these
     ready = 0
     for part in toc["parts"]:
         for ch in part["chapters"]:
@@ -107,17 +154,11 @@ def main():
     print(f"OK: {ready} chapters valid.")
     if check_only: return
 
-    tpl = (SRC / "template.html").read_text()
-    page = (tpl
-        .replace("/*{{FONTS_CSS}}*/", font_css())
-        .replace("/*{{STYLE_CSS}}*/", (SRC / "style.css").read_text())
-        .replace("<!--{{CHAPTER_TEMPLATES}}-->", "\n".join(templates))
-        .replace("/*{{TOC_JSON}}*/", json.dumps(toc).replace("</", "<\\/"))
-        .replace("/*{{QUIZ_JSON}}*/", json.dumps(quiz_all).replace("</", "<\\/"))
-        .replace("/*{{APP_JS}}*/", (SRC / "app.js").read_text().replace("</script", "<\\/script")))
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(page)
-    print(f"Built {OUT} ({OUT.stat().st_size / 1024:.0f} KB, {ready} chapters)")
+    for mode, m in MODES.items():
+        out = DIST / m["dir"] / "index.html"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(render(mode, toc, templates, quiz_all, cards_all, origins))
+        print(f"Built {out} ({out.stat().st_size / 1024:.0f} KB, {ready} chapters)")
 
 if __name__ == "__main__":
     main()

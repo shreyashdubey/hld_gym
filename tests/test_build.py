@@ -42,6 +42,31 @@ def test_vercel_catchall_headers_stay_last():
         "the catch-all security-header block must remain last in vercel.json"
 
 
+def test_both_outputs_exist():
+    """One build produces both views. The book keeps its own path and identity."""
+    book = ROOT / "dist" / "book" / "index.html"
+    origins = ROOT / "dist" / "origins" / "index.html"
+    assert book.exists(), "dist/book/index.html missing — run python3 build.py"
+    assert origins.exists(), "dist/origins/index.html missing"
+
+
+def test_outputs_carry_distinct_modes():
+    book = (ROOT / "dist" / "book" / "index.html").read_text()
+    origins = (ROOT / "dist" / "origins" / "index.html").read_text()
+    assert '<body data-mode="book">' in book, "book output has no data-mode=book"
+    assert '<body data-mode="origins">' in origins, "origins output has no data-mode=origins"
+    assert "hld-gym.vercel.app/book/" in book
+    assert "hld-gym.vercel.app/origins/" in origins, "origins canonical still points at /book/"
+    assert "/origins/" not in book.split("</head>")[0], "book <head> leaked an origins URL"
+
+
+def test_no_unreplaced_placeholders():
+    for p in ("dist/book/index.html", "dist/origins/index.html"):
+        html = (ROOT / p).read_text()
+        left = re.findall(r"\{\{[A-Z_]+\}\}", html)
+        assert not left, f"{p} has unreplaced placeholders: {sorted(set(left))}"
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):
