@@ -118,6 +118,32 @@ def validate_quiz(cid, data):
         if n < lo[lv]: err(f"{cid}: only {n} level-{lv} questions (want {lo[lv]}+)")
     return items
 
+CARD_SUITS = {"person", "incident", "artifact", "ripple"}
+
+def validate_cards(cid, data):
+    """A card is a Leitner item with a picture. Its id shares the namespace with
+    quiz ids, so the prefix rule and the uniqueness rule are the same ones."""
+    if data.get("chapter") != cid: err(f"{cid}: cards 'chapter' field mismatch")
+    cards, seen = data.get("cards", []), set()
+    for c in cards:
+        cardid = c.get("id", "?")
+        if cardid in seen: err(f"{cid}: duplicate card id {cardid}")
+        seen.add(cardid)
+        if not cardid.startswith(cid): err(f"{cid}: card id {cardid} must start with chapter id")
+        if c.get("suit") not in CARD_SUITS: err(f"{cid}:{cardid}: suit must be one of {sorted(CARD_SUITS)}")
+        if not isinstance(c.get("year"), int): err(f"{cid}:{cardid}: year must be an integer")
+        for field in ("title", "body", "prompt", "answer", "cite"):
+            if not str(c.get(field, "")).strip():
+                err(f"{cid}:{cardid}: '{field}' is required")
+        # A card with no prompt is a decoration, and decoration is the one thing
+        # the design rules out. See the spec, "The deck".
+        if len(str(c.get("body", "")).split()) > 60:
+            err(f"{cid}:{cardid}: card body over 60 words")
+        asset = c.get("asset")
+        if asset and not str(asset).startswith("assets/"):
+            err(f'{cid}:{cardid}: asset must start with "assets/"')
+    return cards
+
 def render(mode, toc, templates, quiz_all, cards_all, origins):
     """Compose one output. `mode` keys into MODES and lands on <body data-mode>,
     which is how app.js knows which view it is running as."""
@@ -173,6 +199,17 @@ def main():
                 if words > 260:
                     err(f"{cid}: origin story is {words} words (limit 260)")
                 origins[cid] = f'<template data-origin="{cid}">\n{ohtml}\n</template>'
+
+            cf = CH / f"{cid}.cards.json"
+            if cf.exists():
+                try:
+                    cards_all[cid] = validate_cards(cid, json.loads(cf.read_text()))
+                except json.JSONDecodeError as e:
+                    err(f"{cid}: cards json invalid: {e}")
+            elif of.exists():
+                # cards and story ship together — a story with no deck is a
+                # chapter that got halfway
+                err(f"{cid}: has .origin.html but no .cards.json")
 
     for w in warnings: print("WARN", w)
     if errors:

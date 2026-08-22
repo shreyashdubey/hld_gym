@@ -106,6 +106,68 @@ def test_event_handler_attributes_rejected_everywhere():
         assert _validate('<p onclick="alert(1)">x</p>', kind), f"on*= not caught in {kind}"
 
 
+CARD_OK = {
+    "chapter": "ptest",
+    "cards": [
+        {"id": "ptest-c1", "suit": "person", "title": "A Person", "sub": "1989 · Somewhere",
+         "year": 1989, "body": "Short face text.", "prompt": "What did they hit?",
+         "answer": "The constraint.", "cite": "src1"},
+    ],
+}
+
+
+def _validate_cards(data):
+    sys.path.insert(0, str(ROOT))
+    import build
+    build.errors.clear()
+    build.validate_cards("ptest", data)
+    return list(build.errors)
+
+
+def test_good_card_passes():
+    assert not _validate_cards(CARD_OK), _validate_cards(CARD_OK)
+
+
+def test_card_id_must_be_chapter_prefixed():
+    bad = json.loads(json.dumps(CARD_OK))
+    bad["cards"][0]["id"] = "other-c1"
+    assert _validate_cards(bad)
+
+
+def test_card_suit_must_be_known():
+    bad = json.loads(json.dumps(CARD_OK))
+    bad["cards"][0]["suit"] = "vibes"
+    assert _validate_cards(bad)
+
+
+def test_card_needs_prompt_and_answer():
+    """A card without a recall prompt is a decoration. The gate is the whole
+    justification for cards existing at all."""
+    for field in ("prompt", "answer"):
+        bad = json.loads(json.dumps(CARD_OK))
+        del bad["cards"][0][field]
+        assert _validate_cards(bad), f"missing {field} was accepted"
+
+
+def test_card_body_capped_at_60_words():
+    bad = json.loads(json.dumps(CARD_OK))
+    bad["cards"][0]["body"] = "word " * 61
+    assert _validate_cards(bad)
+
+
+def test_card_asset_must_be_relative():
+    bad = json.loads(json.dumps(CARD_OK))
+    bad["cards"][0]["asset"] = "https://example.com/x.webp"
+    assert _validate_cards(bad)
+
+
+def test_cards_reach_origins_only():
+    book = (ROOT / "dist" / "book" / "index.html").read_text()
+    origins = (ROOT / "dist" / "origins" / "index.html").read_text()
+    assert '"p2c03-c1"' in origins, "cards missing from /origins"
+    assert '"p2c03-c1"' not in book, "cards leaked into /book"
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):
