@@ -1582,9 +1582,13 @@ Vercel, not a line in this repo.
 - [x] **Free book posted** (reported 2026-08-20; venues not recorded here).
       Whether those posts sent anyone is exactly what the new counter is
       there to answer, and could not be answered before it.
-- [ ] **Web Analytics not yet enabled in the Vercel dashboard.** The code
-      shipped 2026-08-20; the panel is a toggle in project settings and
-      the script collects nothing until it is on. Free on Hobby.
+- [x] **Web Analytics enabled** (2026-08-22). The code shipped 2026-08-20 and
+      the dashboard toggle is now on. Verified against the artefact rather
+      than the dashboard: `/_vercel/insights/script.js` is present in
+      `dist/_next/static/chunks/3dzdqsep0txr3.js`. It is *not* in
+      `dist/index.html` and never will be — `<Analytics />` injects the tag
+      client-side from the bundle, so grepping the HTML finds nothing and
+      proves nothing.
 - [ ] **Reels 05+ not cut.** Four exist and play on the page. Each new kernel
       is a new `reelNN.html` against the same five-beat template.
 - [ ] **Refund after 1 September is undecided.** The page promises a refund
@@ -2310,3 +2314,130 @@ both `.env` files exactly. The browser error was origin-propagation delay,
 which Google documents as taking up to several hours after a client ID is
 created or edited. No Google config was changed, and no doc note was added
 telling a future reader to change it.
+
+## 2026-08-22 — a code review of the whole playground branch, and the one entry that was never written
+
+**What.** Reviewed `origin/main...HEAD` (35 commits: the `playground/` service,
+`sell/lib/{auth,voice,board,layout,dictation}.ts`, `components/{Board,Rep}.tsx`,
+`app/playground/page.tsx`) and fixed everything it found. Python 147 → 157
+tests, `npm test` 46, `npm run lint` clean, `npm run build` ends `○ (Static)`,
+`grep -c '—' out/index.html` prints `0`.
+
+**Before anything else: the missing entry.** The previous commit (613b8cd, the
+cross-user session takeover) shipped with no `PROGRESS.md` entry, against this
+file's own rule. Its symptom, recorded here because the symptom is what a
+future session recognises: *a second signed-in learner could renegotiate a
+different learner's live, billing playground session.* `mode=playground` was
+gated on "some valid token", and with no allowlist any Google account produces
+one, so a valid-but-unrelated token satisfied the gate. Fixed by recording the
+verified email on `_Session` at creation and requiring the *same* identity on a
+renegotiate — a 403, not a 401, because the caller is authenticated and simply
+does not own that session.
+
+### The bugs that cost money or crash a session
+
+**A board node whose `id` is a list or an object killed the rest of the
+session.** JSON has exactly two unhashable shapes and a browser can send
+either. `{"id": {"k": 1}}` reached `{n["id"] for n in ...}` inside
+`BoardContext._render` and `last_change_summary` and raised `TypeError:
+unhashable type` — and because `update()` swaps the graph in *before* anything
+renders it, the poison stayed. Every later `push_context()` in that session
+raised too, including `_enforce_cap`'s coach handover, which is the one thing
+the cap exists to guarantee. It also flatly contradicted
+`_apply_board_message`'s own docstring ("tolerates a malformed graph by
+design"). Fixed in `_nodes`/`_edges`, the single place both readers route
+through, rather than at each of the six use sites.
+
+**A failed offer left a live STT+LLM+TTS worker running.** `offer()`'s
+`except BaseException` cleanup disconnected the peer connection and nothing
+else — but by the time `get_answer()` can fail, `create_task(runner.run(worker))`
+has already started a full pipeline, and the `"closed"`/`"failed"` handlers
+that would tear it down are registered further down and so are not installed
+yet. Voice bills by the minute; that worker was orphaned for the process
+lifetime. The cleanup now cancels the runner and pops any `_sessions` entry it
+managed to write, and `_end_session` cancels the cap task instead of leaving it
+to notice on its next poll (`_Session.cap_task`'s comment claimed teardown
+already did this; nothing did). The self-cancel case is guarded: `_enforce_cap`
+calls `_end_session` on itself at the end of its own loop, and cancelling the
+running task would make the very next `await` — `runner.cancel()` — raise
+instead of tearing the worker down.
+
+**`get_answer()` returns `None`, and both call sites took it unchecked.** The
+new-session path raised `TypeError` on `answer["pc_id"]`; the renegotiate path
+was worse and returned HTTP **200 with a body of literally `null`**, which the
+browser turns into `setRemoteDescription(null)` inside its own retry loop with
+no status left to report. Both now go through `_require_answer()` → 503.
+
+**Playground had no stop button.** The entire button block is hidden while
+`state === "live"`, there was no hang-up control anywhere else in the tree, and
+no unmount teardown either — `Rep.tsx` has had exactly that teardown since
+dictation shipped, this page never got one. A visitor who started a round and
+changed their mind left the WebRTC session and its per-minute spend running
+until the cap cut it twelve minutes later. That is the same leak the cap, the
+CORS narrowing and the whole Google gate were built to control, reached by
+simply navigating away.
+
+### The honesty bugs
+
+**The suite's own security tests never ran on a fresh clone.** `server.py`
+reads `PLAYGROUND_TOKEN_SECRET` at import time on purpose, `playground/.env` is
+gitignored, and `.env.example` ships the secret commented out — so importing
+`playground.server` raised and *all* of `test_server.py` was skipped: every
+auth-gate, renegotiate-bypass and cross-user-takeover test, reported as one
+collection error among a hundred passes. Verified by moving `.env` aside and
+running the README's own command: `Ran 104 tests ... FAILED (errors=1)`, with
+43 tests silently absent. Tests that do not run are worse than tests that do
+not exist, because the count still goes up. Fixed with a `setdefault` in
+`playground/tests/__init__.py` — the only thing Python imports ahead of the
+test modules — which keeps production's refuse-to-start behaviour intact.
+While there: six classes assigned `os.environ["OPENAI_API_KEY"]` with no
+`tearDown`, leaking a fake key into every later test in the process, so a
+future test of `key_loaded=False` would have passed or failed on class
+ordering. Now `patch.dict` with an `addCleanup`.
+
+**An unset `PLAYGROUND_GOOGLE_CLIENT_ID` told every learner their own Google
+account had been rejected.** It defaulted to `""`, google-auth compared each
+token's `aud` against `[""]`, mismatched, and the resulting `AuthError` became
+a 401 "Google sign-in failed" — for an env var the operator never set, with the
+real cause visible only in a server log. Now a 503 that names the
+misconfiguration. Deliberately *not* an import-time refusal like the signing
+secret: `mode=dictation` needs no sign-in at all, so a dictation-only deploy is
+legitimate and must still boot.
+
+**`_authenticate_playground_request` reflected the `AuthError` text into the
+401 body** — `detail=str(e)`, the exact practice `login()` refuses forty lines
+above, and for the reasons its docstring already spells out. Nothing leaks
+today, since `verify_token` only raises fixed strings; what it handed a caller
+was a four-way oracle separating a forged signature from an expired token from
+a malformed one, and a licence for the next `AuthError` raised with dynamic
+text on that path to become a real reflection bug with no second review.
+
+**A signed-back-in visitor was told the voice service was unreachable before
+anything had been tried.** `start()`'s catch sets `state = "unavailable"` and
+signs the visitor out; the Google callback then set `signedIn` back to true and
+left `state` alone, so the button that reappeared read "voice service
+unreachable" and the hint under it made a claim about a service nothing had
+contacted since. One line: `setState("idle")`. Same rule as ever, pointing the
+other way this time.
+
+**`Rep.tsx` had grown a rendered em dash** — "Voice is unavailable right now —
+type it instead" — which breaks this file's own checked number,
+`grep -c '—' dist/index.html` must print `0`. Latent, not visible at review
+time: `dist/` is stale and does not yet contain any of the new dictation
+strings, so it would have landed on the live sales page at the next
+`publish:book`, which is the worst moment to find it.
+
+### Tidying, in the same pass
+
+`VoiceConfig.token_secret` deleted — nothing read it, but `from_env()` loaded
+`PLAYGROUND_TOKEN_SECRET` into it anyway, so the obvious place a future caller
+would look for the signing secret (every other `PLAYGROUND_*` knob lives on
+that dataclass) would have handed them `""` and quietly undone the one secret
+documented as having no default. `test_config.py` now asserts the field's
+*absence*. `min(remaining, remaining - handover_at)` in `_enforce_cap` cannot
+pick its first term — `handover_at` is strictly positive — so it read as a
+clamp it never was, in the one function whose sleep maths was already got wrong
+once. And the two adjacent identical `phase === "locked"` blocks in `Rep.tsx`
+are one block with two rows.
+
+**Not fixed, and why:** nothing. Every finding in the review was real.

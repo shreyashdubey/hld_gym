@@ -13,6 +13,11 @@ export const RESERVE_URL =
    builds, not a page Next knows about. */
 export const BOOK_URL = "/book/";
 
+/* The same 51 chapters, story-first: real histories instead of invented scene
+   openers, plus the card collection. A second static pipeline writes it, so it
+   is a plain <a> for the same reason /book/ is. */
+export const ORIGINS_URL = "/origins/";
+
 /* The price, as the buttons print it. It has changed once already ($39 to $19)
    and the CTAs in the rep and on the page shipped out of step. */
 export const PRICE = "$19";

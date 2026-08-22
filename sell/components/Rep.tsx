@@ -295,31 +295,34 @@ export default function Rep() {
                 phase === "locked" ? "Write it the way you’d say it to an interviewer…" : "(left blank)"
               }
             />
+            {/* No em dash in any string that renders: sell/AGENTS.md's hard
+                rules make `grep -c '—' dist/index.html` a checked number,
+                and Rep is mounted on the home page. */}
             {phase === "locked" && (
-              <div className="btnRow">
-                <button
-                  type="button"
-                  className="dictate-btn"
-                  onClick={toggleMic}
-                  disabled={mic === "connecting"}
-                  aria-pressed={mic === "on"}
-                >
-                  {mic === "on" ? "◉ listening" : mic === "connecting" ? "connecting…" : "◎ speak it"}
-                </button>
-                <span className="hint">
-                  {mic === "unavailable"
-                    ? "Voice is unavailable right now — type it instead, the scoring is identical."
-                    : "Or type it. Both are graded the same way."}
-                </span>
-              </div>
-            )}
-            {phase === "locked" && (
-              <div className="btnRow">
-                <button className="btn" onClick={() => setPhase("graded")}>
-                  submit, no going back
-                </button>
-                <span className="hint">rough and honest beats polished and looked-up</span>
-              </div>
+              <>
+                <div className="btnRow">
+                  <button
+                    type="button"
+                    className="dictate-btn"
+                    onClick={toggleMic}
+                    disabled={mic === "connecting"}
+                    aria-pressed={mic === "on"}
+                  >
+                    {mic === "on" ? "◉ listening" : mic === "connecting" ? "connecting…" : "◎ speak it"}
+                  </button>
+                  <span className="hint">
+                    {mic === "unavailable"
+                      ? "Voice is unavailable right now. Type it instead, the scoring is identical."
+                      : "Or type it. Both are graded the same way."}
+                  </span>
+                </div>
+                <div className="btnRow">
+                  <button className="btn" onClick={() => setPhase("graded")}>
+                    submit, no going back
+                  </button>
+                  <span className="hint">rough and honest beats polished and looked-up</span>
+                </div>
+              </>
             )}
           </div>
         )}

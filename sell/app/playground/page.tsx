@@ -77,6 +77,15 @@ export default function PlaygroundPage() {
         .then(() => {
           setAuthError(null);
           setSignedIn(true);
+          /* Back to square one, not to whatever the last attempt left
+             behind. A connect failure sets "unavailable" and signs the
+             visitor out (see start()'s catch); without this reset the
+             button that reappears after they sign back in reads "voice
+             service unreachable", and the hint under it claims the service
+             isn't reachable — about a service nothing has contacted since.
+             Same rule the catch's own comment cites, pointing the other
+             way: never claim the product does something it does not. */
+          setState("idle");
         })
         .catch(() => setAuthError("Sign-in failed — try again."));
     }).catch(() => setAuthError("Google sign-in isn't available right now."));
@@ -105,6 +114,33 @@ export default function PlaygroundPage() {
       elements: [...existing, ...convertToExcalidrawElements(skeleton as never)],
     });
   }, []);
+
+  /* Voice bills OpenAI credit by the minute, so a session has to end when
+     the visitor is done with it, not when the server-side cap notices twelve
+     minutes later. There was no stop control at all: the whole button block
+     is hidden while state === "live", and nothing tore the session down on
+     unmount either, so a visitor who started a round and then navigated away
+     client-side left it running and spending. Rep.tsx has had exactly this
+     teardown since dictation shipped; this page never got one.
+
+     lib/voice.ts guarantees onDisconnect never fires for a disconnect the
+     caller asked for itself, so this sets the terminal state directly --
+     "ended", the same state the cap's own clean cut produces, because a
+     round the visitor chose to end is not a failure either. */
+  const stop = useCallback(() => {
+    const opened = session.current;
+    session.current = null;
+    setState("ended");
+    void opened?.disconnect().catch(() => {});
+  }, []);
+
+  useEffect(
+    () => () => {
+      void session.current?.disconnect().catch(() => {});
+      session.current = null;
+    },
+    [],
+  );
 
   const start = useCallback(async () => {
     setState("connecting");
@@ -207,6 +243,17 @@ export default function PlaygroundPage() {
           </p>
           <div ref={googleButton} />
           {authError && <p className="hint">{authError}</p>}
+        </>
+      )}
+      {signedIn === true && state === "live" && (
+        <>
+          <button type="button" className="btn" onClick={stop}>
+            end the round
+          </button>
+          <p className="hint">
+            Ends the session now rather than waiting for the cap. The board
+            below keeps everything on it either way.
+          </p>
         </>
       )}
       {signedIn === true && state !== "live" && (

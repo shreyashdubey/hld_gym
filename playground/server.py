@@ -145,6 +145,17 @@ async def login(request: LoginRequest) -> LoginResponse:
     a habit not worth forming. The real detail is logged server-side only;
     the response body gets a fixed message."""
     config = VoiceConfig.from_env()
+    if not config.google_client_id:
+        # Without this, google-auth compares the token's `aud` against [""],
+        # mismatches every real credential and raises -> AuthError -> 401
+        # "Google sign-in failed": every learner told their own Google
+        # account was rejected, when the actual cause is an env var the
+        # operator never set. Unlike PLAYGROUND_TOKEN_SECRET this does not
+        # refuse to boot, because mode=dictation needs no sign-in at all and
+        # a dictation-only deploy is legitimate -- it fails on the one
+        # endpoint that actually needs it, and says which side is broken.
+        logger.error("PLAYGROUND_GOOGLE_CLIENT_ID is unset; /api/login cannot verify anything")
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured")
     try:
         email = verify_google_id_token(request.id_token, config.google_client_id)
     except GoogleUnavailableError as e:
@@ -174,7 +185,29 @@ def _authenticate_playground_request(authorization: str | None) -> str:
     try:
         return verify_token(token, _TOKEN_SECRET, now=time.time())
     except AuthError as e:
-        raise HTTPException(status_code=401, detail=str(e)) from e
+        # One fixed message for every rejection, the detail to the log --
+        # the same rule login() states at length above, for the same two
+        # reasons. Today verify_token only raises fixed strings, so nothing
+        # leaks; str(e) here still handed a caller a four-way oracle
+        # (forged vs expired vs malformed vs no email), and the first
+        # AuthError raised with dynamic text on this path would have become
+        # a reflection bug with no second review.
+        logger.warning("Playground session token rejected: %s", e)
+        raise HTTPException(status_code=401, detail="sign in required") from e
+
+
+def _require_answer(connection: SmallWebRTCConnection) -> dict:
+    """The SDP answer, or a 503. SmallWebRTCConnection.get_answer() returns
+    None whenever its `_answer` is unset, and both call sites below used it
+    unchecked: the new-session path then raised TypeError on
+    answer["pc_id"], and the renegotiate path -- worse -- returned HTTP 200
+    with a body of literally `null`, which the browser turns into
+    setRemoteDescription(null) inside its own retry loop with no status left
+    to report."""
+    answer = connection.get_answer()
+    if answer is None:
+        raise HTTPException(status_code=503, detail="voice service unavailable")
+    return answer
 
 
 class OfferRequest(BaseModel):
@@ -211,8 +244,9 @@ class _Session(NamedTuple):
     # security review demonstrated this live before it shipped.
     email: str | None = None
     # None for dictation, which has no Session and so nothing to cap. Held
-    # here for the same reason `task` is: a task with no other reference
-    # can be garbage-collected mid-run.
+    # here for the same reason `task` is (a task with no other reference can
+    # be garbage-collected mid-run) and so _end_session can cancel it on a
+    # hangup instead of leaving it to notice on its next poll.
     cap_task: asyncio.Task | None = None
 
 
@@ -236,6 +270,12 @@ async def _end_session(conn: SmallWebRTCConnection) -> None:
     """
     session = _sessions.pop(conn.pc_id, None)
     if session is not None:
+        # Not when _enforce_cap is calling this on itself at the end of its
+        # own loop: cancelling the running task makes the very next await --
+        # runner.cancel() on the line below -- raise CancelledError, and the
+        # worker would never actually be torn down.
+        if session.cap_task is not None and session.cap_task is not asyncio.current_task():
+            session.cap_task.cancel()
         await session.runner.cancel(reason="connection ended")
 
 
@@ -296,7 +336,10 @@ async def _enforce_cap(
                 # completion, so the handover has to be asked for explicitly.
                 await worker.queue_frames([LLMRunFrame()])
             handed_over = True
-        sleep_for = remaining if handed_over else min(remaining, remaining - handover_at)
+        # handover_at is strictly positive, so this is not a clamp and never
+        # was -- it read like one, in the one function whose sleep maths was
+        # already got wrong once.
+        sleep_for = remaining if handed_over else remaining - handover_at
         await asyncio.sleep(min(sleep_for, 1.0) if sleep_for > 0 else 0.05)
     await _end_session(connection)
 
@@ -393,11 +436,15 @@ async def offer(
         if existing.mode == "playground" and authenticated_email != existing.email:
             raise HTTPException(status_code=403, detail="not your session")
         await existing.connection.renegotiate(sdp=request.sdp, type=request.type)
-        return existing.connection.get_answer()
+        return _require_answer(existing.connection)
 
     connection = SmallWebRTCConnection()
     await connection.initialize(sdp=request.sdp, type=request.type)
 
+    # Both filled in inside the try, both read by the cleanup below, so both
+    # have to exist before the first line that can throw.
+    runner: WorkerRunner | None = None
+    registered_pc_id: str | None = None
     try:
         # Everything from here down can fail before the connection is ever
         # registered in _sessions: VoiceConfig.from_env() on a malformed
@@ -423,7 +470,8 @@ async def offer(
         runner = WorkerRunner(handle_sigint=False)
         task = asyncio.create_task(runner.run(worker))
 
-        answer = connection.get_answer()
+        answer = _require_answer(connection)
+        registered_pc_id = answer["pc_id"]
         # Registered before the cap task is created, not after: _enforce_cap's
         # `while connection.pc_id in _sessions` reads _sessions on its very
         # first iteration, and asyncio.create_task only *schedules* the
@@ -436,7 +484,7 @@ async def offer(
         # once it exists -- _enforce_cap doesn't read it, only server.py's
         # own teardown paths do, and none of those can run before this
         # function returns.
-        _sessions[answer["pc_id"]] = _Session(
+        _sessions[registered_pc_id] = _Session(
             connection=connection,
             runner=runner,
             task=task,
@@ -446,7 +494,7 @@ async def offer(
         )
         if pg_session is not None:
             cap_task = asyncio.create_task(_enforce_cap(connection, worker, pg_session))
-            _sessions[answer["pc_id"]] = _sessions[answer["pc_id"]]._replace(cap_task=cap_task)
+            _sessions[registered_pc_id] = _sessions[registered_pc_id]._replace(cap_task=cap_task)
 
         connection.add_event_handler("closed", _end_session)
         connection.add_event_handler("failed", _end_session)
@@ -456,6 +504,20 @@ async def offer(
         # SmartTurn plus Silero is exactly the slow window where a client
         # giving up is most likely. Re-raise once cleanup is done; this
         # tears down, it does not swallow.
+        #
+        # Disconnecting the peer is not the whole teardown. By the time
+        # _require_answer() can raise, create_task(runner.run(worker)) has
+        # already started a full STT+LLM+TTS pipeline that nothing else will
+        # ever cancel: the "closed"/"failed" handlers are registered further
+        # down and so are not installed yet on any of these paths. Same for
+        # a throw after _sessions registration -- the entry would never be
+        # popped, and its cap task would poll for the whole session cap.
+        if registered_pc_id is not None:
+            leaked = _sessions.pop(registered_pc_id, None)
+            if leaked is not None and leaked.cap_task is not None:
+                leaked.cap_task.cancel()
+        if runner is not None:
+            await runner.cancel(reason="offer failed")
         await connection.disconnect()
         raise
 

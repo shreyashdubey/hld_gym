@@ -18,15 +18,32 @@ from playground.server import (
     _enforce_cap,
     _extract_board_graph,
     _sessions,
+    _TOKEN_SECRET,
     login,
     offer,
 )
 from playground.session import Session
 
 
+def _fake_openai_key(test: unittest.TestCase) -> None:
+    """A fake OPENAI_API_KEY for the duration of one test, restored after.
+
+    Six classes here used to assign os.environ directly with no tearDown.
+    `unittest discover` runs the whole suite in one process, so a later test
+    asserting on a *missing* key -- /health reporting key_loaded=False, the
+    one property that test exists to check -- would have passed or failed on
+    class ordering rather than on the code. The rest of this suite already
+    injects mappings (_allowed_origins({}), VoiceConfig.from_env(env)); this
+    was the one place that mutated the real environment instead.
+    """
+    patcher = patch.dict(os.environ, {"OPENAI_API_KEY": "sk-secret-do-not-leak"})
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
 class TestHealth(unittest.TestCase):
     def setUp(self):
-        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        _fake_openai_key(self)
         from playground.server import app
 
         self.client = TestClient(app)
@@ -43,7 +60,7 @@ class TestHealth(unittest.TestCase):
 
 class TestOffer(unittest.TestCase):
     def setUp(self):
-        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        _fake_openai_key(self)
         from playground.server import app
 
         self.client = TestClient(app)
@@ -245,7 +262,7 @@ class TestConnectionLeakGuard(unittest.TestCase):
     shown untested code regresses silently."""
 
     def setUp(self):
-        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        _fake_openai_key(self)
         self.fake = _FakeConnection()
         self.request = OfferRequest(sdp="x", type="offer")
 
@@ -282,10 +299,13 @@ class _FakeWorkerRunner:
     in."""
 
     def __init__(self, *args, **kwargs):
-        pass
+        self.cancel_calls = 0
 
     async def run(self, worker):
         return
+
+    async def cancel(self, reason=None):
+        self.cancel_calls += 1
 
 
 class TestCapTaskRegistrationOrder(unittest.TestCase):
@@ -302,7 +322,7 @@ class TestCapTaskRegistrationOrder(unittest.TestCase):
     old order look correct."""
 
     def setUp(self):
-        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        _fake_openai_key(self)
         self.fake = _FakeConnection()
         self.request = OfferRequest(sdp="x", type="offer")
         from playground.auth import sign_token
@@ -470,7 +490,7 @@ class TestPlaygroundAuthGate(unittest.TestCase):
     without a real WebRTC handshake."""
 
     def setUp(self):
-        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        _fake_openai_key(self)
         from playground.server import _TOKEN_SECRET
 
         self.secret = _TOKEN_SECRET
@@ -605,7 +625,7 @@ class TestLogin(unittest.TestCase):
     verify_google_id_token, never a real network call."""
 
     def setUp(self):
-        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        _fake_openai_key(self)
 
     def test_a_verified_google_token_returns_our_own_session_token(self):
         with patch(
@@ -681,7 +701,7 @@ class TestRenegotiateAuthGateBypass(unittest.TestCase):
     path -- this is about the gate, not the pipeline."""
 
     def setUp(self):
-        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        _fake_openai_key(self)
         from playground.server import _TOKEN_SECRET
 
         self.secret = _TOKEN_SECRET
@@ -744,7 +764,7 @@ class TestRenegotiateOwnership(unittest.TestCase):
     branch now requires a match."""
 
     def setUp(self):
-        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        _fake_openai_key(self)
         from playground.server import _TOKEN_SECRET
 
         self.secret = _TOKEN_SECRET
@@ -788,6 +808,155 @@ class TestRenegotiateOwnership(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.status_code, 403)
         self.assertEqual(self.fake.renegotiate_calls, 0)
+
+
+
+class _NoAnswerConnection(_FakeConnection):
+    """A connection whose get_answer() returns None -- what the real
+    SmallWebRTCConnection returns whenever its `_answer` is unset (see the
+    installed pipecat connection.py). Both of offer()'s call sites used to
+    take that unchecked."""
+
+    def get_answer(self):
+        return None
+
+
+class TestOfferAnswerMissing(unittest.TestCase):
+    """get_answer() returning None used to fail two different ways, both
+    wrong: TypeError on answer["pc_id"] for a new session (a 500, with a
+    full STT+LLM+TTS worker already running and nothing left to cancel it),
+    and HTTP 200 with a body of literally `null` on a renegotiate, which the
+    browser turns into setRemoteDescription(null) inside its own retry loop.
+    Voice bills by the minute, so an orphaned worker is a money leak, not
+    just an untidy one."""
+
+    def setUp(self):
+        _fake_openai_key(self)
+        self.fake = _NoAnswerConnection()
+        self.request = OfferRequest(sdp="x", type="offer")
+        self.auth = f"Bearer {sign_token('learner@example.com', _TOKEN_SECRET, now=time.time(), ttl_secs=3600)}"
+
+    def test_a_missing_answer_cancels_the_worker_instead_of_orphaning_it(self):
+        runners = []
+
+        def make_runner(*args, **kwargs):
+            runners.append(_FakeWorkerRunner())
+            return runners[-1]
+
+        with patch("playground.server.SmallWebRTCConnection", return_value=self.fake):
+            with patch(
+                "playground.server.build_playground_worker",
+                return_value=(object(), Session(VoiceConfig())),
+            ):
+                with patch("playground.server.WorkerRunner", make_runner):
+                    with self.assertRaises(HTTPException) as ctx:
+                        asyncio.run(offer(self.request, mode="playground", authorization=self.auth))
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(self.fake.disconnect_calls, 1)
+        self.assertEqual(
+            [r.cancel_calls for r in runners],
+            [1],
+            "the worker task was left running after the offer failed",
+        )
+        self.assertNotIn(self.fake.pc_id, _sessions)
+
+    def test_a_renegotiate_with_no_answer_is_a_503_not_a_null_body(self):
+        session = _Session(
+            connection=self.fake,
+            runner=_FakeWorkerRunner(),
+            task=None,
+            mode="playground",
+            email="learner@example.com",
+        )
+        _sessions[self.fake.pc_id] = session
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(
+                    offer(
+                        OfferRequest(sdp="x", type="offer", pc_id=self.fake.pc_id),
+                        mode="playground",
+                        authorization=self.auth,
+                    )
+                )
+            self.assertEqual(ctx.exception.status_code, 503)
+        finally:
+            _sessions.pop(self.fake.pc_id, None)
+
+
+class TestSessionTokenRejectionIsOpaque(unittest.TestCase):
+    """login() already refuses to reflect an AuthError's own text; this path
+    did the same thing 40 lines later with detail=str(e). Nothing leaks
+    today (verify_token only raises fixed strings) -- what it handed a
+    caller was an oracle separating a forged signature from an expired one
+    from a malformed one, and a licence for the next AuthError raised with
+    dynamic text to become a real reflection bug."""
+
+    def _reject(self, header):
+        from playground.server import _authenticate_playground_request
+
+        with self.assertRaises(HTTPException) as ctx:
+            _authenticate_playground_request(header)
+        return ctx.exception
+
+    def test_every_rejection_reason_gives_the_same_401_body(self):
+        expired = sign_token("a@b.c", _TOKEN_SECRET, now=time.time() - 7200, ttl_secs=3600)
+        forged = sign_token("a@b.c", "a-different-secret", now=time.time(), ttl_secs=3600)
+        bodies = {
+            self._reject(f"Bearer {expired}").detail,
+            self._reject(f"Bearer {forged}").detail,
+            self._reject("Bearer not-a-token-at-all").detail,
+            self._reject(None).detail,
+        }
+        self.assertEqual(bodies, {"sign in required"})
+
+    def test_the_body_never_carries_the_submitted_token(self):
+        forged = sign_token("a@b.c", "a-different-secret", now=time.time(), ttl_secs=3600)
+        self.assertNotIn(forged, self._reject(f"Bearer {forged}").detail)
+
+
+class TestLoginWithoutAClientId(unittest.TestCase):
+    """An unset PLAYGROUND_GOOGLE_CLIENT_ID made google-auth compare every
+    token's `aud` against [""], so every learner was told their own Google
+    account had been rejected -- for an env var the operator never set. The
+    signing secret refuses to boot on the same class of mistake; this one
+    cannot (mode=dictation needs no sign-in, so a dictation-only deploy is
+    legitimate), so it has to fail honestly on the one endpoint that needs
+    it."""
+
+    def test_an_unconfigured_client_id_is_a_503_not_a_401(self):
+        with patch.dict(os.environ, {"PLAYGROUND_GOOGLE_CLIENT_ID": ""}):
+            with patch("playground.server.verify_google_id_token") as verify:
+                with self.assertRaises(HTTPException) as ctx:
+                    asyncio.run(login(LoginRequest(id_token="anything")))
+        self.assertEqual(ctx.exception.status_code, 503)
+        verify.assert_not_called()
+
+
+class TestEndSessionCancelsTheCapTask(unittest.TestCase):
+    """The cap task used to be left to notice its own session was gone on
+    its next poll. Bounded at a second, so never a crash -- but _Session's
+    comment claimed teardown paths already cancelled it, and nothing did."""
+
+    def test_a_hangup_cancels_the_cap_task(self):
+        from playground.server import _end_session
+
+        conn = _FakeConnection()
+        runner = _FakeWorkerRunner()
+
+        async def scenario():
+            cap = asyncio.create_task(asyncio.sleep(3600))
+            _sessions[conn.pc_id] = _Session(
+                connection=conn, runner=runner, task=None, mode="playground",
+                email="a@b.c", cap_task=cap,
+            )
+            await _end_session(conn)
+            await asyncio.sleep(0)
+            return cap
+
+        cap = asyncio.run(scenario())
+        self.assertTrue(cap.cancelled() or cap.cancelling())
+        self.assertEqual(runner.cancel_calls, 1)
+        self.assertNotIn(conn.pc_id, _sessions)
 
 
 if __name__ == "__main__":

@@ -75,16 +75,39 @@ class BoardContext:
         return str(label) if label else UNLABELLED
 
     @staticmethod
-    def _nodes(graph: dict) -> list[dict]:
-        """Nodes that can actually be referenced: dicts carrying an id.
-        Anything else is dropped rather than crashing a live session."""
-        return [n for n in (graph.get("nodes") or []) if isinstance(n, dict) and "id" in n]
+    def _usable_id(value: object) -> bool:
+        """An id both this class and a dict/set can hold. JSON's only
+        unhashable shapes are list and object, and both arrive here: a
+        browser sending {"id": {...}} used to reach `{n["id"] for n in ...}`
+        and raise TypeError: unhashable type. That raised *after* update()
+        had already swapped the graph in, so every later render and every
+        later push_context() in the session raised too -- including the
+        session cap's coach handover, the one thing the cap exists to
+        guarantee. Dropped here, in the one place both _render and
+        last_change_summary read through, rather than guarded at each use."""
+        return not isinstance(value, (list, dict))
 
-    @staticmethod
-    def _edges(graph: dict) -> list[dict]:
+    @classmethod
+    def _nodes(cls, graph: dict) -> list[dict]:
+        """Nodes that can actually be referenced: dicts carrying a usable id.
+        Anything else is dropped rather than crashing a live session."""
+        return [
+            n
+            for n in (graph.get("nodes") or [])
+            if isinstance(n, dict) and "id" in n and cls._usable_id(n["id"])
+        ]
+
+    @classmethod
+    def _edges(cls, graph: dict) -> list[dict]:
         """Edges that can actually be drawn: dicts carrying both endpoints."""
         return [
-            e for e in (graph.get("edges") or []) if isinstance(e, dict) and "from" in e and "to" in e
+            e
+            for e in (graph.get("edges") or [])
+            if isinstance(e, dict)
+            and "from" in e
+            and "to" in e
+            and cls._usable_id(e["from"])
+            and cls._usable_id(e["to"])
         ]
 
     @classmethod

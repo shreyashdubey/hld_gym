@@ -259,5 +259,55 @@ class TestBoardContext(unittest.TestCase):
         self.assertIn("456", b.last_change_summary)
 
 
+class TestUnhashableIds(unittest.TestCase):
+    """A board is untyped JSON straight from a browser, and JSON's two
+    unhashable shapes -- list and object -- both reach here. An id of either
+    used to raise `TypeError: unhashable type` inside `{n["id"] for n in
+    ...}`, and because update() swaps the graph in *before* anything renders
+    it, the poisoned graph stayed: every later render and every later
+    push_context() in that session raised too, including the session cap's
+    coach handover, which is the one thing the cap exists to guarantee."""
+
+    POISON = {
+        "nodes": [{"id": {"k": 1}, "label": "X"}, {"id": ["a"], "label": "Y"}],
+        "edges": [{"from": {"k": 1}, "to": "a"}],
+        "unreadable": 0,
+    }
+
+    def test_an_unhashable_node_id_renders_instead_of_raising(self):
+        b = BoardContext()
+        b.update(self.POISON)
+        self.assertIn("none yet", b.messages()[0]["content"])
+
+    def test_an_unhashable_id_does_not_break_the_change_summary(self):
+        b = BoardContext()
+        b.update(A)
+        b.update(self.POISON)
+        self.assertIn("removed App", b.last_change_summary)
+
+    def test_the_session_still_works_after_a_poisoned_update(self):
+        """The part that made this fatal rather than cosmetic: the bad graph
+        was never rolled back, so the damage outlived the one bad message."""
+        b = BoardContext()
+        b.update(self.POISON)
+        b.update(B)
+        self.assertIn("Cache", b.messages()[0]["content"])
+        # The poisoned graph contributed no usable nodes, so B's are all new.
+        self.assertEqual(b.last_change_summary, "added App, Cache; connected App to Cache")
+
+    def test_a_usable_node_beside_an_unusable_one_survives(self):
+        b = BoardContext()
+        b.update(
+            {
+                "nodes": [{"id": ["bad"], "label": "Dropped"}, {"id": "a", "label": "App"}],
+                "edges": [],
+                "unreadable": 0,
+            }
+        )
+        content = b.messages()[0]["content"]
+        self.assertIn("App", content)
+        self.assertNotIn("Dropped", content)
+
+
 if __name__ == "__main__":
     unittest.main()
