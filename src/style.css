@@ -214,12 +214,13 @@ body {
 .brand, .pill, .btn, .icon-btn, .box-tag, .eyebrow, .tile-label, .q-level-tab,
 .stamp, .side-part-btn, .side-ch, .rail-title, .rail-link, .rq, .toast,
 .dg-steps, .dg-close, .part-head .tagline, .ch-cell, .q-why b.verdict,
-h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt {
+h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt,
+.card-suit, .coll-suit, .coll-suit-tag {
   font-family: var(--font-ui);
 }
 .mono, code, pre, .ch-meta, .tile-value, .q-num, .heat-cap, .review-item-tag,
 .timer, .side-ch .n, .ch-cell .n, .rq b, .side-part-btn .pn,
-.content th, .content td, figure.diagram figcaption {
+.content th, .content td, figure.diagram figcaption, .coll-year, .tl-year {
   font-family: var(--font-mono);
 }
 /* lowercase is the ideology: no word gets more weight than another. Applied to
@@ -228,7 +229,7 @@ h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt {
 .brand, .pill, .btn, .icon-btn, .box-tag, .eyebrow, .tile-label, .q-level-tab,
 .stamp, .side-part-btn, .side-ch, .rail-title, .rail-link, .rq, .toast,
 .dg-steps, .dg-close, .ch-meta, .q-num, .heat-cap, .review-item-tag,
-.content th, .q-why b.verdict, .ch-cell {
+.content th, .q-why b.verdict, .ch-cell, .card-suit, .coll-suit, .coll-suit-tag {
   text-transform: lowercase;
 }
 
@@ -432,8 +433,15 @@ h1.ch-title {
 .box > :last-child, .takeaways > :last-child { margin-bottom: 0; }
 .box.analogy { border-top: 2px solid var(--warm); }
 .box.analogy .box-tag { color: var(--warm); }
-.box.story { border-top: 2px solid var(--ink-2); }
-.box.story .box-tag { color: var(--ink-2); }
+/* The origin story sits where the cold open used to, and a dated historical
+   event is the same object .box.story already is — so it takes that rule
+   rather than a rule of its own. Two extra lines: the seam that hands the
+   reader from history to the chapter proper, and the dotted rule under a fact
+   that carries a source. */
+.box.story, .box.origin { border-top: 2px solid var(--ink-2); }
+.box.story .box-tag, .box.origin .box-tag { color: var(--ink-2); }
+.origin-seam { color: var(--ink-2); font-style: italic; }
+.fact { border-bottom: 1px dotted var(--ink-3); }
 .box.lens { border-top: 2px solid var(--ink); }
 .box.lens .box-tag { color: var(--ink); }
 /* orange is reserved. On TE hardware it means record; here it means this is
@@ -532,7 +540,7 @@ text.dg-good, tspan.dg-good { fill: var(--good); stroke: none; font-family: var(
   color: var(--accent-ink); font-weight: 600; margin-bottom: 6px;
 }
 .fey-prompt { font-weight: 600; margin: .4em 0; font-size: .95rem; }
-.feynman textarea {
+.feynman textarea, .card-answer {
   width: 100%; min-height: 110px; resize: vertical;
   font-family: var(--font-read); font-size: .92rem; line-height: 1.6; color: var(--ink);
   background: var(--paper); border: 1px solid var(--line-strong); padding: 10px 12px;
@@ -583,6 +591,94 @@ details[open] > summary { margin-bottom: 8px; }
 }
 .q-summary.pass { border-color: var(--good); border-top-width: 2px; }
 
+/* ---------- the deck, the collection, the timeline ----------
+   A card is a .q-item at card scale: hairline frame, panel fill, square
+   corners, and the same green/red the quiz already uses — "kept" here has to
+   mean what "correct" means everywhere else in the book. The face stays
+   display:none behind [hidden] until the reader commits; nothing below styles
+   .card-face itself, so no rule here can pull an unearned title into view. */
+.deck { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); }
+.deck-note { color: var(--ink-2); font-size: .9rem; }
+.card {
+  border: 1px solid var(--line); background: var(--panel);
+  padding: 14px 18px;
+  /* card art blends against this fill and nothing behind it. Without the
+     isolate the blend would reach the page, and in phosphor the two fixed CRT
+     overlays as well. */
+  isolation: isolate;
+}
+.card-suit { font-size: .62rem; font-weight: 600; letter-spacing: .16em; color: var(--ink-3); }
+.card-prompt { font-weight: 600; margin: 6px 0 12px; line-height: 1.5; }
+.card-answer { min-height: 72px; font-size: .88rem; }
+/* One ink treatment over photograph and drawing alike, so a press photo and an
+   authored portrait read as one sketchbook rather than a scrapbook. luminosity
+   keeps the picture's tones and takes hue and saturation from the surface it
+   sits on, which is how the halftone lands in each theme's own ink without a
+   hardcoded colour anywhere: neutral on paper and blueprint, faintly blue in
+   manim, green on the phosphor tube. */
+.card-art {
+  display: block; width: 100%; max-width: 9rem; margin: 0 auto 10px;
+  filter: grayscale(1) contrast(1.25);
+  mix-blend-mode: luminosity;
+}
+/* Dark paper wants the ink inverted, or a photograph arrives as a bright slab. */
+[data-theme="dark"] .card-art,
+[data-theme="manim"] .card-art,
+[data-theme="phosphor"] .card-art { filter: grayscale(1) contrast(1.15) invert(1); }
+.card-title { font-weight: 700; margin-top: 12px; }
+.card-sub { color: var(--ink-2); font-size: .82rem; }
+.card-body { margin-top: 8px; }
+.card-model {
+  margin-top: 12px; padding-top: 10px;
+  border-top: 1px dashed var(--line); color: var(--ink-2); font-size: .92rem;
+}
+.card-grade { display: flex; gap: 8px; margin-top: 14px; }
+/* Two signals, not one: the frame and the suit label both move, so the state
+   does not rest on a 1px hairline alone. */
+.card.earned { border-color: var(--good); border-top-width: 2px; }
+.card.earned .card-suit { color: var(--good); }
+.card.missed { border-color: var(--bad); border-top-width: 2px; }
+.card.missed .card-suit { color: var(--bad); }
+
+.coll-bar { height: 4px; background: var(--line); overflow: hidden; margin: 22px 0 14px; }
+.coll-bar > span { display: block; height: 100%; background: var(--accent); }
+.coll-suits { display: flex; gap: 20px; flex-wrap: wrap; color: var(--ink-2); font-size: .8rem; }
+.coll-suit b { font-size: .62rem; letter-spacing: .16em; color: var(--ink-3); margin-right: 7px; }
+/* .coll-grid is the home page's .ch-grid, declared with it further down.
+   transparent left border in the base state so marking one does not shift the
+   row, the same way .side-ch marks the chapter you are on */
+.coll-card {
+  display: grid; gap: 2px; align-content: start;
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  border-left: 2px solid transparent;
+  background: var(--paper); padding: 10px 12px;
+  text-decoration: none; font-size: .82rem; line-height: 1.4;
+}
+.coll-card:hover { background: var(--panel); }
+.coll-card.earned { border-left-color: var(--good); }
+/* .content a already claims a colour at 0-1-1, so these have to outrank it */
+.content a.coll-card { color: var(--ink-3); }
+.content a.coll-card.earned { color: var(--ink); }
+.coll-year { font-size: .68rem; color: var(--ink-3); }
+.coll-title { font-weight: 600; }
+.coll-suit-tag { font-size: .58rem; letter-spacing: .16em; color: var(--ink-3); }
+
+.tl { list-style: none; padding: 0; margin: 24px 0 0; border-left: 1px solid var(--line); }
+.tl-node { display: grid; grid-template-columns: 4rem 1fr; gap: 12px; padding: 5px 0 5px 16px; position: relative; }
+/* square, like every other mark in this system */
+.tl-node::before {
+  content: ""; position: absolute; left: -4px; top: 16px;
+  width: 7px; height: 7px; background: var(--line-strong);
+}
+.tl-node.earned::before { background: var(--good); }
+.tl-year { font-size: .78rem; color: var(--ink-3); text-align: right; }
+.content a.tl-label { color: var(--ink-3); text-decoration: none; }
+.content .tl-node.earned .tl-label { color: var(--ink); }
+.content a.tl-label:hover { text-decoration: underline; }
+/* The deck is a stack of empty boxes on paper: no face, an empty textarea and
+   a button that cannot be pressed. Nothing there survives printing. */
+@media print { .deck-wrap { display: none; } }
+
 /* ---------- buttons, nav ---------- */
 .btn {
   display: inline-block; border: 1px solid var(--accent);
@@ -612,7 +708,9 @@ details[open] > summary { margin-bottom: 8px; }
 .part-head .bossbtn { margin-left: auto; }
 /* the frame closes on the container, not on the cells, so a part whose last row
    is short still reads as a finished grid rather than a torn-off one */
-.ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0; border: 1px solid var(--line); }
+.ch-grid, .coll-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 0; border: 1px solid var(--line); }
+/* the collection is that same grid one page over — it only wants air above it */
+.coll-grid { margin-top: 24px; }
 .ch-cell {
   border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
   background: var(--paper);
