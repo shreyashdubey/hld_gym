@@ -17831,6 +17831,17 @@ let S = blank();
 try { S = Object.assign(blank(), JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) {}
 const save = () => localStorage.setItem(KEY, JSON.stringify(S));
 
+/* save() writes the whole of S, so two tabs on the same browser would each
+   overwrite the other's last write — and /book and /origins share this key on
+   purpose, which makes two tabs the normal case rather than the odd one. Re-read
+   on any write from another tab. Last writer still wins within a single action;
+   what this stops is a whole session being lost to a tab nobody looked at. */
+window.addEventListener('storage', e => {
+  if (e.key !== KEY || !e.newValue) return;
+  try { S = Object.assign(blank(), JSON.parse(e.newValue)); } catch (err) { return; }
+  renderChrome();
+});
+
 /* The gym layer — streak, xp, rank, stamps, boss battles, the review queue — is
    off for anyone who arrives just to read. Visiting #gym toggles it on for this
    browser and it stays on; nothing is deleted while it is off, so turning it
