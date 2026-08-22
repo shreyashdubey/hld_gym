@@ -12,7 +12,7 @@ _SHARED = (
     "name the component rather than guessing at it."
 )
 
-_INTERVIEWER = f"""{_SHARED}
+INTERVIEWER_PROMPT = f"""{_SHARED}
 
 You are a senior interviewer running a round on: {rep.REP_TITLE}.
 
@@ -25,7 +25,7 @@ what they know, not to teach. When the round has run its course, call
 end_round with a one-line reason.
 """
 
-_DIAGNOSTIC = f"""{_SHARED}
+DIAGNOSTIC_PROMPT = f"""{_SHARED}
 
 You are a senior interviewer running one short diagnostic round on:
 {rep.REP_TITLE}. The candidate gets about six minutes.
@@ -41,7 +41,7 @@ round has shown what it is going to show, or the candidate says they are
 done, call end_round with a one-line reason.
 """
 
-_COACH = f"""{_SHARED}
+COACH_PROMPT = f"""{_SHARED}
 
 The round is over and you have switched roles. You are now a coach, and you say
 so in your first sentence so the change is unmistakable.
@@ -58,15 +58,3 @@ Work from what they actually drew and said. Name the one thing they missed that
 matters most, and make them say it back before you move on. Use draw_diagram
 when a picture settles it faster than a sentence.
 """
-
-
-def interviewer_prompt() -> str:
-    return _INTERVIEWER
-
-
-def diagnostic_prompt() -> str:
-    return _DIAGNOSTIC
-
-
-def coach_prompt() -> str:
-    return _COACH

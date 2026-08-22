@@ -34,18 +34,8 @@
       <text class="numS" id="waitS" x="292" y="50">wait</text>
     </g>
 
-    <!-- the queue: ten slots, lit by depth -->
+    <!-- the queue: ten slots (q0–q9, built by the script), lit by depth -->
     <g id="gQ">
-      <rect class="chip" id="q0" x="112" y="72"  width="136" height="20"></rect>
-      <rect class="chip" id="q1" x="112" y="96"  width="136" height="20"></rect>
-      <rect class="chip" id="q2" x="112" y="120" width="136" height="20"></rect>
-      <rect class="chip" id="q3" x="112" y="144" width="136" height="20"></rect>
-      <rect class="chip" id="q4" x="112" y="168" width="136" height="20"></rect>
-      <rect class="chip" id="q5" x="112" y="192" width="136" height="20"></rect>
-      <rect class="chip" id="q6" x="112" y="216" width="136" height="20"></rect>
-      <rect class="chip" id="q7" x="112" y="240" width="136" height="20"></rect>
-      <rect class="chip" id="q8" x="112" y="264" width="136" height="20"></rect>
-      <rect class="chip" id="q9" x="112" y="288" width="136" height="20"></rect>
       <!-- label and count are separate elements: nesting the count inside the
            label meant relabelling the label deleted the count. -->
       <text class="nSub" id="qT" x="292" y="186">orders</text>
@@ -118,12 +108,20 @@ function waitFor(d) {
   return s < 90 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
 }
 
-mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
-  op("eyebrow", win(t, 0, 14400, 0, 300));
-  op("hook",    win(t, 0, 1400, 0, 340));
+/* The ten queue slots: identical chips 24px apart, so they are stamped out
+   here rather than hand-written in the markup. */
+for (let i = 0; i < 10; i++) {
+  const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  r.setAttribute("class", "chip");
+  r.setAttribute("id", "q" + i);
+  r.setAttribute("x", "112");
+  r.setAttribute("y", String(72 + i * 24));
+  r.setAttribute("width", "136");
+  r.setAttribute("height", "20");
+  $("gQ").insertBefore(r, $("qT"));
+}
 
-  const out = 1 - raw(t, 13200, 400);
-  $("stage").style.opacity = out;
+mount({ base: T, pace: PACE, beats: BEATS, render: function (t, out) {
   op("gDoor",   Math.min(es(t, 300, 440), out));
   op("gServer", Math.min(es(t, 440, 440), out));
   op("gWait",   Math.min(es(t, 580, 440), out));
@@ -180,10 +178,6 @@ mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
   op("c5", win(t, 8800, 10300));
   op("c6", win(t, 10500, 11900));
   op("c7", win(t, 12050, 13200));
-
-  $("kernel").style.opacity = win(t, 13400, 15000, 520, 1);
-  $("kernel").style.transform = `translateY(${mix(t, 13400, 620, 14, 0)}px)`;
-  op("brand", win(t, 14400, 15000, 400, 1));
 }});
 </script>
 </body>

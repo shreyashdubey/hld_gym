@@ -297,7 +297,6 @@ async def _run_diagnostic_end(
     session: Session,
     connection: SmallWebRTCConnection,
     config: VoiceConfig,
-    grade_fn=None,
     flush_secs: float = 1.0,
 ) -> None:
     """The one end path for all three diagnostic triggers: end_round, the
@@ -305,14 +304,8 @@ async def _run_diagnostic_end(
     the loop is single-threaded and there is no await between the check and
     the set, so two triggers cannot both grade. The teardown lives in a
     finally so a surprise in grading or delivery can never leave a live
-    session billing with nobody coming back for it; grade_fn itself never
-    raises (see grading.grade), the finally is belt for the braces.
-
-    grade_fn defaults to None, not to grading.grade directly: a default bound
-    at def time is captured once, at import, before any test (or future
-    caller) could ever patch playground.server.grading.grade -- so the
-    default is resolved here, inside the body, against the module attribute
-    as it stands at call time.
+    session billing with nobody coming back for it; grading.grade itself
+    never raises, the finally is belt for the braces.
 
     The grade call is bounded by _GRADING_TIMEOUT_SECS: grading.grade itself
     never raises, but with no bound here a hung provider call would hang this
@@ -325,13 +318,13 @@ async def _run_diagnostic_end(
         return
     session.round_over = True
     try:
-        fn = grade_fn if grade_fn is not None else grading.grade
         turns = session.context.get_messages() if session.context is not None else []
         board = session.board.messages()
         board_text = board[0]["content"] if board else ""
         try:
             moments = await asyncio.wait_for(
-                fn(turns, board_text, model=config.llm_model), _GRADING_TIMEOUT_SECS
+                grading.grade(turns, board_text, model=config.llm_model),
+                _GRADING_TIMEOUT_SECS,
             )
         except asyncio.TimeoutError:
             moments = None

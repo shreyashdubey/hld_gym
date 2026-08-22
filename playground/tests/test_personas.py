@@ -4,7 +4,7 @@ import unittest
 
 from playground import rep
 from playground.config import VoiceConfig
-from playground.personas import coach_prompt, diagnostic_prompt, interviewer_prompt
+from playground.personas import COACH_PROMPT, DIAGNOSTIC_PROMPT, INTERVIEWER_PROMPT
 from playground.session import Session
 
 REP_TS = pathlib.Path(__file__).resolve().parents[2] / "sell" / "lib" / "rep.ts"
@@ -14,24 +14,24 @@ class TestPersonas(unittest.TestCase):
     def test_the_interviewer_does_not_hold_the_answers(self):
         """A model holding the answers leaks them the moment a candidate sounds
         stuck, and then the round graded nothing."""
-        prompt = interviewer_prompt()
+        prompt = INTERVIEWER_PROMPT
         for probe in rep.PROBES:
             self.assertNotIn(probe["a"], prompt)
         for label in rep.RUBRIC_LABELS:
             self.assertNotIn(label, prompt)
 
     def test_the_coach_does_hold_the_answers(self):
-        prompt = coach_prompt()
+        prompt = COACH_PROMPT
         for probe in rep.PROBES:
             self.assertIn(probe["a"], prompt)
         for label in rep.RUBRIC_LABELS:
             self.assertIn(label, prompt)
 
     def test_the_interviewer_still_knows_the_question(self):
-        self.assertIn(rep.REP_TITLE, interviewer_prompt())
+        self.assertIn(rep.REP_TITLE, INTERVIEWER_PROMPT)
 
     def test_the_two_prompts_are_not_the_same_text(self):
-        self.assertNotEqual(interviewer_prompt(), coach_prompt())
+        self.assertNotEqual(INTERVIEWER_PROMPT, COACH_PROMPT)
 
 
 class TestNoDriftFromTheFrontend(unittest.TestCase):
@@ -71,7 +71,7 @@ class TestDiagnosticPrompt(unittest.TestCase):
         # Same invariant as the sprint interviewer: a model holding the
         # answers leaks them the moment a candidate sounds stuck, and then
         # the round graded nothing.
-        prompt = diagnostic_prompt()
+        prompt = DIAGNOSTIC_PROMPT
         self.assertNotIn(rep.KERNEL, prompt)
         for label in rep.RUBRIC_LABELS:
             self.assertNotIn(label, prompt)
@@ -79,13 +79,13 @@ class TestDiagnosticPrompt(unittest.TestCase):
             self.assertNotIn(probe["a"], prompt)
 
     def test_it_still_names_the_rep_and_end_round(self):
-        prompt = diagnostic_prompt()
+        prompt = DIAGNOSTIC_PROMPT
         self.assertIn(rep.REP_TITLE, prompt)
         self.assertIn("end_round", prompt)
 
     def test_a_diagnostic_session_uses_the_diagnostic_prompt(self):
         s = Session(VoiceConfig(), kind="diagnostic")
-        self.assertIn(diagnostic_prompt(), s.system_messages()[0]["content"])
+        self.assertIn(DIAGNOSTIC_PROMPT, s.system_messages()[0]["content"])
 
 
 if __name__ == "__main__":

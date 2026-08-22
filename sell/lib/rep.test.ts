@@ -47,6 +47,6 @@ test("a partial answer loses exactly the parts it omitted", () => {
 
 test("an empty answer scores nothing and gets the blank verdict", () => {
   assert.equal(score(""), 0);
-  assert.match(verdictFor(0, RUBRIC.length, true), /left it blank/);
-  assert.match(verdictFor(6, RUBRIC.length, false), /Strong recall/);
+  assert.match(verdictFor(0, true), /left it blank/);
+  assert.match(verdictFor(6, false), /Strong recall/);
 });

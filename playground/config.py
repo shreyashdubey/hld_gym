@@ -73,20 +73,12 @@ class VoiceConfig:
             raw = src.get(prefix + f.name.upper())
             if raw is None:
                 continue
-            if f.type is float or f.type == 'float':
-                try:
-                    kwargs[f.name] = float(raw)
-                except ValueError as e:
-                    raise ValueError(
-                        f"Failed to parse {prefix + f.name.upper()}={raw!r} as float"
-                    ) from e
-            elif f.type is int or f.type == 'int':
-                try:
-                    kwargs[f.name] = int(raw)
-                except ValueError as e:
-                    raise ValueError(
-                        f"Failed to parse {prefix + f.name.upper()}={raw!r} as int"
-                    ) from e
-            else:
-                kwargs[f.name] = raw
+            # str is identity for string fields, and never raises on a string.
+            cast = {"float": float, "int": int}.get(getattr(f.type, "__name__", f.type), str)
+            try:
+                kwargs[f.name] = cast(raw)
+            except ValueError as e:
+                raise ValueError(
+                    f"Failed to parse {prefix + f.name.upper()}={raw!r} as {cast.__name__}"
+                ) from e
         return cls(**kwargs)

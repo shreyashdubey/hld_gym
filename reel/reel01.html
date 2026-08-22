@@ -142,15 +142,12 @@ function lamp(kind) {
   $("lamp").style.stroke = stroke;
 }
 
-mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
-  /* --- beat 0: hook. Opaque at t=0 by design — frame 0 is the thumbnail every
-     feed shows before anyone presses play, and this shipped black once. The
-     movement on arrival is the scene building underneath it. --- */
-  op("eyebrow", win(t, 0, 14400, 0, 300));
-  op("hook",    win(t, 0, 1500, 0, 340));
-
-  const out = 1 - raw(t, 13400, 400);            // the stage clears for the kernel
-  $("stage").style.opacity = out;
+/* This reel runs its ending 100–200ms later than the others and holds the
+   hook longer, hence the three frame overrides. */
+mount({ base: T, pace: PACE, beats: BEATS,
+        hookOut: 1500, stageOut: 13400, brandIn: 14500, render: function (t, out) {
+  /* --- beat 0: the hook (painted by mount's shared frame). The movement on
+     arrival is the scene building underneath it. --- */
   op("gDoor",   Math.min(es(t, 260, 460), out));
   op("gReader", Math.min(es(t, 420, 460), out));
   op("gDesk",   Math.min(es(t, 580, 460), out));
@@ -166,7 +163,6 @@ mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
   /* --- beat 1 (1.6–3.4): your key works. Establish normal, or nothing that
      follows is a betrayal. --- */
   const tapA1 = raw(t, 1700, 620);
-  const inRoom = t >= 2500;
   op("cardA", Math.min(win(t, 1500, 12900, 300, 300), out));
   op("occA", Math.min(win(t, 2500, 13000, 320, 300), out));
 
@@ -185,7 +181,6 @@ mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
 
   /* --- beat 4 (6.9–8.4): guest B taps in, legitimately. --- */
   const tapB = raw(t, 7000, 640);
-  const bIn = t >= 7900;
   op("occB", Math.min(win(t, 7900, 13000, 320, 300), out));
 
   /* --- beat 5 (8.5–10.2): you wake, tap the same dead key, and the lamp goes
@@ -224,7 +219,6 @@ mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
   txt("readerT", refused ? "denied" : reading ? "open" : relabel ? "the check" : "reader");
   $("readerT").style.fill = refused ? "var(--bad)" : reading ? "var(--good)" : "var(--ink-3)";
   op("gFence", Math.min(win(t, 12100, 13400, 340, 300), out));
-  txt("fenceT", "last key · 34");
 
   /* --- captions: one slot, never two at once --- */
   op("c1", win(t, 1700, 3400));
@@ -234,11 +228,6 @@ mount({ base: T, pace: PACE, beats: BEATS, render: function (t) {
   op("c5", win(t, 8600, 10200, 260, 260));
   op("c6", win(t, 10350, 11800));
   op("c7", win(t, 11950, 13400));
-
-  /* --- beat 8: the kernel, then the brand --- */
-  $("kernel").style.opacity = win(t, 13600, 15000, 520, 1);
-  $("kernel").style.transform = `translateY(${mix(t, 13600, 620, 14, 0)}px)`;
-  op("brand", win(t, 14500, 15000, 400, 1));
 }});
 </script>
 </body>

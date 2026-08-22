@@ -8,7 +8,7 @@ REEL="${1:-01}"
 THEME="${2:-dark}"
 FPS=30
 
-node record.mjs --reel "$REEL" --fps "$FPS" --theme "$THEME"
+node shoot.mjs --frames --reel "$REEL" --fps "$FPS" --theme "$THEME"
 
 # Grain and vignette are the whole "shot on a camera" finish; the push-in is
 # already baked in by the page, so nothing here rescales and the hairlines

@@ -4,9 +4,12 @@
 Run: python3 tests/test_build.py
 """
 import json, re, sys, tempfile
+from copy import deepcopy
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+import build
 
 
 def test_publish_excludes_other_pipelines():
@@ -100,8 +103,6 @@ def test_origin_fragments_reach_the_book():
 def _validate(html, kind):
     """Drive build.py's validator directly. It accumulates into a module global,
     so reset it around each call."""
-    sys.path.insert(0, str(ROOT))
-    import build
     build.errors.clear()
     build.warnings.clear()
     build.validate_html("ptest", html, kind)
@@ -216,8 +217,6 @@ CARD_OK = {
 
 
 def _validate_cards(data):
-    sys.path.insert(0, str(ROOT))
-    import build
     build.errors.clear()
     build.validate_cards("ptest", data)
     return list(build.errors)
@@ -228,13 +227,13 @@ def test_good_card_passes():
 
 
 def test_card_id_must_be_chapter_prefixed():
-    bad = json.loads(json.dumps(CARD_OK))
+    bad = deepcopy(CARD_OK)
     bad["cards"][0]["id"] = "other-c1"
     assert _validate_cards(bad)
 
 
 def test_card_suit_must_be_known():
-    bad = json.loads(json.dumps(CARD_OK))
+    bad = deepcopy(CARD_OK)
     bad["cards"][0]["suit"] = "vibes"
     assert _validate_cards(bad)
 
@@ -243,7 +242,7 @@ def test_card_needs_prompt_and_answer():
     """A card without a recall prompt is a decoration. The gate is the whole
     justification for cards existing at all."""
     for field in ("prompt", "answer"):
-        bad = json.loads(json.dumps(CARD_OK))
+        bad = deepcopy(CARD_OK)
         del bad["cards"][0][field]
         assert _validate_cards(bad), f"missing {field} was accepted"
 
@@ -251,10 +250,10 @@ def test_card_needs_prompt_and_answer():
 def test_card_needs_sub():
     """sub carries the date and place - the field that makes a card historical
     rather than trivia."""
-    bad = json.loads(json.dumps(CARD_OK))
+    bad = deepcopy(CARD_OK)
     del bad["cards"][0]["sub"]
     assert _validate_cards(bad), "missing sub was accepted"
-    bad = json.loads(json.dumps(CARD_OK))
+    bad = deepcopy(CARD_OK)
     bad["cards"][0]["sub"] = ""
     assert _validate_cards(bad), "empty sub was accepted"
 
@@ -262,22 +261,22 @@ def test_card_needs_sub():
 def test_card_year_rejects_bool_string_and_out_of_range():
     """bool is a subclass of int in Python, so isinstance(True, int) is True -
     a JSON `true` must not sail through as a year."""
-    bad = json.loads(json.dumps(CARD_OK)); bad["cards"][0]["year"] = True
+    bad = deepcopy(CARD_OK); bad["cards"][0]["year"] = True
     assert _validate_cards(bad), "year: true was accepted"
-    bad = json.loads(json.dumps(CARD_OK)); bad["cards"][0]["year"] = "1989"
+    bad = deepcopy(CARD_OK); bad["cards"][0]["year"] = "1989"
     assert _validate_cards(bad), "year as a string was accepted"
-    bad = json.loads(json.dumps(CARD_OK)); bad["cards"][0]["year"] = 3
+    bad = deepcopy(CARD_OK); bad["cards"][0]["year"] = 3
     assert _validate_cards(bad), "an out-of-range year (3) was accepted"
 
 
 def test_card_body_capped_at_60_words():
-    bad = json.loads(json.dumps(CARD_OK))
+    bad = deepcopy(CARD_OK)
     bad["cards"][0]["body"] = "word " * 61
     assert _validate_cards(bad)
 
 
 def test_card_asset_must_be_relative():
-    bad = json.loads(json.dumps(CARD_OK))
+    bad = deepcopy(CARD_OK)
     bad["cards"][0]["asset"] = "https://example.com/x.webp"
     assert _validate_cards(bad)
 
@@ -289,10 +288,10 @@ def test_card_asset_rejects_attribute_breakers():
                       "assets/x.webp' onerror='alert(1)",
                       "assets/<script>.webp",
                       "assets/two words.webp"):
-        bad = json.loads(json.dumps(CARD_OK))
+        bad = deepcopy(CARD_OK)
         bad["cards"][0]["asset"] = bad_asset
         assert _validate_cards(bad), f"accepted asset {bad_asset!r}"
-    ok = json.loads(json.dumps(CARD_OK))
+    ok = deepcopy(CARD_OK)
     ok["cards"][0]["asset"] = "assets/fine-name_1.webp"
     assert not _validate_cards(ok), "rejected a clean asset path"
 
@@ -301,8 +300,6 @@ def test_cards_object_instead_of_list_fails_cleanly():
     """{"cards": {"a": {...}}} - an object where a list belongs - must fail
     the build, not raise. A validator that crashes tells an author nothing
     about which file is wrong."""
-    sys.path.insert(0, str(ROOT))
-    import build
     build.errors.clear()
     build.validate_cards("ptest", {"chapter": "ptest", "cards": {"a": {"id": "x"}}})
     assert build.errors, "a 'cards' object instead of a list should fail, not crash"
@@ -326,8 +323,6 @@ CITE_OK = {
 
 
 def _validate_cites(html, side, cards=()):
-    sys.path.insert(0, str(ROOT))
-    import build
     build.errors.clear()
     build.warnings.clear()
     build.validate_cites("ptest", html, side, list(cards))
@@ -365,7 +360,7 @@ def test_origin_box_without_any_cite_fails():
 
 
 def test_primary_source_required():
-    side = json.loads(json.dumps(CITE_OK))
+    side = deepcopy(CITE_OK)
     side["sources"]["src1"]["type"] = "blog"
     html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
     assert _validate_cites(html, side), "a chapter cited only to a blog should fail"
@@ -384,7 +379,7 @@ def test_year_mismatch_caught_regardless_of_attribute_order():
 
 
 def test_checked_date_required_and_iso():
-    side = json.loads(json.dumps(CITE_OK))
+    side = deepcopy(CITE_OK)
     side["sources"]["src1"]["checked"] = "last tuesday"
     html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
     assert _validate_cites(html, side)
@@ -393,14 +388,14 @@ def test_checked_date_required_and_iso():
 def test_primary_source_requires_quote():
     """~15-20% of primary sources 403 later; 'quote' is captured at
     verification time so a dead link never forces a re-hunt. Enforce it."""
-    side = json.loads(json.dumps(CITE_OK))
+    side = deepcopy(CITE_OK)
     del side["sources"]["src1"]["quote"]
     html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
     assert _validate_cites(html, side), "a primary source with no quote was accepted"
 
 
 def test_secondary_source_quote_is_optional():
-    side = json.loads(json.dumps(CITE_OK))
+    side = deepcopy(CITE_OK)
     side["sources"]["src2"] = {"type": "blog", "title": "A Blog", "year": 1998,
                                 "checked": "2026-08-22"}
     html = ('<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p>'
@@ -410,10 +405,10 @@ def test_secondary_source_quote_is_optional():
 
 
 def test_source_year_rejects_bool_and_out_of_range():
-    side = json.loads(json.dumps(CITE_OK)); side["sources"]["src1"]["year"] = True
+    side = deepcopy(CITE_OK); side["sources"]["src1"]["year"] = True
     html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
     assert _validate_cites(html, side), "source year: true was accepted"
-    side = json.loads(json.dumps(CITE_OK)); side["sources"]["src1"]["year"] = 20260
+    side = deepcopy(CITE_OK); side["sources"]["src1"]["year"] = 20260
     assert _validate_cites(html, side), "an out-of-range source year (20260) was accepted"
 
 
@@ -461,8 +456,6 @@ def test_referenced_assets_reach_the_book():
 
 
 def test_missing_asset_is_a_build_error():
-    sys.path.insert(0, str(ROOT))
-    import build
     build.errors.clear()
     build.check_assets("ptest", '<p><img src="assets/does-not-exist.webp" alt="x"></p>')
     assert build.errors, "a reference to a nonexistent asset should fail the build"
@@ -472,8 +465,6 @@ def test_check_assets_rejects_path_traversal():
     """src="assets/../../build.py" passed both the prefix check and the
     existence check, then was never copied into dist/book/assets/ - a
     broken image the build called fine."""
-    sys.path.insert(0, str(ROOT))
-    import build
     build.errors.clear()
     build.check_assets("ptest", '<img src="assets/../../build.py" alt="x">')
     assert build.errors, "a path escaping src/assets/ should fail the build"
@@ -481,8 +472,6 @@ def test_check_assets_rejects_path_traversal():
 
 def test_check_assets_rejects_a_directory():
     """src="assets/somedir" must not pass just because the path exists."""
-    sys.path.insert(0, str(ROOT))
-    import build
     build.errors.clear()
     build.check_assets("ptest", '<img src="assets/" alt="x">')
     assert build.errors, "a directory reference should fail the build"
@@ -506,7 +495,7 @@ def test_empty_prose_cite_fails_even_when_cards_cite():
 def test_primary_source_must_be_cited_in_prose():
     """A card cannot carry the chapter's only primary source. The rule exists so
     the *story* rests on a paper, RFC, postmortem, commit, PR, CVE or oral history."""
-    side = json.loads(json.dumps(CITE_OK))
+    side = deepcopy(CITE_OK)
     side["sources"]["blog1"] = {"type": "blog", "title": "A Blog", "year": 1998,
                                 "checked": "2026-08-22"}
     html = '<div class="box origin"><p><span class="fact" data-cite="blog1">1998</span></p></div>'
@@ -596,12 +585,6 @@ def test_both_fact_checks_share_one_matcher():
             f"{cls} was accepted as a citation but its year went unchecked: {errs}"
 
 
-def _build():
-    sys.path.insert(0, str(ROOT))
-    import build
-    return build
-
-
 def _asset_fixture(td):
     """A src/assets/ in miniature: one wired portrait, one working note, one
     portrait nobody wired up."""
@@ -617,16 +600,14 @@ def test_working_file_does_not_reach_dist():
     """licences.json is an internal triage note naming which Commons files are
     mis-licensed. It is a working file in a source directory, and the wholesale
     copytree published it."""
-    build = _build()
     with tempfile.TemporaryDirectory() as td:
         src, dest, referenced = _asset_fixture(td)
-        build.copy_assets(src, dest, referenced)
+        build.copy_assets(src, dest, sorted(referenced))
         assert not (dest / "licences.json").exists(), "a .json working file reached the public output"
 
 
 def test_shipped_assets_contain_no_working_files():
     """The same guard against the real built site, not a fixture."""
-    build = _build()
     dst = ROOT / "dist" / "book" / "assets"
     if not dst.exists():
         return  # nothing built; test_the_one_output_exists is the guard for that
@@ -636,22 +617,21 @@ def test_shipped_assets_contain_no_working_files():
 
 
 def test_referenced_svg_does_reach_dist():
-    build = _build()
     with tempfile.TemporaryDirectory() as td:
         src, dest, referenced = _asset_fixture(td)
-        shipped = build.copy_assets(src, dest, referenced)
+        build.copy_assets(src, dest, sorted(referenced))
         assert (dest / "p9c99-person.svg").exists(), "a referenced .svg was not copied"
-        assert [p.name for p in shipped] == ["p9c99-person.svg"], \
-            f"copy_assets shipped more than the referenced set: {[p.name for p in shipped]}"
+        copied = sorted(p.name for p in dest.rglob("*") if p.is_file())
+        assert copied == ["p9c99-person.svg"], \
+            f"copy_assets shipped more than the referenced set: {copied}"
 
 
 def test_unreferenced_image_warns_and_does_not_ship():
     """The cost of copying only referenced files: a drawn portrait nobody wired
     up silently vanishes. 16 went missing once already, so it must be loud."""
-    build = _build()
     with tempfile.TemporaryDirectory() as td:
         src, dest, referenced = _asset_fixture(td)
-        build.copy_assets(src, dest, referenced)
+        build.copy_assets(src, dest, sorted(referenced))
         assert not (dest / "p9c98-person.svg").exists(), "an unreferenced image shipped anyway"
         unwired = [p.name for p in build.unwired_images(src, referenced)]
         assert unwired == ["p9c98-person.svg"], \
@@ -662,7 +642,6 @@ def _manifest_check(td, manifests, files=(), refs=(), figs=()):
     """Point build.py at a throwaway src/assets/ and run the manifest gate.
     check_manifest reads module globals, so save and restore them or the next
     test in the run inherits a fake assets directory."""
-    build = _build()
     saved = (build.ASSETS, build.referenced, build.figures)
     try:
         assets = Path(td) / "assets"
@@ -790,7 +769,6 @@ def test_figcaption_credit_survives_entities_and_wrapping():
 
 
 def _render(templates):
-    build = _build()
     return build.render({"parts": []}, templates, {}, {}, {})
 
 
@@ -812,7 +790,6 @@ def test_credits_block_reflects_only_what_ships():
     """A build that ships no image files gets no credits block at all. An empty
     table is a claim about images that are not on the page. This was /book's
     normal state until the two outputs merged; it is now the fixture case."""
-    build = _build()
     with tempfile.TemporaryDirectory() as td:
         saved = build.ASSETS
         try:

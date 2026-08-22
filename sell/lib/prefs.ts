@@ -4,7 +4,7 @@
    a localStorage key. */
 
 export const THEMES = ["light", "dark", "manim", "phosphor"] as const;
-export type Theme = (typeof THEMES)[number];
+type Theme = (typeof THEMES)[number];
 
 export const THEME_GLYPH: Record<Theme, string> = {
   light: "◐",
@@ -27,7 +27,7 @@ export const THEME_KEY = "hldsprint_theme";
    finer on purpose — a slider invites fiddling, and this is a control someone
    sets once and forgets. */
 export const SIZES = ["m", "l", "xl"] as const;
-export type Size = (typeof SIZES)[number];
+type Size = (typeof SIZES)[number];
 
 export const SIZE_NAME: Record<Size, string> = {
   m: "Normal",

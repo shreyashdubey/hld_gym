@@ -4,10 +4,6 @@
 const TOC = JSON.parse(document.getElementById('toc-data').textContent);
 const QUIZ = JSON.parse(document.getElementById('quiz-data').textContent); // {chapterId: [items]}
 const CARDS = JSON.parse(document.getElementById('cards-data').textContent); // {chapterId: [cards]}
-/* One engine, two compiled outputs. build.py stamps the mode onto <body>; the
-   book output ships an empty CARDS and no data-origin templates, so every
-   origins branch below is dead code there rather than a second code path. */
-const ORIGINS = document.body.dataset.mode === 'origins';
 
 /* ---------- state ---------- */
 const KEY = 'hldgym_v1';
@@ -63,7 +59,7 @@ TOC.parts.forEach(p => p.chapters.forEach((c, i) => CHAPTERS.push({ ...c, part: 
 const chById = id => CHAPTERS.find(c => c.id === id);
 const isReady = id => !!document.querySelector(`template[data-ch="${id}"]`);
 const chQuiz = id => QUIZ[id] || [];
-const chCards = id => (ORIGINS && CARDS[id]) || [];
+const chCards = id => CARDS[id] || [];
 const mastered = id => (S.levels[id] || {})[3] >= 80;
 
 /* ---------- xp, rank, streak ---------- */
@@ -100,7 +96,6 @@ function touchStreak() {
   S.heat[t] = S.heat[t] || 0;
   save(); renderChrome();
 }
-function bumpHeat() { const t = today(); S.heat[t] = (S.heat[t] || 0) + 1; }
 
 /* ---------- leitner ---------- */
 function gradeItem(itemId, correct) {
@@ -115,7 +110,8 @@ function gradeItem(itemId, correct) {
   it.ok = !!correct;   // last outcome, so a card can grey again after a miss
   it.due = new Date(Date.now() + INTERVALS[it.box] * DAY).toISOString().slice(0, 10);
   S.items[itemId] = it;
-  bumpHeat(); touchStreak(); save();
+  S.heat[today()] = (S.heat[today()] || 0) + 1;
+  touchStreak(); save();
 }
 function dueItems() {
   const t = today(), out = [];
@@ -438,8 +434,8 @@ function renderHome() {
   html += `<p>
       ${cont ? `<a class="btn" href="#ch/${cont.id}">${gym || resumed ? 'Continue' : 'Start reading'}: ${cont.title}</a>` : ''}
       ${gym ? `<a class="btn ghost" href="#review">Review due · ${due}</a>` : ''}
-      ${ORIGINS ? `<a class="btn ghost" href="#cards">The collection · ${allCards().filter(c => cardEarned(c.id)).length}/${allCards().length}</a>` : ''}
-      ${ORIGINS ? `<a class="btn ghost" href="#timeline">The timeline</a>` : ''}
+      <a class="btn ghost" href="#cards">The collection · ${allCards().filter(c => cardEarned(c.id)).length}/${allCards().length}</a>
+      <a class="btn ghost" href="#timeline">The timeline</a>
     </p>`;
 
   if (gym) {
@@ -784,7 +780,7 @@ function renderChapter(id) {
   </div>`;
   const body = VIEW.querySelector('.ch-body');
   body.appendChild(tpl.content.cloneNode(true));
-  if (ORIGINS) swapColdOpen(body, id);
+  swapColdOpen(body, id);
   initDiagrams(body);
 
   // feynman blocks

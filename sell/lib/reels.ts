@@ -5,7 +5,7 @@
  * search result that disagrees with the page is worse than no search result.
  * One list, two readers.
  */
-export type Reel = {
+type Reel = {
   id: string;
   kernel: string;
   told: string;

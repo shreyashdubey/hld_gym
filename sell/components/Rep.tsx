@@ -3,19 +3,10 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { PROBES, RUBRIC, STEPS, STEP_MS, LEAD_MS, LOCK_MS, WATCH_S, REP_TITLE, verdictFor } from "@/lib/rep";
 import { BOOK_URL, PRICE, RESERVE_URL } from "@/lib/links";
-import { appendTranscript } from "@/lib/dictation";
 import { connectVoice, type VoiceSession } from "@/lib/voice";
 import { DiagramNarrow, DiagramWide } from "./Diagram";
 
 type Phase = "idle" | "watching" | "locked" | "graded" | "done";
-
-const PHASE_LABEL: Record<Phase, string> = {
-  idle: "watch",
-  watching: "watch",
-  locked: "locked",
-  graded: "graded",
-  done: "done",
-};
 
 export default function Rep() {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -122,7 +113,14 @@ export default function Rep() {
         onMessage: (m) => {
           const msg = m as { type?: string; text?: string };
           if (msg?.type === "transcript" && msg.text) {
-            setRecall((prev) => appendTranscript(prev, msg.text as string));
+            /* Spoken chunks land in the same textarea as typed text, one space
+               apart, so the rubric grades both through exactly one path. */
+            setRecall((prev) => {
+              const chunk = (msg.text as string).trim();
+              if (!chunk) return prev;
+              const base = prev.trimEnd();
+              return base ? `${base} ${chunk}` : chunk;
+            });
           }
         },
         onDisconnect: () => {
@@ -212,7 +210,7 @@ export default function Rep() {
     <div className="rep">
       <div className="repTag">
         <span>{REP_TITLE}</span>
-        <span className="phase">{PHASE_LABEL[phase]}</span>
+        <span className="phase">{phase === "idle" || phase === "watching" ? "watch" : phase}</span>
       </div>
 
       <div className="repBody">
@@ -346,7 +344,7 @@ export default function Rep() {
                 ))}
               </ul>
               <div className="scoreVerdict">
-                {verdictFor(score, RUBRIC.length, !recall.trim())}
+                {verdictFor(score, !recall.trim())}
               </div>
             </div>
             {/* Said where the score is read, not in a footnote: a senior engineer

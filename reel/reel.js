@@ -78,19 +78,15 @@ function edges(map) {
     /** arrowheads paint at full opacity regardless of the dash pattern, so they
      *  must not arm until the line has nearly arrived */
     arm(id, p) { const h = $("h" + id); if (h) h.style.opacity = p; },
-    at(id, p) {
-      const [x1, y1, x2, y2] = map[id];
-      return [lerp(x1, x2, p), lerp(y1, y2, p)];
-    },
   };
 }
 
 /**
  * Registers the scene.
  *
- *   mount({ base, pace, beats, render })
+ *   mount({ base, pace, beats, hookOut, stageOut, brandIn, render })
  *
- * `render(t)` must paint the complete frame for any t in any order — never
+ * `render(t, out)` must paint the complete frame for any t in any order — never
  * accumulate state between calls. It always receives **base** time, so the
  * timings inside a scene stay readable no matter how the reel is paced.
  *
@@ -100,11 +96,20 @@ function edges(map) {
  *
  * `beats` are the scene's own named moments, in base time. The recorder and the
  * preview read them back scaled, so no tool holds a second copy of the timeline.
+ *
+ * Every reel shares one frame, painted here around the scene: the eyebrow and
+ * hook at the top (opaque at t=0 by design — frame 0 is the thumbnail every
+ * feed shows before anyone presses play, and this shipped black once), the
+ * stage clearing for the kernel, then the kernel and the brand. `out` is that
+ * stage fade; the scene must Math.min it into anything it keeps on screen
+ * late. Three knobs cover the real variation between scenes, in base ms:
+ * `hookOut` (when the hook leaves), `stageOut` (when the stage clears — the
+ * kernel always follows 200ms later), `brandIn` (when the brand arrives).
  */
-function mount({ base, pace = 1, beats = [], render }) {
+function mount({ base, pace = 1, beats = [],
+                 hookOut = 1400, stageOut = 13200, brandIn = 14400, render }) {
   const T_TOTAL = base * pace;
   window.T_TOTAL = T_TOTAL;
-  window.PACE = pace;
   window.BEATS = beats.map(([t, name]) => [Math.round(t * pace), name]);
 
   /* The camera: one continuous 4.5% push across the whole clip. Constant motion
@@ -115,7 +120,15 @@ function mount({ base, pace = 1, beats = [], render }) {
     const c = clamp(t, 0, T_TOTAL);
     camera.style.transform =
       `scale(${1 + 0.045 * (c / T_TOTAL)}) translateY(${-6 * (c / T_TOTAL)}px)`;
-    render(c / pace);
+    const bt = c / pace;
+    op("eyebrow", win(bt, 0, 14400, 0, 300));
+    op("hook",    win(bt, 0, hookOut, 0, 340));
+    const out = 1 - raw(bt, stageOut, 400);        // the stage clears for the kernel
+    $("stage").style.opacity = out;
+    render(bt, out);
+    $("kernel").style.opacity = win(bt, stageOut + 200, 15000, 520, 1);
+    $("kernel").style.transform = `translateY(${mix(bt, stageOut + 200, 620, 14, 0)}px)`;
+    op("brand", win(bt, brandIn, 15000, 400, 1));
   };
 
   window.seek(0);

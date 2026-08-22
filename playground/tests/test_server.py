@@ -1149,9 +1149,8 @@ class TestRunDiagnosticEnd(unittest.IsolatedAsyncioTestCase):
         async def grade_fn(turns, board_text, model, client=None):
             return [{"quote": "q", "probe": "p", "gap": "g", "chapter": "/book/#ch/p1c06"}]
 
-        await server._run_diagnostic_end(
-            session, connection, VoiceConfig(), grade_fn=grade_fn, flush_secs=0
-        )
+        with patch.object(server.grading, "grade", grade_fn):
+            await server._run_diagnostic_end(session, connection, VoiceConfig(), flush_secs=0)
         [sent] = connection.app_messages
         self.assertEqual(sent["label"], "rtvi-ai")
         self.assertEqual(sent["data"]["type"], "failure_map")
@@ -1168,9 +1167,8 @@ class TestRunDiagnosticEnd(unittest.IsolatedAsyncioTestCase):
         async def grade_fn(turns, board_text, model, client=None):
             return None
 
-        await server._run_diagnostic_end(
-            session, connection, VoiceConfig(), grade_fn=grade_fn, flush_secs=0
-        )
+        with patch.object(server.grading, "grade", grade_fn):
+            await server._run_diagnostic_end(session, connection, VoiceConfig(), flush_secs=0)
         [sent] = connection.app_messages
         self.assertIsNone(sent["data"]["moments"])
 
@@ -1185,12 +1183,9 @@ class TestRunDiagnosticEnd(unittest.IsolatedAsyncioTestCase):
             calls.append(1)
             return []
 
-        await server._run_diagnostic_end(
-            session, connection, VoiceConfig(), grade_fn=grade_fn, flush_secs=0
-        )
-        await server._run_diagnostic_end(
-            session, connection, VoiceConfig(), grade_fn=grade_fn, flush_secs=0
-        )
+        with patch.object(server.grading, "grade", grade_fn):
+            await server._run_diagnostic_end(session, connection, VoiceConfig(), flush_secs=0)
+            await server._run_diagnostic_end(session, connection, VoiceConfig(), flush_secs=0)
         self.assertEqual(len(calls), 1)
 
 

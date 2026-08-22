@@ -34,7 +34,7 @@ export const WATCH_S = Math.round((LEAD_MS + STEPS.length * STEP_MS + LOCK_MS) /
 /** What a correct reconstruction has to contain. Matched against free text —
     deliberately generous, because the point is to find what was forgotten
     entirely, not to grade phrasing. */
-export type RubricKey = { label: string; re: RegExp };
+type RubricKey = { label: string; re: RegExp };
 
 /* Stems, not exact words. Real answers say "checks", "writes", "queried" —
    matching on \bcheck\b marks a correct answer wrong, which is far worse here
@@ -61,7 +61,7 @@ export const RUBRIC: RubricKey[] = [
   { label: "a TTL on the write", re: /\b(ttl|expir\w*|time.to.live|300|evict\w*)\b/i },
 ];
 
-export type Probe = { q: string; a: string };
+type Probe = { q: string; a: string };
 
 /** The three follow-ups. Each targets something people routinely leave out. */
 export const PROBES: Probe[] = [
@@ -79,7 +79,7 @@ export const PROBES: Probe[] = [
   },
 ];
 
-export function verdictFor(score: number, total: number, blank: boolean): string {
+export function verdictFor(score: number, blank: boolean): string {
   if (blank)
     return "You left it blank. That is the most honest possible result, and it is exactly why the lock exists.";
   /* No "this is the normal score": nothing has been measured, and a claimed

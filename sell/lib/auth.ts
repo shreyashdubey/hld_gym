@@ -33,7 +33,7 @@ const STORAGE_KEY = "playground_session_token";
    -- see playground/README.md. Public by design: it identifies this app to
    Google, the same way any OAuth client ID does; it authorizes nothing by
    itself. */
-export const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_PLAYGROUND_GOOGLE_CLIENT_ID ?? "";
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_PLAYGROUND_GOOGLE_CLIENT_ID ?? "";
 
 export function getStoredToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -72,9 +72,8 @@ export function isTokenLikelyValid(token: string | null): boolean {
     /api/login, and stores it on success. Throws on any failure -- a
     rejected Google credential, a client ID mismatch, the service being
     down -- callers must not treat a failed exchange as a sign-in. */
-export async function loginWithGoogleIdToken(idToken: string, url?: string): Promise<string> {
-  const base = url ?? VOICE_URL;
-  const res = await fetch(`${base}/api/login`, {
+export async function loginWithGoogleIdToken(idToken: string): Promise<string> {
+  const res = await fetch(`${VOICE_URL}/api/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ id_token: idToken }),

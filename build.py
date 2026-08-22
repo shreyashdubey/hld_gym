@@ -18,25 +18,22 @@ SITE = "https://hld-gym.vercel.app"
 # same 51 chapters. Readers could not tell what the difference was and the
 # second door was never linked from anywhere, so the plain one is gone and the
 # story-first one inherited /book - the address the sell page links, the
-# sitemap lists, and search has already indexed. data-mode stays "origins"
-# because that is the flag app.js reads to turn on cards, the timeline, and the
-# cold-open swap.
-MODE = {
-    "dir": "book",
-    "data_mode": "origins",
-    "title": "HLD Gym: system design for senior interviews, free and complete",
-    "desc": "A free, complete system design book for senior interviews. 51 chapters, "
-            "197 animated diagrams and 1,278 questions, covering Meta, Google, Palantir "
-            "and Anthropic loops. 36 chapters open on the real dated incident that forced "
-            "the mechanism into its shape. No signup, no paywall.",
-    "og_title": "HLD Gym: system design for senior interviews",
-    "og_desc": "51 chapters, 197 animated diagrams, 1,278 questions, and 36 real "
-               "histories. Free, no signup.",
-}
+# sitemap lists, and search has already indexed. <body data-mode="origins"> is
+# hardcoded in template.html now that this is the only output.
+TITLE = "HLD Gym: system design for senior interviews, free and complete"
+DESC = ("A free, complete system design book for senior interviews. 51 chapters, "
+        "197 animated diagrams and 1,278 questions, covering Meta, Google, Palantir "
+        "and Anthropic loops. 36 chapters open on the real dated incident that forced "
+        "the mechanism into its shape. No signup, no paywall.")
+OG_TITLE = "HLD Gym: system design for senior interviews"
+OG_DESC = ("51 chapters, 197 animated diagrams, 1,278 questions, and 36 real "
+           "histories. Free, no signup.")
 
+# img is legal as a tag in both kinds; the figure rule in validate_html is what
+# keeps it out of chapter prose.
 ALLOWED_TAGS = set("p h2 h3 ul ol li strong em code pre table thead tbody tr th td figure figcaption "
                    "svg g rect circle ellipse line path polyline polygon text tspan defs marker title "
-                   "details summary div span dfn br blockquote".split())
+                   "details summary div span dfn br blockquote img".split())
 ALLOWED_DIV = {"box", "box-tag", "analogy", "story", "lens", "crux", "feynman", "fey-prompt",
                "fey-model", "exercise", "ex-q", "takeaways", "diagram",
                "origin", "origin-seam", "origin-body", "card", "card-face", "card-back"}
@@ -101,7 +98,7 @@ def _is_year(v):
 def check_assets(cid, html):
     """A broken image is a silent failure in the browser and a loud one here."""
     root = ASSETS.resolve()
-    for ref in re.findall(r'(?:src|href)="([^"]+)"', html, re.I):
+    for ref in re.findall(r'src="([^"]+)"', html, re.I):
         if not ref.startswith("assets/"):
             continue
         p = (ASSETS / ref[len("assets/"):]).resolve()
@@ -118,16 +115,14 @@ def unwired_images(assets_dir, referenced):
     return sorted(p for p in assets_dir.rglob("*")
                   if p.is_file() and p.suffix.lower() in IMAGE_EXTS and p.resolve() not in referenced)
 
-def copy_assets(assets_dir, dest, referenced):
-    """Copy exactly the referenced assets, nothing else. Returns what shipped."""
+def copy_assets(assets_dir, dest, shipped):
+    """Copy exactly the given assets (resolved paths under assets_dir), nothing else."""
     shutil.rmtree(dest, ignore_errors=True)
     root = assets_dir.resolve()
-    shipped = sorted(p for p in referenced if p.is_relative_to(root))
     for p in shipped:
         d = dest / p.relative_to(root)
         d.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(p, d)
-    return shipped
 
 def load_manifests():
     """Merge every src/assets/*.manifest.json into one map. Zero manifests is a
@@ -323,11 +318,8 @@ def validate_html(cid, html, kind="chapter"):
     # The external-URL ban is unconditional; the assets/ check above is what
     # lets origin images through it, because a relative path has no scheme.
     if re.search(r'https?://', html): err(f"{cid}: external URL found")
-    # <img> is in the set for both kinds now. What keeps it out of chapter
-    # prose is the figure rule above, not the tag allowlist.
-    allowed = ALLOWED_TAGS | {"img"}
     for tag in re.findall(r'<([a-zA-Z][a-zA-Z0-9-]*)', html):
-        if tag.lower() not in allowed:
+        if tag.lower() not in ALLOWED_TAGS:
             err(f"{cid}: tag <{tag}> not allowed")
     for m in re.finditer(r'<div class="([^"]+)"', html):
         for cls in m.group(1).split():
@@ -523,22 +515,18 @@ def validate_cites(cid, html, side, cards):
                 f"(a source cannot report an event later than itself)")
 
 def render(toc, templates, quiz_all, cards_all, origins, entries=None, shipped=()):
-    """Compose the output. MODE['data_mode'] lands on <body data-mode>, which is
-    how app.js knows which features to turn on."""
-    m = MODE
-    canonical = f"{SITE}/{m['dir']}/"
+    """Compose the output."""
     tpl = (SRC / "template.html").read_text()
     body = "\n".join(templates)
     n_diagrams = body.count('<figure class="diagram"')
     if origins:
         body += "\n" + "\n".join(origins.values())
     return (tpl
-        .replace("{{MODE}}", m["data_mode"])
-        .replace("{{PAGE_TITLE}}", m["title"])
-        .replace("{{PAGE_DESC}}", m["desc"])
-        .replace("{{CANONICAL}}", canonical)
-        .replace("{{OG_TITLE}}", m["og_title"])
-        .replace("{{OG_DESC}}", m["og_desc"])
+        .replace("{{PAGE_TITLE}}", TITLE)
+        .replace("{{PAGE_DESC}}", DESC)
+        .replace("{{CANONICAL}}", f"{SITE}/book/")
+        .replace("{{OG_TITLE}}", OG_TITLE)
+        .replace("{{OG_DESC}}", OG_DESC)
         .replace("/*{{FONTS_CSS}}*/", font_css())
         .replace("/*{{STYLE_CSS}}*/", (SRC / "style.css").read_text())
         .replace("<!--{{CREDITS}}-->", credits_html(entries or {}, shipped, n_diagrams))
@@ -623,7 +611,8 @@ def main():
                     except json.JSONDecodeError as e:
                         err(f"{cid}: cite json invalid: {e}")
 
-    check_manifest(load_manifests())
+    entries = load_manifests()
+    check_manifest(entries)
 
     if ASSETS.exists():
         for p in unwired_images(ASSETS, referenced):
@@ -636,21 +625,20 @@ def main():
     print(f"OK: {ready} chapters valid.")
     if check_only: return
 
-    entries = load_manifests()
     # The credits block is generated from exactly the files that get copied, so
     # it cannot claim an image the output does not ship.
     shipped = (sorted(p for p in referenced if p.is_relative_to(ASSETS.resolve()))
                if ASSETS.exists() else [])
 
-    out = DIST / MODE["dir"] / "index.html"
+    out = DIST / "book" / "index.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render(toc, templates, quiz_all, cards_all, origins, entries, shipped))
     print(f"Built {out} ({out.stat().st_size / 1024:.0f} KB, {ready} chapters)")
 
     if ASSETS.exists():
         dest = out.parent / "assets"
-        n = len(copy_assets(ASSETS, dest, referenced))
-        print(f"  copied {n} asset(s) → {dest}")
+        copy_assets(ASSETS, dest, shipped)
+        print(f"  copied {len(shipped)} asset(s) → {dest}")
 
 if __name__ == "__main__":
     main()

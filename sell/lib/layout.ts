@@ -9,7 +9,7 @@ export type Topology = {
   edges: { from: string; to: string; label?: string }[];
 };
 
-export type ExcalidrawSkeleton = {
+type ExcalidrawSkeleton = {
   type: string;
   id?: string;
   x: number;

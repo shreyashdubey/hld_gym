@@ -19,30 +19,20 @@ import {
    getServerSnapshot returns null, so the server renders a neutral placeholder
    and React swaps in the real label once hydrated. */
 
-type Store = {
-  subscribe: (cb: () => void) => () => void;
-  get: () => string;
-  set: (v: string) => void;
-};
-
-/* One store per attribute, created once and reused, so useSyncExternalStore
-   gets stable references instead of resubscribing on every render. */
-const stores = new Map<string, Store>();
-
-function storeFor(attr: string, key: string): Store {
-  const existing = stores.get(attr);
-  if (existing) return existing;
-
-  let listeners: Array<() => void> = [];
-  const store: Store = {
-    subscribe(cb) {
-      listeners.push(cb);
+/* One store per attribute, created once at module scope, so
+   useSyncExternalStore gets stable references instead of resubscribing on
+   every render. */
+function makeStore(attr: string, key: string) {
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(cb: () => void) {
+      listeners.add(cb);
       return () => {
-        listeners = listeners.filter((l) => l !== cb);
+        listeners.delete(cb);
       };
     },
     get: () => document.documentElement.dataset[attr] ?? "",
-    set(v) {
+    set(v: string) {
       document.documentElement.dataset[attr] = v;
       try {
         localStorage.setItem(key, v);
@@ -52,12 +42,12 @@ function storeFor(attr: string, key: string): Store {
       listeners.forEach((l) => l());
     },
   };
-  stores.set(attr, store);
-  return store;
 }
 
-function useCycle<T extends string>(attr: string, key: string, values: readonly T[]) {
-  const store = storeFor(attr, key);
+const themeStore = makeStore("theme", THEME_KEY);
+const sizeStore = makeStore("fs", SIZE_KEY);
+
+function useCycle<T extends string>(store: ReturnType<typeof makeStore>, values: readonly T[]) {
   const raw = useSyncExternalStore(store.subscribe, store.get, () => null);
   const value = raw && (values as readonly string[]).includes(raw) ? (raw as T) : null;
 
@@ -71,7 +61,7 @@ function useCycle<T extends string>(attr: string, key: string, values: readonly 
 }
 
 export function ThemeToggle() {
-  const { value, cycle } = useCycle("theme", THEME_KEY, THEMES);
+  const { value, cycle } = useCycle(themeStore, THEMES);
   const label = value ? `Theme: ${THEME_NAME[value]}. Switch theme` : "Switch theme";
 
   return (
@@ -85,7 +75,7 @@ export function ThemeToggle() {
 }
 
 export function TextSizeToggle() {
-  const { value, cycle } = useCycle("fs", SIZE_KEY, SIZES);
+  const { value, cycle } = useCycle(sizeStore, SIZES);
   const label = value ? `Text size: ${SIZE_NAME[value]}. Change text size` : "Change text size";
 
   return (

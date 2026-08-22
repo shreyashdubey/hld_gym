@@ -155,7 +155,7 @@ from the DOM, "the animation is visible" is not, and they are different claims.
   outside `app/`, and its own `package.json` so Playwright stays out of this
   dependency tree. Its one rule is that the frame is a pure function of `t` — no
   CSS transitions or keyframes, or frame-stepped recording stops being
-  deterministic. Check a cut with `node contact.mjs` before rendering every
+  deterministic. Check a cut with `node shoot.mjs --beats` before rendering every
   frame.
 - The reel feed on the page swaps encode by theme: `light` gets the `paper` cut,
   everything else gets `dark`. A video is a rendered file, so it cannot adapt to
