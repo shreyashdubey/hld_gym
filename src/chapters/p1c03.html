@@ -6,7 +6,7 @@
 
 <h2>From requirements to tables</h2>
 
-<p>Data modeling starts before any SQL. Read your requirements and underline two kinds of words. The <strong>nouns</strong> become entities — the things your system remembers: users, movies, shows, seats, bookings. The <strong>verbs</strong> become queries — the questions your system must answer fast: "show me tonight's shows for this movie", "is seat F7 taken?", "list my bookings, newest first."</p>
+<p>Data modeling starts before any SQL, and the rest of this chapter hangs off it in one chain: requirements become tables, normalization edits those tables, the queries the tables must answer become indexes, and the writes that touch several at once become transactions. Read your requirements and underline two kinds of words. The <strong>nouns</strong> become entities — the things your system remembers: users, movies, shows, seats, bookings. The <strong>verbs</strong> become queries — the questions your system must answer fast: "show me tonight's shows for this movie", "is seat F7 taken?", "list my bookings, newest first."</p>
 
 <p>Entities give you tables. Verbs give you indexes and shape. A schema designed from nouns alone is a filing cabinet nobody can search; a schema designed from verbs alone is a pile of query-shaped caches with no source of truth. You need both, in that order: model the entities honestly, then check every important query has a fast path through them.</p>
 
@@ -72,13 +72,13 @@
 
 <h2>Indexes: the sorted phone book</h2>
 
-<p>Back to the nine-second query. Without an index, the database's only move is a <strong>full table scan</strong> — read all 20 million rows, keep the matches. The fix is the same one humans invented for phone books: <em>keep a sorted copy, and search by jumping, not reading</em>.</p>
+<p>Take the "my bookings" query against 20 million rows. Without an index, the database's only move is a <strong>full table scan</strong> — read every row, keep the matches. The fix is the same one humans invented for phone books: <em>keep a sorted copy, and search by jumping, not reading</em>.</p>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>A B-tree index is a phone book. Nobody finds "Sharma" by reading from page one — you open near the back, see "Patel", jump forward, see "Singh", step back, done: five glances instead of a hundred thousand entries, because <em>sorted data lets you halve the search space with every look</em>. And a composite index is exactly a phone book's sort order: last name, then first name. Finding "Sharma, Priya" is instant. Finding <em>everyone named Priya regardless of surname</em> is hopeless in the same book — Priyas are scattered across every surname. The book's order only helps if your question starts with the first column of the sort.</p>
 </div>
 
-<p>Concretely, a <strong>B-tree</strong> is a tree of fixed-size pages (blocks of ~8KB). The leaf pages at the bottom hold every indexed value in sorted order, each with a pointer to its actual row. The pages above are a thinning pyramid of signposts: "keys up to M are down-left, after M down-right." Because each page holds hundreds of keys, the tree is astonishingly shallow — <strong>three to four levels cover hundreds of millions of rows</strong>. A lookup walks root → branch → leaf → row: about four page reads, and the top levels are so hot they permanently live in RAM. That's the entire trick. Not magic — logarithms plus a sorted copy you paid to maintain.</p>
+<p>Concretely, a <strong>B-tree</strong> is a tree of fixed-size pages (blocks of ~8KB). The leaf pages at the bottom hold every indexed value in sorted order, each with a pointer to its actual row. The pages above are a thinning pyramid of signposts: "keys up to M are down-left, after M down-right." Because each page holds hundreds of keys, the tree is astonishingly shallow — <strong>three to four levels cover hundreds of millions of rows</strong>. A lookup walks root → branch → leaf → row: about four page reads instead of twenty million row reads — seconds of scanning become milliseconds — and the top levels are so hot they permanently live in RAM. That's the entire trick. Not magic — logarithms plus a sorted copy you paid to maintain.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="B-tree structure: a root page, branch pages, and sorted leaf pages pointing to rows">

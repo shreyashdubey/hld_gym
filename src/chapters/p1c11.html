@@ -6,7 +6,7 @@
 
 <h2>The only question that matters: what does the response depend on?</h2>
 
-<p>Every piece of work in a handler is either <strong>synchronous</strong> — the user's response depends on its result — or <strong>asynchronous</strong> — it must happen, but not before you reply. The test: <em>if this step silently took ten minutes, would the response I just sent become a lie?</em></p>
+<p>Take a checkout handler that charges the card, writes the order row, calls an email provider for a confirmation, renders a PDF invoice, pings the warehouse and updates analytics before it replies. Every piece of that work is either <strong>synchronous</strong> — the user's response depends on its result — or <strong>asynchronous</strong> — it must happen, but not before you reply. The test: <em>if this step silently took ten minutes, would the response I just sent become a lie?</em></p>
 
 <ul>
 <li><strong>Charge the card:</strong> yes — "confirmed" while the charge might fail is a lie. Sync.</li>
@@ -15,7 +15,7 @@
 <li><strong>Invoice PDF, warehouse ping, analytics:</strong> no, no, no. Async, async, async.</li>
 </ul>
 
-<p>So the handler becomes: charge, write, drop four small job messages onto a queue, reply. The user waits ~350 ms instead of 3.5 s. And when the email provider melts, checkout doesn't notice — the email jobs just sit in the queue until it recovers.</p>
+<p>So the handler becomes: charge, write, drop four small job messages onto a queue, reply. Run one after another those six steps cost the user about 3.5 s of spinner; now the reply comes back in ~350 ms. And when the email provider melts — its API slowing to 30 seconds, then timing out — checkout doesn't notice, because the email jobs just sit in the queue until it recovers.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 310" role="img" aria-label="Timeline comparing synchronous checkout to asynchronous checkout with a queue">
@@ -83,7 +83,7 @@
 
 <p>A message queue has three roles. A <dfn>producer</dfn> writes a small message — "send confirmation for order 8213" — and moves on. A <dfn>broker</dfn> (the queue system itself) stores that message durably, on disk, usually replicated, so a crash doesn't eat it. A <dfn>consumer</dfn> (a worker) pulls messages and does the actual work at its own pace. Producer and consumer never talk directly, and that gap is the whole point.</p>
 
-<p>The gap buys three kinds of decoupling. <strong>Time:</strong> the consumer can be down for ten minutes and nothing is lost — messages wait. <strong>Rate:</strong> producers can burst at 50,000 messages a second while consumers steadily chew through 5,000; the queue holds the difference. <strong>Failure:</strong> a sick consumer no longer makes the producer's request fail — exactly what saved our checkout above.</p>
+<p>The gap buys three kinds of decoupling. <strong>Time:</strong> the consumer can be down for ten minutes and nothing is lost — messages wait. <strong>Rate:</strong> producers can burst at 50,000 messages a second while consumers steadily chew through 5,000; the queue holds the difference. <strong>Failure:</strong> a sick consumer no longer makes the producer's request fail — exactly what keeps the checkout handler above alive when its email provider melts.</p>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>A restaurant kitchen runs on a queue: the ticket rail. The waiter (producer) clips an order to the rail and goes straight back to the dining room — they don't stand at the stove until the biryani is done. Cooks (consumers) pull tickets at the pace the stove allows. When the 8pm rush hits, the rail fills instead of the kitchen collapsing; when a cook steps out, tickets wait instead of vanishing. Add a cook, and the rail drains faster — no waiter changes anything. Where the analogy breaks: a rail is small and visible, so overload is obvious. A real queue can silently grow to millions of messages — which is why monitoring queue depth becomes non-negotiable later in this chapter.</p>

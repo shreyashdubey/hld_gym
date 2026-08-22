@@ -8,7 +8,7 @@
 
 <h2>Leader-follower: one boss, obedient copies</h2>
 
-<p>The most common design, behind almost every Postgres and MySQL deployment you'll ever touch, is <strong>leader-follower replication</strong> (also primary/replica, or the older master/slave). One machine is the <strong>leader</strong>: it accepts every write. The others are <strong>followers</strong>: full copies that typically serve reads but never accept a write directly from a client.</p>
+<p>The most common design for keeping copies in sync, behind almost every Postgres and MySQL deployment you'll ever touch, is <strong>leader-follower replication</strong> (also primary/replica, or the older master/slave). One machine is the <strong>leader</strong>: it accepts every write. The others are <strong>followers</strong>: full copies that typically serve reads but never accept a write directly from a client.</p>
 
 <p>How do followers stay in sync? Every time the leader commits a change, it appends a record of that change to an ordered, append-only file — Postgres calls it the write-ahead log (WAL), MySQL calls it the binlog. Followers hold an open connection to the leader, stream that log, and replay each entry in the exact order the leader wrote it. Same starting state, same changes, same order — each follower converges to a byte-for-byte copy. This is <strong>log shipping</strong>, and the log-of-ordered-changes idea will follow you through this whole book (it's also the soul of Kafka, Chapter 3.17).</p>
 
@@ -231,7 +231,7 @@
 
 <div class="takeaways"><div class="box-tag">Takeaways</div>
 <ul>
-<li>One copy of your data is a countdown timer: disks fail at 1–2% a year, so at scale machine death is routine, and replication is the only defense.</li>
+<li>One copy of your data is a countdown timer: disks fail at 1–2% a year and whole sites go dark at once, so at scale machine death is routine, and replication is the only defense.</li>
 <li>Leader-follower is the workhorse: all writes go to one leader, which appends changes to an ordered log that followers stream and replay to stay identical copies.</li>
 <li>Sync vs async vs semi-sync is a durability-versus-latency budget: async can lose acknowledged writes when the leader dies; semi-sync to one nearby follower buys "on two machines before we say saved" for about a millisecond.</li>
 <li>Replication lag causes real user-facing bugs — the vanishing comment — fixed by policy, not patches: read-your-writes (pin to leader or track log positions) and monotonic reads (session stickiness).</li>

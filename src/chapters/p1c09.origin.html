@@ -1,17 +1,15 @@
-<div class="box origin"><div class="box-tag">Taobao, 2010</div>
-<p class="origin-seam">A wish-list page, and a table nobody could cut.</p>
+<div class="box origin"><div class="box-tag">Google AdWords, 2011</div>
+<p class="origin-seam">A database nobody could afford to re-cut.</p>
 
-<p>Taobao's Favourites stored what shoppers had saved. Two reads mattered equally: everything one user saved, and everyone who saved one item. Shard on the user and the first hits a single machine; the second <span data-cite="obdesign">has to read every partition</span>. Shard on the item and you only swap which read suffers. One table gets one key.</p>
+<p>Google's advertising backend ran on MySQL <span class="fact" data-cite="spanner2012">"manually sharded many ways"</span>. One column decided everything: the scheme <span class="fact" data-cite="spanner2012">"assigned each customer and all related data to a fixed shard"</span>. Every campaign and ad group an advertiser owned sat together, so per-customer indexes and joins stayed cheap — and any question that was not about one customer needed <span class="fact" data-cite="spanner2012">"knowledge of the sharding in application business logic"</span>.</p>
 
-<p>Alibaba's answer was to write a database. Work began in <span data-cite="ob2022">May 2010</span>. A Taobao engineer posting as <span class="fact" data-cite="chuanhui2011">Chuanhui</span> published the site's projection <span class="fact" data-cite="chuanhui2011">in April 2011</span>: <span class="fact" data-cite="chuanhui2011">a hundred terabytes and a hundred billion records within five years</span>, with hand-cut shards already straining the business.</p>
+<p>Replication was not room. The team’s own limitations slide filed master–slave under availability, <span class="fact" data-cite="f1sigmod2012">"downtime during failover"</span>; under scaling it wrote <span class="fact" data-cite="f1sigmod2012">"Grow by adding shards"</span>.</p>
 
-<p>So they stopped sharding the writes. Yesterday's rows &mdash; the baseline &mdash; spread across ChunkServers. <span data-cite="obdesign chuanhui2011">Everything changed since sat in memory on one UpdateServer, and every read merged the two.</span> One node seeing every write meant cross-row and cross-table transactions <span data-cite="obdesign">needed no distributed coordination</span>.</p>
+<p>Adding shards meant re-deciding which shard each customer belonged to and moving them live, on the database that bills the advertisers. The Spanner paper puts the invoice on the record: the last resharding <span class="fact" data-cite="spanner2012">"took over two years of intense effort, and involved coordination and testing across dozens of teams to minimize risk."</span></p>
 
-<p>It shipped. OceanBase has served <span data-cite="ob2022">Taobao Favourites since June 2011</span> and <span data-cite="ob2022">reached Alipay in 2014</span>. <span class="fact" data-cite="tpcc2020">In 2020</span> it posted <span class="fact" data-cite="tpcc2020">707,351,007 tpmC</span> at <span class="fact" data-cite="tpcc2020">CNY 3.98 per tpmC</span>.</p>
-
-<p>The escape hatch was the ceiling. Their own <span class="fact" data-cite="paetica2023">2023</span> paper calls that UpdateServer <span class="fact" data-cite="paetica2023">"a single-point write, multi-point read architecture"</span> that <span class="fact" data-cite="paetica2023">"makes it difficult to expand when higher levels of concurrency become necessary."</span> They had escaped distributed transactions by keeping one machine nobody could split.</p>
+<p>So they stopped paying it. <span class="fact" data-cite="spanner2012">"This operation was too complex to do regularly"</span> — the team capped growth on MySQL and pushed the overflow into external Bigtables, which <span class="fact" data-cite="spanner2012">"compromised transactional behavior and the ability to query across all data."</span> The dataset was <span class="fact" data-cite="spanner2012">tens of terabytes</span>: not too big for the hardware, only for the cut. One column, chosen once, had become a ceiling on how much of Google's ad business its own database was allowed to hold.</p>
 </div>
 
 <div class="feynman" data-key="p1c09-o1">
-<p class="fey-prompt">Two equally important reads, one shard key. Which query do you make expensive, and what do you build to survive it? Write it before you read on.</p>
+<p class="fey-prompt">Two years to move the rows once. What would you build on day one so the second move is cheap? Write it before you read on.</p>
 </div>

@@ -5,46 +5,46 @@
       "id": "p1c09-c1",
       "suit": "person",
       "asset": "assets/p1c09-person.svg",
-      "title": "Chuanhui",
-      "sub": "22 April 2011 - Taobao engineer, NOSQL Notes",
-      "year": 2011,
-      "prompt": "Taobao projected a hundred billion records inside five years, then routed every write in the system to one machine. What property of the workload made that defensible, and which two operations did it make cheap?",
-      "answer": "The daily volume of change was tiny - recent updates fit in one machine's memory - so centralising them turned keeping state from a distributed problem into a single-machine one, and made cross-row and cross-table transactions cheap to coordinate.",
-      "body": "The Taobao engineer who blogged OceanBase's design reasoning at NOSQL Notes, weeks before the system went into service. He presented it as a deliberate trade rather than an ideal, and said the team had already worked through ways to undo it if the estimate proved wrong.",
-      "cite": "chuanhui2011"
+      "title": "Jeff Shute",
+      "sub": "22 May 2012 - SIGMOD, first author of the F1 talk deck",
+      "year": 2012,
+      "prompt": "Google's ad backend was sharded by customer. Who leads the author list on the SIGMOD 2012 talk deck cataloguing what that legacy system could not do, and what did the deck say the team therefore had to do about data growth?",
+      "answer": "Jeff Shute. The deck grouped the limitations as availability, scaling and functionality - no cross-shard transactions or joins, and rebalancing shards 'extremely difficult and risky' - and said the team therefore had to 'limit size and growth of data stored in database'.",
+      "body": "First author of both F1 papers and of the slide deck listing what AdWords was escaping. The Spanner paper's acknowledgements thank 'the F1 team, and Jeff Shute in particular' for work on the data model - the hierarchy that ended up making the advertiser a root row.",
+      "cite": "f1sigmod2012"
     },
     {
       "id": "p1c09-c2",
       "suit": "incident",
-      "title": "The favourites table",
-      "sub": "2010 - Taobao.com Favourites",
-      "year": 2010,
-      "prompt": "Taobao Favourites is read two ways: a user's saved items, and an item's savers. Sharding on user_id makes one of them cheap. Precisely what happens to the other, and why is 'shard on item_id instead' not a fix?",
-      "answer": "The other read carries no shard key, so every partition has to be asked - scatter-gather. Switching to item_id just moves the scatter-gather onto the first read. One table gets one shard key, and here neither read is the dominant one.",
-      "body": "Two reads of equal business value over one set of rows, and no column serving both. Partition by user_id, and finding every user who favourited an item means reading every partition. Alibaba started building a database instead of choosing.",
-      "cite": "obdesign"
+      "title": "The last resharding",
+      "sub": "concluded before 2011 - Google AdWords' sharded MySQL",
+      "year": 2011,
+      "prompt": "AdWords' MySQL was sharded by customer. Name the duration of the last resharding, how broadly it had to be coordinated, and the two things the team gave up rather than run it again.",
+      "answer": "Over two years of intense effort, with coordination and testing across dozens of teams to minimize risk. Rather than repeat it, they capped growth on the MySQL database and displaced data into external Bigtables - losing transactional behavior over that data and the ability to query across all of it.",
+      "body": "Tens of terabytes, small for its era, but cut by customer - so growth meant re-deciding which shard each customer lived on and moving them while the database billed advertisers. The Spanner paper calls resharding it 'extremely costly' and the operation 'too complex to do regularly'.",
+      "cite": "spanner2012"
     },
     {
       "id": "p1c09-c3",
       "suit": "artifact",
-      "title": "OceanBase Paetica, PVLDB 16(12), 2023",
-      "sub": "Yang, Xu, Gao, Yang et al. - pages 3728-3740",
-      "year": 2023,
-      "prompt": "OceanBase ran sharded ChunkServers behind a single UpdateServer for years. Their own 2023 VLDB paper names the flaw in five words, and names the one capability the UpdateServer lacked. What are they, and which version threw the design out?",
-      "answer": "\"single-point write, multi-point read\" - and the UpdateServer \"does not possess the capability for distributed transactions\". Versions 1.0 to 3.0 abandoned it for a fully peer-to-peer structure.",
-      "body": "Section 2 of the paper walks OceanBase from version 0.5 to 4.0: split storage and computing layers, the ChunkServer and UpdateServer pair, why that shape suited businesses like Taobao favourites, and what the single write node cost when concurrency rose.",
-      "cite": "paetica2023"
+      "title": "Spanner: Google's Globally-Distributed Database, OSDI 2012",
+      "sub": "Corbett, Dean, Ghemawat, Hsieh et al. - section 5.4, 'F1'",
+      "year": 2012,
+      "prompt": "The Spanner OSDI paper is read for TrueTime, but one section prices the system F1 replaced. Which section is it, what sharding rule does it quote, and what is the first reason it gives for the F1 team adopting Spanner?",
+      "answer": "Section 5.4, titled 'F1'. The rule: the MySQL sharding scheme 'assigned each customer and all related data to a fixed shard'. The first reason listed: 'Spanner removes the need to manually reshard'.",
+      "body": "Twenty-six authors, OSDI 2012. Section 5.4 also reports F1's deployment - five replicas, two on the US west coast and three on the east - and a table of directory-fragment counts showing the vast majority of customers still land on a single server.",
+      "cite": "spanner2012"
     },
     {
       "id": "p1c09-c4",
       "suit": "ripple",
-      "title": "707,351,007 tpmC",
-      "sub": "May 2020 - Ant Financial, TPC-C full disclosure report",
-      "year": 2020,
-      "prompt": "The stopgap built for one wish-list page ended up under a payments company. Name the throughput and the price/performance TPC published for it in 2020, the currency both are quoted in, and roughly how many database nodes it took.",
-      "answer": "707,351,007 tpmC at CNY 3.98 per tpmC, on 1,554 OceanBase data nodes; the three-year total system cost was CNY 2,814,509,552.00.",
-      "body": "OceanBase reached Alipay in 2014 and Zhejiang E-Commerce Bank in 2015. In May 2020 Ant Financial filed a TPC-C full disclosure report for an Alibaba Cloud cluster running OceanBase v2.2, audited by Doug Johnson of InfoSizing, with an availability date of June 08, 2020.",
-      "cite": "tpcc2020"
+      "title": "The advertiser became the root row",
+      "sub": "2013 - F1's hierarchical schema, PVLDB 6(11)",
+      "year": 2013,
+      "prompt": "AdWords spent over two years unable to re-cut by customer, then moved to a different database entirely. What happened to the customer key in the new schema, and what does a single Spanner directory typically hold?",
+      "answer": "It was promoted, not dropped. F1 made the advertiser a root table, Customer, with Campaign and AdGroup clustered beneath it; a root row and all its descendant rows live in one Spanner directory, and each directory typically corresponds to one customer.",
+      "body": "The F1 paper states the shard-key rule plainly: 'most transactions are typically updating data for a single advertiser at a time, so we made the advertiser a root table (Customer) and clustered related tables under it.' The migration did not escape the key. It wrote the key into the schema.",
+      "cite": "f12013"
     }
   ]
 }

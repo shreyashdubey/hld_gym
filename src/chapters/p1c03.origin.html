@@ -1,15 +1,13 @@
 <div class="box origin"><div class="box-tag">IBM San Jose, 1979</div>
-  <p>Machine time arrived as a bill. Pat Selinger <span class="fact" data-cite="selinger2003">told an interviewer in 2003</span> that Boeing, an early user of System R, IBM's experimental relational database, said it was <span class="fact" data-cite="selinger2003">February</span> and the year's computing budget was gone. Boeing meant it as praise. Something still had to decide, per query, whether an index beat reading the whole table.</p>
+  <p>Two questions decide whether an index gets used; only one has an answer. Selinger's team wrote that one down in <span class="fact" data-cite="selinger1979">1979</span> as a definition: predicates match an index when the columns they name are <span class="fact" data-cite="selinger1979">"an initial substring of the set of columns of the index key"</span>. Nothing is measured.</p>
 
-  <p>Selinger's team priced every access path in one currency: <span class="fact" data-cite="selinger1979">"index pages fetched plus data pages fetched"</span> plus a weight for CPU. Smallest wins. Pricing an index meant defining how much of one a query could use, so in <span class="fact" data-cite="selinger1979">1979</span> they wrote it down: predicates match an index when the columns they name are <span class="fact" data-cite="selinger1979">"an initial substring of the set of columns of the index key"</span>.</p>
+  <p>The second is how many rows the predicate returns. Nobody could know, so the paper guessed. It assumed <span class="fact" data-cite="selinger1979">"an even distribution of tuples among the index key values"</span>, multiplied predicates as if <span class="fact" data-cite="selinger1979">"column values are independent"</span>, and for an equality on an unindexed column wrote a flat <span class="fact" data-cite="selinger1979">1/10</span>.</p>
 
-  <p>That is the leftmost-prefix rule: a definition, not folklore. It follows from an index key being a concatenation sorted left to right.</p>
+  <p>Those are not stale numbers. They are the model. Run ANALYZE and the numbers get fresher, not different in kind: a value too rare to land in the sample is still handed the average share, and two columns that always move together are still multiplied as if independent. The plan moves with the estimate — your index skipped on a table whose schema never changed.</p>
 
-  <p>The other half never worked. Pricing needs the row count a predicate returns. Nobody had it. So the paper assumed <span class="fact" data-cite="selinger1979">"an even distribution of tuples among the index key values"</span>, multiplied predicates as if <span class="fact" data-cite="selinger1979">"column values are independent"</span>, and for an unindexed equality wrote a flat <span class="fact" data-cite="selinger1979">1/10</span>.</p>
-
-  <p>You never choose the plan. You choose the tables and the index column order; the optimizer chooses the rest from those guesses. Its own authors knew the costs came out <span class="fact" data-cite="selinger1979">"often not accurate in absolute value"</span>.</p>
+  <p>Those guesses shipped. Selinger's <span class="fact" data-cite="selinger2003">2003</span> interviewer credited the paper with the principles that <span class="fact" data-cite="selinger2003">"underlie the query optimizers in every major database system today"</span> — assumptions included. The authors knew their costs came out <span class="fact" data-cite="selinger1979">"often not accurate in absolute value"</span>. You never choose the plan. You choose the tables and the index column order; the optimizer chooses the rest from those guesses.</p>
 </div>
 
 <div class="feynman" data-key="p1c03-o1">
-  <p class="fey-prompt">Your index is on (city, created_at); the query filters only on created_at. What does the optimizer price? Write it before reading on.</p>
+  <p class="fey-prompt">Take the hottest query in a system you have shipped. Write the index you would add, columns in order, before the chapter gives you the rule.</p>
 </div>
