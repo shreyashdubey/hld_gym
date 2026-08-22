@@ -1,0 +1,49 @@
+{
+  "chapter": "p3c17",
+  "cards": [
+    {
+      "id": "p3c17-c1",
+      "suit": "person",
+      "title": "Mendel Rosenblum and John Ousterhout",
+      "sub": "1991 · UC Berkeley, Sprite project",
+      "year": 1991,
+      "prompt": "In Sprite LFS, where does the permanent copy of a file's data live, and where does the index that finds it live?",
+      "answer": "Both are in the log. The log is the only structure on disk; the indexing information sits inside the log, so a file is read back out of the log itself rather than out of a separate random-access structure.",
+      "body": "Storage for the Sprite network operating system, at Berkeley. Their premise was demographic, not clever: memory was getting cheap, caches were absorbing reads, so disk traffic would become writes — and writes are only slow when they seek. So make every write an append and never seek again.",
+      "cite": "lfs1991"
+    },
+    {
+      "id": "p3c17-c2",
+      "suit": "incident",
+      "title": "The cleaner eats the win",
+      "sub": "USENIX Winter 1995 · Harvard and UC Berkeley",
+      "year": 1995,
+      "prompt": "Seltzer's TPC-B sweep: at what disk utilization had LFS's advantage over FFS already vanished, and what did the cleaner cost at that point?",
+      "answer": "48% utilization — the advantage was gone that early. The cleaner cost a 34% performance degradation, erasing the roughly 50% advantage LFS held with the cleaner switched off.",
+      "body": "Margo Seltzer and five co-authors ran 4.4BSD-LFS against the 4.4BSD Fast File System on TPC-B, a check-cashing benchmark, sweeping disk utilization. Cleaner off, LFS won handily. Cleaner on, the line flattened onto FFS. No money was ever priced. And TPC-B was not even the workload LFS was built for: the 1991 paper aimed at small files.",
+      "cite": "seltzer1995"
+    },
+    {
+      "id": "p3c17-c3",
+      "suit": "artifact",
+      "title": "The Design and Implementation of a Log-Structured File System",
+      "sub": "Rosenblum & Ousterhout · SOSP '91",
+      "year": 1991,
+      "prompt": "Which two venues published this paper, and how far apart? (Aggregators often list only one.)",
+      "answer": "The 13th ACM Symposium on Operating Systems Principles in 1991, and ACM Transactions on Computer Systems 10(1), February 1992, pages 26-52. The camera-ready itself says it will appear in both.",
+      "body": "Open the PDF. Section 3.3 defines segment cleaning in three steps: read a number of segments into memory, identify the live data, write the live data back to a smaller number of clean segments. Sprite LFS used segments of either 512 kilobytes or one megabyte.",
+      "cite": "lfs1991"
+    },
+    {
+      "id": "p3c17-c4",
+      "suit": "ripple",
+      "title": "LSM trees, and the bill Kafka still pays",
+      "sub": "O'Neil, Cheng, Gawlick, O'Neil · Acta Informatica, 1996",
+      "year": 1996,
+      "prompt": "What did the LSM-tree authors take from LFS, and which specific LFS cost did they claim their structure avoids?",
+      "answer": "They took the idea of always writing multi-page blocks to new locations, and the name. They claim LSM blocks are freed whole on the trailing edge of the rolling merge, so reuse costs no extra I/O — where LFS blocks are only partly freed, forcing a read and a write to reclaim.",
+      "body": "The paper that named a whole storage family after Rosenblum and Ousterhout's. Kafka's segment files plus log compaction are the same bargain wearing a retention policy: appends are free, reclaiming space is not, and you pay in rewritten bytes either way. Read your retention config as a cleaning budget.",
+      "cite": "lsmtree1996"
+    }
+  ]
+}

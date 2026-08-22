@@ -1,0 +1,49 @@
+{
+  "chapter": "p2c10",
+  "cards": [
+    {
+      "id": "p2c10-c1",
+      "suit": "person",
+      "title": "M. Douglas McIlroy",
+      "sub": "1982 · Bell Labs, Murray Hill",
+      "year": 1982,
+      "prompt": "The Unix spell word list was about 250,000 bytes of clear text. What machine's memory did it have to live inside, how much was there in total, and what did McIlroy give up to make it fit?",
+      "answer": "A PDP-11, whose whole addressable memory was 32,768 sixteen-bit words. He gave up storing the words at all: only hash evidence remained, so spell could accept a word it had never seen but could never recover which words it held.",
+      "body": "spell's clear text ran to about 250,000 bytes. A PDP-11 addressed 32,768 sixteen-bit words in total. McIlroy's move was to keep no words at all — only a hash table the entries could not be reconstructed from.",
+      "cite": "mcilroy1982"
+    },
+    {
+      "id": "p2c10-c2",
+      "suit": "incident",
+      "title": "The list outgrew the table",
+      "sub": "Bell Labs · 25,000 words → 30,000",
+      "year": 1982,
+      "prompt": "spell's first filter held 25,000 words in 400,000 bits using 11 hash functions. Who wrote it, and why could McIlroy not simply add the next 5,000 words to it?",
+      "answer": "D. M. Ritchie supplied it. False-acceptance probability is fixed by entries per bit, so adding words raises the error rate on every lookup. A filter has no delete and no in-place resize, which left exactly two moves: a bigger bit table, which the machine did not have, or a worse error rate.",
+      "body": "Ritchie's superimposed-code filter: 25,000 words spattered across 400,000 bits by eleven hash functions — remainders modulo the eleven largest primes under 400,000 — with false acceptance under one in 2,000. Then, McIlroy wrote, 25,000 words \"wasn't enough\", and the bit table was already the entire budget.",
+      "cite": "mcilroy1982"
+    },
+    {
+      "id": "p2c10-c3",
+      "suit": "artifact",
+      "title": "Development of a Spelling List",
+      "sub": "McIlroy · IEEE Trans. Communications 30(1):91-99 · January 1982",
+      "year": 1982,
+      "prompt": "The exact scheme that replaced spell's filter stored sorted hash values as differences. What did it cost per word, what theoretical floor was it measured against, and what did the lookup index add?",
+      "answer": "An expected codeword length of 13.60 bits per word, against an information-theoretic floor of 13.57 bits per entry for 30,000 entries of 27-bit hash. Partitioning the differences across 512 bins, so lookup need not sum from the start, raised the effective mean to 14.01 bits.",
+      "body": "Sorted 27-bit hash values, stored as first differences in a variable-length code. Expected length 13.60 bits per word; the floor for 30,000 such values is 13.57. Splitting across 512 bins to make lookup fast pushed the effective mean to 14.01 bits — \"a tight, but workable fit.\"",
+      "cite": "mcilroy1982"
+    },
+    {
+      "id": "p2c10-c4",
+      "suit": "ripple",
+      "title": "The two checks before you place a filter",
+      "sub": "Bloom, CACM 13(7), July 1970 → every LSM engine you run",
+      "year": 1970,
+      "prompt": "Bloom's 1970 paper names the single class of error his structure permits. What is his phrase for it, and which two checks does spell's history force on you before and after you adopt one?",
+      "answer": "\"Errors of commission\" — it can say yes wrongly, never no wrongly. Before: name the direction and confirm the tolerable outcome lies on that side (spell may pass a typo, but must never reject a real word). After: re-derive the rate as the data grows, because entries per bit is the rate and a full filter cannot be shrunk, resized or emptied — it saturates silently.",
+      "body": "Bloom bought space with \"errors of commission\": yes can be wrong, no cannot. spell could take that deal because a writer is never contradicted. What the deal does not cover is growth — the rate is entries per bit, and a filled filter has no delete and no resize.",
+      "cite": "bloom1970"
+    }
+  ]
+}

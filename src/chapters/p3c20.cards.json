@@ -1,0 +1,49 @@
+{
+  "chapter": "p3c20",
+  "cards": [
+    {
+      "id": "p3c20-c1",
+      "suit": "person",
+      "title": "Cheng Huang",
+      "sub": "2012 · Microsoft Research, with the Windows Azure Storage team",
+      "year": 2012,
+      "body": "First author of Azure's 2012 erasure-coding paper. Yekhanin recalled in 2014 that the work began with Huang and Jin Li guessing Azure 'might benefit from adopting some new kind of erasure codes'. Huang, same interview: when they published earlier papers in 2007, 'there was very little interest from business groups'.",
+      "prompt": "Huang's group threw out a Reed-Solomon layout that already met Azure's 1.33x cost target. Which number did they reject it on — and argue why that number is a durability input rather than an operations detail.",
+      "answer": "Reconstruction cost: the fragments one repair has to read. Reed-Solomon (12, 4) needs twelve. Every repair read is fabric bandwidth spent and time added to the window in which the next loss arrives, and each extra term in the durability product scales with that window — so repair speed sets the nines.",
+      "cite": "msr2014"
+    },
+    {
+      "id": "p3c20-c2",
+      "suit": "incident",
+      "title": "The 4 MB bake-off on a live cluster",
+      "sub": "2012 · WAS production cluster, 1 Gbps per storage node",
+      "year": 2012,
+      "body": "The measurement that settled the code choice, run on a production cluster 'with significant load variation over time'. CPU was never the question: decoding a 4 KB fragment averaged 13.2us with Reed-Solomon and 7.12us with LRC, orders of magnitude below the time to move the fragments across the network.",
+      "prompt": "Azure raced both codes on a lightly loaded production cluster with a 4 MB object. Give the three latencies — direct read, Reed-Solomon reconstruction, LRC reconstruction — and name the resource that was actually saturating.",
+      "answer": "Direct read 99 ms; Reed-Solomon reading 12 fragments 893 ms, about nine times slower; LRC 418 ms. The bottleneck was the 1 Gbps NIC on each storage node. Repair is a bandwidth problem, which is why halving the fragments read roughly halved the latency.",
+      "cite": "lrc2012"
+    },
+    {
+      "id": "p3c20-c3",
+      "suit": "artifact",
+      "title": "Erasure Coding in Windows Azure Storage",
+      "sub": "2012 · USENIX ATC '12, Boston, pages 15-26",
+      "year": 2012,
+      "body": "Huang, Simitci, Xu, Ogus, Calder, Gopalan, Li and Yekhanin; awarded Best Paper. Free PDF from USENIX, twelve pages. Section 2 builds Local Reconstruction Codes out of a worked six-fragment example before any field theory, and section 5 is the production measurement, not a simulation.",
+      "prompt": "Reed-Solomon (12, 4) and LRC (12, 2, 2) both cost 1.33x. Lay out both: fragment counts, reads to rebuild one lost data fragment, and how many arbitrary losses each survives.",
+      "answer": "RS: 12 data + 4 parity = 16 fragments, repair reads 12, survives any 4. LRC: 12 data split into two groups of six, one local parity per group, two global parities across all twelve = 16 fragments, repair reads 6, survives any 3 — and beyond three only the information-theoretically decodable patterns, because LRC is not maximum-distance-separable.",
+      "cite": "atc12page"
+    },
+    {
+      "id": "p3c20-c4",
+      "suit": "ripple",
+      "title": "Why your object store has two tiers",
+      "sub": "2014 · Microsoft Research, on the 2012 deployment",
+      "year": 2014,
+      "body": "LRC went into Azure Storage in 2012 and, Microsoft Research wrote in 2014, 'throughout all Microsoft storage production lines, from the cloud to enterprise and the desktop', reaching Windows Server 2012 R2 and Windows 8.1 in 2013. It is the same split this chapter commits to.",
+      "prompt": "This decision is why an object store carries two storage tiers rather than one. Name both tiers with their redundancy, and say what physically stops the cheap tier from covering new writes.",
+      "answer": "A hot tier at 3x replication on the open, appendable extent or container, and a coded tier near 1.33x on sealed ones. Coding needs the final contents of a fixed unit; an extent still accepting appends has no final contents. So coding is a background job that runs after sealing and then deletes the three copies.",
+      "cite": "msr2014"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "chapter": "p1c10",
+  "cards": [
+    {
+      "id": "p1c10-c1",
+      "suit": "person",
+      "title": "David K. Gifford",
+      "sub": "1979 · Stanford University and Xerox PARC",
+      "year": 1979,
+      "prompt": "Gifford's scheme lets a copy hold zero votes. What is a zero-vote copy for, and what does allowing one tell you about why he weighted votes instead of counting machines?",
+      "answer": "A weak representative: a temporary copy, typically on the user's own disk, that serves reads fast (65 ms local vs 75 ms to the server) while carrying no votes, so it can be included in a quorum without changing what that quorum costs. Counting machines gives one uniform knob for the whole file; votes are per copy, so a copy can be given speed without being given authority.",
+      "body": "A Stanford graduate student, funded partly by Xerox, who was not building a database. He was building Violet, a distributed calendar on PARC personal computers, and needed one calendar file to stay readable while a server was down.",
+      "cite": "gifford1979tr"
+    },
+    {
+      "id": "p1c10-c2",
+      "suit": "incident",
+      "title": "Violet's two-user livelock",
+      "sub": "1979 · Xerox PARC, before the section 4.2 fix",
+      "year": 1979,
+      "prompt": "Violet ran the voting algorithm correctly and two users watching one calendar still made zero progress. What was actually stuck, and why does that failure not touch the r + w rule?",
+      "answer": "Read locks in the transactional file system underneath. A writes, which breaks B's read transaction; B repaints and re-requests; B then times out A's write lock, breaking A. Neither quorum ever fails. Gifford deliberately separated consistency from replication, so the vote arithmetic stayed correct while the layer below livelocked.",
+      "body": "Two users viewing the same calendar. Gifford: \"Both screens repaint with the old information, and no net progress is made.\" The cost was not money — it was a replication algorithm that worked sitting under an application nobody could share.",
+      "cite": "gifford1979violet"
+    },
+    {
+      "id": "p1c10-c3",
+      "suit": "artifact",
+      "title": "\"Weighted Voting for Replicated Data\"",
+      "sub": "SOSP '79 · pp. 150-162 · CSL-79-14",
+      "year": 1979,
+      "prompt": "The abstract of the R + W > N paper states the rule, then the intersection the rule forces, then one more sentence. Engineers stop at the intersection. What is the sentence after it, and what breaks if you ship without it?",
+      "answer": "\"Version numbers make it possible to determine which copies are current.\" Without it the intersection still holds — a current copy is definitely inside your read quorum — but you have several copies in hand and no way to tell which is the current one. Overlap proves you saw the newest write; it does not identify it.",
+      "body": "David K. Gifford, Proc. 7th ACM SOSP, 1979, pp. 150-162, DOI 10.1145/800215.806583. Issued first as Xerox PARC report CSL-79-14, September 1979; presented 12 December 1979 at Pacific Grove, California.",
+      "cite": "gifford1979"
+    },
+    {
+      "id": "p1c10-c4",
+      "suit": "ripple",
+      "title": "The tunable-consistency dial",
+      "sub": "2007 · Dynamo, SOSP'07",
+      "year": 2007,
+      "prompt": "You set your client's consistency level to QUORUM. Which of Gifford's two quantities are you picking, and which Dynamo feature deliberately voids the guarantee you just paid for?",
+      "answer": "You are picking r (on reads) or w (on writes) — R + W > N is Gifford's rule with every replica given one vote. Dynamo's sloppy quorum voids it: writes go to the first N healthy nodes rather than the key's home nodes, so a read of the home nodes can miss the newest write until hinted handoff delivers it.",
+      "body": "Dynamo, SOSP'07: \"Setting R and W such that R + W > N yields a quorum-like system.\" The same paper drops strict membership for a \"sloppy quorum\". Every QUORUM / ONE / ALL setting in its descendants is that pair of knobs.",
+      "cite": "dynamo2007"
+    }
+  ]
+}

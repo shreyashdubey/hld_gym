@@ -1,0 +1,49 @@
+{
+  "chapter": "p3c18",
+  "cards": [
+    {
+      "id": "p3c18-c1",
+      "suit": "person",
+      "title": "Mike Unum",
+      "sub": "2003 · GE Energy, manager of commercial solutions",
+      "year": 2003,
+      "prompt": "GE's team could not make FirstEnergy's alarm crash happen again by replaying the same inputs. What did they have to do to the running program before the bug would appear, and what does that trick tell you about the class of fault?",
+      "answer": "Slow it down: they injected deliberate delays into the code while feeding alarm inputs, and reproduced the crash in a Florida lab about eight weeks after the blackout. The window was milliseconds wide, so the fault was timing-dependent, not input-dependent — a race condition. Two processes got write access to one data structure at the same time and corrupted it.",
+      "body": "Ran the hunt for the bug in GE Energy's XA/21 alarm system. His team pored over roughly one million lines of C and C++ in the Alarm and Event Processing Routine. He described the result plainly: two processes contending for a common data structure, and corruption that sent the alarm application into an infinite loop.",
+      "cite": "poulsen2004"
+    },
+    {
+      "id": "p3c18-c2",
+      "suit": "incident",
+      "title": "The FirstEnergy alarm failure",
+      "sub": "14 August 2003 · FirstEnergy's Ohio control center",
+      "year": 2003,
+      "prompt": "The alarm process stalled at 14:14 EDT and the primary EMS server died at 14:41. Failing over to the hot standby bought exactly 13 minutes. Why so few, and which redundancy design would have done better?",
+      "answer": "Because the fault lived in the application's state, not in the machine. The stalled alarm application failed over intact onto the backup, met the same growing backlog of unprocessed events, and killed it at 14:54 EDT. Hot standby copies a software bug faithfully; it only defends against independent hardware failure. Rebuilding a replica from a replayable log defends against both.",
+      "body": "Alarms stopped at 14:14 EDT; for over an hour nobody in the control room knew. Primary server died 14:41, backup 14:54. Lines sagged into trees unseen. At 16:05:57 a 345-kV line tripped, and within seven minutes the cascade crossed eight states and Ontario: 61,800 MW, 50 million people, $4–10 billion in US costs.",
+      "cite": "taskforce2004"
+    },
+    {
+      "id": "p3c18-c3",
+      "suit": "artifact",
+      "title": "Final Report on the August 14, 2003 Blackout",
+      "sub": "April 2004 · U.S.-Canada Power System Outage Task Force",
+      "year": 2004,
+      "prompt": "The report names one Energy Management System feature FirstEnergy did not have. It is the single feature this chapter's whole monitoring plane is organised around. Which feature, and what is its name in your own platform?",
+      "answer": "An alarm on the alarm system itself. The report observes that an alarm system can be set up to alarm operators if it fails to perform properly, then states that FE's EMS did not have such a notification system. In your platform that is meta-monitoring: an end-to-end ingest-lag SLO on the monitoring plane, evaluated somewhere the monitoring plane cannot take down with it.",
+      "body": "238 pages, published April 2004, free to read. Chapter 5 walks the failure minute by minute: the stalled alarm process, the two dead servers, screen refreshes slowing from 1–3 seconds to 59, and strip-chart pens holding the last valid measurement without any variation while the grid came apart underneath them.",
+      "cite": "taskforce2004"
+    },
+    {
+      "id": "p3c18-c4",
+      "suit": "ripple",
+      "title": "Monitoring became an audited obligation",
+      "sub": "8 August 2005 · Energy Policy Act, section 1211",
+      "year": 2005,
+      "prompt": "Before 2003, North American grid reliability standards were followed voluntarily. What changed in 2005, and what is the equivalent move inside a company after its dashboards go blind during an outage?",
+      "answer": "Section 1211 added Section 215 to the Federal Power Act: all users, owners and operators of the bulk-power system shall comply with reliability standards, and the Electric Reliability Organization may impose a penalty for a violation. The internal equivalent is putting an SLO on your monitoring plane's own freshness, with a pager on it and a review when it is missed — turning 'we monitor everything' from a claim into something that can fail an audit.",
+      "body": "The task force's first recommendation was to make reliability standards mandatory and enforceable, with penalties for noncompliance. Congress wrote it into section 1211 of the Energy Policy Act, signed 8 August 2005. 'We watch our grid' stopped being a statement of intent and became something a regulator can fine you for getting wrong.",
+      "cite": "epact2005"
+    }
+  ]
+}

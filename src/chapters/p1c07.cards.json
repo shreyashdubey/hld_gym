@@ -1,0 +1,60 @@
+{
+  "chapter": "p1c07",
+  "cards": [
+    {
+      "id": "p1c07-c1",
+      "suit": "person",
+      "title": "Mark Bergsma",
+      "sub": "2007 · Wikimedia Foundation",
+      "year": 2007,
+      "prompt": "Wikimedia ran a top-ten website on donations, out of three data centres. Which one ran the application, what ran in the other two, and how many people and dollars a year was the whole plant?",
+      "answer": "Mark Bergsma documented it. Tampa, Florida was the primary cluster and the only one with application servers; Amsterdam and Seoul were caching-only. About 350 servers run by roughly 6 people, a foundation of 9 employees on around $2M a year, mostly donations.",
+      "body": "Mark Bergsma, Wikimedia Foundation. His architecture deck: “3 data centers: Tampa, Amsterdam, Seoul” — “Primary cluster in Tampa, Florida”, “Secondary caching-only clusters in Amsterdam, the Netherlands and Seoul, South Korea”. 350 servers, “...managed by ~ 6 people”, 9 employees, “Yearly budget of around $2M, supported mostly through donations”.",
+      "cite": "bergsma2007"
+    },
+    {
+      "id": "p1c07-c2",
+      "suit": "artifact",
+      "title": "MediaWiki, includes/OutputPage.php",
+      "sub": "24 September 2005 · commit 1833e43b",
+      "year": 2005,
+      "prompt": "MediaWiki decides in one condition whether a page may live at the edge. What is the condition, and which response header does it always send so no cache downstream can get that decision wrong?",
+      "answer": "The condition is the absence of the PHP session cookie: no cookie and the page goes to Squid with an s-maxage; cookie present and it goes out Cache-Control: private, must-revalidate, max-age=0. Every response carries Vary: Accept-Encoding, Cookie.",
+      "body": "sendCacheControl() emits “Vary: Accept-Encoding, Cookie” under the comment “maintain different caches for logged-in users and non-logged in ones”, and hands Squid an s-maxage only when the session cookie is absent. Otherwise: “Cache-Control: private, must-revalidate, max-age=0”. The cache key was decided in the application, not the CDN config.",
+      "cite": "mediawiki2005"
+    },
+    {
+      "id": "p1c07-c3",
+      "suit": "artifact",
+      "title": "RFC 2756 — HTCP",
+      "sub": "January 2000 · Vixie & Wessels, Experimental",
+      "year": 2000,
+      "prompt": "An edit has to un-publish one URL from every cache on three continents within seconds, and TTLs cannot do it. Which published protocol carries that order, and what is the op-code called?",
+      "answer": "HTCP, the Hyper Text Caching Protocol, RFC 2756 (Vixie and Wessels, January 2000). The op-code is CLR. Wikimedia sent one UDP multicast CLR per edited URL to every Squid at once.",
+      "body": "“Hyper Text Caching Protocol (HTCP/0.0)”, P. Vixie and D. Wessels, January 2000. Its CLR op-code, in full: “Tell a cache to completely forget about an entity. RD is honoured.” Wikimedia rejected expiry times for wiki pages; on each edit the application servers multicast one HTCP message naming the URL.",
+      "cite": "rfc2756"
+    },
+    {
+      "id": "p1c07-c4",
+      "suit": "incident",
+      "title": "The one image server",
+      "sub": "2007 · Wikimedia media storage",
+      "year": 2007,
+      "prompt": "Wikimedia split its Squid caches into two groups, Text and Media. One of them hit 98%, the best number in the deck. Which one, what was sitting behind it as the origin, and what does a hit rate that high let a team get away with?",
+      "answer": "Media — images and other large static files; Text was wiki pages, at 85%. Behind Media sat a single image server: 1.3 TB, 4 million files, overloaded at 100 requests/s, uploads over NFS mounted on every application server, backups taking about two weeks. A 98% hit rate keeps an origin alive that could not otherwise ship.",
+      "body": "Behind the 98%: “1 Image server containing 1.3 TB of data, 4 million files”, “Overloaded serving just 100 requests/s”, uploads over NFS mounted on all application servers, “Not scalable”, “Backups take ~ 2 weeks”. The cache was not making that origin better. It was making it survivable.",
+      "cite": "bergsma2007"
+    },
+    {
+      "id": "p1c07-c5",
+      "suit": "ripple",
+      "title": "The cache got a veto",
+      "sub": "2005 → today · esams, Amsterdam",
+      "year": 2026,
+      "prompt": "Twenty years after those Amsterdam racks, what is still true of Wikimedia's topology, and what did the caching tier permanently win the right to veto?",
+      "answer": "Amsterdam is still a Wikimedia caching data centre, renamed esams. The veto is over the product: a MediaWiki feature too expensive to serve does not get enabled on Wikipedia, so personalisation is a cost the edge charges back to the origin.",
+      "body": "Wikitech still calls esams “a caching data center”, now inside Digital Realty's AMS9 — same city, same job, renamed along the way. The 2005 shape held. The price it set: personalisation became a budget line. Anything that makes a page differ per reader has to be paid for at the origin, forever.",
+      "cite": "wikitech_esams"
+    }
+  ]
+}

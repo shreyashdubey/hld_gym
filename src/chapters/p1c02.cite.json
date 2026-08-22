@@ -1,0 +1,160 @@
+{
+  "chapter": "p1c02",
+  "sources": {
+    "birrell1984": {
+      "type": "paper",
+      "title": "Implementing Remote Procedure Calls",
+      "author": "Andrew D. Birrell and Bruce Jay Nelson",
+      "year": 1984,
+      "venue": "ACM Transactions on Computer Systems, Vol. 2, No. 1, February 1984, pp. 39-59",
+      "url": "https://www.cs.princeton.edu/courses/archive/fall03/cs518/papers/rpc.pdf",
+      "checked": "2026-08-22",
+      "quote": "We guarantee that if the call returns to the user then the procedure in the server has been invoked precisely once. Otherwise, an exception is reported to the user and the procedure will have been invoked either once or not at all—the user is not told which.",
+      "supports": [
+        "at-most-once is the ceiling, stated in print in 1984",
+        "a timeout tells the caller nothing about whether the callee ran",
+        "venue read off the running head of the PDF: ACM Transactions on Computer Systems, Vol. 2, No. 1, February 1984, Pages 39-59; the last page carries 'Received March 1983; revised November 1983; accepted November 1983'",
+        "the PDF text layer renders the em dash in this sentence as '--'"
+      ]
+    },
+    "birrell1984aim": {
+      "type": "paper",
+      "title": "Implementing Remote Procedure Calls, section 1.4 (Fundamental Decisions)",
+      "author": "Andrew D. Birrell and Bruce Jay Nelson",
+      "year": 1984,
+      "url": "https://www.cs.princeton.edu/courses/archive/fall03/cs518/papers/rpc.pdf",
+      "checked": "2026-08-22",
+      "quote": "A principle that we used several times in making design choices is that the semantics of remote procedure calls should be as close as possible to those of local (single-machine) procedure calls.",
+      "supports": [
+        "the design goal: make a remote call look like a local one",
+        "section 1.4 is titled 'Fundamental Decisions'; section 1.3 is 'Aims'",
+        "the PDF text layer drops some inter-word spaces on this page ('R P C', 'calls.This')"
+      ]
+    },
+    "birrell1984perf": {
+      "type": "paper",
+      "title": "Implementing Remote Procedure Calls, Table I (Performance Results for Some Examples of Remote Calls)",
+      "author": "Andrew D. Birrell and Bruce Jay Nelson",
+      "year": 1984,
+      "url": "https://www.cs.princeton.edu/courses/archive/fall03/cs518/papers/rpc.pdf",
+      "checked": "2026-08-22",
+      "quote": "no args/results          1059         1097            131                9",
+      "supports": [
+        "Table I row 'no args/results', columns Minimum / Median / Transmission / Local-only",
+        "units fixed by the surrounding text: 'The times shown in Table I are all in microseconds, and were measured by counting Dorado microprocessor cycles and dividing by the known crystal frequency. They are accurate to within about ten percent.'",
+        "so: median 1097 microseconds for a remote no-argument call, 9 microseconds for the same call made purely locally",
+        "'The measurements were made for remote calls between two Dorados connected by an Ethernet.'"
+      ]
+    },
+    "birrell1984callid": {
+      "type": "paper",
+      "title": "Implementing Remote Procedure Calls, section 3.2 (Simple Calls)",
+      "author": "Andrew D. Birrell and Bruce Jay Nelson",
+      "year": 1984,
+      "url": "https://www.cs.princeton.edu/courses/archive/fall03/cs518/papers/rpc.pdf",
+      "checked": "2026-08-22",
+      "quote": "The call identifier serves two purposes. It allows the caller to determine that the result packet is truly the result of his current call (not, for example, a much delayed result of some previous call), and it allows the callee to eliminate duplicate call packets (caused by retransmissions, for example). The call identifier consists of the calling machine identifier (which is permanent and globally unique), a machine-relative identifier of the calling process, and a sequence number.",
+      "supports": [
+        "the identifier is minted by the caller",
+        "its job at the callee is duplicate elimination"
+      ]
+    },
+    "birrell1984table": {
+      "type": "paper",
+      "title": "Implementing Remote Procedure Calls, section 3.2 (Simple Calls)",
+      "author": "Andrew D. Birrell and Bruce Jay Nelson",
+      "year": 1984,
+      "url": "https://www.cs.princeton.edu/courses/archive/fall03/cs518/papers/rpc.pdf",
+      "checked": "2026-08-22",
+      "quote": "The RPCRuntime on a callee machine maintains a table giving the sequence number of the last call invoked by each calling activity. When a call packet is received, its call identifier is looked up in this table. The call packet can be discarded as a duplicate (possibly after acknowledgment) unless its sequence number is greater than that given in this table.",
+      "supports": [
+        "the recogniser is a table held at the callee, not politeness at the caller"
+      ]
+    },
+    "birrell1984gc": {
+      "type": "paper",
+      "title": "Implementing Remote Procedure Calls, section 3.2 (Simple Calls)",
+      "author": "Andrew D. Birrell and Bruce Jay Nelson",
+      "year": 1984,
+      "url": "https://www.cs.princeton.edu/courses/archive/fall03/cs518/papers/rpc.pdf",
+      "checked": "2026-08-22",
+      "quote": "If a connection is idle, the server machine may discard its state information after an interval, when there is no longer any danger of receiving retransmitted call packets (say, after five minutes), and it can do so without interacting with the caller machine.",
+      "supports": [
+        "the duplicate table is bounded and garbage-collected, which is where the TTL on an idempotency key comes from",
+        "the interval is chosen on the paper's own assumption that no retransmission can still be in flight; the paper does not claim a later duplicate is possible, and the story must not either"
+      ]
+    },
+    "birrell1984nelson": {
+      "type": "paper",
+      "title": "Implementing Remote Procedure Calls, sections 1.4, 1.5, 3.1 and reference 13",
+      "author": "Andrew D. Birrell and Bruce Jay Nelson",
+      "year": 1984,
+      "url": "https://www.cs.princeton.edu/courses/archive/fall03/cs518/papers/rpc.pdf",
+      "checked": "2026-08-22",
+      "quote": "Similarly, we chose the building semantics described below (based closely on the existing Cedar mechanisms) in preference to the ones presented in Nelson's thesis [13]. […] The program structure we use for RPC is similar to that proposed in Nelson's thesis. It is based on the concept of stubs. […] 13. NELSON, B. J. Remote procedure call. Tech. Rep. CSL-81-9, Xerox Palo Alto Research Center, Palo Alto, Calif. 1981. […] Some of our previous experiments [13] were made using PUP byte streams, and the Xerox NS \"Courier\" RPC protocol [4] uses the NS sequenced packet protocol. […] Our measurements [13] and experience with each of these implementations convinced us that this approach was unsatisfactory.",
+      "supports": [
+        "four excerpts from the same paper, in file order: section 1.4, section 1.5, section 3.1, reference list",
+        "the 1984 package kept the stub structure from Nelson's 1981 thesis and took Cedar's binding semantics instead of the thesis's",
+        "the printed text reads 'the building semantics described below' — a typo for 'binding': section 2 (the section 'below') is titled BINDING, and section 5 says 'Our binding semantics are quite powerful'. Read off the page image at 200dpi, not the text layer",
+        "the paper says nothing about replacing Nelson's *call* semantics; that reading is not supported",
+        "the thesis is cited by Birrell and Nelson as Xerox PARC Tech. Rep. CSL-81-9, 1981",
+        "section 3.1: reference [13] is Nelson's 1981 thesis, and its measurements of RPC over byte streams are why the 1984 package wrote a packet-level protocol of its own — backs the third clause of card c1"
+      ]
+    },
+    "waldo1994ids": {
+      "type": "paper",
+      "title": "A Note on Distributed Computing (Sun Microsystems Laboratories SMLI TR-94-29), section 5",
+      "author": "Jim Waldo, Geoff Wyant, Ann Wollrath and Sam Kendall",
+      "year": 1994,
+      "date": "1994-11",
+      "url": "http://web.archive.org/web/20090717005030/http://research.sun.com/techrep/1994/smli_tr-94-29.pdf",
+      "checked": "2026-08-22",
+      "quote": "The only way to fix this is to change the protocol to add request IDs. But since this is a standardized interface, there is no way to do this.",
+      "supports": [
+        "you cannot retrofit a request ID under callers you do not control",
+        "context: Waldo's worked example of a client that retries on timeout and silently enqueues the same work two, three, four times",
+        "the paragraph that follows: 'Many aspects of robustness can be reflected only at the protocol/interface level.'",
+        "cover page reads: SMLI TR-94-29, November 1994"
+      ]
+    },
+    "waldo1994tuning": {
+      "type": "paper",
+      "title": "A Note on Distributed Computing (Sun Microsystems Laboratories SMLI TR-94-29), section 6",
+      "author": "Jim Waldo, Geoff Wyant, Ann Wollrath and Sam Kendall",
+      "year": 1994,
+      "date": "1994-11",
+      "url": "http://web.archive.org/web/20090717005030/http://research.sun.com/techrep/1994/smli_tr-94-29.pdf",
+      "checked": "2026-08-22",
+      "quote": "In the early days of NFS, system administrators tried to tune various parameters (time-out length, number of retries) to avoid these problems. These efforts failed.",
+      "supports": [
+        "no timeout value makes a lost reply distinguishable from a lost call",
+        "same section, on hard mounts: 'one server crashes, and many workstations—even those apparently having nothing to do with that server—freeze.'",
+        "same paper, section 4.3: 'In a distributed system, the failure of a network link is indistinguishable from the failure of a processor on the other side of that link.'"
+      ]
+    },
+    "rfc1831": {
+      "type": "rfc",
+      "title": "RFC 1831 — RPC: Remote Procedure Call Protocol Specification Version 2",
+      "author": "R. Srinivasan, Sun Microsystems",
+      "year": 1995,
+      "date": "1995-08",
+      "url": "https://www.rfc-editor.org/rfc/rfc1831.txt",
+      "checked": "2026-08-22",
+      "quote": "However, a client application may choose to reuse its previous transaction ID when retransmitting a call. The server may choose to remember this ID after executing a call and not execute calls with the same ID in order to achieve some degree of execute-at-most-once semantics. The server is not allowed to examine this ID in any other way except as a test for equality.",
+      "supports": [
+        "the same mechanism as Birrell and Nelson's call identifier, shipped as a wire field in a standards-track protocol eleven years later — a shape match, not a lineage the RFC states",
+        "the client *may* reuse the id on a retry rather than mint a new one; the RFC makes it optional ('may choose to reuse'), not mandatory",
+        "the server may only test the id for equality, so the id carries no meaning",
+        "same section: 'If an application retransmits RPC call messages after time-outs, and does not receive a reply, it cannot infer anything about the number of times the procedure was executed.'"
+      ]
+    }
+  },
+  "unverified": [
+    "That Nelson's RPC thesis also carries the Carnegie Mellon report number CMU-CS-81-119. Birrell and Nelson's reference list gives only 'Tech. Rep. CSL-81-9, Xerox Palo Alto Research Center, Palo Alto, Calif. 1981', and the thesis itself was not opened.",
+    "That Bruce Nelson coined the term 'remote procedure call'. Neither the 1984 paper nor the 1994 report says so, so the claim is not made anywhere in the prose or on a card.",
+    "That ONC RPC's xid, or NFS's duplicate request cache, descends from Birrell and Nelson's sequence-number table. RFC 1831 describes the mechanism and names no lineage, so both the story and the ripple card claim only that the shape is the same, never that one came from the other.",
+    "That a retransmission can still arrive after the callee has discarded its table entry. The paper asserts the opposite — the interval is chosen 'when there is no longer any danger of receiving retransmitted call packets' — so the story names the assumption instead of claiming a duplicate execution the source denies.",
+    "That the Idempotency-Key header is a descendant of either mechanism. It is a claim about present-day practice, carried on card c4 as a shape match only, and sourced nowhere in this ledger.",
+    "Any figure in real currency for what the Cedar RPC work cost, or for what a Dorado cost. Neither source carries one; the only cost either paper states is the measured latency, which is what the story uses."
+  ]
+}

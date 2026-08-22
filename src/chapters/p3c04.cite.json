@@ -1,0 +1,95 @@
+{
+  "chapter": "p3c04",
+  "sources": {
+    "rfc1047": {
+      "type": "rfc",
+      "title": "Duplicate messages and SMTP",
+      "author": "C. Partridge",
+      "year": 1988,
+      "date": "1988-02",
+      "url": "https://www.rfc-editor.org/rfc/rfc1047.txt",
+      "checked": "2026-08-22",
+      "quote": "During the period between the time the receiving mailer has determined that it will accept the message, and the time that sending mailer gets the 250 reply, the message is active at both the sending and receiving mailer.",
+      "quotes": [
+        "Request for Comments: 1047                              CIC at BBN Labs",
+        "Craig Partridge",
+        "February 1988",
+        "Over the past few years, the staff of the CSNET Coordination and Information Center (CIC) has often been asked to help determine why a single mail message is being delivered multiple times to its recipients.",
+        "There is a point in the process of delivering a message where the receiving mailer knows it has accepted the message but the sending mailer is still not sure the message has been reliably delivered.",
+        "Until the sending mailer gets the 250 reply, it must assume the message was not delivered.  After the receiving mailer has decided to accept the message, it must assume the message has been delivered to it.",
+        "If the communications link fails during this synchronization gap, then the message has been duplicated.  Both mailers have active copies of the message that they will try to deliver.",
+        "Observations by the author suggest that this synchronization problem may be the second leading cause of duplicate messages on the Internet (second to mail loops).",
+        "Many mailers delay responding to the final dot because they are doing sophisticated processing of the message, in an attempt to confirm that they can deliver the message.  For example, the mailers may expand an entire mailing list to confirm that it can reach all addressees or may attempt to physically deposit the message into the mailboxes of local users, before confirming receipt of the final dot.",
+        "These practices are not unreasonable, but they often cause the synchronization gap to continue for several minutes",
+        "receiving mailers should be able to acknowledge the final dot as soon as the message has been safely put in a non-volatile (e.g., disk) queue for further processing.",
+        "the timeout for reply to the final dot should probably be at least 5 minutes and a timeout of 10 minutes would not be unreasonable.",
+        "Partridge                                                       [Page 3]"
+      ],
+      "supports": [
+        "Craig Partridge, CIC at BBN Labs, February 1988",
+        "CSNET Coordination and Information Center fielded repeated reports of one message delivered several times",
+        "the gap runs from the receiver deciding to accept the final dot to the sender seeing 250",
+        "the message is active at both ends inside the gap; sender must assume undelivered, receiver must assume delivered",
+        "the gap often lasts several minutes because receivers expand mailing lists and write mailboxes before replying",
+        "author ranked it second leading cause of duplicate messages on the Internet, after mail loops",
+        "persist-before-ack: acknowledge once the message is on a non-volatile (disk) queue",
+        "the memo is three pages long",
+        "the memo's entire remedy is to shrink the gap: acknowledge the final dot sooner, configure mailers to do less processing before the 250, and raise the sender's timeout to 5-10 minutes. It proposes no identifier and no receiver-side deduplication."
+      ]
+    },
+    "rfc1123": {
+      "type": "rfc",
+      "title": "Requirements for Internet Hosts -- Application and Support",
+      "author": "R. Braden, Ed. (Internet Engineering Task Force)",
+      "year": 1989,
+      "date": "1989-10",
+      "url": "https://www.rfc-editor.org/rfc/rfc1123.txt",
+      "checked": "2026-08-22",
+      "quote": "o    DATA Termination: 10 minutes.\n\n              This is while awaiting the \"250 OK\" reply. When the receiver gets the final period terminating the message data, it typically performs processing to deliver the message to a user mailbox.  A spurious timeout at this point would be very wasteful, since the message has been successfully sent.",
+      "quotes": [
+        "5.3.2  Timeouts in SMTP",
+        "Based on extensive experience with busy mail-relay hosts, the minimum per-command timeout values SHOULD be as follows:",
+        "To avoid receiving duplicate messages as the result of timeouts, a receiver-SMTP MUST seek to minimize the time required to respond to the final \".\" that ends a message transfer.  See RFC-1047 [SMTP:4] for a discussion of this problem.",
+        "Minimize acceptance delay (RFC-1047)         |5.3.3     |x| | | | |",
+        "[SMTP:4]  \"Duplicate Messages and SMTP,\" C. Partridge, RFC-1047,",
+        "When the receiver-SMTP accepts a piece of mail (by sending a \"250 OK\" message in response to DATA), it is accepting responsibility for delivering or relaying the message.  It must take this responsibility seriously, i.e., it MUST NOT lose the message for frivolous reasons, e.g., because the host later crashes or because of a predictable resource shortage.",
+        "RFC1123                       INTRODUCTION                  October 1989"
+      ],
+      "supports": [
+        "RFC 1123, October 1989",
+        "section 5.3.2 sets minimum per-command SMTP timeouts",
+        "DATA Termination minimum is 10 minutes, awaiting the 250 OK after the final dot",
+        "section 5.3.3 makes minimizing acceptance delay a MUST and cites RFC 1047 by number"
+      ]
+    },
+    "rfc5321": {
+      "type": "rfc",
+      "title": "Simple Mail Transfer Protocol",
+      "author": "J. Klensin",
+      "year": 2008,
+      "date": "2008-10",
+      "url": "https://www.rfc-editor.org/rfc/rfc5321.txt",
+      "checked": "2026-08-22",
+      "quote": "To avoid receiving duplicate messages as the result of timeouts, a receiver-SMTP MUST seek to minimize the time required to respond to the final <CRLF>.<CRLF> end of data indicator.  See RFC 1047 [40] for a discussion of this problem.",
+      "quotes": [
+        "Request for Comments: 5321                                  October 2008",
+        "Obsoletes: 2821",
+        "When the receiver-SMTP accepts a piece of mail (by sending a \"250 OK\" message in response to DATA), it is accepting responsibility for delivering or relaying the message.  It must take this responsibility seriously.  It MUST NOT lose the message for frivolous reasons, such as because the host later crashes or because of a predictable resource shortage.",
+        "[40]  Partridge, C., \"Duplicate messages and SMTP\", RFC 1047,"
+      ],
+      "supports": [
+        "RFC 5321, October 2008, the current SMTP standard",
+        "it repeats the RFC 1123 minimize-the-gap MUST verbatim and still cites RFC 1047",
+        "it specifies no deduplication identifier; the only remedy remains shrinking the gap",
+        "250 OK means the receiver has accepted responsibility and MUST NOT lose the message to a later crash"
+      ]
+    }
+  },
+  "unverified": [
+    "Any dollar or currency figure for the cost of duplicate mail delivery on ARPANET/CSNET. RFC 1047 quantifies the problem only by rank (second to mail loops); no monetary estimate was found in any source opened, so none appears in the prose.",
+    "Jon Postel's specific involvement in this thread. He is the RFC Editor of the period and appears in the origins.json allocation, but no opened source ties him to RFC 1047's content, so he does not appear in the prose or on a card.",
+    "Whether RFC 1123's 10-minute DATA Termination floor was chosen because of RFC 1047's 10-minute suggestion. The two numbers match and RFC 1123 5.3.3 cites RFC 1047, but no opened source states the causal link, so the prose states the two facts and does not assert the cause.",
+    "RFC 1845 (SMTP checkpoint/restart) as a downstream consequence of this problem. Not opened; not used.",
+    "That SMTP 'carried no name a receiver could recognise on a resend', and that this is why Partridge proposed timeouts instead of deduplication. Removed from the prose on verification. RFC 1047 never mentions an identifier, so the causal claim is unsourced; and RFC 822 (August 1982) section 4.6.1 already defined Message-ID, a sender-minted identifier whose 'uniqueness ... is guaranteed by the host which generates it' and which a requeued resend carries unchanged. What SMTP lacked was not a name but any rule obliging a receiver to remember one. The prose now says only what the memo says: its whole remedy is to shrink the gap, not to close it."
+  ]
+}

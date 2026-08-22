@@ -1,0 +1,111 @@
+{
+  "chapter": "p3c16",
+  "sources": {
+    "fitzpatrick2003commit": {
+      "type": "commit",
+      "title": "committing memcached — first commit in the memcached repository (Makefile, README, memcached.c)",
+      "author": "Brad Fitzpatrick",
+      "year": 2003,
+      "date": "2003-05-27",
+      "url": "https://github.com/memcached/memcached/commit/32f382b605b4565bddfae5c9d082af3bfd30cf02",
+      "checked": "2026-08-22",
+      "quote": "memcached does non-blocking network I/O, but not disk.  (it should never go to disk, or you've lost the whole point of it)",
+      "supports": [
+        "commit sha 32f382b, authored 2003-05-27T07:19:11Z by Brad Fitzpatrick <brad@danga.com>",
+        "commit message is exactly 'committing memcached'",
+        "the commit adds three files: Makefile (10 lines), README (20 lines), memcached.c (1,195 lines)",
+        "the C daemon already exists in the first commit; the Perl prototype predates it",
+        "svn origin: http://code.sixapart.com/svn/memcached/trunk@2"
+      ]
+    },
+    "vorobey2003slab": {
+      "type": "commit",
+      "title": "update from avva with new allocation policy: bunches of power-of-two slab classes",
+      "author": "Anatoly Vorobey",
+      "year": 2003,
+      "date": "2003-05-30",
+      "url": "https://github.com/memcached/memcached/commit/60d709425f570c684a17dd15c09d88888e2158a7",
+      "checked": "2026-08-22",
+      "quote": "update from avva with new allocation policy: bunches of power-of-two\nslab classes.  no external fragmentation... always allocate slabs of 1MB.",
+      "supports": [
+        "commit sha 60d709425f570c684a17dd15c09d88888e2158a7, authored 2003-05-30T03:33:12Z by Anatoly Vorobey <mellon@pobox.com>",
+        "three days after the 2003-05-27 initial commit",
+        "the 1 MB slab page and power-of-two size classes date from this commit",
+        "an earlier avva commit, 2003-05-28, added 'stats mallinfo', 'stats maps', 'incr', and 'decr'",
+        "this commit is what replaced glibc malloc: memcached.c at 32f382b allocates items with malloc(ntotal); items.c here calls slabs_alloc(id), and slabs.c defines POWER_BLOCK 1048576"
+      ]
+    },
+    "fitzpatrick2004lj": {
+      "type": "blog",
+      "title": "Distributed Caching with Memcached",
+      "author": "Brad Fitzpatrick",
+      "year": 2004,
+      "date": "2004-08-01",
+      "url": "https://www.linuxjournal.com/article/7451",
+      "checked": "2026-08-22",
+      "quote": "One day, sick of how painful it is to cache efficiently in mod_perl applications, I started dreaming. I realized we had a lot of spare memory available around the network, and I wanted to use it somehow.",
+      "confidence": "secondary",
+      "supports": [
+        "Linux Journal, published 'on August 1, 2004', by Brad Fitzpatrick",
+        "'Yes, I could've replaced all our databases with 64-bit machines with much more memory, but recall that I'm stubborn and frugal.'",
+        "'It also works only on a single machine, not across 40+ Web nodes.' / 'I didn't want all 40+ machines caching independently and duplicating information.'",
+        "'Each Memcached instance is totally independent, and does not communicate with the others.'",
+        "'The first layer is implemented in the client library; it decides which Memcached server to send the request to by hashing the key onto a list of virtual buckets, each one representing a Memcached server.'",
+        "'LiveJournal.com currently has 28 Memcached instances running on our network on ten unique hosts, caching the most popular 30GB of data. Our hit rate is around 92%'",
+        "'The initial prototype of Memcached was written in Perl. Although I love Perl, the prototype was laughably slow and bloated.'",
+        "'Approximately 70 machines currently run LiveJournal.com, a blogging and social networking system with 2.5 million accounts.'",
+        "'Memcached is used on LiveJournal, Slashdot, Wikipedia and other high-traffic sites.'",
+        "'Memcached currently generates slab classes for all power-of-two sizes from 64 bytes to 1MB'"
+      ]
+    },
+    "danga2004backend": {
+      "type": "talk",
+      "title": "Inside LiveJournal's Backend, or, \"holy hell that's a lot of hits!\"",
+      "author": "Brad Fitzpatrick and Lisa Phillips, Danga Interactive",
+      "year": 2004,
+      "date": "2004-11-01",
+      "url": "https://www.danga.com/words/2004_lisa/lisa04.pdf",
+      "checked": "2026-08-22",
+      "quote": "virtual buckets & memcached bucket manager(s). definitely.\n    – grow/shrink memcached farm at run-time\n    – solves flapping problem if client re-hashes and can't detect old data",
+      "confidence": "secondary",
+      "supports": [
+        "title page reads 'Inside LiveJournal's Backend' / 'or, \"holy hell that's a lot of hits!\"' / 'November 2004' / 'Brad Fitzpatrick <brad@danga.com>' 'Lisa Phillips <lisa@danga.com>' / 'Danga Interactive'",
+        "slide 'memcached': 'no \"master node\"' and 'clients distribute requests'",
+        "slide 'How memcached works': 'requests hashed out amongst instance \"buckets\"' and 'CRC32(\"key\") = 383472 % num_buckets = 6'",
+        "slide 'LiveJournal and memcached': '10 unique hosts – none dedicated, whatever has extra memory', '28 instances (512 MB = 1 bucket)', '30 GB of cached data', '90-93% hit rate', '~100,000 queries/second at peaks'",
+        "slide 'memcached – speed': 'C – prototype Perl version proved concept, too slow' and 'glibc malloc died after 7~8 days'",
+        "slide 'LiveJournal Overview': 'college hobby project, Apr 1999', '5+ million accounts; ~half active', '100+ servers'",
+        "slide 'Two Servers': 'Paid account revenue buys: Kenny: 6U Dell web server / Cartman: 6U Dell database server'",
+        "hosted at danga.com/words/2004_lisa/lisa04.pdf; the deck's own title page carries no venue name"
+      ]
+    },
+    "nishtala2013": {
+      "type": "paper",
+      "title": "Scaling Memcache at Facebook",
+      "author": "Rajesh Nishtala, Hans Fugal, Steven Grimm, Marc Kwiatkowski, Herman Lee, Harry C. Li, Ryan McElroy, Mike Paleczny, Daniel Peek, Paul Saab, David Stafford, Tony Tung, Venkateshwaran Venkataramani",
+      "year": 2013,
+      "date": "2013-04-03",
+      "url": "https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf",
+      "checked": "2026-08-22",
+      "quote": "As is, memcached provides no server-to-server coordination; it is an in-memory hash table running on a single server.",
+      "supports": [
+        "venue as printed in the PDF running head: '10th USENIX Symposium on Networked Systems Design and Implementation (NSDI '13)'; quote on printed page 386; USENIX BibTeX gives Lombard, IL, pages 385-398",
+        "the 2003 no-membership property survived unchanged into Facebook's deployment",
+        "Gutter pool: 'this system reduces the rate of client-visible failures by 99% and converts 10%–25% of failures into hits each day'",
+        "'If a memcached server fails entirely, hit rates in the gutter pool generally exceed 35% in under 4 minutes and often approach 50%.'",
+        "'Gutter accounts for approximately 1% of the memcached servers'"
+      ]
+    }
+  },
+  "unverified": [
+    "The widely repeated first-release date of 22 May 2003. The oldest revision in the memcached repository is trunk@2, committed 2003-05-27; no primary source for a 22 May date was found, so 27 May 2003 is used instead.",
+    "That memcached's Perl prototype took 'a few days' to write. Fitzpatrick confirms a Perl prototype existed and was 'laughably slow and bloated', but names no duration anywhere located.",
+    "That LiveJournal's 2003 hardware was donated. The primary sources describe machines bought from paid-account revenue and leftover boxes reused, not donations.",
+    "LiveJournal's account count and machine count in May 2003 specifically. The nearest figures are August 2004 (2.5 million accounts, ~70 machines) and November 2004 (5+ million accounts, 100+ servers).",
+    "Whether the November 2004 danga.com deck is the same talk USENIX lists for LISA '04 as 'LiveJournal's Backend and memcached: Past, Present, and Future' — the USENIX page returned HTTP 403 and the PDF's title page names no venue.",
+    "Who performed the Perl-to-C rewrite. The first commit's memcached.c is authored by Fitzpatrick; Vorobey's contributions in the repository begin the following day.",
+    "How long glibc malloc survived in production before the slab allocator replaced it. Fitzpatrick's 2004 accounts give 'about a week' (Linux Journal) and 'glibc malloc died after 7~8 days' (danga deck), but neither dates that window, and the repository leaves only three days between the first commit (27 May 2003) and the slab allocator (30 May 2003). No duration appears in the prose or on a card.",
+    "That LiveJournal could not afford more database hardware in 2003. Fitzpatrick states the opposite - 'Yes, I could've replaced all our databases with 64-bit machines with much more memory, but recall that I'm stubborn and frugal' - so the refusal is framed as a choice, not a budget.",
+    "That the cache was free. The Nov 2004 deck gives 'none dedicated, whatever has extra memory', but the Linux Journal article says they 'buy extra memory for any old machine that can take it', so the prose claims no new machines, not zero cost."
+  ]
+}

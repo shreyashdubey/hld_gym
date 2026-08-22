@@ -1,0 +1,15 @@
+<div class="box origin"><div class="box-tag">Carlsbad, California, 2022</div>
+<p class="origin-seam">The GPUs were not the slow part. The queue was.</p>
+
+<p>Serving a language model then meant handing an engine a batch of requests and waiting for all of them. Gyeong-In Yu and four colleagues at Seoul National University and FriendliAI wrote down the cost: <span class="fact" data-cite="orca2022">"requests that have finished earlier &hellip; cannot return to the client, while newly arrived requests have to wait until the current batch completely finishes."</span></p>
+
+<p data-cite="orcasched2022">One user asking yes-or-no is held hostage by a neighbour writing an essay. The fix was one sentence: schedule at the granularity of an iteration, not a request. Run the batch for one token. Then decide again who is in it.</p>
+
+<p>They measured it on GPT-3 175B, <span class="fact" data-cite="orcacfg2022 orcaenv2022">partitioned across 16 A100s — two Azure ND96asr v4 machines</span>, list price <span class="fact" data-cite="azureprice2021">$27.197 an hour</span> each. At the same median latency of <span class="fact" data-cite="orcaeval2022">190 ms per generated token, NVIDIA FasterTransformer served 0.185 requests a second and Orca served 6.81 — a 36.9× speedup</span>. Same silicon. Scheduling alone.</p>
+
+<p>Then the cost moved. A batch whose membership changes every token forces the scheduler to ask, every token, whether there is key-value cache left for one more. Orca's answer was to <span class="fact" data-cite="orcamem2022">reserve max_tokens slots of GPU memory</span> the instant a request was admitted — room for every token it might ever hold, not the ones it used. The schedule had become elastic. The memory behind it had not.</p>
+</div>
+
+<div class="feynman" data-key="p3c23-o1">
+<p class="fey-prompt">Before you read on: what has to be true about a request before the scheduler may let it into the batch? Write it down.</p>
+</div>

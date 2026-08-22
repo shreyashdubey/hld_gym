@@ -1,0 +1,49 @@
+{
+  "chapter": "p1c09",
+  "cards": [
+    {
+      "id": "p1c09-c1",
+      "suit": "person",
+      "title": "Chuanhui",
+      "sub": "22 April 2011 - Taobao engineer, NOSQL Notes",
+      "year": 2011,
+      "prompt": "Taobao projected a hundred billion records inside five years, then routed every write in the system to one machine. What property of the workload made that defensible, and which two operations did it make cheap?",
+      "answer": "The daily volume of change was tiny - recent updates fit in one machine's memory - so centralising them turned keeping state from a distributed problem into a single-machine one, and made cross-row and cross-table transactions cheap to coordinate.",
+      "body": "The Taobao engineer who blogged OceanBase's design reasoning at NOSQL Notes, weeks before the system went into service. He presented it as a deliberate trade rather than an ideal, and said the team had already worked through ways to undo it if the estimate proved wrong.",
+      "cite": "chuanhui2011"
+    },
+    {
+      "id": "p1c09-c2",
+      "suit": "incident",
+      "title": "The favourites table",
+      "sub": "2010 - Taobao.com Favourites",
+      "year": 2010,
+      "prompt": "Taobao Favourites is read two ways: a user's saved items, and an item's savers. Sharding on user_id makes one of them cheap. Precisely what happens to the other, and why is 'shard on item_id instead' not a fix?",
+      "answer": "The other read carries no shard key, so every partition has to be asked - scatter-gather. Switching to item_id just moves the scatter-gather onto the first read. One table gets one shard key, and here neither read is the dominant one.",
+      "body": "Two reads of equal business value over one set of rows, and no column serving both. Partition by user_id, and finding every user who favourited an item means reading every partition. Alibaba started building a database instead of choosing.",
+      "cite": "obdesign"
+    },
+    {
+      "id": "p1c09-c3",
+      "suit": "artifact",
+      "title": "OceanBase Paetica, PVLDB 16(12), 2023",
+      "sub": "Yang, Xu, Gao, Yang et al. - pages 3728-3740",
+      "year": 2023,
+      "prompt": "OceanBase ran sharded ChunkServers behind a single UpdateServer for years. Their own 2023 VLDB paper names the flaw in five words, and names the one capability the UpdateServer lacked. What are they, and which version threw the design out?",
+      "answer": "\"single-point write, multi-point read\" - and the UpdateServer \"does not possess the capability for distributed transactions\". Versions 1.0 to 3.0 abandoned it for a fully peer-to-peer structure.",
+      "body": "Section 2 of the paper walks OceanBase from version 0.5 to 4.0: split storage and computing layers, the ChunkServer and UpdateServer pair, why that shape suited businesses like Taobao favourites, and what the single write node cost when concurrency rose.",
+      "cite": "paetica2023"
+    },
+    {
+      "id": "p1c09-c4",
+      "suit": "ripple",
+      "title": "707,351,007 tpmC",
+      "sub": "May 2020 - Ant Financial, TPC-C full disclosure report",
+      "year": 2020,
+      "prompt": "The stopgap built for one wish-list page ended up under a payments company. Name the throughput and the price/performance TPC published for it in 2020, the currency both are quoted in, and roughly how many database nodes it took.",
+      "answer": "707,351,007 tpmC at CNY 3.98 per tpmC, on 1,554 OceanBase data nodes; the three-year total system cost was CNY 2,814,509,552.00.",
+      "body": "OceanBase reached Alipay in 2014 and Zhejiang E-Commerce Bank in 2015. In May 2020 Ant Financial filed a TPC-C full disclosure report for an Alibaba Cloud cluster running OceanBase v2.2, audited by Doug Johnson of InfoSizing, with an availability date of June 08, 2020.",
+      "cite": "tpcc2020"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "chapter": "p2c05",
+  "cards": [
+    {
+      "id": "p2c05-c1",
+      "suit": "person",
+      "title": "Larry Seese",
+      "sub": "1990 · AT&T, director of technology development",
+      "year": 1990,
+      "prompt": "Seese blamed the collapse on a change AT&T had made deliberately, as an improvement, the month before. Name the improvement, and say what property of it turned one switch's recovery into a nationwide cascade.",
+      "body": "The man who had to explain it. A week after the outage he walked the trade journal Telephony through the mechanism switch by switch — the deliberate speed-up, the second message, the shutdown, the chain reaction. \"The fault was in the code\" of the update loaded into all 114 4ESS switches in mid-December.",
+      "answer": "They sped up how a switch learns its neighbour is back. Before, switch A sent an explicit 'I am working again' and B double-checked. After, B inferred it from A's first SS7 initial address message — an ordinary call attempt. The status update was now driven by production traffic, so a recovering switch's own calls became the trigger, and every switch ran that same code.",
+      "cite": "telephony1990"
+    },
+    {
+      "id": "p2c05-c2",
+      "suit": "incident",
+      "title": "AT&T's nine-hour Monday",
+      "sub": "15 January 1990 · 4ESS toll network, coast to coast",
+      "year": 1990,
+      "prompt": "AT&T's engineers reached for their standard recovery procedures first, and the report says these \"proved inadequate\". Explain why every standard procedure made it worse, and what the one move that finally worked had in common with doing nothing.",
+      "body": "One New York 4ESS hit a minor hardware fault at 2:30 p.m. EST and began a normal four-to-six second recovery. The effect cascaded: Direct Link Node processors in other switches went out of service too, and stayed unstable because traffic kept supplying the triggers. Last link cleared 11:30 p.m. EST; rollback next day. Monday's calling volume was below normal.",
+      "answer": "Standard procedures restore switches to service, and a switch returning to service is exactly what emits the paired call attempts that damage its neighbours' Direct Link Node processors — recovery was the propagation mechanism. The move that worked was subtractive: suspending signalling traffic on the backup links cut the message rate below the density that produced two attempts within 1/100th of a second, so the oscillation damped instead of feeding itself.",
+      "cite": "att1990report"
+    },
+    {
+      "id": "p2c05-c3",
+      "suit": "artifact",
+      "title": "Technical background on AT&T's network slowdown",
+      "sub": "AT&T · ACM RISKS Digest 9.63, 31 January 1990",
+      "year": 1990,
+      "prompt": "This report contains one sentence that quietly explains why the defect shipped to every switch in the country. Reconstruct what it claims — then find the later sentence in the same report that complicates it.",
+      "body": "AT&T's own account, released through its Consultant Liaison Program and reproduced in ACM RISKS Digest Volume 9 Issue 63. It names the Direct Link Node processor, its duplicated mate, the 1/100th-of-a-second vulnerable window, and the mid-December update that put the flaw into every 4ESS at once. It is short; go and read it.",
+      "answer": "\"While the software had been rigorously tested in laboratory environments before it was introduced, the unique combination of events that led to this problem couldn't be predicted.\" The complication comes a few paragraphs later: after the rollback AT&T took the suspicious software into the laboratory and reproduced the problem. So the lab could always have found it. What was missing was the test case — nobody had exercised a failed peer rejoining the network, which is the one path the whole fleet was about to run at once.",
+      "cite": "att1990report"
+    },
+    {
+      "id": "p2c05-c4",
+      "suit": "ripple",
+      "title": "The untested path is the one that comes back",
+      "sub": "1990 · William Hugh Murray, RISKS Digest 9.63",
+      "year": 1990,
+      "prompt": "Murray argued the failure was not a component problem. Say what he called it instead, and translate his rule into the deploy policy your own fleet should run.",
+      "body": "Thirteen days after the outage, in the digest issue that carried AT&T's report, Murray wrote the lesson in capitals: \"WE ARE NOT PROPERLY TESTING TO SEE WHAT HAPPENS WHEN THE COMPONENT SUCCEEDS IN CORRECTING ITSELF AND COMES BACK ON LINE.\" A companion post added two rules: avoid gratuitous automation, and if you cannot test it, do not do it.",
+      "answer": "A system problem — \"IT WAS THE INABILITY TO PROPERLY HANDLE THE RETURN TO THE LINE OF A FAILING COMPONENT\". The modern reading, which is yours to draw and not Murray's words: rejoin and recovery paths need the same canary treatment as feature code, and a release goes out cell by cell, so the rejoin path runs inside one blast radius before it runs inside all of them.",
+      "cite": "murray1990"
+    }
+  ]
+}

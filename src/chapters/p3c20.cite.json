@@ -1,0 +1,103 @@
+{
+  "chapter": "p3c20",
+  "sources": {
+    "lrc2012": {
+      "type": "paper",
+      "title": "Erasure Coding in Windows Azure Storage",
+      "author": "Cheng Huang, Huseyin Simitci, Yikang Xu, Aaron Ogus, Brad Calder, Parikshit Gopalan, Jin Li, Sergey Yekhanin (Microsoft Corporation)",
+      "year": 2012,
+      "date": "2012-06",
+      "venue": "2012 USENIX Annual Technical Conference (USENIX ATC '12), Boston, MA, pages 15-26, ISBN 978-931971-93-5. Awarded Best Paper.",
+      "url": "https://www.usenix.org/system/files/conference/atc12/atc12-final181_0.pdf",
+      "checked": "2026-08-22",
+      "quote": "Erasure coding can reduce the cost of storage over 50%, which is a tremendous cost saving as we will soon surpass an Exabyte of storage.",
+      "quote2": "There are the obvious cost savings from purchasing less hardware to store that much data, but there are significant savings from the fact that this also reduces our data center footprint by 1/2, the power savings from running 1/2 the hardware, along with other savings.",
+      "quote3": "This could be accomplished using the standard approach of Reed-Solomon codes [13] where we would have (12, 4), which is 12 data fragments and 4 code fragments. This means that to do the reconstruction we would need to read from a set of 12 fragments. This i) greatly increases the chance of hitting a hot storage node, and ii) increases the network costs and I/Os and adds latency to read that many fragments to do the reconstruction.",
+      "quote4": "Provide significant reduction in storage overhead to 1.33x while maintaining higher durability than a system that keeps 3 replicas for the data.",
+      "quote5": "A (k, l, r) LRC divides k data fragments into l local groups. It encodes l local parities, one for each local group, and r global parities. Any single data fragment failure can be decoded from k/l fragments within its local group.",
+      "quote6": "Let's now use LRC (12, 2, 2) as an example and illustrate an actual fragment placement in WAS. A WAS stamp consists of 20 racks. For maximum reliability, each of the total 16 fragments for an extent is placed in [a different fault domain]. ... There are two local groups, each with 6 data fragments, plus 2 local parities (1 per group), and then 2 global parities.",
+      "quote7": "In comparison, reconstruction with LRC is fast. It requires only 6 fragments to be read and achieves the latency of 166ms, which is comparable to 151ms with Reed-Solomon reading 13 fragments.",
+      "quote8": "Compared to direct read taking 99ms, Reed-Solomon with 12 fragments takes 893ms - 9 times slower.",
+      "quote9": "Since LRC reduces the number of fragments by half, its latency is 418ms and significantly reduced from that of Reed-Solomon.",
+      "quote10": "LRC is not Maximum Distance Separable [12] and therefore cannot tolerate arbitrary 4 failures. For instance, say the 4 failures are x1, x2, x3 and px. This failure pattern is non-decodable because there are only two parities - the global parities - that can help to decode the 3 missing data fragments.",
+      "quote11": "To summarize, the (6, 2, 2) LRC is capable of decoding arbitrary three failures. It can also decode all the information-theoretically decodable four failure patterns, which accounts for 86% of all the four failures. In short, the (6, 2, 2) LRC achieves the Maximally Recoverable property [14].",
+      "quote12": "The data is originally written to 3 full copies to keep the data durable. Once reaching a certain size (e.g., 1 GB), extents are sealed. These sealed extents can no longer be modified and thus make perfect candidates for erasure coding. WAS then erasure codes a sealed extent lazily in the background, and once the extent is erasure-coded the original 3 full copies of the extent are deleted.",
+      "quote13": "We chose LRC (12, 2, 2) since it achieves our 1.33x storage overhead target and has the above latency, I/O and bandwidth advantages over Reed-Solomon.",
+      "quote14": "The fast reconstruction and the I/O cost savings are the reasons why we chose LRC over Reed-Solomon for Windows Azure Storage's erasure coding.",
+      "quote15": "The average latency of decoding 4KB fragments is 13.2us for Reed-Solomon and 7.12us for LRC.",
+      "quote16": "This way of constructing coding equations requires a very small finite field and makes implementation practical. It is a critical improvement over our own Pyramid codes [14]. In Pyramid codes, coding equation coefficients are discovered through a search algorithm, whose complexity grows exponentially with the length of the code.",
+      "quote17": "Results are obtained on our production cluster with significant load variation over time. ... The production cluster, where these results were gathered, has one 1Gbps NIC for each storage node.",
+      "note": "Read from the USENIX PDF, not from an index. Text extracted with pdftotext and every quote above matched verbatim against the extraction after de-hyphenation and whitespace normalisation. quote8 as extracted reads 'Reed-Solomon with 12 10 fragments takes 893ms' where '10' is the page number injected mid-column by the two-column layout; the sentence is 'with 12 fragments'. quote6 is elided at '[a different fault domain]' because the two-column layout interleaves the following section heading there; the surrounding sentence is reproduced exactly. The paper's en dashes are written here as '-'. Venue guard: the paper's own reference [21] cites the companion theory paper as 'On the Locality of Codeword Symbols, Allerton, 2011'; the IEEE Transactions on Information Theory version is November 2012. Both exist and neither is cited in the prose.",
+      "supports": [
+        "3x replication was the pre-2012 Azure baseline; 1.33x was the erasure-coding target",
+        "the rejection of Reed-Solomon (12,4) was on reconstruction reads (12 fragments), not on storage overhead",
+        "LRC (12,2,2) = 12 data + 2 local + 2 global = 16 fragments, also 1.33x, single-fragment repair reads 6",
+        "4 MB reconstruction on a loaded production cluster: direct read 99ms, RS 893ms, LRC 418ms",
+        "LRC is not MDS; it tolerates any 3 losses and only the information-theoretically decodable 4-loss patterns",
+        "86% figure is stated for the (6,2,2) example, not for (12,2,2)",
+        "3 full copies on the append path; erasure coding runs lazily on sealed extents and then deletes the copies"
+      ]
+    },
+    "was2011": {
+      "type": "paper",
+      "title": "Windows Azure Storage: A Highly Available Cloud Storage Service with Strong Consistency",
+      "author": "Brad Calder, Ju Wang, Aaron Ogus, Niranjan Nilakantan, Arild Skjolsvold, Sam McKelvie, Yikang Xu, Shashwat Srivastav, Jiesheng Wu, Huseyin Simitci, et al. (Microsoft)",
+      "year": 2011,
+      "date": "2011-10-23",
+      "venue": "SOSP '11, October 23-26, 2011, Cascais, Portugal",
+      "url": "https://sigops.org/s/conferences/sosp/2011/current/2011-Cascais/printable/11-calder.pdf",
+      "checked": "2026-08-22",
+      "quote": "To reduce the cost of storage, WAS erasure codes sealed extents for Blob storage. WAS breaks an extent into N roughly equal sized fragments at block boundaries. Then, it adds M error correcting code fragments using Reed-Solomon for the erasure coding algorithm [19].",
+      "quote2": "It reduces the cost of storing data from three full replicas within a stamp, which is three times the original data, to only 1.3x - 1.5x the original data, depending on the number of fragments used. In addition, erasure coding actually increases the durability of the data when compared to keeping three replicas within a stamp.",
+      "quote3": "Once an extent is sealed it can no longer be appended to. A sealed extent is immutable, and the stream layer performs certain optimizations on sealed extents like erasure coding cold extents.",
+      "quote4": "Extents are the unit of replication in the stream layer, and the default replication policy is to keep three replicas within a storage stamp for an extent.",
+      "note": "Read from the SOSP '11 conference PDF; the venue line \"SOSP '11, October 23-26, 2011, Cascais, Portugal.\" is printed on page 1 of that PDF. Every quote above was matched verbatim against pdftotext output of that PDF. The en dash in quote2 is written here as '-'. Note against over-claiming: quote1 and quote2 show that WAS already erasure-coded sealed Blob extents with Reed-Solomon in 2011, a year before LRC, so 3x was the state of data not yet coded, not of every byte in Azure; the prose says 'everything not yet coded' for that reason.",
+      "supports": [
+        "the 3x-replicated append path and the sealed-extent boundary predate the LRC work by a year",
+        "WAS's erasure coding is applied only to sealed, immutable extents",
+        "three replicas within a stamp was the stream layer's default replication policy",
+        "Reed-Solomon coding of sealed Blob extents was already in WAS by 2011 at 1.3x-1.5x, so the 2012 choice was between codes, not between replication and coding"
+      ]
+    },
+    "atc12page": {
+      "type": "docs",
+      "title": "Erasure Coding in Windows Azure Storage — USENIX ATC '12 technical sessions page",
+      "author": "USENIX Association",
+      "year": 2012,
+      "url": "https://www.usenix.org/conference/atc12/technical-sessions/presentation/huang",
+      "checked": "2026-08-22",
+      "quote": "Awarded Best Paper!",
+      "quote2": "booktitle = {2012 USENIX Annual Technical Conference (USENIX ATC 12)}, year = {2012}, isbn = {978-931971-93-5}, address = {Boston, MA}, pages = {15--26}, publisher = {USENIX Association}, month = jun",
+      "supports": [
+        "Best Paper award, venue, city, page range and ISBN as printed by USENIX"
+      ]
+    },
+    "msr2014": {
+      "type": "blog",
+      "title": "The Code That No One in the Cloud Can Live Without",
+      "author": "Rob Knies, Microsoft Research",
+      "year": 2014,
+      "date": "2014-07-02",
+      "url": "https://www.microsoft.com/en-us/research/blog/the-code-that-no-one-in-the-cloud-can-live-without/",
+      "checked": "2026-08-22",
+      "confidence": "secondary",
+      "quote": "Local Reconstruction Codes have been adopted throughout all Microsoft storage production lines, from the cloud to enterprise and the desktop. It was first deployed in Azure Storage in 2012, to great acclaim. In 2013, LRC also shipped with Windows Server 2012 R2 and Windows 8.1.",
+      "quote2": "\"The project started with Cheng and Jin Li having the idea that Azure might benefit from adopting some new kind of erasure codes,\" Yekhanin says.",
+      "quote3": "\"It took a long time to bear fruit, from research to production,\" Huang says. \"When we started exploring this direction and published earlier papers in 2007, there was very little interest from business groups. Literally, every team we talked to told us that disks were getting bigger and cheaper every day. Redundancy could be easily achieved with replication, and there was no need to bother with erasure coding.\"",
+      "note": "Vendor blog, and a 2014 recollection of 2007-2012 events, so the origin-of-the-idea and adoption-breadth claims are attributed to this 2014 telling rather than stated as contemporaneous fact. Not cited in the story prose; used only on cards.",
+      "supports": [
+        "LRC first deployed in Azure Storage in 2012 and shipped in Windows Server 2012 R2 and Windows 8.1 in 2013",
+        "Yekhanin's 2014 recollection that Huang and Jin Li started the project",
+        "Huang's 2014 recollection of the 2007 reception"
+      ]
+    }
+  },
+  "unverified": [
+    "Any dollar figure for the saving. The allocation brief said 'hundreds of millions of dollars of drives not bought'; the ATC 2012 paper gives no currency amount, only 'over 50%' of storage cost, half the data center footprint and half the hardware power. No dollar figure appears in the prose.",
+    "That LRC (12, 2, 2) decodes 86% of four-fragment loss patterns. The paper states 86% only for its small (6, 2, 2) teaching example; it gives no equivalent percentage for the production (12, 2, 2) code. The prose therefore states the property, not the percentage, and the card attributes 86% to the (6, 2, 2) example.",
+    "That the LRC coefficients were found by computer search. The allocation brief said so; the paper says the opposite — coefficient search was the Pyramid-codes approach, and LRC's GF(2^4) construction is described as 'a critical improvement over our own Pyramid codes'. The claim does not appear anywhere in this chapter's story or cards.",
+    "The month or day in 2012 on which LRC was first deployed in Azure Storage. Only the year is sourced, and only from the 2014 Microsoft Research blog.",
+    "Whether the (12, 2, 2) production code was itself proved Maximally Recoverable. The paper proves MR for the (6, 2, 2) example and asserts the MR property for LRC in general in its section 2.4 summary.",
+    "That Azure was uniformly 3x-replicated before LRC. The SOSP 2011 paper already describes WAS erasure-coding sealed Blob extents with Reed-Solomon at 1.3x-1.5x, so the claim was cut: the prose now says three copies of 'everything not yet coded', which both papers support."
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "chapter": "p3c16",
+  "cards": [
+    {
+      "id": "p3c16-c1",
+      "suit": "person",
+      "title": "Brad Fitzpatrick",
+      "sub": "2003 · Danga Interactive / LiveJournal",
+      "year": 2003,
+      "prompt": "LiveJournal's databases were the bottleneck in 2003 and the standard fix — 64-bit database machines with more RAM — was available. What did Fitzpatrick spend instead, where was it already sitting, and what daily annoyance did he name as the trigger?",
+      "body": "He refused the hardware — \"recall that I'm stubborn and frugal\" — and spent the idle RAM already in LiveJournal's 40+ mod_perl Web nodes. His trigger, in his own words: \"sick of how painful it is to cache efficiently in mod_perl applications.\" Each Apache child had its own address space, so nothing could be shared.",
+      "answer": "Idle RAM already in the 40+ mod_perl web nodes, not new 64-bit database machines. Trigger: caching under mod_perl was painful, because every Apache child owns a separate address space.",
+      "cite": "fitzpatrick2004lj"
+    },
+    {
+      "id": "p3c16-c2",
+      "suit": "artifact",
+      "title": "The first memcached commit",
+      "sub": "27 May 2003 · commit 32f382b, memcached repository",
+      "year": 2003,
+      "prompt": "Which commit can you open today to read memcached's founding constraint in one clause? Give its date, its message, roughly how much code it added, and the clause.",
+      "body": "Commit 32f382b, 27 May 2003, brad@danga.com, message \"committing memcached\" — a Makefile, a README, and 1,195 lines of memcached.c. The README: \"memcached does non-blocking network I/O, but not disk. (it should never go to disk, or you've lost the whole point of it)\". Durability was never on the table.",
+      "answer": "Commit 32f382b, 27 May 2003, message \"committing memcached\", ~1,195 lines of C. The README says it should never go to disk, or you've lost the whole point of it.",
+      "cite": "fitzpatrick2003commit"
+    },
+    {
+      "id": "p3c16-c3",
+      "suit": "incident",
+      "title": "The allocator that fragmented to death",
+      "sub": "30 May 2003 · Anatoly Vorobey (avva)",
+      "year": 2003,
+      "prompt": "memcached's first commit allocated every item with plain glibc malloc. What does that do to a process holding variable-sized, long-lived items, who replaced it three days later, and which number from that fix still constrains your cache today?",
+      "body": "The first commit called malloc() per item. Variable-sized, long-lived allocations fragment the address space until the process falls over. On 30 May 2003 Anatoly Vorobey landed a slab allocator: \"bunches of power-of-two slab classes. no external fragmentation... always allocate slabs of 1MB.\" That 1 MB page is the unit your size classes still calcify around.",
+      "answer": "Address-space fragmentation, from glibc malloc on variable-sized, long-lived items. Anatoly Vorobey's slab allocator, 30 May 2003: power-of-two size classes carved from 1 MB slabs. The 1 MB page is still there.",
+      "cite": "vorobey2003slab"
+    },
+    {
+      "id": "p3c16-c4",
+      "suit": "ripple",
+      "title": "No server-to-server coordination",
+      "sub": "2013 · NSDI '13, Facebook Inc.",
+      "year": 2013,
+      "prompt": "Ten years after LiveJournal, Facebook ran the largest memcache deployment on earth on the same daemon. Which 2003 property did they inherit unchanged, and which layer therefore owns the hash ring in every cache you have ever used?",
+      "body": "Scaling Memcache at Facebook, NSDI '13: \"As is, memcached provides no server-to-server coordination; it is an in-memory hash table running on a single server.\" So configuration, aggregation and routing all had to be built outside the server — in the client library, or a proxy. The cache never learns it is a cluster.",
+      "answer": "No server-to-server coordination; the server stays an in-memory hash table on one machine. Routing and the hash ring live in the client library or a proxy such as mcrouter, never in the cache.",
+      "cite": "nishtala2013"
+    }
+  ]
+}

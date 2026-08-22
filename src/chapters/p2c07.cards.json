@@ -1,0 +1,49 @@
+{
+  "chapter": "p2c07",
+  "cards": [
+    {
+      "id": "p2c07-c1",
+      "suit": "person",
+      "title": "John Nagle",
+      "sub": "1984 · Ford Aerospace and Communications Corporation",
+      "year": 1984,
+      "body": "Nagle wrote RFC 896 from Ford Aerospace, which with Ford Motor Company ran what the memo calls the only private IP/TCP long-haul network in existence. He was chasing two production faults on Ford's own leased lines: the small-packet problem and the source-quench problem. The memo is remembered for the first. The phrase it coined outlived both.",
+      "prompt": "Nagle says he drove his own network into congestion collapse on purpose and watched it sit there. Why does that state hold rather than clear once the burst passes?",
+      "answer": "Because the retransmissions are the load. Once saturated, every packet is being transmitted several times and throughput is reduced to a small fraction of normal, so the senders' own retries refill the queues as fast as they drain. Nagle wrote that the condition is stable and that they had pushed their network into it experimentally and observed its stability; it ends only when hosts back off or connections time out entirely.",
+      "cite": "rfc896"
+    },
+    {
+      "id": "p2c07-c2",
+      "suit": "incident",
+      "title": "The first congestion collapse",
+      "sub": "October 1986 · LBL to UC Berkeley",
+      "year": 1986,
+      "body": "The first of what Jacobson and Karels call a series of congestion collapses. Van Jacobson at Lawrence Berkeley Laboratory and Michael Karels at UC Berkeley asked whether the 4.3BSD TCP was misbehaving or just badly tuned; the answer to both was yes. Seven new algorithms went into the 4BSD TCP. An IMP was an ARPANET packet switch.",
+      "prompt": "The two sites were 400 yards and two IMP hops apart. Give the throughput before and after, and say why that separation makes the number an indictment of the endpoints rather than of the link.",
+      "answer": "It fell from 32 Kbps to 40 bps — a sudden factor-of-thousand drop in bandwidth, in the paper's words. There was no long-haul path, no transatlantic trunk, no distance to blame: over 400 yards and two hops the capacity was destroyed by how the senders reacted to load, which is why the fix had to go into TCP and not into the wire.",
+      "cite": "jacobson1988"
+    },
+    {
+      "id": "p2c07-c3",
+      "suit": "artifact",
+      "title": "RFC 970, On Packet Switches With Infinite Storage",
+      "sub": "RFC 970 · December 1985 · Network Working Group, FACC Palo Alto",
+      "year": 1985,
+      "body": "Nine pages of argument and one experiment: Nagle used a supermini with several megabytes of memory as a switch and got 916 datagrams queued at peak. He called the finding \"a rather unexpected result\" and refused the obvious escape: it is \"not an artifact of the infinite-buffer assumption\", because finite-storage networks do the same thing, only less visibly.",
+      "prompt": "The RFC hands the switch infinite memory and it still loses every packet. Trace the two steps: what runs out instead of space, and what the next hop does with what it is handed.",
+      "answer": "Time runs out, not space. The outgoing queue grows until transit time through it exceeds the incoming packets' time-to-live, so anything that does get forwarded leaves with a time-to-live of exactly one. The next hop must decrement by at least one, takes it to zero, and discards it. Infinite storage, first-in-first-out queuing and a finite packet lifetime therefore drop all packets under overload.",
+      "cite": "rfc970"
+    },
+    {
+      "id": "p2c07-c4",
+      "suit": "ripple",
+      "title": "The drop is the only signal",
+      "sub": "RFC 6633 · May 2012 · IETF",
+      "year": 2012,
+      "body": "ICMP Source Quench was the explicit \"slow down\". Router generation of it had been formally deprecated since 1995; RFC 6633 finished the job by deprecating transport reaction to it, updating RFC 792, RFC 1122 and RFC 1812. What survives is inference: a sender learns it is overloading the path by losing packets.",
+      "prompt": "Your gateway can answer 429 with Retry-After. The Internet's routers gave up on the equivalent message. Name what beat the explicit signal, and name the one thing your service has that a router in the middle does not.",
+      "answer": "The RFC gives its own reasons: Source Quench was known to be an ineffective and unfair antidote for congestion, router generation of it had already been formally deprecated since 1995, virtually all popular host implementations had removed support since at least 2005, and widespread ICMP filtering makes it impossible to rely on. What your service has is a request/response connection it is already holding, so refusal is one cheap status code back to a caller it can name. A router in the middle has no such channel, so its only way to say stop is to destroy the packet, which is indistinguishable from a broken link.",
+      "cite": "rfc6633"
+    }
+  ]
+}

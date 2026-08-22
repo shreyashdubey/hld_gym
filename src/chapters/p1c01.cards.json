@@ -1,0 +1,49 @@
+{
+  "chapter": "p1c01",
+  "cards": [
+    {
+      "id": "p1c01-c1",
+      "suit": "person",
+      "title": "Bob Braden",
+      "sub": "1994 · USC Information Sciences Institute, Marina del Rey",
+      "year": 1994,
+      "prompt": "Braden's T/TCP let a server accept and act on application data carried in the very first packet. What did the server have to keep, and per what, to decide that packet was not an old duplicate?",
+      "answer": "A cache of the last connection count (CC) it had seen from each client host. A SYN carrying a CC larger than the cached one must be new, so it is accepted immediately; otherwise the server falls back to a normal three-way handshake. RFC 1644 calls this the TAO test.",
+      "body": "TCP researcher at USC's ISI. In July 1994 he published RFC 1644, an experimental TCP extension for request/response traffic. His target was not bandwidth. It was the one extra round trip the three-way handshake adds before any data can move. He is also a listed co-author of the RFC that later called it defective.",
+      "cite": "rfc1644"
+    },
+    {
+      "id": "p1c01-c2",
+      "suit": "incident",
+      "title": "The counter you can guess",
+      "sub": "September 1996 · The NetBSD Project",
+      "year": 1996,
+      "prompt": "T/TCP's connection count was meant to do the handshake's job in one packet. What could an attacker do with that counter that they could not do against a real three-way handshake, and what did it cost the operator?",
+      "answer": "Predict it. The counter is monotonic and readable by opening a dummy connection first, so an attacker forges a source address, sends a valid-looking first packet, and the server accepts and acts on the data — with no record of the real origin. The handshake's initial sequence number only reaches the real address, so echoing it is weak but genuine proof of address ownership. The price was not cash: it was host-based authorization — a T/TCP server's ability to trust a source IP at all — plus a heavier SYN flood.",
+      "body": "Charles M. Hannum of the NetBSD Project circulated 'Security Problems Associated With T/TCP' in September 1996. RFC 1644's own Security Considerations, on page 38, ran to one sentence: 'Security issues are not discussed in this memo.' The IETF later recorded T/TCP as 'found defective'; RFC 6247 moved it to Historic in May 2011.",
+      "cite": "hannum1996"
+    },
+    {
+      "id": "p1c01-c3",
+      "suit": "artifact",
+      "title": "RFC 1644",
+      "sub": "July 1994 · IETF, Experimental → Historic",
+      "year": 1994,
+      "prompt": "T/TCP is dead, but RFC 4614 records one idea from it that outlived the protocol. Which idea, and which RFC did the roadmap point at?",
+      "answer": "Sharing state across connections. RFC 4614: 'One idea pioneered by T/TCP lives on in RFC 2140, in the sharing of state across connections.'",
+      "body": "'T/TCP -- TCP Extensions for Transactions Functional Specification', R. Braden, July 1994, Experimental. Thirty-eight pages of state machine for one goal: a request and a response in one packet each way. Reclassified Historic in May 2011, and still readable in full at the RFC Editor.",
+      "cite": "rfc1644"
+    },
+    {
+      "id": "p1c01-c4",
+      "suit": "ripple",
+      "title": "TCP Fast Open's cookie",
+      "sub": "2011 · Google · ACM CoNEXT 2011, Tokyo",
+      "year": 2011,
+      "prompt": "TCP Fast Open deletes the same round trip T/TCP did, and it shipped. What does its cookie prove that T/TCP's connection count could not, and which attack did the authors decide not to fix?",
+      "answer": "The cookie is a server-issued token bound to the client's IP and unguessable by the client, so returning it proves the client really receives packets at that address — the address-ownership proof the handshake round trip used to supply. They deliberately did not fix replay: TFO allows old, duplicate SYN packets with data, so the request in a SYN must be safe to repeat.",
+      "body": "Radhakrishnan, Cheng, Chu, Jain and Raghavan, ACM CoNEXT 2011, Tokyo. From traffic analysis and network emulation they projected 15% off HTTP transaction network latency, over 10% off whole-page load time, up to 40% in some cases. Their verdict on the ancestor: T/TCP's 'scheme is insecure'.",
+      "cite": "tfo2011"
+    }
+  ]
+}

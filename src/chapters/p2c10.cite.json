@@ -1,0 +1,89 @@
+{
+  "chapter": "p2c10",
+  "sources": {
+    "mcilroy1982": {
+      "type": "paper",
+      "title": "Development of a Spelling List",
+      "author": "M. D. McIlroy",
+      "year": 1982,
+      "venue": "IEEE Transactions on Communications COM-30(1):91-99, January 1982",
+      "url": "https://www.cs.dartmouth.edu/~doug/spell.pdf",
+      "checked": "2026-08-22",
+      "note": "Read from the author's own typeset reproduction at cs.dartmouth.edu/~doug/spell.pdf, whose head bears the date line 'March 11, 1995'; the byline on it reads 'M. D. McIlroy, AT&T Bell Laboratories, Murray Hill, New Jersey 07974'. Journal venue and pagination taken from McIlroy's own publication list (cs.dartmouth.edu/~doug/pubs.html): 'M. D. McIlroy, Development of a spelling list, IEEE Trans. on Communications 30 (1982) 91-99'. McIlroy's list gives volume, year and pages only; the issue number (1) and the month (January) are not on it and were confirmed separately against the publisher-deposited record for DOI 10.1109/TCOM.1982.1095395 (IEEE Trans. on Communications, vol. 30, iss. 1, pp. 91-99, published print 1982-01). Note the reproduction's byline reads \"AT&T Bell Laboratories\", which is the 1995 imprint: in 1982 the name was Bell Laboratories, so the prose says only \"Bell Labs\". Text quoted below is from the PDF, not from an index or a snippet.",
+      "quote": "For the then 25,000-word list hashed into 25,000 16-bit words, or 400,000 bits, the optimal number of hash functions was k = 11, and the probability of false acceptance was less than 1 in 2,000 tries.",
+      "quotes": [
+        "The word list used by the UNIX spelling checker, spell, was developed from many sources over several years.",
+        "This paper tells how the spelling checker works, how the words were chosen, how the spelling checker was used to improve itself, and how the (reduced) list of 30,000 English words was squeezed into 26,000 16-bit machine words.",
+        "Some years ago, S. C. Johnson introduced the UNIX spelling checker spell.",
+        "The spelling list, whose clear text runs to about 250,000 bytes, is accessed randomly.",
+        "If the probability of such an error is kept as low as 1 in 2000, then since typical rough drafts rarely have more than 20 bad words, a mistake will be accepted in about 1 in 100 documents, an error rate that is minuscule compared to the incidence of undetectable errors such as an for and or form for from.",
+        "Two different hashing methods have been implemented. The first, based on a simple superimposed code scheme first proposed by Bloom, was supplied by D. M. Ritchie and succeeded in encoding a 25,000-word list into 50,000 bytes.",
+        "Superimposed coding spatters each entry randomly across a large bit table so thoroughly that the hash values cannot be reconstructed from the table.",
+        "Remainders modulo the k largest primes less than N constitute a convenient and effective set of hash functions.",
+        "For the then 25,000-word list hashed into 25,000 16-bit words, or 400,000 bits, the optimal number of hash functions was k = 11, and the probability of false acceptance was less than 1 in 2,000 tries.",
+        "Experience showed, however, that 25,000 words wasn’t enough; almost every run turned up some worthy new word. To go further, without increasing the hash table size or error rate, the table had to be compressed more tightly.",
+        "A desirable vocabulary size for a spelling list is about 30,000, or roughly 2^15 words, a desirable error rate about 1 in 2^12; thus an appropriate hash value size is 27 bits.",
+        "How can 2^15 x 27 bits of hash values be jammed into the PDP11’s addressable memory of 2^15 x 16 bits?",
+        "In our case where v = 30000 and b = 27, this works out to 13.57 bits per entry–small enough to fit!",
+        "With a = 2^27/30000 as before, the simple Huffman code given in Appendix C has an expected codeword length of 13.60 bits.",
+        "In our case, the expected extra space for breakage and for pointers to 512 bins brings the effective mean codeword length up to 14.01 bits: a tight, but workable fit.",
+        "Such codes have been described by Golomb."
+      ],
+      "supports": [
+        "spell's clear-text word list was about 250,000 bytes",
+        "Ritchie supplied the superimposed-code (Bloom) filter: 25,000 words, 400,000 bits, k = 11, false acceptance under 1 in 2,000",
+        "false acceptance is tolerable because a rough draft holds ~20 bad words, so one document in 100 lets a mistake through",
+        "the 25,000-word list was not enough and the table could not grow without raising the error rate",
+        "the exact replacement: 27-bit hash values stored as differences, 13.60 bits per word against a 13.57-bit information-theoretic floor, 14.01 bits effective with 512 bins"
+      ],
+      "doi": "10.1109/TCOM.1982.1095395"
+    },
+    "v7spellh": {
+      "type": "commit",
+      "title": "spell.h, /usr/src/cmd/spell — UNIX Seventh Edition (Research V7) source tree",
+      "author": "Bell Laboratories",
+      "year": 1979,
+      "url": "https://raw.githubusercontent.com/dspinellis/unix-history-repo/Research-V7/usr/src/cmd/spell/spell.h",
+      "checked": "2026-08-22",
+      "note": "Read as raw source from the Research-V7 branch of the unix-history-repo reconstruction. V7 was released January 1979. The file declares `short tab[TABSIZE]` with `#define TABSIZE 25000` and a table `long p[]` of exactly eleven primes: 399871, 399887, 399899, 399911, 399913, 399937, 399941, 399953, 399979, 399983, 399989 — confirmed by computation to be the eleven largest primes below 400,000, which is the paper's 'remainders modulo the k largest primes less than N'.",
+      "quote": "whence one finds, for example, that a 25000-word dictionary in a 400000-bit table works best with k=11.",
+      "quotes": [
+        "Hash table for spelling checker has n bits. Each word w is hashed by k different (modular) hash functions, hi. The bits hi(w), i=1..k, are set for words in the dictionary.",
+        "The probability that a random string is recognized as a word is then (1-P)**k.",
+        "#define TABSIZE 25000\t/*(int)(400000/(1<<shift))--pdp11 compiler deficiency*/"
+      ],
+      "supports": [
+        "the superimposed-code filter is not a story about code, it is the code: it shipped in Version 7 Unix",
+        "eleven hash functions implemented as remainders modulo the eleven largest primes under 400,000"
+      ]
+    },
+    "bloom1970": {
+      "type": "paper",
+      "title": "Space/Time Trade-offs in Hash Coding with Allowable Errors",
+      "author": "Burton H. Bloom",
+      "year": 1970,
+      "venue": "Communications of the ACM, Volume 13 / Number 7 / July, 1970, pp. 422-426",
+      "url": "https://www.cs.princeton.edu/courses/archive/spring05/cos598E/bib/p422-bloom.pdf",
+      "checked": "2026-08-22",
+      "note": "Read from the PDF. The affiliation line reads 'Computer Usage Company, Newton Upper Falls, Mass.' The running foot on the first page reads '422' and 'Volume 13 / Number 7 / July, 1970'. Re-opened 2026-08-22; the princeton.edu copy did not respond, so the same file was read via the Internet Archive snapshot of that URL (web.archive.org/web/20220525211106/…/p422-bloom.pdf). Byline and running foot as above; \"errors of commission\" appears in the abstract and again in the body under Method 1.",
+      "quote": "The reduction in space is accomplished by exploiting the possibility that a small fraction of errors of commission may be tolerable in some applications",
+      "quotes": [
+        "Analysis of the paradigm problem demonstrates that allowing a small number of test messages to be falsely identified as members of the given set will permit a much smaller hash area to be used without increasing reject time.",
+        "In application areas where error-free performance is a necessity, these new methods are not applicable.",
+        "the size of the hash area (space), the time required to identify a message as a nonmember of the given set (reject time), and an allowable error frequency."
+      ],
+      "supports": [
+        "the permitted error is one-directional and Bloom named it: errors of commission",
+        "the space saving is bought with, and only with, that permitted error"
+      ]
+    }
+  },
+  "unverified": [
+    "The calendar year in which Ritchie's superimposed-code filter was written. The 1982 paper dates neither implementation; the filter is present in the Research V7 tree (V7 released January 1979), which bounds it from above but not below. No year for it appears in the prose.",
+    "Whether the differential-coded replacement is properly called 'Golomb coding'. McIlroy's own text calls it a 'differential Huffman code' and an 'infinite Huffman code', and cites Golomb's 1966 run-length encodings paper only as a description of the code family in Appendix C. The prose uses McIlroy's own wording and does not say 'Golomb'.",
+    "The dollar cost of PDP-11 memory at Bell Labs at the time. No figure was found in any opened source, so no currency figure appears in the prose; the cost is carried in the machine's own unit, addressable words.",
+    "Which Research Unix editions after V7 shipped which of the two methods. The v10spell repository README states its source is 'the spell program from the Tenth Edition Research UNIX system' and that it 'still uses the compressed dictionaries', but this was not traced edition by edition and no such claim appears in the prose.",
+    "The year the 25,000-word list actually outgrew the filter. McIlroy reports it only as \"experience showed\" in the 1982 write-up; it must postdate the filter shipping in V7 (January 1979) but no source narrows it. Card p2c10-c2 is therefore dated 1982, the year of the document that records it, not 1979, which is the year of the cause.",
+    "That spell competed for the PDP-11's 32,768 addressable words with other processes. The paper says only \"the PDP11's addressable memory of 2^15 x 16 bits\" — an address-space limit, not a shared physical pool. The sharing claim was removed from the prose and from card p2c10-c1."
+  ]
+}

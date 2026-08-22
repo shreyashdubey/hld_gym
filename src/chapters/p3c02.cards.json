@@ -1,0 +1,49 @@
+{
+  "chapter": "p3c02",
+  "cards": [
+    {
+      "id": "p3c02-c1",
+      "suit": "person",
+      "title": "Grover, King and Kushler",
+      "sub": "1995 · US patent application 08/507,756",
+      "year": 1995,
+      "body": "Three engineers with one problem: make a nine-key pad type English. The application names Dale L. Grover, Martin T. King and Clifford A. Kushler; it was filed on 26 July 1995, with Grover and Kushler assigning their interest to King the same day. Tegic Communications of Seattle took assignment in January 1998 and shipped it as T9.",
+      "prompt": "The device they were designing for had no network and no disk, and owed an answer inside one keypress. Where did that force the word ranking to be computed, and what physically carried it in the shipped device?",
+      "answer": "Offline, at build time, long before any key was pressed. Inside the device the ranking was the storage order itself: words held in order of decreasing frequency of use, so the search returns them already ranked. Nothing scores or sorts on the device.",
+      "cite": "patent1998"
+    },
+    {
+      "id": "p3c02-c2",
+      "suit": "incident",
+      "title": "The five percent you pay by thumb",
+      "sub": "2000 · CHI paper, 9,025-word sample",
+      "year": 2000,
+      "body": "Silfverberg, MacKenzie and Korhonen analysed disambiguation over a 9,025-word English sample: 8437 (95%) \"can be entered and uniquely disambiguated\". Their Figure 8 gives 2-2-7-3 as \"case\" first, then care, base, card, bare and cape, five presses of the NEXT key; they reproduced those words on a real T9 phone.",
+      "prompt": "A precomputed top-K is wrong for some fraction of requests. On this handset, who paid for that error, at which moment, and why would more hardware not have reduced it by one press?",
+      "answer": "The user paid, at read time, one NEXT press at a time, on every repeat. The error is baked into the artifact at build time: the shipped order is the corpus's opinion, so no amount of request-time CPU, memory or replication can change which word comes up first. Only a rebuild can.",
+      "cite": "chi2000"
+    },
+    {
+      "id": "p3c02-c3",
+      "suit": "artifact",
+      "title": "US Patent 5,818,437",
+      "sub": "Granted 6 October 1998 · filed 26 July 1995",
+      "year": 1998,
+      "body": "\"Reduced keyboard disambiguating computer\", application 08/507,756, filed 26 July 1995 and assigned to Tegic Communications in January 1998. Open it and read the vocabulary storage and look-up section: the stored lookup tag is omitted \"to save memory\" and regenerated from the word whenever a comparison is needed.",
+      "prompt": "One sentence of this patent is this chapter's crux, written in 1995 for a device with no network. Reconstruct it: what is stored, in what order, and what does that buy you at keypress time?",
+      "answer": "\"Within the memory, the words are stored in order of decreasing frequency of use so that the proper order is automatically presented.\" Words, ordered by descending frequency of use. It buys an already-ranked result with no sort and no scoring at keypress time. Note what it does not buy: dropping the stored tags to save memory means the search walks every word of that length and regenerates each tag, so the read path is a walk, not a hash lookup. The precomputed order is the part that carries over.",
+      "cite": "patent1998"
+    },
+    {
+      "id": "p3c02-c4",
+      "suit": "ripple",
+      "title": "Immutable base, tiny mutable overlay",
+      "sub": "November 1999 · AOL completes the Tegic merger",
+      "year": 1999,
+      "body": "AOL's fiscal-2000 annual report books it: the merger completed in November 1999, \"approximately 4.8 million shares of common stock\" for all of Tegic, accounted for as a pooling-of-interests. The shape outlived the company: a frozen ranked base, plus a small per-user vocabulary bolted alongside it.",
+      "prompt": "T9 could not correct a bad ranking in place, so it grew a second, tiny, mutable store beside the frozen one. Name the structures in this chapter's design that occupy exactly those two roles, and the operation that replaces an in-place edit.",
+      "answer": "The nightly batch snapshot, immutable and hash-sharded, is the frozen base. The trending overlay pushed to every serving node, and the client-side personal history, are the small mutable stores merged on top at read time. You never edit the base: you rebuild it offline and swap the whole snapshot, which is also why rollback is instant.",
+      "cite": "aol10k"
+    }
+  ]
+}

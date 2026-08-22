@@ -1,0 +1,49 @@
+{
+  "chapter": "p3c04",
+  "cards": [
+    {
+      "id": "p3c04-c1",
+      "suit": "person",
+      "title": "Craig Partridge",
+      "sub": "1988 · CSNET Coordination and Information Center, BBN Labs",
+      "year": 1988,
+      "prompt": "What job was Partridge doing when the SMTP duplicate problem found him, and where did he rank it among the causes of duplicate mail?",
+      "body": "Not protocol design — user support. CIC staff were repeatedly asked why one mail message was being delivered several times. Tracing those reports turned up a synchronization problem in SMTP rather than a broken mailer anywhere. His own observation put it second only to mail loops as a cause of duplicate messages on the Internet.",
+      "answer": "Support work at CSNET's Coordination and Information Center at BBN, fielding reports that a single message arrived several times. Tracing them found a gap in SMTP itself. He ranked it the second leading cause of duplicate messages on the Internet, behind mail loops.",
+      "cite": "rfc1047"
+    },
+    {
+      "id": "p3c04-c2",
+      "suit": "incident",
+      "title": "The synchronization gap",
+      "sub": "SMTP · from the final dot to the 250 reply",
+      "year": 1988,
+      "prompt": "Name the two instants that bound SMTP's synchronization gap, and say what each mailer is obliged to assume while it is open.",
+      "body": "It opens when the receiving mailer decides to accept the message and closes when the sending mailer sees 250. Inside it the message is live at both ends: the sender must assume it was not delivered, the receiver must assume it was. Lose the link in between and both copies get delivered.",
+      "answer": "It opens when the receiver decides to accept the final dot and closes when the sender receives the 250 reply. The sender must assume non-delivery, so it retries; the receiver must assume delivery, so it delivers. A break inside the gap duplicates the message.",
+      "cite": "rfc1047"
+    },
+    {
+      "id": "p3c04-c3",
+      "suit": "artifact",
+      "title": "RFC 1047, \"Duplicate messages and SMTP\"",
+      "sub": "C. Partridge · February 1988 · three pages",
+      "year": 1988,
+      "prompt": "Which RFC wrote this up, in what month, and what does it tell a receiver to do before it answers 250?",
+      "body": "Three pages. It shrinks the gap rather than closing it: acknowledge the final dot \"as soon as the message has been safely put in a non-volatile (e.g., disk) queue for further processing,\" and defer mailing-list expansion and mailbox writes until afterwards. Persist-before-ack, in a standards document, in 1988.",
+      "answer": "RFC 1047, Craig Partridge, February 1988. A receiver should reply as soon as the message is safely on a non-volatile (disk) queue, deferring the expensive delivery processing until after the 250 has gone out.",
+      "cite": "rfc1047"
+    },
+    {
+      "id": "p3c04-c4",
+      "suit": "ripple",
+      "title": "DATA Termination: 10 minutes",
+      "sub": "RFC 1123 §5.3.2 · October 1989",
+      "year": 1989,
+      "prompt": "SMTP never got a deduplication rule. What shipped instead, what is the number, and does the current standard close the gap?",
+      "body": "A minimum timeout, not an id. RFC 1123 set per-command sender floors, including ten minutes awaiting the \"250 OK\" after the final dot, and made minimizing acceptance delay a MUST, citing RFC 1047 by number. RFC 5321 (2008) repeats that sentence and that citation. It is why a stuck mail server holds your connection instead of retrying into duplicates.",
+      "answer": "Timeout floors. RFC 1123 §5.3.2 (October 1989) sets DATA Termination at a 10-minute minimum for the 250 OK, and §5.3.3 makes minimizing the delay a MUST citing RFC 1047. RFC 5321 (2008) carries the same rule and the same citation — still no deduplication rule.",
+      "cite": "rfc1123"
+    }
+  ]
+}

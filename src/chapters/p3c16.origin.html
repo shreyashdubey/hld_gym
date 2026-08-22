@@ -1,0 +1,17 @@
+<div class="box origin"><div class="box-tag">LiveJournal, 2003</div>
+<p class="origin-seam">The databases were the emergency. The cure was for sale.</p>
+
+<p>The fix was 64-bit database machines with more memory. Brad Fitzpatrick would not buy them: <span class="fact" data-cite="fitzpatrick2004lj">"recall that I'm stubborn and frugal."</span> What he had free was idle RAM across <span class="fact" data-cite="fitzpatrick2004lj">40+ Web nodes</span>, and, <span class="fact" data-cite="fitzpatrick2004lj">"sick of how painful it is to cache efficiently in mod_perl applications"</span>, he spent that instead.</p>
+
+<p>On <span class="fact" data-cite="fitzpatrick2003commit">27 May 2003</span> he committed <span class="fact" data-cite="fitzpatrick2003commit">1,195 lines</span> of C under the message <span class="fact" data-cite="fitzpatrick2003commit">"committing memcached"</span>. Its README states the design in one clause: <span class="fact" data-cite="fitzpatrick2003commit">"it should never go to disk, or you've lost the whole point of it."</span></p>
+
+<p>Every absence follows: no durability, no replication, no auth. Three days later Anatoly Vorobey swapped in power-of-two slab classes and <span class="fact" data-cite="vorobey2003slab">"always allocate slabs of 1MB"</span> — the page your cache still fights over. And no membership: <span class="fact" data-cite="fitzpatrick2004lj">"Each Memcached instance is totally independent, and does not communicate with the others."</span> Nothing knows the cluster, so the client hashes the key <span class="fact" data-cite="danga2004backend"><code>% num_buckets</code></span>.</p>
+
+<p>By <span class="fact" data-cite="danga2004backend">November 2004</span> that was LiveJournal's whole cache: <span class="fact" data-cite="danga2004backend">28 instances</span> on <span class="fact" data-cite="danga2004backend">ten hosts, none dedicated</span>, holding <span class="fact" data-cite="danga2004backend">30 GB</span> at a <span class="fact" data-cite="danga2004backend">90-93% hit rate</span>, <span class="fact" data-cite="danga2004backend">~100,000 queries/second at peaks</span>. It cost no new machines.</p>
+
+<p>And <code>num_buckets</code> could not change. His own <span class="fact" data-cite="danga2004backend">2004</span> to-do slide already asked to <span class="fact" data-cite="danga2004backend">"grow/shrink memcached farm at run-time"</span> — adding one box rehashes nearly every key, and the miss storm lands on the databases the cache exists to spare.</p>
+</div>
+
+<div class="feynman" data-key="p3c16-o1">
+<p class="fey-prompt">You build the cache now — no Redis, no Memcached. Which 2003 deletion would you keep, and which would you pay to undo?</p>
+</div>

@@ -1,0 +1,49 @@
+{
+  "chapter": "p1c03",
+  "cards": [
+    {
+      "id": "p1c03-c1",
+      "suit": "person",
+      "title": "Pat Selinger",
+      "sub": "1979 · IBM San Jose Research Laboratory",
+      "year": 1979,
+      "prompt": "The first author of the access-path paper had no database background when she joined System R. What did she come from, and what does that tell you about where cost-based optimization came from?",
+      "answer": "Operating systems and programming languages; she was handed Chris Date's textbook and told to read it before talking to the team. Optimization arrived as compiler thinking - enumerate candidate plans, price them, take the cheapest - pointed at storage.",
+      "body": "Selinger joined IBM as System R was starting, from operating systems and programming languages, knowing nothing about databases. The team handed her Chris Date's textbook and told her to read it first. By 1979 she was first author on the paper that taught a database to choose between an index and a scan.",
+      "cite": "selinger2003"
+    },
+    {
+      "id": "p1c03-c2",
+      "suit": "incident",
+      "title": "Boeing's February",
+      "sub": "recalled in 2003 · an early System R customer",
+      "year": 2003,
+      "prompt": "Why did an early System R customer complain about cost and call the system wonderful in the same breath? What had SQL changed about who gets to ask a question?",
+      "answer": "SQL let people who could not write access paths ask questions at all, so query volume exploded against metered machine time. Boeing had spent its whole year's computing budget by February and refused the apology. Metered machine time is why the optimizer's objective function is cost, not elegance.",
+      "body": "Selinger recalled in 2003 that Boeing, one of the early System R users, reported its computing budget for the year gone by February - then told the team not to apologise: 'We can ask questions we could never find the answers to before.' Cheap to write, not cheap to run.",
+      "cite": "selinger2003"
+    },
+    {
+      "id": "p1c03-c3",
+      "suit": "artifact",
+      "title": "Access Path Selection in a Relational Database Management System",
+      "sub": "ACM SIGMOD 1979 · pp. 23-34",
+      "year": 1979,
+      "prompt": "Name the primary source for the leftmost-prefix rule and quote the phrase in it that decides which predicates an index can serve.",
+      "answer": "Selinger, Astrahan, Chamberlin, Lorie and Price, ACM SIGMOD 1979, pp. 23-34. A predicate set matches an index when the columns it names are 'an initial substring of the set of columns of the index key'.",
+      "body": "Twelve pages, five authors, IBM Research in San Jose. It defines sargable predicates, index matching, selectivity factors and join-order search. Table 1 holds the selectivity factors, Table 2 the cost formulas: index pages fetched plus data pages fetched plus weighted CPU calls. A segment scan is priced TCARD/P + W * RSICARD.",
+      "cite": "selinger1979"
+    },
+    {
+      "id": "p1c03-c4",
+      "suit": "ripple",
+      "title": "Your bad plan is a 1979 assumption",
+      "sub": "1979 to the optimizer in front of you",
+      "year": 1979,
+      "prompt": "EXPLAIN chooses a sequential scan over the index you just built, and it is the wrong choice. Which 1979 assumption is usually responsible, and why does adding another index not fix it?",
+      "answer": "The row-count estimate. The model assumes values spread evenly across index keys and that predicates are independent, with 1/10 as the fallback for an unmeasurable equality. Skew or correlated columns inflate the estimate, so the index path prices worse than the scan. The index is fine; the guess is wrong, so you fix statistics, not indexes.",
+      "body": "Every mainstream optimizer inherited Selinger's framework and its guesses: even distribution, independent predicates, 1/10 where nothing can be measured. Histograms and multi-column statistics patch the first two; the shape is unchanged. The paper already conceded its predicted costs were 'often not accurate in absolute value' - only the ranking had to hold.",
+      "cite": "selinger1979"
+    }
+  ]
+}

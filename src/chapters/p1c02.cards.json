@@ -1,0 +1,49 @@
+{
+  "chapter": "p1c02",
+  "cards": [
+    {
+      "id": "p1c02-c1",
+      "suit": "person",
+      "title": "Bruce Jay Nelson",
+      "sub": "1981 · Xerox PARC, Palo Alto",
+      "year": 1981,
+      "prompt": "Nelson had designed RPC once already, in a 1981 Xerox report. Name the piece of that design the 1984 package kept, the piece it took from Cedar instead, and what the report's own measurements settled.",
+      "body": "Nelson's 1981 report, Xerox PARC CSL-81-9. Birrell and Nelson kept its program structure — \"similar to that proposed in Nelson's thesis. It is based on the concept of stubs\" — but took Cedar's binding semantics \"in preference to the ones presented in Nelson's thesis\", and cited its measurements of RPC over byte streams as proof that approach \"was unsatisfactory\".",
+      "answer": "They kept the stub structure — generated marshalling code on both sides — and replaced the thesis's binding semantics with Cedar's. What the thesis settled was the transport: its measurements of RPC layered on byte streams were the reason the 1984 package wrote a packet-level protocol of its own.",
+      "cite": "birrell1984nelson"
+    },
+    {
+      "id": "p1c02-c2",
+      "suit": "incident",
+      "title": "Soft mount, hard mount",
+      "sub": "1994 · Sun Microsystems Laboratories, SMLI TR-94-29",
+      "year": 1994,
+      "prompt": "In the early days of NFS, administrators tried to tune away the soft-mount failures with two numbers. Name both, say what the report concluded about the attempt, and explain why no value of either could have worked.",
+      "body": "Waldo, Wyant, Wollrath and Kendall on why NFS could not be made robust. Soft mounts leaked failure into programs that ignored it, and admins tuned time-out length and number of retries against that: \"These efforts failed.\" Hard mounts hung instead, so \"one server crashes, and many workstations—even those apparently having nothing to do with that server—freeze.\"",
+      "answer": "Time-out length and number of retries; the report says flatly that these efforts failed. No value works because the failure of a network link is indistinguishable from the failure of the machine behind it, so a longer wait yields no new information — the fix has to be in the interface, not the parameters.",
+      "cite": "waldo1994tuning"
+    },
+    {
+      "id": "p1c02-c3",
+      "suit": "artifact",
+      "title": "Implementing Remote Procedure Calls",
+      "sub": "ACM TOCS 2(1), February 1984, pp. 39–59",
+      "year": 1984,
+      "prompt": "The paper's guarantee comes in two clauses, and the second clause is this entire chapter. State what it promises when the call returns, and what it admits when the call does not — as close to the wording as you can get.",
+      "body": "Birrell and Nelson on the Cedar RPC package, measured between two Dorado workstations. Received March 1983, accepted November 1983. Section 3.2 is the core: the call identifier, the callee's table of last-seen sequence numbers, the five-minute discard. Table I has the price — 1097 microseconds median for a remote no-argument call, 9 for the same call local.",
+      "answer": "If the call returns, the procedure was invoked precisely once. Otherwise an exception is reported and the procedure was invoked either once or not at all — and the user is not told which. That second clause is at-most-once: a timeout carries no information, so the retry has to be made safe at the callee.",
+      "cite": "birrell1984"
+    },
+    {
+      "id": "p1c02-c4",
+      "suit": "ripple",
+      "title": "xid, and everything downstream of it",
+      "sub": "1995 · RFC 1831, ONC RPC",
+      "year": 1995,
+      "prompt": "RFC 1831 forbids the server one obvious use of the transaction ID and permits only a test for equality. Say what that restriction buys the person who has to change the API in five years, and name the present-day header carrying the same field under the same restriction.",
+      "body": "The same mechanism in a standards-track RFC, eleven years on. A client \"may choose to reuse its previous transaction ID when retransmitting a call\"; the server may remember it \"in order to achieve some degree of execute-at-most-once semantics\"; and the server \"is not allowed to examine this ID in any other way except as a test for equality\".",
+      "answer": "An opaque key means the server cannot depend on its format, so the encoding never becomes part of the contract you are stuck with — the same reason a cursor is base64 mud. The same shape survives in the Idempotency-Key header: caller-minted, reused on retry, meaningful to nobody but the table that stores it.",
+      "cite": "rfc1831"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "chapter": "p3c09",
+  "cards": [
+    {
+      "id": "p3c09-c1",
+      "suit": "person",
+      "title": "Martijn Koster",
+      "sub": "1994 · Nexor, www-talk mailing list",
+      "year": 1994,
+      "prompt": "Koster could have fixed his own problem two ways: change the protocol so servers could refuse robots, or publish a convention robots might follow. He picked the convention. What did that choice permanently cost every crawler written since?",
+      "answer": "The server side got no enforcement, no authentication of the requester and no rate control, so the whole burden moved to the client: every crawler ever since has had to implement, store and police its own per-host delay, with nothing on the far end able to verify it or punish a liar.",
+      "body": "Koster ran a web server at Nexor. In September 1993 it reported a robot pulling the same pages at roughly one document per second. He did not propose changing HTTP. On 25 February 1994 he asked the www-talk list for a convention instead: a plain text file, at a fixed path, that well-behaved robots would read.",
+      "cite": "koster1994wwwtalk"
+    },
+    {
+      "id": "p3c09-c2",
+      "suit": "incident",
+      "title": "Websnarf hits the page about spiders",
+      "sub": "1994 · Charles Stross, SCO",
+      "year": 1994,
+      "prompt": "Stross says he is 'the numpty who necessitated' robots.txt. Put his incident and Koster's proposal in date order — which came first, and what does that reordering say about what the standard was actually a response to?",
+      "answer": "The proposal is the earlier dated record: Koster posted it to www-talk on 25 February 1994, and the only surviving Stross emails Koster could find are dated 7 March 1994, ten days later. So robots.txt was not written for one incident; it was written for a recurring pattern going back to at least September 1993. Websnarf is evidence the problem was general, not its cause.",
+      "body": "Teaching himself Perl during a burn-out at SCO, Stross wrote a spider and gave it a wired-in start URL: a website about spiders, which happened to be Koster's. Recalling it in 2009 he wrote that he had 'unintentionally invented the denial of service attack'. Koster asked him to stop; he stopped.",
+      "cite": "stross2009"
+    },
+    {
+      "id": "p3c09-c3",
+      "suit": "artifact",
+      "title": "A Standard for Robot Exclusion, and RFC 9309",
+      "sub": "30 June 1994 · ratified as RFC 9309 in September 2022",
+      "year": 1994,
+      "prompt": "Open both documents and diff the grammars. Twenty-eight years bought exactly one new rule keyword — which one? And which field, needed by every polite crawler on earth, is absent from both?",
+      "answer": "Allow was added; RFC 9309's grammar is rule = *WS (\"allow\" / \"disallow\") *WS \":\", against User-agent plus Disallow in 1994. Missing from both: any way to state a rate. The strings 'crawl-delay' and 'rate' do not occur anywhere in RFC 9309, and the 1994 format ignores unrecognised headers.",
+      "body": "Two documents you can open right now. The 1994 one is a mailing-list consensus dated 30 June, whose status section reads 'It is not enforced by anybody, and there no guarantee that all current and future robots will use it.' The second is RFC 9309, an IETF Standards Track document of September 2022, authored by Koster with three Google engineers.",
+      "cite": "koster1994spec"
+    },
+    {
+      "id": "p3c09-c4",
+      "suit": "ripple",
+      "title": "Why your delay is a max() of three terms",
+      "sub": "1994–2022 · every crawler frontier since",
+      "year": 2022,
+      "prompt": "Your fetcher computes delay = max(robots crawl-delay, base delay, adaptive backoff). Two of those terms exist only because of a gap in the standard. Name the gap, and say why the first term cannot be trusted even when it is present.",
+      "answer": "Neither version of the standard can express a rate, so most hosts never state one — hence a base delay for the silent majority, and an adaptive term keyed on observed response time, 429s and Retry-After to learn what the file cannot say. Even a present Crawl-delay is a non-standard extension nothing obliges you to read and nothing can check you honoured, which is why the per-host clock has to live inside the frontier.",
+      "body": "'Crawl-delay' is a non-standard extension: the string appears nowhere in RFC 9309, and the 1994 format ignores unrecognised headers. RFC 9309 also caps the cache window at 24 hours, which is where a crawler's robots.txt TTL comes from. The one thing it never gives you is a speed, so the crawler decides.",
+      "cite": "rfc9309"
+    }
+  ]
+}

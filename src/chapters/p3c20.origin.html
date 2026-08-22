@@ -1,0 +1,17 @@
+<div class="box origin"><div class="box-tag">Windows Azure Storage, 2012</div>
+<p class="origin-seam">An exabyte of data, and one number that picked the code</p>
+
+<p>Cheng Huang's team had the cheap answer already. Azure held <span class="fact" data-cite="was2011">three full copies</span> of everything not yet coded; Reed-Solomon (12, 4) would take that to <span class="fact" data-cite="lrc2012">1.33x</span> — <span class="fact" data-cite="lrc2012">"over 50%"</span> off the cost of storage, and half the data center footprint, as Azure was about to <span class="fact" data-cite="lrc2012">"surpass an Exabyte of storage"</span>.</p>
+
+<p>They rejected it — not on cost, on repair: <span class="fact" data-cite="lrc2012">"to do the reconstruction we would need to read from a set of 12 fragments."</span> One offline fragment, twelve reads across the fabric — and at fleet scale, something always is.</p>
+
+<p>So they built Local Reconstruction Codes. Split twelve data fragments into two groups of six, one local parity per group, two global parities across all twelve. <span class="fact" data-cite="lrc2012">Sixteen</span> fragments, still 1.33x — but a lost data fragment rebuilds from <span class="fact" data-cite="lrc2012">six</span> reads, not twelve. In production, a 4 MB reconstruction fell from <span class="fact" data-cite="lrc2012">893 ms to 418 ms</span>.</p>
+
+<p>The bill is in the fine print. LRC is <span class="fact" data-cite="lrc2012">not maximum-distance-separable</span>. Reed-Solomon survives any four losses; LRC any three, plus only the four-loss patterns that are information-theoretically decodable. They picked which failures to lose.</p>
+
+<p>The write path never got the discount. New data still lands as three copies in an open extent; only when it is <span class="fact" data-cite="was2011">sealed</span> and immutable can the coder touch it. You cannot erasure-code bytes that are still arriving.</p>
+</div>
+
+<div class="feynman" data-key="p3c20-o1">
+<p class="fey-prompt">You run an exabyte at 3x. Attack the overhead or the repair reads? Write it before you read on.</p>
+</div>

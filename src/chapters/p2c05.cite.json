@@ -1,0 +1,84 @@
+{
+  "chapter": "p2c05",
+  "sources": {
+    "att1990report": {
+      "type": "postmortem",
+      "title": "Technical background on AT&T's network slowdown, January 15, 1990",
+      "author": "AT&T (circulated through the AT&T Consultant Liaison Program; posted by Don H Kemp to comp.dcom.telecom, forwarded by Geoff Goodfellow)",
+      "year": 1990,
+      "date": "1990-01-28",
+      "venue": "ACM RISKS Digest, Volume 9 Issue 63, Wednesday 31st January 1990, item 'Re: AT&T Crash Statement: The Official Report'",
+      "url": "https://catless.ncl.ac.uk/Risks/9.63.html",
+      "checked": "2026-08-22",
+      "quote": "At approximately 2:30 p.m. EST on Monday, January 15, one of AT&T's 4ESS toll switching systems in New York City experienced a minor hardware problem which activated normal fault recovery routines within the switch.  This required the switch to briefly suspend new call processing until it completed its fault recovery action — a four-to-six second procedure.  Such a suspension is a typical maintenance procedure, and is normally invisible to the calling public.",
+      "supports": [
+        "start time 2:30 p.m. EST, Monday 15 January 1990 -- AT&T's own words, not a search snippet",
+        "the trigger was a minor HARDWARE fault in one New York City 4ESS, and the four-to-six second suspension was the NORMAL recovery procedure, not the failure",
+        "the DLN and the 1/100th-of-a-second window: 'When this processor (called a Direct Link Node, or DLN) in a connecting switch received the first call attempt (IAM) from the previously out-of-service New York switch, it initiated a process to update its status map.  As the result of a software flaw, this DLN processor was left vulnerable to disruption for several seconds.  During this vulnerable time, the receipt of two call attempts from the New York switch -- within an interval of 1/100th of a second -- caused some data to become damaged.  The DLN processor was then taken out of service to be reinitialized.'",
+        "the duplicate mate failed the same way: 'Since the DLN processor is duplicated, its mate took over the traffic load.  However, a second couplet of closely spaced new call messages from the New York 4ESS switch hit the mate processor during the vulnerable period, causing it to be removed from service and temporarily isolating the switch from the CCS7 signaling network.  The effect cascaded through the network as DLN processors in other switches similarly went out of service.'",
+        "one release across the whole fleet: 'The software flaw was inadvertently introduced into all the 4ESS switches in the AT&T network as part of a mid-December software update.  This update was intended to significantly improve the network's performance by making it possible for switching systems to access a backup signaling network more quickly in case of problems with the main CCS7 signaling network.'",
+        "the lab DID reproduce it, after the fact: 'On Tuesday, we took the faulty program update out of the switches and temporarily switched back to the previous program.  We then started examining the faulty program with a fine-toothed comb, found the suspicious software, took it into the laboratory, and were able to reproduce the problem.'  The report gives no date for the reproduction, and no source describes the laboratory's size or configuration.",
+        "the defect passed testing: 'While the software had been rigorously tested in laboratory environments before it was introduced, the unique combination of events that led to this problem couldn't be predicted.'",
+        "standard recovery failed: 'To troubleshoot the problem, AT&T engineers first tried an array of standard procedures to reestablish the integrity of the signaling network.  In the past, these have been more than adequate to regain call processing.  In this case, they proved inadequate.  So we knew very early on we had a problem we'd never seen before.'",
+        "the fix was subtractive, and the end time: 'We were able to stabilize the network by temporarily suspending signaling traffic on our backup links, which helped cut the load of messages to the affected DLN processors.  At 11:30 p.m. EST on Monday, we had the last link in the network cleared.'",
+        "the rollback: 'On Tuesday, we took the faulty program update out of the switches and temporarily switched back to the previous program.'",
+        "the load was not exceptional: 'It is important to note that Monday's calling volume was not unusual; in fact, it was less than a normal Monday, and the network handled normal loads on previous weekdays.'",
+        "typography note: the digest text renders the first dash of the 1/100th-of-a-second clause as '--' and the second as an em dash; the four-to-six second clause uses an em dash. Both are reproduced above as they render in the archived page."
+      ]
+    },
+    "telephony1990": {
+      "type": "blog",
+      "title": "Cause of AT&T network failure -- Peter G. Neumann quoting Telephony, 22 January 1990, p. 11",
+      "author": "Larry Seese, AT&T director of technology development, quoted in Telephony; excerpted by Peter G. Neumann",
+      "year": 1990,
+      "date": "1990-01-26",
+      "venue": "ACM RISKS Digest, Volume 9 Issue 62, Friday 26th January 1990",
+      "url": "https://catless.ncl.ac.uk/Risks/9.62.html",
+      "checked": "2026-08-22",
+      "confidence": "secondary",
+      "quote": "\"The fault was in the code\" of the new software that AT&T loaded into front-end processors of all 114 of its 4ESS switching systems in mid-December, said Larry Seese, AT&T's director of technology development.",
+      "supports": [
+        "the fleet size: all 114 4ESS switching systems, one software load, mid-December",
+        "Seese on the cascade: '\"It was a chain reaction. Any switch that was connected to B was put into the same condition.\"'",
+        "Seese on the deliberate speed-up that became the propagation path: '\"We made an improvement in the way we react to those messages so we can react more quickly. The first common channel signaling system 7 initial address message (caused by a call attempt) that switch B receives from swithc A alerts B that A is back in service. Switch B then resets its internal logic to indicate that A is back in service,\" said Seese.' [the digest text contains the typo 'swithc']",
+        "what the old code did instead: 'Under the previous system, switch A would send out a message that it was working again, and swithc B would double-check that switch A was back in service.'",
+        "the timing condition under which the bug does NOT fire: '\"The event just repeated itself in every [4ESS] switch over and over again. If the switches hadn't gotten a second message while resetting, there would have been no problem. If the messages had been received farther apart, it would not have triggered the problem.\"'",
+        "the mitigation, in Telephony's words: 'AT&T solved the problem by reducing the messaging load of the CCS7 network. That allowed the switches to rest themselves and the network to stabilize.' [the digest reads 'rest', apparently for 'reset']",
+        "secondary because this is a trade-journal article relayed by a moderated digest, not a document AT&T published; where it and att1990report differ, the AT&T report is used",
+        "venue check: the archived RISKS page header reads 'The RISKS Digest Volume 9 Issue 62, Friday, 26th January 1990'. A widely mirrored reprint at telephoneworld.org dates the same issue 'February 26, 1990', which is wrong."
+      ]
+    },
+    "murray1990": {
+      "type": "blog",
+      "title": "Important Lesson from AT&T Tragedy",
+      "author": "William Hugh Murray, Fellow, Information System Security, Ernst & Young",
+      "year": 1990,
+      "date": "1990-01-28",
+      "venue": "ACM RISKS Digest, Volume 9 Issue 63, Wednesday 31st January 1990",
+      "url": "https://catless.ncl.ac.uk/Risks/9.63.html",
+      "checked": "2026-08-22",
+      "confidence": "secondary",
+      "quote": "The failure was not, as was first suggested, a propagating alarm condition.  Rather, IT WAS THE INABILITY TO PROPERLY HANDLE THE RETURN TO THE LINE OF A FAILING COMPONENT.  It was not a COMPONENT problem; it was, as I feared and suggested a SYSTEM problem.  This is a growing class of complex system failure.",
+      "supports": [
+        "the contemporaneous statement of the lesson, thirteen days after the outage and in the same digest issue as AT&T's report",
+        "the testing gap, in his capitals: 'We are testing to see what happens when a component fails.  WE ARE NOT PROPERLY TESTING TO SEE WHAT HAPPENS WHEN THE COMPONENT SUCCEEDS IN CORRECTING ITSELF AND COMES BACK ON LINE.'",
+        "his two rules, from the companion item 'Potential Lesson From AT&T' in the same issue: 'AUTOMATE ONLY THOSE THINGS THAT HAPPEN WITH SUFFICIENT FREQUENCY THAT AUTOMATION IS JUSTIFIED.  AVOID GRATUITOUS AUTOMATION.' and 'IF YOU CANNOT TEST IT, DO NOT DO IT.'",
+        "he also names the automation itself as a contributor: 'Note that AT&T had automated the procedure for restoring a failing component.  This decision contributed to the failure.'",
+        "secondary: a reader's commentary posted to a moderated digest, not an investigation. It is used only for what Murray himself wrote."
+      ]
+    }
+  },
+  "unverified": [
+    "Any figure in real currency for this outage. The commonly repeated numbers -- roughly 50% of AT&T long-distance call attempts blocked, about 50 million calls lost, more than $60 million in forgone revenue -- trace, in every copy I could open, to Dennis Burke, 'All Circuits are Busy Now: The 1990 AT&T Long Distance Network Collapse', CSC440-01 course paper, California Polytechnic State University, November 1995 (https://users.csc.calpoly.edu/~jdalbey/SWE/Papers/att_collapse.html, checked 2026-08-22), which sources them to Business Week, Time and Newsweek of 29 January 1990 -- none of which I could open. AT&T's own report gives no call count and no dollar figure, and calls the event a 'slowdown'. No money therefore appears in the prose or on a card.",
+    "The 'misplaced break statement' account of the defect. AT&T's report says only 'a software flaw'. Peter G. Neumann's index 'Illustrative Risks to the Public in the Use of Computer Systems and Related Technology' (https://www.csl.sri.com/users/neumann/illustrative.html, checked 2026-08-22) records it as 'attributed to \"switch\"...\"if\"...\"break\" in SS-7 (S 15 2)', pointing at ACM SIGSOFT Software Engineering Notes vol. 15 no. 2, which I did not open. The pseudocode in Burke 1995 is the usual source. The break statement appears nowhere in the prose or on a card.",
+    "Burke 1995 gives the start as 2:25 p.m. and describes the trigger as a self-test showing the switch 'nearing its load limits'. AT&T's own report says 'approximately 2:30 p.m. EST' and 'a minor hardware problem'. The AT&T times and cause are the ones used; the 2:25 p.m. variant is not.",
+    "That the 15 January 1990 outage caused the FCC's mandatory service-outage reporting regime, or the Network Reliability Council. Plausible and widely asserted, but I could not open an FCC document saying so, so no such claim is made.",
+    "That this outage is a named ancestor of cell-based architecture or of cell-by-cell deployment. No source I opened draws that line. The ripple card claims only what William Hugh Murray wrote in RISKS 9.63, and marks the modern reading as the reader's own inference.",
+    "Robert Allen's public apology and AT&T's discount day. No source I could open carries either, so neither appears.",
+    "Whether the number of 4ESS switches was exactly 114 on 15 January 1990. The figure is Larry Seese's, quoted in Telephony; AT&T's own report says only 'all the 4ESS switches in the AT&T network'.",
+    "That the laboratory could not have found the defect -- e.g. that it held one switch and the fault needed the full fleet. An earlier draft of the cold open and of card c3 said so; nothing supports it and att1990report contradicts it, because AT&T 'took it into the laboratory, and were able to reproduce the problem'.  Both passages now say the opposite: the lab reproduced it, and what was missing was the test case for a failed peer rejoining.  The report's actual claim is only that 'the unique combination of events that led to this problem couldn't be predicted.'",
+    "The date on which AT&T reproduced the fault in the laboratory. att1990report places it after the Tuesday 16 January rollback and before the report's own circulation on 28 January, but gives no date.  An earlier draft of card c1 said Seese was, on 22 January, 'describing something AT&T had only just reproduced in a lab'; the Telephony piece says nothing about a lab, so the clause is gone.",
+    "How many closely spaced call attempts it took to damage a DLN.  att1990report describes a couplet -- the first IAM opens a vulnerable window of several seconds, and then 'the receipt of two call attempts from the New York switch -- within an interval of 1/100th of a second -- caused some data to become damaged', with the mate later hit by 'a second couplet'.  Seese in telephony1990 describes only one further message: 'switch B got a second call-attempt message from A while it was in the process of resetting its internal logic.'  The prose follows AT&T's own report (two attempts inside the window, the mate catching the next pair); Seese's simpler two-message version is not used.",
+    "That 'every 4ESS in the country cycled'.  That is Seese's wording in telephony1990 ('The event just repeated itself in every [4ESS] switch over and over again'), not AT&T's; att1990report says only that 'the effect cascaded through the network as DLN processors in other switches similarly went out of service'.  Card c2 cites the AT&T report, so it now uses the report's wording."
+  ]
+}
