@@ -4,10 +4,13 @@ import time
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from playground.auth import AuthError, sign_token
 from playground.config import VoiceConfig
 from playground.server import (
+    LoginRequest,
     OfferRequest,
     _Session,
     _allowed_origins,
@@ -15,6 +18,7 @@ from playground.server import (
     _enforce_cap,
     _extract_board_graph,
     _sessions,
+    login,
     offer,
 )
 from playground.session import Session
@@ -297,6 +301,14 @@ class TestCapTaskRegistrationOrder(unittest.TestCase):
         os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
         self.fake = _FakeConnection()
         self.request = OfferRequest(sdp="x", type="offer")
+        from playground.auth import sign_token
+        from playground.server import _TOKEN_SECRET
+
+        # mode=playground is gated on our own session token now -- see
+        # TestPlaygroundAuthGate for the gate itself. This test is about the
+        # registration-order bug, so it needs to get past the gate with a
+        # valid token, not exercise it.
+        self.auth = f"Bearer {sign_token('learner@example.com', _TOKEN_SECRET, now=time.time(), ttl_secs=3600)}"
 
     def test_the_session_is_registered_before_the_cap_task_runs(self):
         seen: dict[str, bool] = {}
@@ -307,7 +319,7 @@ class TestCapTaskRegistrationOrder(unittest.TestCase):
         fake_session = Session(VoiceConfig())
 
         async def scenario():
-            answer = await offer(self.request, mode="playground")
+            answer = await offer(self.request, mode="playground", authorization=self.auth)
             # asyncio.create_task only schedules _enforce_cap's coroutine;
             # it needs one trip round the loop to actually take its first
             # step. Do that here, inside the same running loop, rather than
@@ -439,6 +451,165 @@ class TestEnforceCap(unittest.TestCase):
         self.assertEqual(session.mode, "coach")
         self.assertEqual(worker.queued, [])
         self.assertEqual(runner.cancel_calls, ["connection ended"])
+
+
+class TestPlaygroundAuthGate(unittest.TestCase):
+    """mode=playground is gated on our own session token, checked before any
+    connection or session exists -- a rejected request must create nothing
+    and bill nothing (voice bills by the minute). mode=dictation is
+    deliberately untouched by any of this; see the design's "stays
+    completely open". offer() is called directly here, the same way
+    TestConnectionLeakGuard and TestCapTaskRegistrationOrder do, rather than
+    through TestClient -- it gives the same fine control over the event loop
+    without a real WebRTC handshake."""
+
+    def setUp(self):
+        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        from playground.server import _TOKEN_SECRET
+
+        self.secret = _TOKEN_SECRET
+        self.request = OfferRequest(sdp="x", type="offer")
+
+    def _token(self, email="learner@example.com", now=None, ttl_secs=3600):
+        return sign_token(email, self.secret, now=now if now is not None else time.time(), ttl_secs=ttl_secs)
+
+    def test_no_authorization_header_is_a_401_and_creates_no_connection(self):
+        with patch("playground.server.SmallWebRTCConnection") as mock_conn:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(offer(self.request, mode="playground", authorization=None))
+        self.assertEqual(ctx.exception.status_code, 401)
+        mock_conn.assert_not_called()
+
+    def test_a_non_bearer_scheme_is_a_401(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                offer(self.request, mode="playground", authorization=f"Basic {self._token()}")
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_an_expired_token_is_a_401(self):
+        token = self._token(now=time.time() - 10_000, ttl_secs=1)
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(offer(self.request, mode="playground", authorization=f"Bearer {token}"))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_a_tampered_token_is_a_401(self):
+        token = self._token()
+        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                offer(self.request, mode="playground", authorization=f"Bearer {tampered}")
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_a_malformed_token_is_a_401(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                offer(self.request, mode="playground", authorization="Bearer not-a-real-token")
+            )
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_a_valid_token_passes_the_gate_and_reaches_the_pipeline_build(self):
+        """Past the gate, offer() goes on to build the real playground
+        worker -- mocked here the same way TestCapTaskRegistrationOrder
+        mocks it (including _enforce_cap itself, so no real polling task is
+        left running past this test). This proves the gate lets a valid
+        token through; it does not re-test the pipeline build."""
+        fake = _FakeConnection()
+        fake_session = Session(VoiceConfig())
+
+        async def fake_enforce_cap(connection, worker, pg_session):
+            return
+
+        try:
+            with patch("playground.server.SmallWebRTCConnection", return_value=fake):
+                with patch(
+                    "playground.server.build_playground_worker",
+                    return_value=(object(), fake_session),
+                ):
+                    with patch("playground.server.WorkerRunner", _FakeWorkerRunner):
+                        with patch(
+                            "playground.server._enforce_cap", side_effect=fake_enforce_cap
+                        ):
+                            answer = asyncio.run(
+                                offer(
+                                    self.request,
+                                    mode="playground",
+                                    authorization=f"Bearer {self._token()}",
+                                )
+                            )
+            self.assertEqual(answer["pc_id"], fake.pc_id)
+        finally:
+            _sessions.pop(fake.pc_id, None)
+
+    def test_dictation_needs_no_token_at_all(self):
+        fake = _FakeConnection()
+        try:
+            with patch("playground.server.SmallWebRTCConnection", return_value=fake):
+                with patch("playground.server.build_dictation_worker", return_value=object()):
+                    with patch("playground.server.WorkerRunner", _FakeWorkerRunner):
+                        answer = asyncio.run(
+                            offer(self.request, mode="dictation", authorization=None)
+                        )
+            self.assertEqual(answer["pc_id"], fake.pc_id)
+        finally:
+            _sessions.pop(fake.pc_id, None)
+
+    def test_dictation_ignores_even_a_garbage_authorization_header(self):
+        """Proof, not just absence of a check: dictation must still work
+        when the header is present but worthless, not merely when it's
+        missing."""
+        fake = _FakeConnection()
+        try:
+            with patch("playground.server.SmallWebRTCConnection", return_value=fake):
+                with patch("playground.server.build_dictation_worker", return_value=object()):
+                    with patch("playground.server.WorkerRunner", _FakeWorkerRunner):
+                        answer = asyncio.run(
+                            offer(self.request, mode="dictation", authorization="Bearer garbage")
+                        )
+            self.assertEqual(answer["pc_id"], fake.pc_id)
+        finally:
+            _sessions.pop(fake.pc_id, None)
+
+
+class TestLogin(unittest.TestCase):
+    """/api/login exchanges a verified Google ID token for our own session
+    token -- see playground/auth.py. The Google verification call itself is
+    IO (it fetches Google's public keys); stubbed here via a patched
+    verify_google_id_token, never a real network call."""
+
+    def setUp(self):
+        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+
+    def test_a_verified_google_token_returns_our_own_session_token(self):
+        with patch(
+            "playground.server.verify_google_id_token", return_value="learner@example.com"
+        ):
+            result = asyncio.run(login(LoginRequest(id_token="google-id-token")))
+        self.assertEqual(result.email, "learner@example.com")
+        from playground.auth import verify_token
+        from playground.server import _TOKEN_SECRET
+
+        self.assertEqual(
+            verify_token(result.token, _TOKEN_SECRET, now=time.time()), "learner@example.com"
+        )
+
+    def test_a_failed_google_verification_is_a_401_not_a_500(self):
+        with patch(
+            "playground.server.verify_google_id_token",
+            side_effect=AuthError("Google sign-in verification failed: bad token"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(login(LoginRequest(id_token="bad-token")))
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_a_missing_id_token_is_a_4xx_at_the_http_boundary_not_a_500(self):
+        from playground.server import app
+
+        client = TestClient(app)
+        r = client.post("/api/login", json={})
+        self.assertGreaterEqual(r.status_code, 400)
+        self.assertLess(r.status_code, 500)
 
 
 if __name__ == "__main__":

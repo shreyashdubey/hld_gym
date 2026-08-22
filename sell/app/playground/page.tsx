@@ -1,8 +1,14 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Board from "@/components/Board";
 import { connectVoice, type VoiceSession } from "@/lib/voice";
+import {
+  getStoredToken,
+  isTokenLikelyValid,
+  loginWithGoogleIdToken,
+  renderGoogleSignInButton,
+} from "@/lib/auth";
 import { extractGraph, type BoardElement, type BoardGraph } from "@/lib/board";
 import { layoutTopology, type Topology } from "@/lib/layout";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -31,6 +37,49 @@ export default function PlaygroundPage() {
   const [backfill, setBackfill] = useState<BoardGraph | null>(null);
   const session = useRef<VoiceSession | null>(null);
   const excalidrawAPI = useRef<ExcalidrawImperativeAPI | null>(null);
+
+  /* Every session bills OpenAI credit by the minute, so /api/offer gates
+     mode=playground on our own session token -- see
+     playground/server.py and docs/superpowers/specs/2026-08-21-playground-design.md.
+     null until the effect below settles it, on purpose: this page is
+     server-rendered once during the static export's prerender, where
+     `window` (and so localStorage) doesn't exist, so the server's first
+     render must show neither the sign-in button nor "start the round" --
+     showing either eagerly (tried first as a lazy useState initializer,
+     `typeof window === "undefined" ? null : isTokenLikelyValid(...)`)
+     produced a real hydration mismatch: the server's tree (always null)
+     disagreed with the client's very first render (the real answer,
+     already different). isTokenLikelyValid is a client-side shortcut, not
+     the real gate -- see lib/auth.ts -- the server checks the actual
+     signature on every /api/offer regardless, so a stale token that slips
+     past this check simply fails there instead. */
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const googleButton = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    // Reading localStorage is a one-time sync with an external system, not
+    // a value computed from render -- the case react-hooks' own docs carve
+    // out for setState-in-effect. The lint rule's heuristic can't tell the
+    // two apart.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSignedIn(isTokenLikelyValid(getStoredToken()));
+  }, []);
+
+  // Renders Google's own button once signed-out is established -- not
+  // eagerly at module scope; renderGoogleSignInButton touches `window`, the
+  // same constraint Board.tsx's dynamic Excalidraw import exists for.
+  useEffect(() => {
+    if (signedIn !== false || !googleButton.current) return;
+    renderGoogleSignInButton(googleButton.current, (idToken) => {
+      loginWithGoogleIdToken(idToken)
+        .then(() => {
+          setAuthError(null);
+          setSignedIn(true);
+        })
+        .catch(() => setAuthError("Sign-in failed — try again."));
+    }).catch(() => setAuthError("Google sign-in isn't available right now."));
+  }, [signedIn]);
 
   const onGraphChange = useCallback((graph: BoardGraph) => {
     session.current?.send("board", { graph });
@@ -61,6 +110,7 @@ export default function PlaygroundPage() {
     try {
       const opened = await connectVoice({
         mode: "playground",
+        token: getStoredToken() ?? undefined,
         onMessage: (m) => {
           const msg = m as { type?: string; text?: string; topology?: Topology };
           if (msg?.type === "transcript" && msg.text) setSaid((s) => [...s, msg.text!]);
@@ -112,7 +162,21 @@ export default function PlaygroundPage() {
   return (
     <main className="playground">
       <h1>Playground</h1>
-      {state !== "live" && (
+      {signedIn === false && (
+        <>
+          {/* Every session bills OpenAI credit per minute of audio on an
+              endpoint anyone could otherwise reach -- see
+              sell/PROGRESS.md's entry for why this exists. No account is
+              created beyond the email Google verifies; see lib/auth.ts. */}
+          <p className="hint">
+            Playground is a live voice session, so it asks for a Google
+            sign-in first — the board below still works without one.
+          </p>
+          <div ref={googleButton} />
+          {authError && <p className="hint">{authError}</p>}
+        </>
+      )}
+      {signedIn === true && state !== "live" && (
         <>
           <button type="button" className="btn" onClick={start} disabled={state === "connecting"}>
             {state === "denied"

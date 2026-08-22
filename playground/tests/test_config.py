@@ -45,6 +45,38 @@ class TestVoiceConfig(unittest.TestCase):
         self.assertIn("PLAYGROUND_STOP_SECS", exc_msg)
         self.assertIn("not_a_number", exc_msg)
 
+    def test_auth_fields_default_without_any_env(self):
+        """A bare VoiceConfig() must keep working with no auth env set at
+        all -- dictation never touches these, and the rest of this suite
+        constructs VoiceConfig() bare throughout."""
+        c = VoiceConfig()
+        self.assertEqual(c.google_client_id, "")
+        self.assertEqual(c.token_secret, "")
+        self.assertEqual(c.session_ttl_secs, 604800)
+
+    def test_from_env_reads_the_google_client_id_as_a_plain_string(self):
+        c = VoiceConfig.from_env({"PLAYGROUND_GOOGLE_CLIENT_ID": "abc123.apps.googleusercontent.com"})
+        self.assertEqual(c.google_client_id, "abc123.apps.googleusercontent.com")
+
+    def test_from_env_reads_the_token_secret_as_a_plain_string(self):
+        c = VoiceConfig.from_env({"PLAYGROUND_TOKEN_SECRET": "s3cret"})
+        self.assertEqual(c.token_secret, "s3cret")
+
+    def test_from_env_coerces_session_ttl_secs_to_int(self):
+        """The float-coercion path already existed; int fields shared no
+        code with it until now -- session_ttl_secs is the first int field on
+        VoiceConfig."""
+        c = VoiceConfig.from_env({"PLAYGROUND_SESSION_TTL_SECS": "3600"})
+        self.assertEqual(c.session_ttl_secs, 3600)
+        self.assertIsInstance(c.session_ttl_secs, int)
+
+    def test_from_env_rejects_a_malformed_session_ttl_secs(self):
+        with self.assertRaises(ValueError) as ctx:
+            VoiceConfig.from_env({"PLAYGROUND_SESSION_TTL_SECS": "a week"})
+        exc_msg = str(ctx.exception)
+        self.assertIn("PLAYGROUND_SESSION_TTL_SECS", exc_msg)
+        self.assertIn("a week", exc_msg)
+
 
 if __name__ == "__main__":
     unittest.main()

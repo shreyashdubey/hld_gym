@@ -603,6 +603,24 @@ until a denominator exists, a click count divides by an unknown. The panel is
 free on the Hobby plan up to its event cap; the usage dashboard that reports
 bandwidth is not, and is not what this answers.
 
+**Auth's row is still literally true for the sell page — nothing here fired
+it.** Its trigger reads *when reps are per-user*, and no rep is: there is
+still no login anywhere between a visitor and the reservation form. What
+gained a Google sign-in on 2026-08-22 is a different surface entirely,
+`playground/server.py`'s `mode=playground` on `/api/offer` — the voice
+service, not this page. That was not the per-user-reps trigger firing; it
+was a distinct problem the table never named: a metered service that spends
+real OpenAI credit per minute of audio, sitting behind an endpoint any
+browser on the internet could reach directly and start billing against,
+with no visitor, no payment link, and no rep anywhere near it. Anyone with a
+Google account is let in — there is no allowlist, a decision made knowingly
+(see `PROGRESS.md`) — the sign-in raises the bar from "anyone with the URL"
+to "anyone willing to authenticate with Google", nothing more precise than
+that. `mode=dictation` has no such
+cost shape (no LLM, no TTS — it is VAD and STT only) and stays completely
+open, on purpose. See `../AGENTS.md`'s hard rules and `playground/README.md`
+for the mechanics.
+
 **The reservation form is not the waitlist this table forbids.** The difference
 is what happens next: a waitlist ends at the email, and this one exists to send
 a payment link within 24 hours, with a final question asking outright whether

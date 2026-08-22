@@ -2176,3 +2176,73 @@ by a test that could fail on its own) — `npm run lint` and `tsc --noEmit`
 both clean, `npm run build` still ends `○ (Static)` and still emits
 `/playground`, and the rsync dry-run above confirms it stays out of
 `dist/`.
+
+## 2026-08-22 — Playground gets a Google sign-in, because someone else's rule fired
+
+**What shipped.** `POST /api/offer` now gates `mode=playground` on our own
+session token, sent as `Authorization: Bearer <token>` — never a query
+string, which leaks into every server log line it passes through. No valid
+token, no session: the check runs before `SmallWebRTCConnection()` is even
+constructed, so a rejected request bills nothing. `mode=dictation` is
+untouched and needs no token at all — a deliberate asymmetry, not an
+oversight, because dictation has no LLM or TTS stage and costs nothing per
+minute the way playground does.
+
+The browser shows Google Identity Services' own "Sign in with Google"
+button (`sell/lib/auth.ts`) when no locally-valid token is on hand. Its ID
+token goes to a new `POST /api/login`, which verifies it with `google-auth`
+(`google.oauth2.id_token.verify_oauth2_token` — signature, issuer,
+audience, expiry) and, only on success, mints our **own** token: not a JWT.
+`base64url(payload_json) + "." + base64url(hmac_sha256(secret,
+payload_json))`, verified with `hmac.compare_digest`, never `==`. No `alg`
+field means there is nothing for an algorithm-confusion attack to parse.
+Google's token expires in about an hour; ours lasts
+`PLAYGROUND_SESSION_TTL_SECS` (7 days by default), so a returning learner
+isn't re-prompted every session. `sell/lib/voice.ts` moved off the
+deprecated `connectionUrl` to `webrtcRequestParams` to carry the header —
+the only shape of the two that has one.
+
+**Why: not the trigger `SYSTEM.md` §9 had on record.** That table's Auth row
+predicted auth would arrive *when reps are per-user* — a login gating
+content. That never fired, and still hasn't: the sell page still has no
+login anywhere between a visitor and the reservation form. What actually
+fired is a different problem the table never named: Playground is a
+metered service that spends real OpenAI credit per minute of audio, sitting
+behind an endpoint any browser on the internet could reach directly and
+start billing against, with no visitor and no payment link anywhere near
+it. `SYSTEM.md` §9 now records the real reason rather than the old
+prediction pretending to have come true.
+
+**There is no allowlist.** Anyone with a Google account is let in — a
+decision made knowingly, after the trade-off was shown, not an oversight
+left for later. The two things actually standing between this endpoint and
+an open bill are unrelated to who signs in: the service binds to
+`127.0.0.1` by default (no `--host` flag in `playground/README.md`'s run
+command — it is not reachable from outside the machine it runs on at all
+today), and the per-session wall-clock cap
+(`PLAYGROUND_SESSION_CAP_SECS`) bounds what any one session, forged or not,
+can spend. **Hosting Playground anywhere removes both** — a public host is
+reachable by definition, and a determined abuser can still open many capped
+sessions back to back. That is the condition under which "no allowlist"
+needs revisiting, not a hypothetical: the day this leaves `127.0.0.1`, an
+allowlist or a per-account rate limit stops being optional.
+
+**How it was proven, not just written.** TDD throughout: `playground/auth.py`
+and its 17 tests in `playground/tests/test_auth.py` existed before the
+implementation did — sign/verify round trip, expiry, a tampered payload, a
+tampered signature, a wrong secret, malformed/junk/empty tokens,
+`token_secret_from_env`'s missing-secret refusal, and the Google wrapper's
+failure handling against a stubbed verifier (never a real network call).
+Five mutations were run against the working tree and reverted: an expired
+token accepted (caught), the signature check skipped (caught, 4 tests),
+`compare_digest` swapped for `==` (**not caught** — behaviourally identical
+for correctness, since only constant-time comparison differs; this is a
+known, accepted gap in what a functional test suite can prove), the service
+starting with no secret (caught), and dictation gated by mistake (caught,
+4 tests — 2 of them incidentally, in `TestConnectionLeakGuard`, which had
+never needed to pass an `authorization` argument before). 138 Python tests
+total (105 existing + 33 new), 36 `sell` tests unchanged, both `npm run
+lint` and `tsc --noEmit` clean, `npm run build` still ends `○ (Static)`.
+`VoiceConfig` gained its first `int` field (`session_ttl_secs`) and
+`from_env()` gained int coercion alongside the float coercion it already
+had — a gap the brief flagged rather than one found the hard way.

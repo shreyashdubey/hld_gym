@@ -10,7 +10,7 @@ import time
 from typing import Literal, Mapping, NamedTuple
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.worker import PipelineWorker
@@ -18,6 +18,13 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.workers.runner import WorkerRunner
 from pydantic import BaseModel
 
+from playground.auth import (
+    AuthError,
+    sign_token,
+    token_secret_from_env,
+    verify_google_id_token,
+    verify_token,
+)
 from playground.config import VoiceConfig
 from playground.pipelines import build_dictation_worker, build_playground_worker
 from playground.session import Session
@@ -82,10 +89,70 @@ app.add_middleware(
 )
 
 
+# Signs and verifies our own session tokens (see playground/auth.py). Read
+# once, at import time -- exactly like _allowed_origins() above, a bad value
+# here must stop the service before it ever serves a request, not fail
+# request by request. token_secret_from_env() has no fallback default, unlike
+# every other PLAYGROUND_* knob: a default signing secret would let anyone
+# forge a session, so a missing one raises here rather than silently picking
+# one.
+_TOKEN_SECRET = token_secret_from_env()
+
+
 @app.get("/health")
 async def health() -> dict:
     """Reports whether a key is loaded. Never reports what the key is."""
     return {"ok": True, "key_loaded": bool(os.getenv("OPENAI_API_KEY"))}
+
+
+class LoginRequest(BaseModel):
+    """The Google ID token straight from Google Identity Services, in the
+    browser -- see sell/lib/auth.ts. Never stored past this one
+    verification: it is exchanged for our own token below and then
+    forgotten."""
+
+    id_token: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    email: str
+
+
+@app.post("/api/login")
+async def login(request: LoginRequest) -> LoginResponse:
+    """Exchanges a verified Google ID token for our own session token.
+    Google's expires in about an hour; ours lasts PLAYGROUND_SESSION_TTL_SECS
+    (7 days by default) so a returning learner isn't re-prompted every
+    session. Anyone with a Google account is let in -- there is no allowlist,
+    a decision made knowingly (see sell/PROGRESS.md). Verification failures
+    (bad signature, wrong audience, expired, no email claim) are all 401,
+    never a 500 -- see playground/auth.py's AuthError."""
+    config = VoiceConfig.from_env()
+    try:
+        email = verify_google_id_token(request.id_token, config.google_client_id)
+    except AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
+    token = sign_token(email, _TOKEN_SECRET, now=time.time(), ttl_secs=config.session_ttl_secs)
+    return LoginResponse(token=token, email=email)
+
+
+def _authenticate_playground_request(authorization: str | None) -> str:
+    """Gates mode=playground -- called before any connection or session
+    exists, so a rejected request creates nothing and bills nothing (voice
+    bills by the minute the moment a session starts). mode=dictation never
+    calls this; see offer()'s mode check below -- that is a deliberate
+    decision (docs/superpowers/specs/2026-08-21-playground-design.md), not
+    an oversight. Every rejection -- missing header, wrong scheme, expired,
+    tampered, malformed -- is a 401, never a 500; see playground/auth.py's
+    AuthError."""
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="sign in required")
+    try:
+        return verify_token(token, _TOKEN_SECRET, now=time.time())
+    except AuthError as e:
+        raise HTTPException(status_code=401, detail=str(e)) from e
 
 
 class OfferRequest(BaseModel):
@@ -240,13 +307,24 @@ def _apply_board_message(session: Session, message: object) -> None:
 
 
 @app.post("/api/offer")
-async def offer(request: OfferRequest, mode: Mode = "dictation") -> dict:
+async def offer(
+    request: OfferRequest,
+    mode: Mode = "dictation",
+    authorization: str | None = Header(default=None),
+) -> dict:
     """One WebRTC connection per session. mode is a query param
     (?mode=playground), not a body field -- the client picks it before the
     SDP exchange, see sell/lib/voice.ts. Typed as Literal rather than str so
     an unrecognised mode is a 422 at the boundary (FastAPI/Pydantic validate
     it before the handler body runs) instead of silently falling back to
-    dictation -- a mute interviewer with no error is worse than a loud one."""
+    dictation -- a mute interviewer with no error is worse than a loud one.
+
+    mode=playground is gated on our own session token (Authorization: Bearer
+    <token>, minted by /api/login) -- see _authenticate_playground_request.
+    mode=dictation stays completely open: no token, no gate, by design."""
+    if mode == "playground":
+        _authenticate_playground_request(authorization)
+
     if request.pc_id and request.pc_id in _sessions:
         session = _sessions[request.pc_id]
         await session.connection.renegotiate(sdp=request.sdp, type=request.type)

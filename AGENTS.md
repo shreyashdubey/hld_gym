@@ -78,8 +78,16 @@ repo's other pipelines produce, and the dev server does not know about them.
   450 the sprint promises, because both are true today. The rule covers the
   reservation form too: its roadmap question labels every unbuilt option
   **planned, not built**.
-- **No backend, no auth, no database until someone pays.** A login between a
-  visitor and the payment link costs conversions and answers nothing.
+- **No backend, no auth, no database until someone pays** — with one
+  exception, and it proves the rule rather than breaking it. Playground
+  (`playground/server.py`'s `mode=playground`) gates on a Google sign-in,
+  added 2026-08-22, because it is not a login between a visitor and a
+  payment link: it is a metered service that spends real OpenAI credit per
+  minute on an endpoint anyone on the internet could otherwise reach, with
+  no visitor and no payment link anywhere near it. `mode=dictation` has no
+  such cost shape (no LLM, no TTS — see the design spec) and stays
+  completely open, on purpose. The sell page itself still has no backend, no
+  auth, no database.
 - **Never publish work as an Artifact.** The claude.ai account is shared, so
   anything published lands in a gallery other people browse. To show something
   visual, serve it locally: `python3 -m http.server` in the right directory.

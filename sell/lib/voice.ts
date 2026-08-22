@@ -32,6 +32,12 @@ export type VoiceSession = {
 export async function connectVoice(opts: {
   url?: string;
   mode?: "dictation" | "playground";
+  /* Our own session token (see lib/auth.ts), sent as
+     "Authorization: Bearer <token>" -- never in the URL: a token in a query
+     string leaks into every server log line it passes through. Only
+     mode=playground checks it; dictation ignores it even if one is passed,
+     see playground/server.py's mode gate -- it stays completely open. */
+  token?: string;
   onMessage: (message: unknown) => void;
   onDisconnect: (reason: "ended" | "error") => void;
 }): Promise<VoiceSession> {
@@ -48,7 +54,16 @@ export async function connectVoice(opts: {
   // two happened.
   let errored = false;
   const client = new PipecatClient({
-    transport: new SmallWebRTCTransport({ connectionUrl: `${base}/api/offer?mode=${mode}` }),
+    // webrtcRequestParams, not the deprecated connectionUrl -- it's the
+    // only shape that carries a header (APIRequest.headers is a Headers
+    // instance, per @pipecat-ai/client-js), which is what an Authorization
+    // header needs.
+    transport: new SmallWebRTCTransport({
+      webrtcRequestParams: {
+        endpoint: `${base}/api/offer?mode=${mode}`,
+        ...(opts.token ? { headers: new Headers({ Authorization: `Bearer ${opts.token}` }) } : {}),
+      },
+    }),
     enableMic: true,
     enableCam: false,
     callbacks: {

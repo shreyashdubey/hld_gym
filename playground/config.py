@@ -34,6 +34,18 @@ class VoiceConfig:
     llm_model: str = "gpt-5"
     tts_model: str = "gpt-4o-mini-tts"
 
+    # Playground auth (see playground/auth.py). Dictation touches none of
+    # this. Defaulted to empty/604800 here so a bare VoiceConfig() -- used
+    # throughout this suite -- keeps working with no auth env set at all;
+    # token_secret's *actual* "no default" refusal is enforced separately,
+    # by playground/auth.py's token_secret_from_env(), called once at
+    # server.py's import time (the same way _allowed_origins() refuses a
+    # "*" wildcard). A dataclass default here is just Python constructor
+    # convenience, not a green light to ship with an empty secret.
+    google_client_id: str = ""
+    token_secret: str = ""
+    session_ttl_secs: int = 604800  # 7 days
+
     def __post_init__(self) -> None:
         if self.dictation_stop_secs <= self.stop_secs:
             raise ValueError(
@@ -62,6 +74,13 @@ class VoiceConfig:
                 except ValueError as e:
                     raise ValueError(
                         f"Failed to parse {prefix + f.name.upper()}={raw!r} as float"
+                    ) from e
+            elif f.type is int or f.type == 'int':
+                try:
+                    kwargs[f.name] = int(raw)
+                except ValueError as e:
+                    raise ValueError(
+                        f"Failed to parse {prefix + f.name.upper()}={raw!r} as int"
                     ) from e
             else:
                 kwargs[f.name] = raw

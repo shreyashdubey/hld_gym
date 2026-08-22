@@ -79,8 +79,14 @@ from the DOM, "the animation is visible" is not, and they are different claims.
 
 ## Hard rules
 
-- **No backend, no auth, no database** until someone pays. See `SYSTEM.md` §9.
-  A login between a visitor and the payment link costs conversions.
+- **No backend, no auth, no database** on the sell page itself, until someone
+  pays. See `SYSTEM.md` §9. A login between a visitor and the payment link
+  costs conversions. **Playground is the one exception**, and it is not a
+  counterexample: `mode=playground` on the voice service
+  (`playground/server.py`) gates on a Google sign-in because it is a metered
+  service that spends real money per session, not a login in front of a
+  payment link. Nothing about the sell page's own no-backend posture
+  changed — `mode=dictation` still needs no auth at all.
 - **`--exclude 'book/'` and `--exclude 'reels/'` stay in `publish:book`.** They
   are the only thing stopping `rsync --delete` from wiping a 4.6MB book and the
   reel encodes, both produced by different pipelines.
