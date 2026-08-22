@@ -197,10 +197,19 @@ off — this is free and already shipped 51 times.
 item. A name that is never asked about is decoration by definition.
 
 **O5 — every date, number and quoted string carries `data-cite`.** Resolving to the
-chapter's `.cite.json`. The build enforces the floor, not the rule: the story's own prose
-must carry at least one `data-cite` key, every key you write must resolve, and at least
-one key **cited in the prose** must be a primary source. Card `cite` keys satisfy none of
-those three — a deck always cites something, so counting it would make the gate unfirable.
+chapter's `.cite.json`. The build enforces the floor, not the rule. Four conditions, all on
+the story's own prose: it must carry at least one `data-cite` key; at least one of those keys
+must sit on a `<span class="fact">`; every key you write must resolve; and at least one key
+cited in the prose must be a primary source. Card `cite` keys satisfy none of the four — a
+deck always cites something, so counting it would make the gate unfirable.
+
+**At least one fact span, not all of them.** A `data-cite` on the box, or on a paragraph, or
+attached to a clause rather than to a number, is legitimate and the build accepts it. Do not
+contort a sentence to get a `.fact` span around it — the condition is only that a story
+claiming to be sourced contains at least one citable fact that carries its source. If you are
+following O5 you clear this without noticing, because every date, number and quoted string
+already gets a `.fact` span.
+
 Whether a *particular* date is cited is not machine-checkable and is yours to hold.
 
 **O6 — no subject is reused across chapters.** `src/origins.json` holds the claim.
@@ -396,6 +405,7 @@ Everything in this table is an error that stops the build, unless it says warnin
 | card fields | `suit` one of the four; `year` an integer 1800–2100 (a JSON `true` does not count as one); `title`, `sub`, `body`, `prompt`, `answer`, `cite` all non-empty; `body` ≤60 words; `asset`, if present, starts `assets/` |
 | `data-cite` keys | every key in the fragment, and every card `cite`, must name a `sources` entry. Keys inside an HTML comment are ignored, because a citation in a comment is not a citation |
 | the citation gate | the **prose** must yield at least one `data-cite` key — an `.origin.html` with no `data-cite` at all, or only an empty `data-cite=""`, or only one inside an HTML comment, fails. Card `cite` keys do not count toward this gate |
+| a cited fact | at least one of those prose keys must sit on a `<span class="fact">`. **At least one, not all** — a `data-cite` elsewhere in the fragment stays legal, it just cannot be the only one. `<p data-cite="k">` alone fails, and gets its own message, distinct from citing nothing at all. The class is matched inside a multi-class attribute and the attribute order does not matter |
 | source fields | `type` one of the eleven; `year` an integer 1800–2100; `title` non-empty; `checked` matching `YYYY-MM-DD`; `quote` non-empty on every primary-type source |
 | primary source | at least one source cited **in the prose** must be of a primary type. A card citing the only paper does not satisfy it |
 | year agreement | a year inside a `<span class="fact" … data-cite="key">` must equal that source's `year`. Attribute order does not matter |
@@ -403,7 +413,7 @@ Everything in this table is an error that stops the build, unless it says warnin
 
 **What it does not check, and you therefore must.** Three of the nine rules have no validator at all, one has a weaker one than it looks, and one field is unchecked:
 
-- **O5** is per-fact; the build's gate is per-chapter. One `data-cite` anywhere in the prose satisfies it, so a story with nineteen uncited dates and one cited one passes. Nothing tells you which date you left uncited. The year-agreement check likewise fires only on a `.fact` span whose `data-cite` holds a single key. What the gate *no longer* accepts: card `cite` keys, which are excluded from both it and the primary-source check.
+- **O5** is per-fact; the build's gate is per-chapter. One `data-cite` on one `.fact` span satisfies it, so a story with nineteen uncited dates and one cited one passes. Nothing tells you which date you left uncited. The year-agreement check likewise fires only on a `.fact` span whose `data-cite` holds a single key. What the gate *no longer* accepts: card `cite` keys, which are excluded from both it and the primary-source check.
 - **O2** — that the last sentence is a wall and not a prize — is read by a person.
 - **O4** — that every proper noun is answerable on a card or in an existing quiz item — is read by a person.
 - **O6** — that your subject is unclaimed — is read by a person, against `src/origins.json`.

@@ -447,6 +447,35 @@ def test_commented_cite_is_not_a_prose_citation():
     cards = [{"id": "ptest-c1", "cite": "src1"}]
     assert _validate_cites(html, CITE_OK, cards), "a commented-out cite plus a citing card passed"
 
+def test_data_cite_on_non_fact_element_fails():
+    """`<p data-cite="key">` satisfied the prose gate while citing no citable
+    fact, and dodged the year-agreement check, which keys on `.fact` spans.
+    At least one citation has to sit on a fact."""
+    html = '<div class="box origin"><p data-cite="src1">Confident history.</p></div>'
+    errs = _validate_cites(html, CITE_OK)
+    assert any("fact" in e for e in errs), errs
+    assert not any("carries no data-cite" in e for e in errs), \
+        f"wrong diagnosis: this author cited something, just not on a fact. {errs}"
+
+
+def test_one_fact_span_is_enough_alongside_other_cites():
+    """The bound: *at least one* fact span, not all citations on fact spans. A
+    story-level cite on the box, or one attached to a clause, stays legal."""
+    html = ('<div class="box origin" data-cite="src1"><p data-cite="src1">A clause.</p>'
+            '<p><span class="fact" data-cite="src1">1998</span></p></div>')
+    assert not _validate_cites(html, CITE_OK), _validate_cites(html, CITE_OK)
+
+
+def test_fact_span_with_dangling_key_reports_only_the_dangling_key():
+    """An unresolved key on a fact span is a dangling-citation error. The
+    fact-span condition is satisfied - the span is there - so do not also
+    report it missing and send the author looking for the wrong mistake."""
+    html = '<div class="box origin"><p><span class="fact" data-cite="ghost">1998</span></p></div>'
+    errs = _validate_cites(html, CITE_OK)
+    assert any("ghost" in e and "sidecar" in e for e in errs), errs
+    assert not any("carries no data-cite" in e or 'class="fact"' in e for e in errs), \
+        f"double-reported one mistake as two. {errs}"
+
 
 def main():
     failed = 0

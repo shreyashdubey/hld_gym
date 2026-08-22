@@ -193,6 +193,13 @@ def validate_cites(cid, html, side, cards):
         for k in attr.split():
             prose.add(k)
             if k not in src: err(f"{cid}: data-cite '{k}' has no sidecar entry")
+    # ...and at least one of them has to sit on a fact. `<p data-cite="k">` cited
+    # nothing citable and dodged the year check below, which keys on .fact spans.
+    # At least one, not all: a cite on the box or on a clause stays legal.
+    facts = set()
+    for tag in re.findall(r'<span\b[^>]*class="[^"]*\bfact\b[^"]*"[^>]*>', live, re.I):
+        m = re.search(r'data-cite="([^"]+)"', tag)
+        if m: facts.update(m.group(1).split())
     used = set(prose)   # prose + deck: what the sidecar cross-checks answer to
     for c in cards:
         k = c.get("cite")
@@ -203,8 +210,14 @@ def validate_cites(cid, html, side, cards):
     # data-cite="" yields no key and must fail here, same as no data-cite at all.
     # Cards are excluded on purpose: `cite` is a required card field, so every
     # deck cites something and a gate that counted them could never fire.
+    # Two mistakes, two messages: citing nothing is not the same error as citing
+    # in the wrong place, and they need different corrections. Neither condition
+    # asks the key to resolve - a dangling key is reported once, just above.
     if not prose:
         err(f"{cid}: origin prose carries no data-cite (card cites do not count)")
+    elif not facts:
+        err(f'{cid}: origin prose has data-cite but none on a <span class="fact"> '
+            f'(at least one date, number or quoted string must carry its source)')
     for k, s in src.items():
         if s.get("type") not in CITE_TYPES: err(f"{cid}:{k}: type must be one of {sorted(CITE_TYPES)}")
         if not _is_year(s.get("year")): err(f"{cid}:{k}: year must be an integer 1800-2100")
