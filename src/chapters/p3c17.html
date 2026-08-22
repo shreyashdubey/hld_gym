@@ -156,6 +156,12 @@
 
 <p><strong>The heuristic I'd commit to:</strong> partitions = max(target throughput ÷ 30 MB/sec, peak consumer instances), times ~2 for headroom. For our 1 GB/sec topic that's max(34, consumer count), and consumer parallelism almost always wins. Headroom matters because <strong>growing partitions later breaks key stickiness</strong>: <code>hash(key) mod N</code> changes with N, so a user's records start landing elsewhere and their old and new events lose relative order forever. Adding partitions to a keyed topic is a migration (chapter 2.11), not a config change — say that unprompted, it's the trap here.</p>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/linkedin.svg" alt="LinkedIn" width="568" height="144" loading="lazy">
+  <figcaption>LinkedIn, whose bespoke point-to-point pipelines were the mess Kafka was written to delete.
+    <span class="credit">LinkedIn logo (2013), public domain (below the threshold of originality). Trademark of LinkedIn Corporation (a subsidiary of Microsoft Corporation), used nominatively.</span></figcaption>
+</figure>
+
 <div class="box story"><div class="box-tag">War story — LinkedIn, from a billion to seven trillion</div>
 <p>Kafka came out of LinkedIn's data-integration mess around 2010: dozens of bespoke point-to-point pipelines shuttling activity data between databases, search, monitoring and Hadoop, each built and broken separately. Jay Kreps, Neha Narkhede and Jun Rao's 2011 NetDB paper, "Kafka: a Distributed Messaging System for Log Processing," is blunt about the unconventional choices: messages addressed by offset rather than an ID, which "avoids the overhead of maintaining auxiliary, seek-intensive random-access index structures"; no in-process message cache at all, relying on the OS page cache to avoid double buffering and keep garbage collection cheap; <code>sendfile</code>; pull-based consumers. At the time LinkedIn's Kafka carried "hundreds of gigabytes of data and close to a billion messages per day." In October 2019 they published the numbers again: <strong>7 trillion messages per day across 100+ clusters, 4,000+ brokers, 100,000+ topics and 7 million partitions.</strong> Keep that last pair — roughly 1,750 partitions per broker in one of the largest deployments on earth. That's your empirical ceiling, not a made-up rule.</p>
 </div>
