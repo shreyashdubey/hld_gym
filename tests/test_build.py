@@ -99,10 +99,66 @@ def _validate(html, kind):
 
 
 def test_img_rejected_in_chapter_allowed_in_origin():
-    img = '<p><img src="assets/lamport.webp" alt="Leslie Lamport in 1989"></p>'
+    """Updated when inline figures landed: a bare <img> in a chapter is still
+    rejected, but the reason is now "not in a figure" rather than "never", and
+    width/height became mandatory for both kinds."""
+    img = ('<p><img src="assets/lamport.webp" alt="Leslie Lamport in 1989" '
+           'width="407" height="564"></p>')
     errs = _validate(img, "chapter")
     assert any("<img> forbidden" in e for e in errs), errs
     assert not _validate(img, "origin"), f"origin <img> wrongly rejected: {_validate(img, 'origin')}"
+
+
+FIG = ('<figure class="fig" data-mode="origins">'
+       '<img src="assets/photo/p2c10-mcilroy.jpg" alt="Doug McIlroy in 2011" '
+       'width="407" height="564" loading="lazy">'
+       '<figcaption>Doug McIlroy, who wrote the pipe into the shell overnight. '
+       '<span class="credit">Photo Denise Panyik-Dale, CC BY 2.0</span></figcaption>'
+       '</figure>')
+
+
+def test_img_in_chapter_is_legal_only_inside_a_figure():
+    """The whole point of the figure rule: the tag allowlist now contains <img>
+    for both kinds, so the figure is the only thing keeping one out of prose."""
+    assert not _validate(f"<h2>H</h2>{FIG}", "chapter"), \
+        f"a well-formed figure was rejected: {_validate(f'<h2>H</h2>{FIG}', 'chapter')}"
+    loose = '<p><img src="assets/photo/x.jpg" alt="A face" width="4" height="5"></p>'
+    errs = _validate(loose, "chapter")
+    assert any("forbidden outside a <figure" in e for e in errs), errs
+
+
+def test_nested_figure_rejected():
+    """Load-bearing, not cosmetic. The book render strips figures with a
+    non-greedy `.*?</figure>`; a nested figure would close that match on the
+    inner tag and delete the rest of the chapter. This check is what makes the
+    regex safe, so it has to fail the build."""
+    nested = FIG.replace('<figcaption>', '<figure class="diagram"><svg/></figure><figcaption>')
+    errs = _validate(nested, "chapter")
+    assert any("nested inside a <figure>" in e for e in errs), errs
+    # a sibling figure after the first is not nesting and must stay legal
+    assert not _validate(f'{FIG}<figure class="diagram"><svg/></figure>', "chapter"), \
+        "two sibling figures were mistaken for nesting"
+
+
+def test_figure_shape_rules():
+    two = FIG.replace('<figcaption>',
+                      '<img src="assets/photo/y.jpg" alt="B" width="1" height="1"><figcaption>')
+    assert any("exactly one <img>" in e for e in _validate(two, "chapter")), _validate(two, "chapter")
+    nocap = FIG.replace('<figcaption>Doug McIlroy, who wrote the pipe into the shell overnight. '
+                        '<span class="credit">Photo Denise Panyik-Dale, CC BY 2.0</span></figcaption>', '')
+    assert any("needs a <figcaption>" in e for e in _validate(nocap, "chapter")), _validate(nocap, "chapter")
+    nocredit = FIG.replace('<span class="credit">Photo Denise Panyik-Dale, CC BY 2.0</span>', '')
+    assert any('<span class="credit">' in e for e in _validate(nocredit, "chapter")), _validate(nocredit, "chapter")
+    empty = FIG.replace('Photo Denise Panyik-Dale, CC BY 2.0</span>', '</span>')
+    assert _validate(empty, "chapter"), "an empty credit span must be rejected"
+
+
+def test_figure_img_needs_intrinsic_size():
+    """Without both, the reading column reflows as each image arrives."""
+    for bad in ('width="407"', 'width="407" height="0"', 'width="wide" height="564"'):
+        f = FIG.replace('width="407" height="564"', bad)
+        errs = _validate(f, "chapter")
+        assert any("positive integer" in e for e in errs), (bad, errs)
 
 
 def test_origin_img_must_be_relative_and_described():
@@ -592,6 +648,204 @@ def test_unreferenced_image_warns_and_does_not_ship():
         unwired = [p.name for p in build.unwired_images(src, referenced)]
         assert unwired == ["p9c98-person.svg"], \
             f"an unreferenced portrait was not surfaced (or a working file was): {unwired}"
+
+
+def _manifest_check(td, manifests, files=(), refs=(), figs=()):
+    """Point build.py at a throwaway src/assets/ and run the manifest gate.
+    check_manifest reads module globals, so save and restore them or the next
+    test in the run inherits a fake assets directory."""
+    build = _build()
+    saved = (build.ASSETS, build.referenced, build.figures)
+    try:
+        assets = Path(td) / "assets"
+        (assets / "photo").mkdir(parents=True, exist_ok=True)
+        (assets / "mark").mkdir(parents=True, exist_ok=True)
+        for name, entries in manifests.items():
+            (assets / name).write_text(json.dumps({"entries": entries}))
+        for f in files:
+            (assets / f).write_text("x")
+        build.ASSETS = assets
+        build.referenced = {(assets / r).resolve() for r in refs}
+        build.figures = list(figs)
+        build.errors.clear()
+        build.warnings.clear()
+        build.check_manifest(build.load_manifests())
+        return list(build.errors), list(build.warnings)
+    finally:
+        build.ASSETS, build.referenced, build.figures = saved
+        build.errors.clear()
+        build.warnings.clear()
+
+
+ROW = {"kind": "person", "subject": "M. Douglas McIlroy", "licence": "CC BY 2.0",
+       "credit": "Photo Denise Panyik-Dale, CC BY 2.0",
+       "source": "https://commons.wikimedia.org/wiki/File:Douglas_McIlroy.jpeg",
+       "retrieved": "2026-08-22"}
+MARK_ROW = {"kind": "mark", "subject": "Google", "licence": "Public domain",
+            "credit": "Google wordmark, public domain", "source": "https://example.org/g",
+            "retrieved": "2026-08-22", "trademark": "Google LLC"}
+
+
+def test_no_manifests_at_all_is_valid():
+    """Zero photographs is the state the book shipped in for a year. It must
+    pass, or nobody can build until the first photo lands."""
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {})
+        assert not errs, errs
+
+
+def test_photo_without_manifest_row_is_an_error():
+    """The only thing between this project and an unattributed photograph going
+    live. It errors; it does not warn."""
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {}, files=("photo/x.jpg",), refs=("photo/x.jpg",))
+        assert any("photo/x.jpg" in e and "no manifest row" in e for e in errs), errs
+    # an authored drawing owes nothing and must stay silent
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {}, files=("p9c99-person.svg",), refs=("p9c99-person.svg",))
+        assert not errs, errs
+
+
+def test_duplicate_manifest_key_names_both_files():
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {"a.manifest.json": {"photo/x.jpg": ROW},
+                                       "b.manifest.json": {"photo/x.jpg": ROW}},
+                                  files=("photo/x.jpg",))
+        assert any("a.manifest.json" in e and "b.manifest.json" in e for e in errs), errs
+
+
+def test_mark_row_missing_trademark_is_rejected():
+    """A free copyright status does not make a mark unencumbered. The owner has
+    to be named, so the field is mandatory for kind=mark and only for that."""
+    row = dict(MARK_ROW)
+    del row["trademark"]
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {"m.manifest.json": {"mark/g.svg": row}},
+                                  files=("mark/g.svg",), refs=("mark/g.svg",))
+        assert any("trademark" in e for e in errs), errs
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {"m.manifest.json": {"mark/g.svg": MARK_ROW}},
+                                  files=("mark/g.svg",), refs=("mark/g.svg",))
+        assert not errs, errs
+    # a person row is not asked for a trademark
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {"m.manifest.json": {"photo/x.jpg": ROW}},
+                                  files=("photo/x.jpg",), refs=("photo/x.jpg",))
+        assert not errs, errs
+
+
+def test_manifest_row_missing_fields_lists_them():
+    row = dict(ROW)
+    del row["licence"]
+    row["retrieved"] = "  "
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {"m.manifest.json": {"photo/x.jpg": row}},
+                                  files=("photo/x.jpg",), refs=("photo/x.jpg",))
+        assert any("licence" in e and "retrieved" in e for e in errs), errs
+
+
+def test_manifest_row_with_no_file_or_no_reference_only_warns():
+    """Neither is a publication problem: nothing shipped."""
+    with tempfile.TemporaryDirectory() as td:
+        errs, warns = _manifest_check(td, {"m.manifest.json": {"photo/gone.jpg": ROW}})
+        assert not errs, errs
+        assert any("no such file" in w for w in warns), warns
+    with tempfile.TemporaryDirectory() as td:
+        errs, warns = _manifest_check(td, {"m.manifest.json": {"photo/x.jpg": ROW}},
+                                      files=("photo/x.jpg",))
+        assert not errs, errs
+        assert any("nothing references it" in w for w in warns), warns
+
+
+def test_figcaption_credit_must_match_the_manifest():
+    """The attribution that ships has to be the attribution someone verified,
+    not a retyping of it."""
+    fig = ("ptest", "assets/photo/x.jpg", "Photo Denise Panyik-Dale, CC BY 2.5")
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {"m.manifest.json": {"photo/x.jpg": ROW}},
+                                  files=("photo/x.jpg",), refs=("photo/x.jpg",), figs=[fig])
+        assert any("does not match the manifest" in e for e in errs), errs
+        joined = "\n".join(errs)
+        assert "CC BY 2.5" in joined and "CC BY 2.0" in joined, \
+            f"the mismatch error must print both strings: {joined}"
+
+
+def test_figcaption_credit_survives_entities_and_wrapping():
+    """An author writes &amp; where the manifest has &, and wraps a long credit
+    across source lines. Neither is a different attribution."""
+    row = dict(ROW, credit="Photo Panyik-Dale & Sons, CC BY 2.0")
+    fig = ("ptest", "assets/photo/x.jpg", "Photo Panyik-Dale &amp; Sons,\n      CC BY 2.0")
+    with tempfile.TemporaryDirectory() as td:
+        errs, _ = _manifest_check(td, {"m.manifest.json": {"photo/x.jpg": row}},
+                                  files=("photo/x.jpg",), refs=("photo/x.jpg",), figs=[fig])
+        assert not errs, errs
+
+
+def _render_both(templates):
+    build = _build()
+    toc = {"parts": []}
+    return (build.render("book", toc, templates, {}, {}, {}),
+            build.render("origins", toc, templates, {}, {}, {}))
+
+
+def test_book_render_strips_figures_and_origins_keeps_them():
+    fig = ('<figure class="fig" data-mode="origins">'
+           '<img src="assets/photo/x.jpg" alt="A face" width="4" height="5">'
+           '<figcaption>A sentence. <span class="credit">C</span></figcaption></figure>')
+    tpl = [f'<template data-ch="ptest"><h2>H</h2><p>before</p>{fig}<p>after</p></template>']
+    book, origins = _render_both(tpl)
+    assert "assets/photo/x.jpg" not in book, "the book render kept an inline figure"
+    assert "A sentence." not in book, "the book render kept a figcaption"
+    assert "<p>before</p><p>after</p>" in book, \
+        "the strip removed more than the figure — check FIGURE_RE is non-greedy"
+    assert "assets/photo/x.jpg" in origins, "the origins render dropped the figure"
+    assert "A sentence." in origins, "the origins render dropped the figcaption"
+
+
+def test_book_strip_stops_at_the_figures_own_close_tag():
+    """The non-greedy match is only safe because nesting is rejected. A diagram
+    figure after an inline figure must survive the strip untouched."""
+    fig = ('<figure class="fig" data-mode="origins">'
+           '<img src="assets/photo/x.jpg" alt="A face" width="4" height="5">'
+           '<figcaption>S. <span class="credit">C</span></figcaption></figure>')
+    tpl = [f'<template data-ch="ptest">{fig}<figure class="diagram"><svg/></figure></template>']
+    book, _ = _render_both(tpl)
+    assert '<figure class="diagram">' in book, "the strip swallowed a following diagram figure"
+
+
+def test_credits_block_reflects_only_what_ships():
+    """/book copies no assets directory, so it ships no image files and gets no
+    credits block at all. An empty table there is a claim about images that are
+    not on the page."""
+    build = _build()
+    with tempfile.TemporaryDirectory() as td:
+        saved = build.ASSETS
+        try:
+            assets = Path(td) / "assets"
+            (assets / "photo").mkdir(parents=True)
+            (assets / "mark").mkdir(parents=True)
+            (assets / "photo" / "x.jpg").write_text("x")
+            (assets / "mark" / "g.svg").write_text("x")
+            (assets / "p9c99-person.svg").write_text("<svg/>")
+            build.ASSETS = assets
+            entries = {"photo/x.jpg": ROW, "mark/g.svg": MARK_ROW}
+            ship = [(assets / r).resolve()
+                    for r in ("photo/x.jpg", "mark/g.svg", "p9c99-person.svg")]
+            assert build.credits_html(entries, [], 197) == "", \
+                "a mode that ships no images still rendered a credits block"
+            html = build.credits_html(entries, ship, 197)
+            assert 'aria-labelledby="credits-h"' in html and "<footer" in html, html[:200]
+            assert "M. Douglas McIlroy" in html and "CC BY 2.0" in html, "table row missing"
+            assert "197 diagrams" in html, "the diagram count is not computed"
+            assert "1 of the images" in html, "the authored-portrait count is not computed"
+            assert "trademarks of their owners" in html, \
+                "a mark shipped without the trademark paragraph"
+            # ...and no trademark paragraph when no mark ships
+            photos_only = build.credits_html(entries, ship[:1] + ship[2:], 197)
+            assert "trademarks of their owners" not in photos_only, \
+                "the trademark paragraph rendered with no mark on the page"
+        finally:
+            build.ASSETS = saved
 
 
 def main():

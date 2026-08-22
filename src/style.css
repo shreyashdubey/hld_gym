@@ -462,6 +462,71 @@ h1.ch-title {
 }
 .stamp.big { font-size: .95rem; padding: 4px 14px; }
 
+/* ---------- inline figures: real photographs, real company marks ----------
+   Files on disk are unmodified originals. Everything below is a CSS filter, so
+   the ink treatment is a rendering choice and never a modification of the
+   asset - which is both a licensing property and reversible. Tokens only, no
+   literal colours, so all four themes follow automatically. */
+.fig {
+  margin: 1.8em auto;
+  /* max-width, not width: a narrow viewport shrinks the figure instead of
+     pushing the reading column sideways. */
+  max-width: 15rem;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0 10px;
+}
+.fig img {
+  /* height:auto is load-bearing. width=/height= are mandatory on the <img>, and
+     a browser turns those attributes into a used height - which leaves both
+     dimensions specified and makes aspect-ratio a no-op. Without this line the
+     frame below silently does nothing and every photo renders at its intrinsic
+     height. */
+  display: block; width: 100%; height: auto;
+  /* Fixed frame + cover, so portraits of different shapes line up down the
+     page. Cropping lives here and not in the pipeline: section 6 of
+     docs/origins-figure-system.md keeps the shipped file uncropped, and a
+     frame chosen in CSS can be changed later without refetching anything. */
+  aspect-ratio: 3 / 4; object-fit: cover; object-position: 50% 22%;
+  /* The same treatment .card-art gives the authored portraits, so a photograph
+     sits with the drawings instead of fighting them. */
+  filter: grayscale(1) contrast(1.25);
+  mix-blend-mode: luminosity;
+}
+/* Dark paper wants the ink inverted, or a photograph arrives as a bright slab.
+   :not(.fig-mark) rather than a later override: `[data-theme] .fig img` is more
+   specific than `.fig-mark img`, so an override would lose and every wordmark
+   would ship inverted in three of the four themes - an altered mark, which is
+   the one thing section 5 of the contract rules out. */
+[data-theme="dark"] .fig:not(.fig-mark) img,
+[data-theme="manim"] .fig:not(.fig-mark) img,
+[data-theme="phosphor"] .fig:not(.fig-mark) img { filter: grayscale(1) contrast(1.15) invert(1); }
+
+/* A wordmark gets containment and sizing, nothing else. No crop and no
+   grayscale-to-ink pass: an altered mark is a trademark problem, and section 5
+   of the contract requires it be reproduced unaltered. */
+.fig-mark { max-width: 17rem; }
+.fig-mark img {
+  aspect-ratio: auto; object-fit: contain;
+  max-height: 4.5rem; height: auto; width: auto; max-width: 100%;
+  margin: 0 auto;
+  filter: none; mix-blend-mode: normal;
+}
+.fig figcaption {
+  font-size: .82rem; line-height: 1.5; color: var(--ink-2); margin-top: 10px;
+}
+/* Quiet, and never the weight of the caption sentence it follows. */
+.credit {
+  display: block; margin-top: 5px;
+  /* Lighter than the caption sentence it follows, never equal to it: the
+     caption teaches, the credit is a receipt. Literata is a 200-900 variable
+     face, so 350 is a real weight here and not a synthesised one. */
+  font-size: .68rem; line-height: 1.4; font-weight: 350;
+  color: var(--ink-3); letter-spacing: .01em;
+}
+@media (max-width: 560px) { .fig, .fig-mark { max-width: 100%; } }
+@media print { .fig img { filter: grayscale(1) contrast(1.25); mix-blend-mode: normal; } }
+
 /* ---------- diagrams ---------- */
 figure.diagram { margin: 2em 0; }
 figure.diagram svg { width: 100%; height: auto; display: block; }
