@@ -16,7 +16,7 @@
 
 <p><strong>Act three: the retries arrive.</strong> Every client that timed out tries again. If clients retry 3 times, each original request becomes up to 4 attempts. Your load just quadrupled — at the exact moment your capacity is at its worst. This is the cruelest property of naive retries: they cost nothing when the system is healthy and multiply load precisely when it is sick.</p>
 
-<p><strong>Act four: the starvation spreads.</strong> Meanwhile, in every service that calls the slow dependency, threads are parked waiting for answers. Thread pools are finite — say 200 threads per server. When all 200 are stuck waiting on the payment provider, that server cannot serve <em>anything</em>, including the product pages that never touch payments. This is why "one dependency got slow" becomes "the whole site is down": the slowness travels through shared thread pools, connection pools, and memory.</p>
+<p><strong>Act four: the starvation spreads.</strong> Meanwhile, in every service that calls the slow dependency, threads are parked waiting for answers. Thread pools are finite — say 200 threads per server. When all 200 are stuck waiting on a slow payment provider, that server cannot serve <em>anything</em>, including the product pages that never touch payments. This is why "one dependency got slow" becomes "the whole site is down": the slowness travels through shared thread pools, connection pools, and memory.</p>
 
 <p><strong>Act five: nothing can recover.</strong> Even when the original fault heals, the accumulated queues and swarming retries keep every service pinned at maximum load. The outage now sustains itself. Someone has to break the loop by hand.</p>
 
@@ -55,7 +55,7 @@
   <line class="dg-edge" x1="200" y1="174" x2="160" y2="174" marker-end="url(#arrow)"/>
   <path class="dg-zone" d="M 615 150 C 560 100, 360 92, 288 80" marker-end="url(#arrow)"/>
   <text class="dg-bad" x="330" y="118">retry load re-enters the queue</text>
-  <text class="dg-txt-s" x="20" y="235">Users sent 2.2x traffic. The backend received 9x. The difference was self-inflicted.</text>
+  <text class="dg-txt-s" x="20" y="235">Worked example: users sent 2.2x traffic, the backend received 9x. Self-inflicted.</text>
 </svg>
 <figcaption>The cascade is a loop, not a line. Retries feed the queue that caused the timeouts that caused the retries.</figcaption>
 </figure>
@@ -147,7 +147,7 @@
 
 <p>Failing fast is only half the value. The other half is the <strong>fallback</strong>: what you return while the breaker is open. Options, in rough order of preference: a cached or stale copy of the data; a sensible default (an empty "recommended for you" row); a degraded response ("payments are busy, your order is saved and will process shortly"); or an honest, <em>instant</em> error. Even the bare error is a win — it answers in microseconds instead of burning a thread for 800ms, which keeps <em>your</em> thread pool alive and gives the sick dependency silence in which to recover.</p>
 
-<p>Which brings us to the cold open's mystery: why did product pages die when only payments were slow? Because every request, payment-related or not, drew threads from the same pool. The fix is <strong>bulkheads</strong>: give each dependency its own small, isolated resource pool — its own threads, connections, or a semaphore cap on concurrent calls. If payments gets 20 threads out of 200, then when payments hangs, it exhausts its 20 and the other 180 keep serving product pages. The name comes from ships: watertight compartments so one breach floods one section, not the hull.</p>
+<p>Which brings us back to act four: why did product pages die when only payments were slow? Because every request, payment-related or not, drew threads from the same pool. The fix is <strong>bulkheads</strong>: give each dependency its own small, isolated resource pool — its own threads, connections, or a semaphore cap on concurrent calls. If payments gets 20 threads out of 200, then when payments hangs, it exhausts its 20 and the other 180 keep serving product pages. The name comes from ships: watertight compartments so one breach floods one section, not the hull.</p>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>The name "circuit breaker" is borrowed from your house's electrical panel, and the borrow is honest with one twist. The breaker in your wall exists because the alternative — wires overheating inside your walls until they ignite — is catastrophically worse than the inconvenience of a dark kitchen. It converts "invisible slow-burning disaster" into "visible instant failure," which is exactly what the software version does: an open breaker turns a thread-eating slow death into a clean, fast, obvious error. The twist: your wall breaker protects only <em>your house</em>, and a human must walk over and reset it. The software breaker protects both sides — the caller's threads and the struggling dependency's remaining capacity — and half-open is its built-in electrician, probing on a timer to see whether it's safe to reset.</p>

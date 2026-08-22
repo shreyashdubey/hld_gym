@@ -20,10 +20,16 @@
         "infinite storage + FIFO + finite packet lifetime => drops all packets under overload",
         "the queue grows until transit time exceeds TTL; forwarded packets carry TTL 1 and the next hop zeroes them",
         "RFC 970 is not argument-only: Nagle reports an experiment (supermini as switch, 916 datagrams queued at peak)",
-        "front matter: Network Working Group, John Nagle, FACC Palo Alto, December 1985; 9 pages"
+        "front matter: Network Working Group, John Nagle, FACC Palo Alto, December 1985; 9 pages",
+        "the price of never dropping: four 56Kb links, a 15-second time-to-live bound, 420K bytes of buffer, and the switch 'need never drop a packet due to buffer exhaustion'",
+        "the 916-datagram experiment never reached the predicted steady state: the TCP connection timed out due to excessive round trip time before the queue reached the time-to-live limit",
+        "RFC 970 does NOT leave the switch mute: Nagle's own remedy is per-source-host round-robin queues plus an advisory Source Quench once a host's queue exceeds a small value ('probably 2'). Any claim that the 1985 switch had no way to say 'slow down' is contradicted by this section."
       ],
       "quote6": "This problem is not just theoretical.  We have demonstrated it experimentally on our own network, using a supermini with several megabytes of memory as a switch.",
-      "quote7": "Our first experiment, using an Ethernet on one side of the switch and a 9600 baud line on the other, resulted in 916 IP datagrams queued in the switch at peak."
+      "quote7": "Our first experiment, using an Ethernet on one side of the switch and a 9600 baud line on the other, resulted in 916 IP datagrams queued in the switch at peak.",
+      "quote8": "For the case of a packet switch with four 56Kb links, and an upper bound on the time-to-live of 15 seconds, the maximum buffer space that could ever be required is 420K bytes <1>.  A switch provided with this rather modest amount of memory need never drop a packet due to buffer exhaustion.",
+      "quote9": "However, we were applying the load over a TCP transport connection, and the transport connection timed out due to excessive round trip time before the queue reached the time to live limit, so we did not actually reach the stable state with the queue at the maximum length as predicted by our analysis above.",
+      "quote10": "The hosts need advisory information from the network to optimize their strategies.  The existing Source Quench mechanism in DoD IP, while minimal, is sufficient to provide this.  The packet switches should send a Source Quench message to a source host whenever the number of packets in the queue for that source host exceeds some small value, probably 2."
     },
     "rfc896": {
       "type": "rfc",
@@ -87,7 +93,8 @@
         "the explicit 'slow down' message was deprecated in May 2012",
         "router generation of it had already been deprecated since 1995",
         "the surviving congestion signal is loss, not a message",
-        "Source Quench described as 'an ineffective (and unfair) antidote for congestion'"
+        "Source Quench described as 'an ineffective (and unfair) antidote for congestion'",
+        "the two-stage death of the signal: router generation deprecated by RFC 1812 since 1995, transport reaction deprecated by RFC 6633 in May 2012"
       ],
       "quote4": "Virtually all popular host implementations have removed support for ICMP Source Quench messages since (at least) 2005 [RFC5927]."
     }
@@ -96,6 +103,8 @@
     "Any currency figure for the October 1986 collapse. Neither Jacobson & Karels nor either RFC prices the outage, and no primary source found puts a dollar cost on it, so no money figure appears in the prose.",
     "That the seven algorithms shipped specifically in 4.3BSD Tahoe. The paper read here says only 'we have put seven new algorithms into the 4BSD TCP' and does not name a release, so the prose does not name one either.",
     "The exact dates and durations of the repeat collapses across ARPANET/NSFNET through 1986-87. The paper says only 'the first of what became a series of congestion collapses' and references 'last April's collapse' without a full list.",
-    "That the two IMPs on the LBL-to-UC-Berkeley path were specifically ARPANET nodes. Jacobson & Karels say only 'two IMP hops' and name no network; RFC 896 speaks of 'ARPANET IMP based networks' in general. The card now carries only the term-of-art definition of an IMP, not a claim about those two switches."
+    "That the two IMPs on the LBL-to-UC-Berkeley path were specifically ARPANET nodes. Jacobson & Karels say only 'two IMP hops' and name no network; RFC 896 speaks of 'ARPANET IMP based networks' in general. The card now carries only the term-of-art definition of an IMP, not a claim about those two switches.",
+    "That any packet destroyed in Nagle's TTL-exhaustion argument had already been retransmitted by its sender. RFC 970 makes no such claim -- the retransmission argument is RFC 896's, about a different mechanism -- so the prose no longer says it.",
+    "That Source Quench was already regarded as ineffective in 1985. It was not: RFC 970 recommends it. The 'ineffective (and unfair) antidote' verdict is RFC 6633's (May 2012), citing RFC 1812's 1995 deprecation, and the prose now dates it there instead of reading it back into Nagle's switch."
   ]
 }

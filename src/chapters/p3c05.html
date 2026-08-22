@@ -26,13 +26,13 @@
 
 <p>Second number: <strong>the fanout multiplication.</strong> Fanout is the copying step — one post fanning out into many follower feeds — so pushing a post means one write per follower. An average account has ~200 followers, so 1.2K posts/sec becomes ~240K tiny cache writes/sec, maybe a million at peak. A sharded Redis fleet shrugs at that; each write is a few microseconds of list-push. So far, push looks great.</p>
 
-<p>Then I do the celebrity row of the table, because follower counts are a power law (Chapter 2.6) — almost everyone has a few hundred followers, a handful of accounts have tens of millions, and the average is a lie told by the tail: a 100M-follower account posts once, and that's <strong>100 million writes for one tap</strong>. At a generous 1M writes/sec of fanout capacity, one post occupies the entire fleet for 100 seconds. Ronaldo's 600M followers: ten minutes of everything we own, and every ordinary user's post queued behind it. Also: 100M copies of a post ID at ~20 bytes each is 2 GB of RAM duplicated per celebrity post — most of it for followers who won't even open the app today. <strong>This is the number that forces a hybrid design</strong>, and I say so now: "push for normal accounts, pull for celebrities — I'll deep-dive the threshold later."</p>
+<p>Then I do the celebrity row of the table, because follower counts are a power law (Chapter 2.6) — almost everyone has a few hundred followers, a handful of accounts have tens of millions, and the average is a lie told by the tail: a 100M-follower account posts once, and that's <strong>100 million writes for one tap</strong>. At a generous 1M writes/sec of fanout capacity, one post occupies the entire fleet for 100 seconds. A Ronaldo-sized Instagram account at 600M followers: ten minutes of everything we own, and every ordinary user's post queued behind it. Also: 100M copies of a post ID at ~20 bytes each is 2 GB of RAM duplicated per celebrity post — most of it for followers who won't even open the app today. <strong>This is the number that forces a hybrid design</strong>, and I say so now: "push for normal accounts, pull for celebrities — I'll deep-dive the threshold later."</p>
 
 <p>One more sizing check, because it decides what the feed cache stores: 500M active users × 300 feed entries × 16 bytes per entry (post ID plus a timestamp) ≈ <strong>2.4 TB of RAM</strong> — about 40 Redis shards. Perfectly buildable, but only because I'm storing post <em>IDs</em>, not post bodies, and only for <em>active</em> users. Store full posts and it's hundreds of terabytes. The estimate just made two design decisions for me.</p>
 
 <h2>API and data model: quick, then move</h2>
 
-<p>This is the Product Architecture section, so I'm precise but fast:</p>
+<p>This is the part the Product Architecture flavor of the round grades hardest (Chapter 0.2), so I'm precise but fast:</p>
 
 <ul>
 <li><code>POST /v1/media</code> → returns an upload URL for blob storage and a <code>media_id</code>. The client uploads bytes directly to blob storage, not through my app servers (Chapter 1.7).</li>
@@ -42,7 +42,7 @@
 <li><code>POST /v1/follows</code> with <code>{followee_id}</code>.</li>
 </ul>
 
-<p>Each feed item comes back <strong>fully hydrated</strong>: post body, author name and avatar, like/comment counts, CDN URLs for media. One request paints the screen. And I name the client behaviors Meta grades in this flavor: render the cached last page instantly on app open while fetching fresh behind it; show a "new posts" pill instead of yanking the scroll position; bump the like count optimistically on tap and reconcile later; prefetch the next page when the user nears the bottom.</p>
+<p>Each feed item comes back <strong>fully hydrated</strong>: post body, author name and avatar, like/comment counts, CDN URLs for media. One request paints the screen. And I name the client behaviors Meta grades in the Product Architecture flavor: render the cached last page instantly on app open while fetching fresh behind it; show a "new posts" pill instead of yanking the scroll position; bump the like count optimistically on tap and reconcile later; prefetch the next page when the user nears the bottom.</p>
 
 <p>Data model: a <code>users</code> table; a <code>follows</code> table that I need in <em>both directions</em> — "who do I follow" (for building feeds) and "who follows X" (for fanout) — so it's stored twice, sharded by each key (Chapter 1.9); a <code>posts</code> table sharded by <code>author_id</code> with time-sortable IDs (Chapter 1.14), which means "recent posts by author X" is one cheap indexed read. Hold that thought — that per-author recent-posts index is called the author's <strong>outbox</strong>, and it's about to matter enormously.</p>
 
@@ -161,7 +161,7 @@
 <h2>Deep dive 1: the fanout decision</h2>
 
 <div class="box crux"><div class="box-tag">The crux</div>
-<p>Push or pull is not a style preference — it's forced by the shape of the follow graph, and the follow graph is a power law. Pull-for-everyone dies on reads: 200K feed requests/sec × ~400 followed accounts each = 80 million outbox reads per second, most of them recomputing the same merge they computed five minutes ago. Push-for-everyone dies on writes: one celebrity post = 100M+ writes, minutes of total fleet capacity for one tap. Neither pure strategy survives, so the design must be hybrid — and the senior signal is <em>where you put the threshold and why</em>. This is the burning room. If you take one thing from this chapter into the interview, take this paragraph.</p>
+<p>Push or pull is not a style preference — it's forced by the shape of the follow graph, and the follow graph is a power law. Pull-for-everyone dies on reads: 200K feed requests/sec × ~400 followed accounts each = 80 million outbox reads per second, most of them recomputing the same merge they computed five minutes ago. Push-for-everyone dies on writes: one celebrity post = 100M+ writes, minutes of total fleet capacity for one tap. Neither pure strategy survives, so the design must be hybrid — and the senior signal is <em>where you put the threshold and why</em>. This is the room that's on fire. If you take one thing from this chapter into the interview, take this paragraph.</p>
 </div>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
@@ -205,7 +205,7 @@
 
 <h2>Deep dive 2: ranking, without pretending to be an ML engineer</h2>
 
-<p>Meta probes ranking on this question almost every time, and the E5 move is to be honest about the boundary: I don't design the model — I design the <em>system the model lives in</em>, which means candidate generation, a latency budget, feature freshness, and a fallback. That answer scores better than bluffing about neural architectures, because it's the answer of someone who'd actually operate this.</p>
+<p>Meta probes ranking on this question almost every time, and the senior (E5) move is to be honest about the boundary: I don't design the model — I design the <em>system the model lives in</em>, which means candidate generation, a latency budget, feature freshness, and a fallback. That answer scores better than bluffing about neural architectures, because it's the answer of someone who'd actually operate this.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="Ranking funnel: candidates filtered, scored by ML service, diversity rules applied, with chronological fallback on scorer timeout">

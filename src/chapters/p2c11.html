@@ -218,7 +218,7 @@
 
 <h2>Boss level: reshard 4 → 16, while hot</h2>
 
-<p>Back to the cold open, because this is the version interviewers reach for when they want senior-or-above signal. Changing the shard <em>key</em> or shard <em>count</em> is the hardest migration there is: the data's home address changes, every row moves, and the routing layer — the code deciding which shard holds user 7,204,911 — must agree with reality at every instant. Here's the full walk, with the rollback at each step, exactly as you'd narrate it at a whiteboard.</p>
+<p>The version interviewers reach for when they want senior-or-above signal is a live <code>users</code> table sharded four ways that has to become sixteen. Changing the shard <em>key</em> or shard <em>count</em> is the hardest migration there is: the data's home address changes, every row moves, and the routing layer — the code deciding which shard holds user 7,204,911 — must agree with reality at every instant. Here's the full walk, with the rollback at each step, exactly as you'd narrate it at a whiteboard.</p>
 
 <p><strong>Step 0 — exploit the math.</strong> Going 4 → 16 is a multiply-by-4, and that's not an accident. With modulo routing, every user on shard <code>user_id % 4 = 1</code> can only land on new shards 1, 5, 9, or 13 — <code>x % 4 = 1</code> forces <code>x % 16</code> into that set. Each old shard splits cleanly into four children; no row ever crosses between old shards. (This is the same instinct as consistent hashing in Chapter 1.9: choose a scheme where growth means <em>splitting</em>, not <em>reshuffling</em>.) Say this in the interview — it cuts the problem's size by 75% before any machinery appears.</p>
 
@@ -243,7 +243,7 @@
 <p>Calibration, so you neither undershoot nor gold-plate. At the senior bar, an interviewer hearing "we need to change this live" expects you to <strong>volunteer</strong>, unprompted:</p>
 
 <ul>
-<li>The four phases by name, in order — and "no maintenance window" justified with a number (SLO math or global traffic), not with fashion.</li>
+<li>The four phases by name, in order — and "no maintenance window" justified with a number, not with fashion: a 99.95% SLO is ~22 minutes a month, so a four-hour window spends a year of it, and there is no 2 a.m. anyway when 2 a.m. in Virginia is mid-morning in Mumbai.</li>
 <li>Dual-write discipline: which store is the source of truth, write ordering, what happens when the second write fails — and the crash-between-writes gap, with outbox/CDC named as the honest fix.</li>
 <li>Backfill as arithmetic plus three adjectives: <em>how long</em> at what rate, rate-limited against replica lag, resumable via checkpoints, idempotent with a version check against newer dual writes.</li>
 <li>Verification as a metric with a gate — shadow reads, mismatch counter, "~0 for days" — never "then we test it carefully."</li>

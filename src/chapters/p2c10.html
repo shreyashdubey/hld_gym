@@ -100,7 +100,7 @@
 
 <h2>HyperLogLog: counting a crowd in 12KB</h2>
 
-<p>Back to the dashboard from the cold open. A Bloom filter can't help — it answers "seen before?", not "how many distinct?". Counting uniques exactly means remembering every ID you've seen, and we already priced that: hundreds of gigabytes.</p>
+<p>Second question, and the ads dashboard is where it bites: unique viewers per campaign, live, across 4 million campaigns. A Bloom filter can't help — it answers "seen before?", not "how many distinct?". Counting uniques exactly means remembering every ID you've seen, and that price is brutal — a campaign with 20 million distinct users runs ~600MB as a real hash set, so the top thousand campaigns alone pass half a terabyte.</p>
 
 <p>HyperLogLog (HLL) counts distinct items in a fixed ~12KB with a typical error under 1%. The intuition is a bar bet. Hash every user ID — a good hash makes the output look like random coin flips. Now watch for rare patterns: a hash starting with one zero bit happens half the time; starting with twenty zero bits happens once in a million. So if the <em>rarest</em> pattern you've ever observed is 20 leading zeros, you've probably seen around a million distinct values. Duplicates change nothing — the same ID gives the same hash — which is precisely why HLL counts <em>distinct</em> for free.</p>
 
@@ -175,13 +175,13 @@
 
 <h3>Mergeability: why sketches love sharded systems</h3>
 
-<p>Look at that last column — it's the quiet superpower. Your impressions are sharded across 8 Kafka partitions and 8 consumers (chapter p1c09 made sure of that). Each consumer counts distinct users locally. Now produce one global number. Sum the 8 counts? Wrong — the same user appears on multiple shards, and you double-count. Exact fix? Every shard ships its full ID set to one machine: you're back to hundreds of gigabytes moving over the network.</p>
+<p>Look at that last column — it's the quiet superpower. Take the ads dashboard again: impressions are sharded across 8 Kafka partitions and 8 consumers (chapter p1c09 made sure of that). Each consumer counts distinct users locally. Now produce one global number. Sum the 8 counts? Wrong — the same user appears on multiple shards, and you double-count. Exact fix? Every shard ships its full ID set to one machine: you're back to hundreds of gigabytes moving over the network.</p>
 
 <p>Sketches merge <em>losslessly</em>. Two HLLs with the same bucket layout: take the per-bucket max, and the result is <em>exactly</em> the HLL one machine would have built seeing every event — merging costs 12KB of network, and the error doesn't compound. Blooms merge by OR-ing bits; CMS grids by adding cells. Merge is commutative and associative, so region rollups and hour-into-day rollups just work. One subtlety worth volunteering: replayed events (streams get replayed; chapter p2c09) are harmless to a Bloom or an HLL — same item, same bits, same buckets — but <em>inflate</em> a CMS, which counts occurrences. "HLL is replay-safe, CMS isn't" is a sentence that visibly separates levels.</p>
 
 <h2>Gossip: how a cluster knows who's alive without a boss</h2>
 
-<p>Switch problems. Same trade, different question. You run a 1,000-node Cassandra-style cluster. Every node needs to know which peers are up, which are down, and who owns which token ranges (the slices of the keyspace each node serves) — otherwise it can't route requests. Who keeps that list?</p>
+<p>Switch problems. Same trade, one level up: gossip gives up certainty about who is alive, on purpose, in a direction it can defend, and buys constant per-node cost with it. You run a 1,000-node Cassandra-style cluster. Every node needs to know which peers are up, which are down, and who owns which token ranges (the slices of the keyspace each node serves) — otherwise it can't route requests. Who keeps that list?</p>
 
 <p>A central health-checker is the obvious answer and the wrong one at this scale: it's a single point of failure (checker dies → the cluster is blind), and "who health-checks the health-checker" never ends. All-to-all heartbeats — everyone pings everyone every second — is 1,000 × 999 ≈ a million messages per second of pure overhead, growing with N². A consensus store like ZooKeeper works for tens of nodes, but a thousand watchers hammering one quorum on every membership change becomes its own outage.</p>
 

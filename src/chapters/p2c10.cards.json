@@ -20,8 +20,8 @@
       "sub": "Bell Labs · 25,000 words → 30,000",
       "year": 1982,
       "prompt": "spell's first filter held 25,000 words in 400,000 bits using 11 hash functions. Who wrote it, and why could McIlroy not simply add the next 5,000 words to it?",
-      "answer": "D. M. Ritchie supplied it. False-acceptance probability is fixed by entries per bit, so adding words raises the error rate on every lookup. A filter has no delete and no in-place resize, which left exactly two moves: a bigger bit table, which the machine did not have, or a worse error rate.",
-      "body": "Ritchie's superimposed-code filter: 25,000 words spattered across 400,000 bits by eleven hash functions — remainders modulo the eleven largest primes under 400,000 — with false acceptance under one in 2,000. Then, McIlroy wrote, 25,000 words \"wasn't enough\", and the bit table was already the entire budget.",
+      "answer": "D. M. Ritchie supplied it. False acceptance is fixed by entries per bit, so pushing 30,000 words into the same 400,000 bits raises the error on every lookup — and those 400,000 bits were already 25,000 of the PDP-11's 32,768 addressable words. McIlroy states the box himself: to go further \"without increasing the hash table size or error rate, the table had to be compressed more tightly.\" Neither obvious move existed, so he changed the encoding instead.",
+      "body": "Ritchie's superimposed-code filter: 25,000 words spattered across 400,000 bits by eleven hash functions, false acceptance under one in 2,000 — sixteen bits a word. Then, McIlroy wrote, 25,000 words \"wasn't enough\", and the bit table already held 25,000 of the machine's 32,768 addressable words.",
       "cite": "mcilroy1982"
     },
     {
@@ -30,20 +30,20 @@
       "title": "Development of a Spelling List",
       "sub": "McIlroy · IEEE Trans. Communications 30(1):91-99 · January 1982",
       "year": 1982,
-      "prompt": "The exact scheme that replaced spell's filter stored sorted hash values as differences. What did it cost per word, what theoretical floor was it measured against, and what did the lookup index add?",
-      "answer": "An expected codeword length of 13.60 bits per word, against an information-theoretic floor of 13.57 bits per entry for 30,000 entries of 27-bit hash. Partitioning the differences across 512 bins, so lookup need not sum from the start, raised the effective mean to 14.01 bits.",
-      "body": "Sorted 27-bit hash values, stored as first differences in a variable-length code. Expected length 13.60 bits per word; the floor for 30,000 such values is 13.57. Splitting across 512 bins to make lookup fast pushed the effective mean to 14.01 bits — \"a tight, but workable fit.\"",
+      "prompt": "The scheme that replaced spell's filter kept 30,000 words as sorted 27-bit hash values, stored as differences. What did it cost per word, what floor was that measured against, and how did its false-acceptance rate compare with the filter's?",
+      "answer": "An expected codeword length of 13.60 bits per word, against an information-theoretic floor of 13.57 bits per entry for 30,000 entries of 27-bit hash; 14.01 effective once the differences were split across 512 bins so lookup need not sum from the start. Its error rate was about 1 in 2^12 — better than the filter's 1 in 2,000 — for 5,000 more words, at fewer bits each. The replacement was not error-free; it was the same fingerprint, coded well.",
+      "body": "Sorted 27-bit hash values as first differences under a variable-length code. Expected length 13.60 bits per word; the floor for 30,000 such values is 13.57. Splitting across 512 bins to make lookup fast pushed the effective mean to 14.01 — \"a tight, but workable fit.\"",
       "cite": "mcilroy1982"
     },
     {
       "id": "p2c10-c4",
       "suit": "ripple",
-      "title": "The two checks before you place a filter",
-      "sub": "Bloom, CACM 13(7), July 1970 → every LSM engine you run",
+      "title": "The ceiling on what a filter saves",
+      "sub": "Bloom, CACM 13(7), July 1970 → every filter you size today",
       "year": 1970,
-      "prompt": "Bloom's 1970 paper names the single class of error his structure permits. What is his phrase for it, and which two checks does spell's history force on you before and after you adopt one?",
-      "answer": "\"Errors of commission\" — it can say yes wrongly, never no wrongly. Before: name the direction and confirm the tolerable outcome lies on that side (spell may pass a typo, but must never reject a real word). After: re-derive the rate as the data grows, because entries per bit is the rate and a full filter cannot be shrunk, resized or emptied — it saturates silently.",
-      "body": "Bloom bought space with \"errors of commission\": yes can be wrong, no cannot. spell could take that deal because a writer is never contradicted. What the deal does not cover is growth — the rate is entries per bit, and a filled filter has no delete and no resize.",
+      "prompt": "A Bloom filter costs about 10 bits per item at a 1% false-positive rate and about 14.4 bits at 0.1%. McIlroy's replacement held 30,000 words as a coded index of 27-bit hashes at 13.60 bits each — more words than his filter held, at a lower error rate. What is a filter actually competing against on space, and at what error rate does it win that competition?",
+      "answer": "Not storage of the items — a well-coded index of the same fingerprints, whose size is the entropy of that hash set: log2(1/error) + 1.44 bits an entry, which is McIlroy's 13.57 for 30,000 27-bit hashes. A Bloom filter costs 1.44 × log2(1/error). Both grow as you tighten the error, but the filter grows 1.44 times faster, so the index is the smaller structure at every error rate below about 10% and the gap only widens: 8.1 bits against 10 at 1%, 11.4 against 14.4 at 0.1%, 13.57 against 17.5 at the rate McIlroy's 27-bit hash actually gives, 30,000/2^27. There is no crossover to hunt for — a filter never wins on bits at an error rate you would ship. It wins on the probe: O(1) lookup, insert as you go, no sorting and no decoding, which is the cost McIlroy paid 512 bins to buy back. The chapter's 20x is against a hash set, and should never be quoted without both that baseline and the 1%.",
+      "body": "Bloom bought space with \"errors of commission\", and that purchase has a ceiling. A filter costs 1.44 × log2(1/error) bits an item; a coded index of the same fingerprints costs log2(1/error) + 1.44. Below 10% error the index is always smaller, and the gap widens as you tighten. The 20x is against a hash set, not against that.",
       "cite": "bloom1970"
     }
   ]

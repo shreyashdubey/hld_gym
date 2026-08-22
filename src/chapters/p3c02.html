@@ -4,13 +4,9 @@
 
 <p>This problem is a favorite at Meta and Google because it looks cute and is secretly brutal. It has a clean crux, it punishes "just use a database," and it rewards letting numbers make the decisions. Let's play it at the senior bar: commit, justify, find the fire early.</p>
 
-<div class="box story"><div class="box-tag">War story — Google Suggest: four years from demo to homepage</div>
-<p>Autocomplete at Google didn't arrive as a roadmap item. In 2004 a Google engineer, Kevin Gibbs, built it in 20% time — the one-day-a-week personal-project budget Google handed engineers — and it shipped that year as an experiment on Google Labs, the company's public sandbox for half-finished ideas. Anyone could try it. And then it sat there. It took until 2008 for suggestions to become standard under the search box on google.com. Four years, for a feature you could demo in an afternoon. The delay wasn't product indecision: a Labs toy serving curious visitors and a system eating roughly ten times google.com's query traffic at <em>lower</em> latency than search itself are not the same machine. The idea was cheap; making it survive the scale was the entire job. That gap — trivial feature, brutal scale — is exactly what this interview question measures.</p>
-</div>
-
 <h2>Requirements: scope it before it scopes you</h2>
 
-<p>First move, out loud: shrink the problem and get agreement.</p>
+<p>First move in the interview, out loud: shrink the problem — top completions for a prefix, at search-engine scale — and get agreement.</p>
 
 <p><strong>Functional:</strong></p>
 <ul>
@@ -24,7 +20,7 @@
 <p><strong>Non-functional, with numbers I'm committing to:</strong></p>
 <ul>
 <li><strong>p99 latency under 100 ms</strong>, keystroke to rendered suggestion. (p99 = the slowest 1 request in 100 — the tail users actually notice.) Below ~100 ms feels instant; above it, the dropdown visibly lags the fingers and users stop trusting it.</li>
-<li><strong>Scale:</strong> assume 5 billion searches/day on the parent search product — a round number, said out loud, agreed with the interviewer, and used for every calculation after.</li>
+<li><strong>Scale:</strong> assume 5 billion searches/day on the parent search product — a round number, said out loud, agreed with your interviewer, and used for every calculation after.</li>
 <li><strong>Availability over freshness:</strong> suggestions may be minutes or hours stale, but the box should almost never be empty and never be slow. Stale is mildly imperfect; laggy feels broken.</li>
 </ul>
 
@@ -39,6 +35,10 @@
 <p>10 × 60K = <strong>600,000 requests/sec average. Past a million at peak.</strong></p>
 
 <p>Sit with that. Autocomplete serves <em>an order of magnitude more traffic than the search engine it decorates</em>, with a <em>tighter</em> latency budget — and the budget is mostly pre-spent: on a mobile network the round trip alone can eat 50–80 ms of our 100, before the browser has drawn a pixel. What's left for the server is maybe 10–20 ms, a million times per second.</p>
+
+<div class="box story"><div class="box-tag">War story — Google Suggest: four years from demo to homepage</div>
+<p>Autocomplete at Google didn't arrive as a roadmap item. In 2004 a Google engineer, Kevin Gibbs, built it in 20% time — the one-day-a-week personal-project budget Google handed engineers — and it shipped that year as an experiment on Google Labs, the company's public sandbox for half-finished ideas. Anyone could try it. And then it sat there. It took until 2008 for suggestions to become standard under the search box on google.com. Four years, for a feature you could demo in an afternoon. The delay wasn't product indecision: a Labs toy serving curious visitors and a system eating roughly ten times google.com's query traffic at <em>lower</em> latency than search itself are not the same machine. The idea was cheap; making it survive the scale was the entire job. That gap — trivial feature, brutal scale — is exactly what this interview question measures.</p>
+</div>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 250" role="img" aria-label="One search for pizza generates five suggestion requests, one per keystroke">

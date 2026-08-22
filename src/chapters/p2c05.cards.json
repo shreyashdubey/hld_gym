@@ -30,20 +30,20 @@
       "title": "Technical background on AT&T's network slowdown",
       "sub": "AT&T · ACM RISKS Digest 9.63, 31 January 1990",
       "year": 1990,
-      "prompt": "This report contains one sentence that quietly explains why the defect shipped to every switch in the country. Reconstruct what it claims — then find the later sentence in the same report that complicates it.",
-      "body": "AT&T's own account, released through its Consultant Liaison Program and reproduced in ACM RISKS Digest Volume 9 Issue 63. It names the Direct Link Node processor, its duplicated mate, the 1/100th-of-a-second vulnerable window, and the mid-December update that put the flaw into every 4ESS at once. It is short; go and read it.",
-      "answer": "\"While the software had been rigorously tested in laboratory environments before it was introduced, the unique combination of events that led to this problem couldn't be predicted.\" The complication comes a few paragraphs later: after the rollback AT&T took the suspicious software into the laboratory and reproduced the problem. So the lab could always have found it. What was missing was the test case — nobody had exercised a failed peer rejoining the network, which is the one path the whole fleet was about to run at once.",
+      "prompt": "The report names what the mid-December update was actually for. Say what it was meant to improve — then say why that purpose makes this a worse failure than an ordinary bug shipped to the whole fleet.",
+      "body": "AT&T's own account, released through its Consultant Liaison Program and reproduced in ACM RISKS Digest Volume 9 Issue 63. It names the Direct Link Node processor, its duplicated mate, the several-second vulnerable window and the 1/100th-of-a-second couplet inside it, and the mid-December update that put the flaw into every 4ESS at once. It is short; go and read it.",
+      "answer": "The update was \"intended to significantly improve the network's performance by making it possible for switching systems to access a backup signaling network more quickly in case of problems with the main CCS7 signaling network.\" The failover path itself was the thing running identically in every 4ESS switch in the network, so the duplicated mate inside the switch and the switches a continent away shared the defect equally — and the network was finally stabilised by suspending signalling on those same backup links.",
       "cite": "att1990report"
     },
     {
       "id": "p2c05-c4",
       "suit": "ripple",
-      "title": "The untested path is the one that comes back",
+      "title": "A system problem, not a component problem",
       "sub": "1990 · William Hugh Murray, RISKS Digest 9.63",
       "year": 1990,
-      "prompt": "Murray argued the failure was not a component problem. Say what he called it instead, and translate his rule into the deploy policy your own fleet should run.",
-      "body": "Thirteen days after the outage, in the digest issue that carried AT&T's report, Murray wrote the lesson in capitals: \"WE ARE NOT PROPERLY TESTING TO SEE WHAT HAPPENS WHEN THE COMPONENT SUCCEEDS IN CORRECTING ITSELF AND COMES BACK ON LINE.\" A companion post added two rules: avoid gratuitous automation, and if you cannot test it, do not do it.",
-      "answer": "A system problem — \"IT WAS THE INABILITY TO PROPERLY HANDLE THE RETURN TO THE LINE OF A FAILING COMPONENT\". The modern reading, which is yours to draw and not Murray's words: rejoin and recovery paths need the same canary treatment as feature code, and a release goes out cell by cell, so the rejoin path runs inside one blast radius before it runs inside all of them.",
+      "prompt": "AT&T duplicated the processor that joins each switch to the signalling network, and spread 114 switches across a continent — and both walls failed the same way. Murray refused the obvious reading of that. Name the category he put the failure in instead, and state the property that decides whether a boundary you draw will hold.",
+      "body": "Thirteen days after the outage, in the digest issue that carried AT&T's report, Murray refused the component reading: \"It was not a COMPONENT problem; it was, as I feared and suggested a SYSTEM problem.\" He added two rules: avoid gratuitous automation, and if you cannot test it, do not do it.",
+      "answer": "A SYSTEM problem — the failure lived in what every component had in common, not in any one component. The modern reading, which is yours to draw and not Murray's words: a wall only contains a failure that cannot cross it, so a cell's blast radius is set by the most-shared thing inside it — same build, same config, same control plane. Geography is not a boundary; not sharing is.",
       "cite": "murray1990"
     }
   ]

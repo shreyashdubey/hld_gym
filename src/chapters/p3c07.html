@@ -165,7 +165,7 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 <p>Everything so far is plumbing a strong mid-level candidate can assemble. The reason this question exists is here: two devices edit the same file while disconnected, and the system must converge without human-invisible data loss. There is no clever algorithm that merges two arbitrary binary edits correctly — a .docx is a zip file; "merging" two zips byte-wise produces garbage. So the design goal is not to be smart. It is to <em>detect</em> concurrency reliably, <em>refuse</em> to guess, and <em>preserve both versions</em> where the human can see them. The mechanism is a base-version check at the linearization point plus the conflicted-copy pattern. Get this right and the rest of the chapter is engineering; get it wrong and you built a data-loss machine with great bandwidth efficiency.</p>
 </div>
 
-<p>Walk the scenario precisely. <code>thesis.docx</code> is at version 7 everywhere. Laptop A (the plane) edits offline. Desktop B (the library) edits offline. Both hold the same fact: "my edit is based on v7." A lands first: commits with base_version&nbsp;7, server sees current&nbsp;=&nbsp;7, accepts, current becomes 8. B commits with base_version&nbsp;7 — but current is now 8. <strong>The base-version check is a compare-and-swap:</strong> "advance 7→my-version only if still 7." It fails. That failure <em>is</em> the concurrency detector: B's edit provably did not see A's edit, so these are concurrent, not sequential.</p>
+<p>Walk the scenario precisely. <code>thesis.docx</code> is at version 7 everywhere. Laptop A (on a plane) edits offline. Desktop B (at a library desk) edits offline. Both hold the same fact: "my edit is based on v7." A lands first: commits with base_version&nbsp;7, server sees current&nbsp;=&nbsp;7, accepts, current becomes 8. B commits with base_version&nbsp;7 — but current is now 8. <strong>The base-version check is a compare-and-swap:</strong> "advance 7→my-version only if still 7." It fails. That failure <em>is</em> the concurrency detector: B's edit provably did not see A's edit, so these are concurrent, not sequential.</p>
 
 <p>Now the committed policy: <strong>never last-write-wins, never silent merge — fork.</strong> B's client receives the 409, downloads v8, and commits its own local content as a <em>new file</em>: <code>thesis (B's conflicted copy 2026-08-14).docx</code>. Both versions now exist side by side in the folder on every device; the human — the only agent that understands thesis semantics — merges. This is Dropbox's actual documented behavior, right down to the filename format with the device name and date baked in so you can tell at a glance which machine and when.</p>
 
@@ -177,10 +177,10 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
   <text class="dg-txt" x="38" y="143">thesis.docx</text>
   <text class="dg-txt-s" x="38" y="161">v7 everywhere</text>
   <rect class="dg-node" x="250" y="30" width="170" height="56" rx="8"/>
-  <text class="dg-txt" x="266" y="53">Laptop A (plane)</text>
+  <text class="dg-txt" x="266" y="53">Laptop A</text>
   <text class="dg-txt-s" x="266" y="71">edits offline, base v7</text>
   <rect class="dg-node" x="250" y="210" width="170" height="56" rx="8"/>
-  <text class="dg-txt" x="266" y="233">Desktop B (library)</text>
+  <text class="dg-txt" x="266" y="233">Desktop B</text>
   <text class="dg-txt-s" x="266" y="251">edits offline, base v7</text>
   <rect class="dg-good" x="510" y="30" width="190" height="56" rx="8"/>
   <text class="dg-txt" x="526" y="53">commit(base=7): OK</text>
