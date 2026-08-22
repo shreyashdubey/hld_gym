@@ -22,13 +22,24 @@ def test_publish_excludes_origins():
 
 def test_vercel_has_origins_headers():
     cfg = json.loads((ROOT / "vercel.json").read_text())
-    sources = [h["source"] for h in cfg["headers"]]
-    assert "/origins/(.*)" in sources, "vercel.json has no cache rule for /origins/"
+    block = next((h for h in cfg["headers"] if h["source"] == "/origins/(.*)"), None)
+    assert block, "vercel.json has no cache rule for /origins/"
+    # not 'immutable': asset filenames are not content-hashed, so an immutable
+    # rule would pin a stale image permanently
+    values = {h["key"]: h["value"] for h in block["headers"]}
+    assert values.get("Cache-Control") == "public, max-age=0, must-revalidate", \
+        f"/origins/ Cache-Control is {values.get('Cache-Control')!r}"
 
 
 def test_sitemap_lists_origins():
     sm = (ROOT / "sell" / "app" / "sitemap.ts").read_text()
     assert "/origins/" in sm, "sitemap.ts does not list /origins/"
+
+
+def test_vercel_catchall_headers_stay_last():
+    cfg = json.loads((ROOT / "vercel.json").read_text())
+    assert cfg["headers"][-1]["source"] == "/(.*)", \
+        "the catch-all security-header block must remain last in vercel.json"
 
 
 def main():

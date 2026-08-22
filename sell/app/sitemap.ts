@@ -7,9 +7,9 @@ import { SITE } from "@/lib/site";
 export const dynamic = "force-static";
 
 
-/* Two URLs, because the site has two pages. /book/ is a static file written by
- * a different pipeline, which Next knows nothing about, so it is listed by hand
- * rather than discovered.
+/* Three URLs, because the site has three pages. /book/ and /origins/ are static
+ * files written by different pipelines, which Next knows nothing about, so they
+ * are listed by hand rather than discovered.
  *
  * No lastModified: it would be re-stamped on every build and show up as a diff
  * in the committed dist/ whether or not anything changed. An untrue lastmod is
