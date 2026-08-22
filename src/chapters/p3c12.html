@@ -145,6 +145,12 @@
 <p>And the flip side, before the interviewer asks: <strong>if exactness weren't a requirement, I'd delete the batch tier.</strong> Sketches alone would serve the leaderboard fine. That second codebase earns its operational cost only because "exact for money" is real.</p>
 
 <div class="box story"><div class="box-tag">War story — Twitter's Summingbird and Algebird</div>
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/twitter.svg" alt="Twitter" width="469" height="94" loading="lazy">
+  <figcaption>Twitter, which hit this wall and open-sourced Summingbird and Algebird as the answer.
+    <span class="credit">Twitter wordmark, public domain (below the threshold of originality). Trademark of X Corp. (formerly Twitter, Inc.), used nominatively.</span></figcaption>
+</figure>
+
 <p>Twitter hit this exact wall and productized the answer. They open-sourced <strong>Summingbird</strong> in 2013 and published the design at VLDB 2014 (Boykin, Ritchie, O'Connell and Lin): you write an aggregation once, in a MapReduce-shaped Scala DSL, and the same code compiles to two runtimes — Scalding on Hadoop for the batch view, Storm for the real-time view — with reads merging the two views into one answer. The paper's motivation is the seam this chapter is built on: the batch layer is accurate but hours behind, the online layer is immediate but approximate and failure-prone, and the merge gives you both. The constraint that makes it work is algebraic: every aggregation must be a <strong>monoid</strong> — associative, with an identity — because partial results computed on different machines, in different time windows, must combine to the same answer regardless of order. Twitter's companion library <strong>Algebird</strong> ships monoid implementations of exactly the structures in this chapter: count-min sketch, HyperLogLog, Bloom filter, top-K. That's the lesson for the interview — "mergeable" is not a bonus property of sketches, it's the <em>entry requirement</em> for anything you want to shard. Twitter later swapped Storm for <strong>Heron</strong> (SIGMOD 2015), keeping the API while fixing debuggability and back-pressure at scale; the two-view shape survived the engine change.</p>
 </div>
 
