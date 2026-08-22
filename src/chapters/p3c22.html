@@ -321,6 +321,13 @@
 <p>Well under a second, no lost orders, no invented ones — and this only works because of determinism. If the standby could produce even slightly different output, promoting it would silently rewrite the market's history.</p>
 
 <div class="box story"><div class="box-tag">War story — Nasdaq and the Facebook IPO, 18 May 2012</div>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/nasdaq.svg" alt="Nasdaq"
+       width="155" height="44" loading="lazy">
+  <figcaption>Nasdaq, whose opening cross kept recalculating itself through the biggest listing it had ever run.
+    <span class="credit">Nasdaq logo, public domain (below the threshold of originality). Trademark of Nasdaq, Inc., used nominatively.</span></figcaption>
+</figure>
 <p>Facebook's IPO was the biggest in Nasdaq's history, and it broke on the one component that isn't the continuous matching engine: the opening cross, the batch algorithm that computes a single opening price from all accumulated interest. The cross calculates a price, then checks whether any orders arrived or were cancelled during the calculation — and if so, recalculates. With that much volume, cancellations kept streaming in faster than the loop could finish, so it recalculated and never converged. The open was delayed roughly half an hour, and about 30,000 orders sat in limbo for more than two hours while traders couldn't learn whether they owned Facebook stock. Nasdaq later paid a <strong>$10 million SEC penalty</strong> — the largest ever levied against an exchange at the time — and set up a fund of about $62 million to compensate member firms. The engineering lesson is this chapter's thesis seen from the other side: a race between "compute the result" and "the inputs keep changing" is exactly what one ordered stream and a deterministic consumer eliminate. Take a sequence-numbered snapshot of the inputs, compute from it, and later messages belong to the next round instead of poisoning the current one.</p>
 </div>
 
@@ -353,6 +360,13 @@
 <p>The sequencer decides order, so fairness reduces to a physical question: does everyone have an equal shot at reaching it first? That's why exchanges cut every colocation cross-connect to the <em>same physical length</em> — the cabinet nearest the engine gets the same coil of extra fiber as the one across the hall, so nobody's photons take a shorter trip. Fairness measured in meters. Beyond that: one pipeline for everyone, no premium express lane, no order type that skips a stage.</p>
 
 <div class="box story"><div class="box-tag">War story — IEX and the 350-microsecond coil</div>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/iex.svg" alt="IEX"
+       width="60" height="39" loading="lazy">
+  <figcaption>IEX, the venue that bought fairness with 38 miles of coiled fibre and then had to defend it at the SEC.
+    <span class="credit">IEX logo, public domain (below the threshold of originality). Trademark of IEX Group, Inc., used nominatively.</span></figcaption>
+</figure>
 <p>IEX — the venue at the centre of Michael Lewis's <em>Flash Boys</em> — took the opposite approach to latency: it deliberately added some. Between its point of presence and its matching engine sits a physical coil of roughly 38 miles of fiber optic cable, wound into a box, delaying every message by <strong>350 microseconds</strong> in each direction. The reason is a specific unfairness. When a large order sweeps several venues it reaches the nearest one first, and a fast trader who sees that fill can race ahead to the other venues and move prices before the rest of the order lands. IEX's delay means that by the time an order emerges from the coil, IEX's own pricing logic has already processed the public market data and repriced its <em>pegged</em> orders — orders that don't name a fixed price but track the wider market's best bid or offer automatically. So the racer arrives to find the price already moved. It was fiercely contested; opponents argued a deliberate delay violated the requirement that quotations be "immediately" accessible. The SEC approved IEX as a national securities exchange in June 2016, taking the view that a delay under a millisecond is too small to matter. The point for your interview: latency and fairness are different goals, and a venue sometimes chooses fairness. Know which one your design optimizes, and be able to say why.</p>
 </div>
 

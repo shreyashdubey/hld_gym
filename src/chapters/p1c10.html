@@ -202,6 +202,13 @@
 <figcaption>After a partition, two cart versions exist. An app-level union keeps every add. LWW would keep one branch and delete an acknowledged write with no trace.</figcaption>
 </figure>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/amazon.svg" alt="The Amazon logo"
+       width="603" height="182" loading="lazy">
+  <figcaption>Amazon, whose 2004 holiday outages forced the question Dynamo was built to answer: what does a shopping cart actually require?
+    <span class="credit">Amazon logo, public domain (below the threshold of originality). Trademark of Amazon.com, Inc., used nominatively.</span></figcaption>
+</figure>
+
 <div class="box story"><div class="box-tag">War story — Amazon Dynamo: the paper that chose a side</div>
 <p>During the 2004 holiday shopping season, Amazon suffered a string of outages traced to pushing their Oracle-based infrastructure past its limits — clustering and replication on the leading commercial database of the day simply couldn't sustain the availability and scale the retail business demanded. The post-mortem question was blunt: what does the shopping cart actually <em>require</em>? Answer: it must <strong>always accept adds</strong>. Every refused "add to cart" during a partition is a customer walking away with their wallet — availability is literally revenue. So Amazon built Dynamo, a key-value store that inverted the traditional priorities: always-writable via sloppy quorums and hinted handoff, vector clocks to detect concurrent versions, and conflicts surfaced <em>at read time</em> for the application to merge — the cart merges by union of items. The paper is honest about the cost: after a merge, a deleted item can occasionally resurrect in your cart, and Amazon judged "a deleted item reappears (rarely)" a fair price for "adds never fail." The 2007 paper became one of the most influential systems papers ever written — Cassandra, Riak, and Voldemort are its direct descendants. And the epilogue completes this chapter's argument: DynamoDB, the 2012 managed service, offers <em>both</em> — eventually consistent reads by default at half the cost of strongly consistent ones, strong reads when you ask, and last-writer-wins for its cross-region global tables. Even the company that wrote the availability manifesto ended up selling consistency as a per-request checkbox.</p>
 </div>

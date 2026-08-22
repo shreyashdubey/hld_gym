@@ -213,6 +213,12 @@
 
 <p>The honest decision rule, committed and justified: <strong>realtime collaborative text with a server you control → OT or a server-based sequence CRDT, both defensible; say why you picked yours. Offline-first, peer-to-peer, or multi-leader sync → CRDT, no contest. Non-text shared state — counters, sets, presence, settings → small CRDTs, they're practically free. Global invariants → neither; coordinate.</strong> And there's a third path the next story earns: if you have a central server <em>and</em> your data isn't text, you may not need either algorithm at full strength.</p>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/figma.svg" alt="Figma" width="1667" height="2500" loading="lazy">
+  <figcaption>Figma, which shipped multiplayer editing in 2016 by buying only as much merge machinery as a design tool actually needed.
+    <span class="credit">Figma logo, public domain (below the threshold of originality). Trademark of Figma, Inc., used nominatively.</span></figcaption>
+</figure>
+
 <div class="box story"><div class="box-tag">War story — Figma's multiplayer</div>
 <p>When Figma built multiplayer editing (shipped 2016; detailed in Evan Wallace's 2019 post "How Figma's multiplayer technology works"), they studied OT first — it's what Google Docs uses — and rejected it as more complexity than a design tool needed. But they didn't adopt full CRDTs either. A Figma document is a tree of objects, each a bag of properties, and their protocol is CRDT-<em>inspired</em>: concurrent changes to <em>different</em> properties of one object both survive; concurrent changes to the <em>same</em> property resolve last-writer-wins, with the central server — which every edit flows through — deciding "last" by arrival order, so no clock-skew roulette. That's the LWW register's data loss, accepted with eyes open: if two designers set the same rectangle's fill in the same instant, one fill wins, and the loser sees it happen and can re-apply in a click. The same trade on prose would eat sentences. Because the server is authoritative, they skipped the machinery decentralized CRDTs need; child ordering uses fractional indexing — positions as fractions between neighbors — rather than sequence-CRDT lists. The lesson interviewers want you to extract: Figma scoped the problem — design objects, central server, property granularity is enough — then bought exactly as much merge machinery as that problem required, not a bit more.</p>
 </div>

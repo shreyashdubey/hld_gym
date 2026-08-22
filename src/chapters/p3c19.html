@@ -302,7 +302,17 @@
 <p>One durability decision falls out, and it's where I spend the "search is derived" freedom the first time. Lucene-based engines keep a write-ahead log (the translog) and can fsync it on every request. I'll relax that to fsync-per-batch, accepting that a hard crash loses the last second of indexing — <strong>because truth is in Postgres and the events are still in Kafka</strong>, so recovery is a replay, not a loss. In a primary datastore that trade would be reckless. In a derived one it's free performance.</p>
 
 <div class="box story"><div class="box-tag">War story — the library everything is built on</div>
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-cutting.jpg" alt="Doug Cutting in 2004" width="360" height="480" loading="lazy">
+  <figcaption>Doug Cutting, whose side project became the library almost every search box you have ever typed into is standing on.
+    <span class="credit">Photo Tim Bray, Doug Cutting, 2004, CC BY-SA 3.0, downscaled</span></figcaption>
+</figure>
 <p>Almost every search system you've touched traces to one person's side project. Doug Cutting wrote Lucene in Java in 1999 and put it on SourceForge; it moved to the Apache Software Foundation in 2001 and became a top-level project in 2005. Lucene isn't a server — it's a library implementing exactly this section: analyzer chain, term dictionary, compressed posting lists, immutable segments, background merges, tombstone bitmaps. Everything since has wrapped it. Solr, created by Yonik Seeley at CNET in 2004 and donated to Apache in 2006, wrapped it in an HTTP server. Elasticsearch came from Shay Banon, who had earlier written a Lucene wrapper called Compass and, by his own retelling, began the rewrite while building a recipe search app for his wife; the first release landed in February 2010 and added what Lucene never had — sharding, replication, and cluster coordination. So when an interviewer says "open up Elasticsearch," the honest answer is: inside is Lucene doing the segment dance on one machine, and around it is a distributed system whose whole job is to shard documents, fan out queries, and merge results. Two separate problems — and knowing which is which is most of this interview.</p>
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-banon.jpg" alt="Shay Banon speaking at Berlin Buzzwords in 2010" width="319" height="480" loading="lazy">
+  <figcaption>Shay Banon, who wrapped that library in a cluster and gave it the name interviewers now ask you to open up.
+    <span class="credit">Photo Richard Wöber, Shay Banon talking about Elasticsearch at Berlin Buzzwords, 2010, CC BY 2.0, downscaled</span></figcaption>
+</figure>
 </div>
 
 <h2>Deep dive 4: distributing it — shard by document, never by term</h2>
@@ -314,6 +324,11 @@
 <p><strong>Shard by document</strong> (what everyone ships): each shard holds 1/12 of the documents and a complete index over just those. Every query goes to every shard, but each does its whole job locally with zero cross-talk and returns 10 IDs and 10 scores. Adding shards adds capacity linearly, and losing one costs 1/12 of the <em>corpus</em> — every query still returns mostly-right results instead of some queries returning nothing.</p>
 
 <div class="box story"><div class="box-tag">War story — Google published this in 2003</div>
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-holzle.jpg" alt="Urs Hölzle on stage at Web Summit in 2014" width="480" height="320" loading="lazy">
+  <figcaption>Urs Hölzle, one of the three authors who put Google's shard-and-merge arithmetic on paper for everyone else to copy.
+    <span class="credit">Photo Naoise Culhane / Sportsfile for Web Summit, Urs Hölzle on stage at Web Summit, Dublin, 2014, CC BY 2.0, downscaled</span></figcaption>
+</figure>
 <p>If doc-sharding feels like folklore, it isn't: it's in "Web Search for a Planet: The Google Cluster Architecture" (Barroso, Dean, and Hölzle, IEEE Micro, 2003), one of the quietly most influential systems papers ever written. It describes Google's index split into pieces each holding a randomly chosen subset of documents; a query is broadcast to one replica of every index shard, each returns its best local hits, results are merged, and a second pool of <em>document servers</em> fetches titles and snippets for the winners. Two phases, exactly as above. The paper's other argument was economic and equally durable: because the workload is embarrassingly parallel across doc shards, throughput comes from adding cheap commodity PCs rather than bigger machines, with replication supplying both throughput and fault tolerance. Twenty years on, the shard-and-merge shape of every search cluster you will ever operate descends from that paper.</p>
 </div>
 

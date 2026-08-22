@@ -47,6 +47,13 @@
 
 <p>That constant is the decision. Not "sketches are cool" — "exact costs 240 GB and scales with an attacker's imagination; the sketch costs under 8 GB across the fleet and doesn't."</p>
 
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/p3c12-cormode.jpg" alt="Graham Cormode at a conference in 2007"
+       width="480" height="360" loading="lazy">
+  <figcaption>Graham Cormode, who with S. Muthukrishnan gave the sketch an error that only ever adds, so a real winner can never drop off the list.
+    <span class="credit">Photo Robert Ennals, Graham Cormode at SIGMOD 2007 in Beijing, CC BY 2.0, downscaled</span></figcaption>
+</figure>
+
 <p><strong>3. CPU and shard count.</strong> A sketch update is 4 hashes and 4 random memory writes — ~300 ns once cache misses are counted, so about 3M sketch updates/sec on one core. The sketch isn't the whole cost of an event, though: decoding the message and the heap check dominate it, so call the end-to-end work 1 microsecond, or <strong>1M events/sec per core</strong>. At 10M/sec that's 10 cores pinned flat, and nobody runs a core at 100% — so about 20 busy cores. I'll commit to <strong>32 shards</strong> (power of two, comfortable headroom). Each handles ~300K events/sec, about 18M per minute-bucket. Hold onto that 18M — it sets the error bound later.</p>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>

@@ -250,6 +250,11 @@
 <p>Every fetch starts with resolving a hostname. At 11,500 fetches/second, forwarding every lookup upstream melts your resolver — and each remote resolution costs 20–200ms. The fix is boring and mandatory: a <strong>local caching resolver on every fetcher node</strong>, async lookups so slow resolutions never block the event loop, and pre-resolution while a host waits in the timer heap. Host-hash sharding helps here too — a host's lookups always hit the same node's cache, so hit rates are excellent.</p>
 
 <div class="box story"><div class="box-tag">War story — Mercator</div>
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-najork.jpg" alt="Marc Najork in 2018" width="480" height="480" loading="lazy">
+  <figcaption>Marc Najork, who profiled a crawler he had built himself and found it single-file through a dependency nobody had drawn.
+    <span class="credit">Photo Marc Najork, self-published portrait, 2018, CC BY 4.0, downscaled</span></figcaption>
+</figure>
 <p>Mercator was the research crawler built at Compaq's Systems Research Center by Allan Heydon and Marc Najork. Their 1999 paper's most quoted finding wasn't about queues at all: profiling showed <strong>DNS resolution consuming 87% of each thread's elapsed time</strong>. The culprit was a synchronized resolver interface — Java's, and <code>gethostbyname</code> underneath it, allowed one uncached lookup outstanding at a time — so their fully parallel crawler was quietly single-file through DNS. They wrote their own multi-threaded resolver firing parallel requests at a local nameserver, and DNS dropped from 87% to 25% of elapsed time. Their 2001 follow-up report is where the two-level frontier this chapter draws comes from, timer heap and all — right down to running about three times as many back queues as crawler threads, the same rule of thumb we used above. The DNS lesson generalizes: your architecture is only as parallel as its most serialized dependency, and that dependency is usually something so mundane you never drew it on the whiteboard.</p>
 </div>
 

@@ -163,8 +163,27 @@ A figure earns its place the same way a story does.
   happened, who shipped the fix. Not next to every mention of a technology that
   shares a name with a company. Redis is named 213 times in this book and almost
   none of them are about the company.
-- Figures go in `<id>.html` below the first `<h2>`. Anything above it is deleted
-  by `swapColdOpen` in `/origins`.
+- Figures go in one of two places, and the difference matters.
+
+  **The teaching body**, `<id>.html`, **below the first `<h2>`.** Anything above
+  that heading is deleted by `swapColdOpen`, so a figure there vanishes.
+
+  **The origin story**, `<id>.origin.html`. This is where the company that
+  *acted in the history* usually belongs, and the first placement pass could not
+  reach it. Nine agents independently reported the same thing: TSB, RBS, Sun,
+  Fujitsu, JMA, FirstEnergy, IBM, Xerox, Bell Labs and a dozen others are named
+  only in the story, never in the body, so their marks had nowhere to go. In
+  `/origins` the story renders at the top of the chapter and is the most-read
+  part of it. A mark beside the paragraph describing what that company did is
+  the best placement in the book, not a consolation.
+
+  Two rules apply only to story figures. The 260-word cap counts prose with
+  figures excluded, so a figure costs no story budget. And a figcaption is
+  capped at 20 words excluding its credit — that cap is what stops the
+  exclusion becoming a loophole for extra narrative.
+
+  **One figure per story. Two at the absolute most, and only if the story has
+  two distinct actors.** The story is 260 words; it cannot carry a gallery.
 
 ## 8. Cards
 

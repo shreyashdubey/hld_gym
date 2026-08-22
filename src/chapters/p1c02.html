@@ -79,6 +79,13 @@
 <p>Slack's Web API originally paginated the obvious way: numbered pages backed by MySQL <code>LIMIT/OFFSET</code>. It worked — until Enterprise Grid brought customers with hundreds of thousands of users in one workspace. A deep page of a huge member list meant MySQL scanning and discarding enormous numbers of rows per request, and membership churn between requests drifted the page boundaries, duplicating or dropping users. Slack's engineers documented the move to cursor-based pagination on methods like <code>conversations.members</code>: responses return an opaque base64 <code>next_cursor</code> encoding the last item seen, and the next request resumes from an index seek at that position. Bounded cost at any depth, stable pages under churn — and an opaque cursor kept them free to change what's inside it. Their guidance to consumers became blunt: if an endpoint offers cursors, use them.</p>
 </div>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/slack.svg" alt="Slack logo"
+       width="498" height="127" loading="lazy">
+  <figcaption>Slack, whose Enterprise Grid workspaces grew large enough to break numbered pages and force the move to cursors.
+    <span class="credit">Slack logo, public domain (below the threshold of originality). Trademark of Slack Technologies, LLC, used nominatively.</span></figcaption>
+</figure>
+
 <h3>Filtering and sorting: small feature, sharp edges</h3>
 
 <p>Filters and sorts ride in query parameters: <code>GET /orders?status=shipped&amp;sort=-created_at</code> (minus prefix = descending, a common convention). Two rules. <strong>Whitelist what's sortable and filterable</strong> — every sortable field promises an index; accept <code>sort=anything</code> and you've handed strangers a full-table-scan button on your primary database. <strong>Bind cursors to their sort</strong> — a cursor encodes a position within one specific ordering, so if the client changes sort or filters mid-walk, reject the stale cursor cleanly instead of returning garbage.</p>
@@ -117,6 +124,13 @@
 <div class="box story"><div class="box-tag">War story — Stripe: idempotency as an API promise</div>
 <p>Stripe moves payments over the public internet, where timeouts aren't an edge case — they're weather. So idempotency keys have been first-class in their API for over a decade, and their design is the reference implementation everyone copies. Clients send an <code>Idempotency-Key</code> header (docs recommend a random V4 UUID) on POSTs. Stripe saves the status code and body of the first request made with a key — <em>whether it succeeded or failed</em> — and replays that saved result for every later request with the same key, so a client retrying into an error sees the same error, not a confusing second outcome. Keys are pruned after 24 hours. Reuse a key with different parameters and Stripe rejects it rather than guess which request you meant; a retry racing the original mid-flight is refused with a conflict. Their engineering writing pushed the pattern into the wider industry — it's now an IETF draft header — and it's why "how do clients safely retry payments?" has a canonical answer you're expected to know cold.</p>
 </div>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/stripe.svg" alt="Stripe wordmark"
+       width="360" height="150" loading="lazy">
+  <figcaption>Stripe, which put idempotency keys in a public payments API and turned a retry convention into a promise.
+    <span class="credit">Stripe wordmark, public domain (below the threshold of originality). Trademark of Stripe, Inc., used nominatively.</span></figcaption>
+</figure>
 
 <h2>Versioning: v1 forever is the real answer</h2>
 

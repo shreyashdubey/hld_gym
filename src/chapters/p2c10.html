@@ -95,6 +95,11 @@
 </ul>
 
 <div class="box story"><div class="box-tag">War story — Akamai and the one-hit wonders</div>
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/akamai.svg" alt="Akamai" width="1202" height="490" loading="lazy">
+  <figcaption>Akamai, whose own measurements of its disk caches turned a filter into a bouncer.
+    <span class="credit">Akamai logo, public domain (below the threshold of originality). Trademark of Akamai Technologies, Inc., used nominatively.</span></figcaption>
+</figure>
 <p>Akamai's CDN servers cache web objects on disk. Their researchers measured something embarrassing: roughly <strong>three-quarters of all requested URLs were fetched exactly once and never again</strong> — "one-hit wonders." Every one was written to disk cache, never read, then evicted to make room for the next never-read object. The fix, published in Maggs and Sitaraman's paper on Akamai's algorithms, was a Bloom filter as a bouncer for the cache itself: record every requested URL in the filter, but only write an object to disk on its <em>second</em> request — when the filter says "seen before." One-hit wonders never touch the disk. Disk writes fell by nearly half, and the hit rate went <em>up</em>, because space wasted on single-use objects now held things people actually re-requested. A false positive just means some object gets cached on its first hit — zero harm. Billions of URLs, a few gigabytes of RAM, no correctness risk: a sketch in exactly the right seat.</p>
 </div>
 
@@ -113,6 +118,11 @@
 <p>In practice you rarely build one: Redis ships HLL as a native type. <code>PFADD campaign:123 user_9871</code> on every impression, <code>PFCOUNT campaign:123</code> for the dashboard, and — the part that matters for distributed systems — <code>PFMERGE</code> to combine counters. BigQuery, Snowflake, Spark, and Druid all expose an equivalent under names like <code>APPROX_COUNT_DISTINCT</code>.</p>
 
 <div class="box story"><div class="box-tag">War story — Redis ships HLL, Reddit counts views with it</div>
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-sanfilippo.jpg" alt="Salvatore Sanfilippo speaking in 2015" width="342" height="480" loading="lazy">
+  <figcaption>Salvatore Sanfilippo, who made an approximate counter a first-class type in a database people trusted for exact ones.
+    <span class="credit">Salvatore Sanfilippo in 2015, still from video by dotconferences, CC BY 3.0, downscaled</span></figcaption>
+</figure>
 <p>In April 2014, Salvatore Sanfilippo (antirez) added HyperLogLog to Redis 2.8.9 as a first-class data type. His design notes are a small masterclass in the trade: a dense HLL is exactly 12KB and counts to billions with 0.81% standard error, while small counters use a sparse encoding of a few dozen bytes, so a million mostly-small counters stay cheap. He named the commands <code>PFADD</code>, <code>PFCOUNT</code>, <code>PFMERGE</code> — the "PF" honors Philippe Flajolet, the French researcher who invented the algorithm and had died three years earlier. Reddit's engineering team later described rebuilding post view counts on exactly this: storing every viewer ID per post was off the table at their scale, so view events stream through Kafka into per-post HLLs in Redis, and the "N views" number on every Reddit post became a sub-1%-error estimate. Nobody can tell 1,024,590 views from 1,031,000 on a screen — but the memory bill can tell a set from a sketch.</p>
 </div>
 

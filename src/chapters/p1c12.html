@@ -123,6 +123,11 @@ else:
 <p>Cost: two small integers per key, one increment per request. Accuracy: approximate — but how approximate?</p>
 
 <div class="box story"><div class="box-tag">War story — Cloudflare: rate limiting at the edge</div>
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/cloudflare.svg" alt="Cloudflare" width="512" height="169" loading="lazy">
+  <figcaption>Cloudflare, which put the sliding window counter on every edge server it runs and then published how wrong the approximation actually is.
+    <span class="credit">Cloudflare logo, public domain (below the threshold of originality). Trademark of Cloudflare, Inc., used nominatively.</span></figcaption>
+</figure>
 <p>When Cloudflare built rate limiting as a product, the constraint was brutal: it had to work for millions of customer domains, enforced across every edge server they run, without melting memory. A timestamp log per visitor per domain was arithmetic suicide at that scale, so they went with the sliding window counter — two counters per key and the weighted-overlap estimate. Then they did the responsible thing: measured how wrong the approximation actually is. They analyzed 400 million requests from 270,000 distinct sources and found the estimator made the wrong call on just 0.003% of requests, with the estimated rate differing from the true rate by about 6% on average — and none of the wrongly-allowed traffic got through at anywhere near abusive volume. In their write-up they note the pleasant irony: the approximation's smoothing across window boundaries isn't a bug, it's the feature — it's exactly what defeats the boundary-burst trick. That analysis is why "sliding window counter" is the answer most senior engineers give by default: near-exact behavior at fixed-window prices, validated at internet scale.</p>
 </div>
 

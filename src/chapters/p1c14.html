@@ -83,6 +83,14 @@
 <p>Flickr hit this problem before Twitter did: they federated their MySQL database into many shards in the mid-2000s, needed globally unique photo IDs, and wrote the solution up in 2010. They considered GUIDs (UUIDs) and rejected them for exactly the index-locality and size reasons above — random 128-bit keys index badly in MySQL. Their solution was almost comically low-tech: a dedicated MySQL box whose only job is a one-row table with an auto-increment column. Issuing an ID is a single <code>REPLACE INTO</code> statement — a MySQL quirk that deletes and re-inserts the row, bumping the counter — then read the counter back. That's a "ticket server": the centralized counter, kept, but isolated on hardware whose only job is counting. One box is a single point of failure, so Flickr ran two: one configured to issue only odd numbers, the other only even (MySQL's <code>auto_increment_increment</code> and <code>auto_increment_offset</code> settings), with clients round-robining between them. Either box can die and the other keeps issuing, and they can never collide. The cost they accepted with open eyes: a network round trip per ID, and IDs that are only <em>roughly</em> ordered across the odd/even pair. It carried billions of Flickr photo IDs. Simple, boring, operable — very senior.</p>
 </div>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/flickr.svg" alt="Flickr wordmark"
+       width="515" height="156" loading="lazy">
+  <figcaption>Flickr, which issued its photo IDs from a pair of one-row MySQL tables, one odd and one even.
+    <span class="credit">Flickr wordmark, public domain (below the threshold of originality).
+    Trademark of SmugMug, Inc., used nominatively.</span></figcaption>
+</figure>
+
 <p>Here's the whole decision compressed:</p>
 
 <table>
@@ -238,6 +246,14 @@
 <h3>Redlock, and an honest paragraph about it</h3>
 
 <p>You might diagnose a different weakness first — "the lock lives in <em>one</em> Redis; what if Redis dies?" — and reach for Redlock, an algorithm by Redis's creator that acquires the lock on a majority of five independent Redis nodes, tolerating node failures. In 2016, Martin Kleppmann (of <em>Designing Data-Intensive Applications</em>) published a widely-read critique, antirez published a sharp rebuttal, and the exchange became the field's favorite argument. Kleppmann's core point survives contact with both essays, and it's the distinction to carry out of this chapter: decide whether your lock is for <strong>efficiency</strong> or for <strong>correctness</strong>. An efficiency lock prevents <em>wasted work</em> — two workers computing the same expensive report; if it rarely fails, you pay some duplicate compute and nobody is harmed, and a single Redis <code>SET NX PX</code> is the right amount of machinery (Redlock's five nodes buy little here). A correctness lock prevents <em>disaster</em> — double refunds, two nodes writing the same file. And for that job, Redlock still isn't enough, because more Redis nodes do nothing about the GC-pause timeline above: Redlock's safety quietly depends on assumptions about clocks and pause times that real machines violate. Kleppmann's verdict, roughly: fine for efficiency (though overkill), insufficient for correctness.</p>
+
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-kleppmann.jpg" alt="Martin Kleppmann in 2017"
+       width="341" height="480" loading="lazy">
+  <figcaption>Martin Kleppmann, whose 2016 critique split locks into the efficiency kind and the correctness kind.
+    <span class="credit">Martin Kleppmann in 2017, photograph by Martin Kleppmann, CC BY 3.0,
+    downscaled</span></figcaption>
+</figure>
 
 <p>So what <em>does</em> protect correctness? A preview, because chapter 2.3 finishes this properly: a <strong>fencing token</strong>. The lock service hands every holder a number that only increases — A gets token 33, and after A's lease expires, B gets 34. Every write carries its token, and the <em>storage being written</em> rejects any token older than the newest it has seen. When zombie A thaws and writes with 33 after B wrote with 34, storage refuses. Notice what moved: the enforcement left the lock and moved into the resource — the one place a frozen process can't lie to. Getting tokens that are guaranteed to only increase requires consensus (ZooKeeper, etcd), which is chapter 2.3's whole subject. Until then, the operational rule of thumb: single-Redis locks for efficiency, and for correctness make the operation <strong>idempotent</strong> — safe to run twice, chapter 2.2 — so that when the lock fails you anyway, nothing burns.</p>
 

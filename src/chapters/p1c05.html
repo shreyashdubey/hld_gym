@@ -8,6 +8,13 @@
 
 <p><strong>Vertical scaling</strong> means making one machine stronger: more CPU cores, more RAM, faster disks. <strong>Horizontal scaling</strong> means adding machines and spreading the work. The industry spent fifteen years romanticizing the second and forgetting how absurdly powerful the first has become.</p>
 
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/p1c05-amdahl.jpg" alt="Gene Amdahl speaking in 2008"
+       width="384" height="480" loading="lazy">
+  <figcaption>Gene Amdahl in 2008, forty years after the three printed pages that put a ceiling on what more processors can buy.
+    <span class="credit">Photo Perry Kivolowitz, Gene Amdahl speaking in San Jose, 2008, CC BY 3.0, downscaled</span></figcaption>
+</figure>
+
 <p>Here's one machine in the mid-2020s: cloud instances rent with hundreds of CPU cores and terabytes of RAM — the biggest memory-optimized ones pass 20 TB. A single NVMe SSD does on the order of a million random reads per second, and a server holds a stack of them. Run the numbers from the estimation chapter: a service doing a few thousand requests per second with a working set of a few hundred gigabytes fits on <em>one machine</em> with room to spare. That's not a toy — that's a successful business.</p>
 
 <p>Vertical scaling also has a property no benchmark shows: <strong>it adds zero new problems</strong>. One machine has no network partitions inside it, no distributed transactions, no "which server has the session" puzzle. Every problem in the rest of this book is one you buy the moment you go from one machine to two. A senior engineer delays that purchase as long as the numbers allow.</p>
@@ -263,6 +270,13 @@
 <p>The order is a judgment call interviewers probe: X first, nearly free once you're stateless. Z when a data tier outgrows one machine. Y when the <em>team's</em> shape demands it — not because a conference said so. Which brings us to the company that learned this in public.</p>
 
 <div class="box story"><div class="box-tag">War story — Pinterest</div>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/pinterest.svg" alt="Pinterest"
+       width="826" height="209" loading="lazy">
+  <figcaption>Pinterest, who ran seven datastores at once and then took most of them back out.
+    <span class="credit">Pinterest wordmark, public domain (below the threshold of originality). Trademark of Pinterest, Inc., used nominatively.</span></figcaption>
+</figure>
 <p>In 2011–2012 Pinterest was among the fastest-growing sites the web had seen — past 10 million users with a single-digit engineering team. Under that pressure they adopted everything that promised infinite scale, and their famous "Scaling Pinterest" retrospective shows the September 2011 stack: MySQL <em>plus</em> Cassandra <em>plus</em> MongoDB <em>plus</em> Membase <em>plus</em> Redis <em>plus</em> Memcached <em>plus</em> Elasticsearch, with multiple sharding schemes at once. Each clustered "auto-scaling" technology, pushed to its limit, failed in its own novel way — and every novel failure was an all-hands emergency with no answers on the internet. So they reversed course and simplified brutally: sharded MySQL (4,096 logical shards at launch, each object's shard baked into its 64-bit ID), Redis, Memcached, Solr — mature tools with boring, documented failure modes. Their stated lessons became canon: keep it simple; use known, proven technology; clone stateless web servers behind load balancers for traffic (the X-axis) and shard data where you must (the Z-axis). The architecture that carried Pinterest through hypergrowth was less exotic than what many ten-person startups run today.</p>
 </div>
 

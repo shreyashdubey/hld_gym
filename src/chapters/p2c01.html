@@ -138,6 +138,13 @@ COMMIT;</code></pre>
 
 <p>The name, by the way, is older than microservices: Hector Garcia-Molina and Kenneth Salem coined "sagas" in a 1987 paper about breaking up long-running transactions inside a single database. The microservices world dug the idea out of the library because it was suddenly the exact shape of the problem.</p>
 
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-garcia-molina.jpg" alt="Hector Garcia-Molina at Stanford in 2011"
+       width="399" height="480" loading="lazy">
+  <figcaption>Hector Garcia-Molina, who named the saga in 1987 for databases that could not hold a lock long enough.
+    <span class="credit">Hector Garcia-Molina at Stanford, 2011, photograph by Gildardo Sanchez, CC BY 2.0, downscaled</span></figcaption>
+</figure>
+
 <h2>Who runs the saga? Choreography vs orchestration</h2>
 
 <p>Somebody has to know what step comes next and what to do on failure. There are exactly two answers.</p>
@@ -165,6 +172,13 @@ COMMIT;</code></pre>
 <p>The senior move is to commit with a reason, not to present the table and shrug. A good verbatim line: <em>"This flow moves money across four services, and support will need to see exactly where any order is stuck — I'll orchestrate it from the order service. For one-way reactions like 'send a confirmation email when an order confirms,' choreography: just subscribe to the event, nothing to unwind."</em> Both patterns, each where it belongs, decision anchored to visibility and rollback needs.</p>
 
 <div class="box story"><div class="box-tag">War story — Uber builds Cadence</div>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/uber.svg" alt="Uber"
+       width="927" height="322" loading="lazy">
+  <figcaption>Uber, which turned every team's hand-rolled orchestrator into one shared engine and then open-sourced it.
+    <span class="credit">Uber wordmark, public domain (below the threshold of originality). Trademark of Uber Technologies, Inc., used nominatively.</span></figcaption>
+</figure>
 <p>By the mid-2010s, Uber had the saga problem at company scale: business flows like driver onboarding — document checks, background verification, activation — span many services and can take days, and dozens of teams were each hand-rolling the same fragile machinery of queues, cron jobs, and "current_step" database columns to track where each flow stood. Every homegrown orchestrator had the same bugs: state lost on crashes, flows stuck with no owner, retries and timers reinvented badly. Maxim Fateev and Samar Abbas — who had met at Amazon around 2009 building Simple Workflow Service, AWS's coordination engine — reunited at Uber's Seattle office in 2015 and built Cadence: a shared orchestration engine that records every step of a workflow as an event history in a database, so when a worker crashes, the workflow replays its history and resumes exactly where it left off, timers and retries included. Orchestration code went from infrastructure every team rebuilt to a platform they all shared; Uber open-sourced it in 2017 and runs a huge number of internal flows on it. In 2019 the pair left to found Temporal — a fork of Cadence — and today companies like Netflix, Datadog, and Coinbase run their sagas on it. The lesson for your whiteboard: orchestration-with-durable-state is so consistently needed that it became a product category ("durable execution"). Mentioning that category is staff-level garnish; knowing <em>why</em> the orchestrator must persist its state — because the orchestrator can crash mid-saga too — is senior table stakes.</p>
 </div>
 
@@ -259,6 +273,13 @@ COMMIT;</code></pre>
 <p>One price tag, and you must volunteer it: the outbox delivers <strong>at-least-once</strong>. If the relay publishes an event and crashes before marking the row sent, it will publish it again on restart. Duplicates are not a bug in your implementation — they are a guaranteed, designed-in behavior, and every consumer must handle them: processing the same event twice must have the same effect as processing it once. That property is idempotency, it's the outbox's inseparable partner, and it's the entire subject of the next chapter.</p>
 
 <div class="box story"><div class="box-tag">War story — Airbnb's SpinalTap</div>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/airbnb.svg" alt="Airbnb"
+       width="512" height="160" loading="lazy">
+  <figcaption>Airbnb, which stopped asking its services to announce their own writes and read the database's log instead.
+    <span class="credit">Airbnb logo, public domain (below the threshold of originality). Trademark of Airbnb, Inc., used nominatively.</span></figcaption>
+</figure>
 <p>As Airbnb broke its Rails monolith (internally nicknamed "monorail") into services through the mid-2010s, dozens of downstream systems needed to know the moment core data changed — a reservation created, a listing price updated — to refresh search indexes, caches, risk checks, and dependent services. Teams gluing this together with dual writes and periodic re-syncs got exactly the drift this chapter predicts: consumers whose view of the data quietly disagreed with the source database. Airbnb's answer was SpinalTap, a change-data-capture service they open-sourced in 2018: it tails MySQL's binlog — the database's own journal of committed changes — plus DynamoDB streams, and publishes every committed mutation to Kafka as a standardized event, in commit order. That last phrase is the whole point: the events aren't what application code <em>claims</em> happened, they're what the database <em>actually committed</em>, so publish-without-write and write-without-publish become structurally impossible. It's the outbox idea graduated into platform infrastructure: stop trusting application code to remember to tell the world; read the truth from the database's log and tell the world yourself.</p>
 </div>
 

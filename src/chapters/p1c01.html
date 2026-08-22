@@ -54,6 +54,13 @@
 <p>A recursive resolver is a hyper-organized receptionist. You ask, "where does Priya Sharma live?" She checks her notebook first — she wrote it down last week, with "valid until Friday" in the margin (the TTL). If the note has expired, she works the chain: the national directory ("try the Maharashtra office"), the state office ("try her housing society"), then the society office, which knows the flat number. You only ever talked to the receptionist. Where the analogy breaks: there are millions of receptionists like her, each keeping her own notebook — which is why the offices at the top of the chain don't collapse under the load.</p>
 </div>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/dyn.svg" alt="The Dyn logo"
+       width="89" height="44" loading="lazy">
+  <figcaption>Dyn, the company that answered DNS queries for Twitter, Netflix, Reddit, Spotify and GitHub on the morning none of their names would resolve.
+    <span class="credit">Dyn logo, public domain (below the threshold of originality). Trademark of Oracle Corporation (Dyn brand), used nominatively.</span></figcaption>
+</figure>
+
 <div class="box story"><div class="box-tag">War story — Dyn, 2016: the day the internet forgot its own names</div>
 <p>On 21 October 2016, Twitter, Netflix, Reddit, Spotify and GitHub all "went down" for millions of people across the US East Coast — except none of them was down. Their servers were healthy. What broke was Dyn, the company running authoritative DNS for all of them. The Mirai botnet — roughly a hundred thousand hacked webcams and DVRs, conscripted through factory-default passwords — hammered Dyn's DNS servers in three waves through the day. A site whose name won't resolve might as well not exist. Users whose resolvers still held cached answers kept browsing — until the short TTLs expired minutes later and the caches drained. The lesson stuck industry-wide: big companies now run <em>two independent authoritative DNS providers</em> in parallel. When an interviewer asks "what are this design's single points of failure?", DNS is the one almost everyone forgets — because it fails so rarely that people forget it can.</p>
 </div>
@@ -278,6 +285,13 @@ Cache-Control: max-age=60
 </table>
 
 <p>The framing that reads senior: <strong>choose by direction and latency, then say the operational cost out loud</strong>. One-way push? SSE — and mention it rides plain HTTP through every proxy and CDN. Genuinely two-way and interactive? WebSockets — and mention drain-on-deploy and reconnect storms in the same breath. A status page checked occasionally? "Polling every 30 seconds is honest and correct here" — resisting the gold-plating is itself a senior signal. The junior tell interviewers listen for: "WebSockets for everything," which volunteers to run the hardest, most stateful option for problems that never asked for it.</p>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/whatsapp.svg" alt="The WhatsApp logo"
+       width="200" height="55" loading="lazy">
+  <figcaption>WhatsApp, whose product is the held connection itself — one always-on socket per phone, and years of tuning to make two million of them fit on one machine.
+    <span class="credit">WhatsApp logo, public domain (below the threshold of originality). Trademark of WhatsApp LLC, used nominatively.</span></figcaption>
+</figure>
 
 <div class="box story"><div class="box-tag">War story — WhatsApp: two million open lines per server</div>
 <p>WhatsApp's product <em>is</em> a persistent connection. Every phone running the app holds one always-on TCP connection to a WhatsApp server — no polling, ever — so a message is pushed the instant it arrives, without burning battery on "anything new?" requests. The legendary part is the density. The early team ran a heavily tuned stack — Erlang on FreeBSD, built around the ejabberd messaging server — and in 2012 published benchmarks showing a <em>single server</em> holding over two million concurrent TCP connections. Erlang made that sane: millions of isolated, lightweight processes at a few kilobytes each, so "one process per connected phone" is a design, not a fantasy. The efficiency shaped the company — when Facebook paid $19 billion for WhatsApp in 2014, roughly 450 million users were served by about fifty employees, around thirty of them engineers. The senior lesson: in persistent-connection systems, <strong>concurrent connections — not requests per second — are the scaling axis</strong>. When you say "WebSockets" in an interview, beat the interviewer to the follow-up: how many connections per box, what they cost in memory, and what happens when a deploy or a blip disconnects a million phones at once.</p>

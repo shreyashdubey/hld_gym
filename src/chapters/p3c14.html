@@ -181,6 +181,12 @@
 
 <p>Where does the money truth live? Not in a <code>balance</code> column that gets <code>UPDATE</code>-ed. In a <strong>double-entry, append-only ledger</strong> — the design accountants have stress-tested for five hundred years, for the same reason we want it: fraud and error detection by construction.</p>
 
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/p3c14-corrigan.jpg" alt="E. Gerald Corrigan in 2014" width="480" height="466" loading="lazy">
+  <figcaption>E. Gerald Corrigan, who in 1985 shut off a bank's incoming wire because its record had fallen tens of billions of dollars behind the money.
+    <span class="credit">Photo Board of Governors of the Federal Reserve System, E. Gerald Corrigan, 2014, public domain as a work of the US federal government, downscaled</span></figcaption>
+</figure>
+
 <p><strong>Double-entry:</strong> every movement of money is recorded twice — it leaves one account and enters another, a debit and a credit, and the amounts of every transaction sum to zero. Money is never created or destroyed in the ledger; it only moves between named accounts: <code>psp_receivable</code> (the PSP holds money it owes us), <code>merchant_payable</code> (we owe the merchant), <code>platform_revenue</code> (our cut), <code>refunds_clearing</code>. A $50.00 sale with a $5.00 platform fee:</p>
 
 <figure class="diagram">
@@ -269,6 +275,12 @@
 </ul>
 
 <p>The unmatched-transaction workflow is part of the design, not an ops afterthought: breaks auto-retry matching for the lag window, then land in a review queue with the full audit trail attached (this is where <code>payment_events</code> pays for itself), and the <strong>reconciliation break count is a paging metric — nonzero after the lag window means an engineer looks today.</strong> A payments system that reconciles daily discovers its bugs in 24 hours. One that doesn't discovers them at tax time, or on Reddit.</p>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/coinbase.svg" alt="Coinbase" width="512" height="91" loading="lazy">
+  <figcaption>Coinbase, blamed in February 2018 for duplicate charges its own code never made, and cleared by the record of what it had actually done.
+    <span class="credit">Coinbase wordmark, public domain (below the threshold of originality). Trademark of Coinbase Global, Inc., used nominatively.</span></figcaption>
+</figure>
 
 <div class="box story"><div class="box-tag">War story — Coinbase and the charges nobody sent</div>
 <p>In February 2018, Coinbase customers started reporting something terrifying: crypto purchases from weeks earlier were reappearing on their card statements as fresh charges — some users reported duplicates stacking up dozens deep, with bank accounts drained and overdraft fees piling on. The internet's instant verdict was "Coinbase double-charged us." The truth was stranger: the card networks had reclassified digital-currency purchases under a new merchant category code (to treat them like cash advances), and during that reprocessing, earlier transactions were <em>reversed and re-charged</em> down on the rails, below anything Coinbase's own code touched. It took days of joint investigation before Visa and the payment processor Worldpay issued a joint statement taking responsibility and confirming the erroneous charges would be reversed — explicitly stating the issue was not caused by Coinbase. Two lessons for your whiteboard. First: your code can be perfect and duplicates can still appear, because the rails beneath your PSP are themselves distributed systems that retry — which is exactly why reconciliation against settlement data is mandatory, not paranoid. Second: when money looks wrong, the company that can produce a complete, timestamped ledger of what it actually did clears its name in days instead of months.</p>

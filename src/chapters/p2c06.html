@@ -162,9 +162,23 @@
 
 <p>The senior answer refuses to pick one policy for all users: <strong>push for normal accounts, pull for celebrities, merge at read time.</strong> When a normal user posts, fan out to their 200 followers — trivial. When a celebrity posts, write it once to a celebrity-posts store and fan out nothing. When you open your feed, the system fetches your precomputed timeline and merges in recent posts from the handful of celebrities you follow. The load profile of each entity class gets the strategy that suits it, with a follower-count threshold deciding who counts as a celebrity.</p>
 
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-krikorian.jpg" alt="Raffi Krikorian speaking at Web Summit in 2018"
+       width="480" height="341" loading="lazy">
+  <figcaption>Raffi Krikorian, who ran Twitter's platform engineering when fan-out-on-write met its first thirty-million-follower account.
+    <span class="credit">Raffi Krikorian at Web Summit, Lisbon, 2018, photograph by Stephen McCarthy / Web Summit, CC BY 2.0, downscaled</span></figcaption>
+</figure>
+
 <div class="box story"><div class="box-tag">War story — Twitter's celebrity fanout</div>
 <p>In Raffi Krikorian's famous "Timelines at Scale" talk (he ran Twitter's platform engineering), Twitter had about 150 million active users and roughly 300K QPS of timeline reads, served by fan-out-on-write: every tweet was copied into each follower's Redis-backed home timeline. Then follower counts exploded. Lady Gaga had around 31 million followers — one tweet from her meant ~31 million timeline writes, and a fanout that could take minutes to finish. The visible symptom was almost comic: replies raced ahead of the original. A follower with a fast fanout path would receive someone's <em>reply</em> to Gaga's tweet before Gaga's tweet itself reached their timeline — conversations arriving before the thing they replied to. Twitter's fix was the hybrid: high-follower accounts are excluded from fanout entirely; their tweets are fetched and merged into timelines at read time, while ordinary accounts keep the push path. This design — push for the many, pull for the few, merge at read — is now the textbook answer, and interviewers expect you to reinvent it on the spot when they say "100 million followers."</p>
 </div>
+
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-lady-gaga.jpg" alt="Lady Gaga at the Venice film festival in 2024"
+       width="320" height="480" loading="lazy">
+  <figcaption>Lady Gaga, the one account whose single tweet became thirty-one million timeline writes.
+    <span class="credit">Lady Gaga at the Venice International Film Festival, 2024, photograph by Harald Krichel, CC BY-SA 4.0, downscaled</span></figcaption>
+</figure>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 360" role="img" aria-label="Hybrid fanout: push path for normal users, pull path for celebrities, merged at read time">

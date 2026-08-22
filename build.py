@@ -242,6 +242,16 @@ def credits_html(entries, shipped, n_diagrams):
                  'imply no affiliation with or endorsement by them. Only marks published under a '
                  'free licence, or too simple to attract copyright, are reproduced; where no such '
                  "mark exists the company is set in the book's own type.</p>")
+    # Some licences are not discharged by a one-line credit: BSD-style terms
+    # require their notice reproduced verbatim in any distribution. A row that
+    # carries one gets it printed, and only when that file actually ships - the
+    # obligation attaches on publication. This exists so the requirement cannot
+    # be satisfied by somebody remembering it.
+    for r, e in rows:
+        notice = str(e.get("notice", "")).strip()
+        if notice:
+            o.append(f'    <details><summary>Full licence notice for <code>{escape(r)}</code>, '
+                     f'required verbatim</summary><pre>{escape(notice)}</pre></details>')
     o += ['  </div>', '</footer>']
     return "\n".join(o)
 
@@ -566,9 +576,23 @@ def main():
                 ohtml = of.read_text()
                 validate_html(cid, ohtml, "origin")
                 check_assets(cid, ohtml)
-                words = len(re.sub(r"<[^>]+>", " ", ohtml).split())
+                # Figures do not count against the 260. That cap governs how
+                # long the reader spends on history before the teaching starts,
+                # which is story prose - and a credit line is not story prose,
+                # it is a licence obligation we cannot shorten. Stories sit at a
+                # median of 258, so counting a mandatory credit against them
+                # would price every photograph out of the one place the company
+                # that acted is actually named. The figcaption cap below is what
+                # stops an author moving narrative into a caption to buy room.
+                prose = FIGURE_RE.sub(" ", ohtml)
+                words = len(re.sub(r"<[^>]+>", " ", prose).split())
                 if words > 260:
-                    err(f"{cid}: origin story is {words} words (limit 260)")
+                    err(f"{cid}: origin story is {words} words of prose (limit 260, figures excluded)")
+                for cap in re.findall(r"<figcaption\b[^>]*>(.*?)</figcaption>", ohtml, re.S | re.I):
+                    body = re.sub(r'<span class="credit".*?</span>', " ", cap, flags=re.S | re.I)
+                    n = len(re.sub(r"<[^>]+>", " ", body).split())
+                    if n > 20:
+                        err(f"{cid}: origin figcaption is {n} words (limit 20, credit excluded)")
                 origins[cid] = f'<template data-origin="{cid}">\n{ohtml}\n</template>'
 
             cf = CH / f"{cid}.cards.json"

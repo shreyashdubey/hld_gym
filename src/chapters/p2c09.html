@@ -182,6 +182,13 @@
 
 <p>Half one: <strong>checkpoints</strong>. Periodically — say every 30 seconds — the framework snapshots all state to durable storage (S3, HDFS), along with the log offsets that state corresponds to. The naive way is to pause the world, dump everything, resume: unacceptable at any real throughput. The elegant way is the <strong>Chandy-Lamport idea</strong> (1985, and Flink's checkpointing is a descendant of it): take a consistent snapshot of a running system <em>without stopping it</em>. The source injects a <strong>barrier</strong> — a special marker — into the stream, right after, say, offset 4,182. The barrier flows along with the data. When an operator sees the barrier, it snapshots its own state <em>at that moment</em> and forwards the barrier downstream. Since every operator snapshots at the same logical point — "I have processed everything before the barrier and nothing after" — the collected pieces form one consistent picture of the whole pipeline, taken while the pipeline kept running.</p>
 
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/sec-lamport.jpg" alt="Leslie Lamport in 2006"
+       width="360" height="480" loading="lazy">
+  <figcaption>Leslie Lamport, whose 1985 snapshot algorithm with K. Mani Chandy is the ancestor of the barrier described here.
+    <span class="credit">Leslie Lamport at IFIP, Udine, 2006, photograph by Andrej Bauer, CC BY-SA 2.5 SI, downscaled</span></figcaption>
+</figure>
+
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>A restaurant manager wants an exact count of orders in progress without closing the kitchen. She slips a red card into the ticket rail between two orders. Each station — grill, fry, plating — keeps working, and the moment the red card reaches it, that station writes down its current tickets and passes the card on. No two stations pause, yet everything written down describes the same instant in the flow of orders: everything before the card, nothing after. That's a barrier snapshot. Where the analogy stretches: with multiple input streams, an operator must wait until the card arrives on <em>all</em> of them before writing (barrier alignment) — the grill station waiting for the card from both the dine-in rail and the delivery rail.</p>
 </div>
@@ -223,6 +230,13 @@
 <div class="box story"><div class="box-tag">War story — Alibaba runs Singles' Day on Flink</div>
 <p>Alibaba's Singles' Day (November 11) is the largest shopping event on Earth, and its famous real-time GMV dashboard — GMV is gross merchandise value, the running total of money spent, the giant number journalists watch tick upward all day — is a stream processing job. Around 2016, Alibaba forked Apache Flink into an internal version called Blink to harden it for search, recommendations, and that dashboard; in January 2019 they went all-in, acquiring data Artisans — the company Flink's creators founded, later renamed Ververica — for a reported €90 million, and contributing Blink's improvements back upstream. The scale numbers are the point: during Double 11 in 2020, Alibaba's Flink deployment peaked at about <strong>4 billion events per second</strong>, roughly 7 TB of data per second, feeding dashboards executives and media were staring at in real time. At that scale, every mechanism in this chapter stops being theory: checkpointing must not stall the pipeline, watermarks must not hold windows hostage, and recovery must replay minutes of history at a rate that dwarfs most companies' total traffic. The same year they began running batch and stream workloads on the one engine — the kappa idea, "one codebase for both," executed at the most extreme scale on record.</p>
 </div>
+
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/alibaba.svg" alt="Alibaba wordmark"
+       width="773" height="122" loading="lazy">
+  <figcaption>Alibaba, which forked Flink into Blink so the Singles' Day dashboard would keep counting.
+    <span class="credit">Alibaba wordmark, public domain (below the threshold of originality). Trademark of Alibaba Group Holding Limited, used nominatively.</span></figcaption>
+</figure>
 
 <h2>Replay: the superpower you're actually buying</h2>
 

@@ -72,6 +72,12 @@
 
 <p>What counts as "the same file"? The <strong>cache key</strong> — by default the URL, plus any headers or query parameters you choose. Get it wrong in either direction and things go sideways. Include too much (say, a per-user session cookie) and every user misses — hit rate quietly hits 0% while your origin takes full traffic. Include too little and you serve the wrong bytes: if <code>?size=small</code> isn't in the key, the desktop user gets the thumbnail. The truly dangerous version is caching a <em>personalized</em> response under a shared key — then user A is served user B's page.</p>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/valve.svg" alt="Valve" width="1000" height="279" loading="lazy">
+  <figcaption>Valve, which took Steam's store offline on Christmas Day 2015 when one caching rule turned a traffic problem into a privacy incident.
+    <span class="credit">Valve wordmark, public domain (below the threshold of originality). Trademark of Valve Corporation, used nominatively.</span></figcaption>
+</figure>
+
 <div class="box story"><div class="box-tag">War story — Steam's Christmas cache leak</div>
 <p>On December 25, 2015, Steam users started seeing other people's account pages — strangers' email addresses, purchase histories, partial payment info. Valve took the store offline. It wasn't a hack: Steam was under a denial-of-service attack, and a caching configuration deployed to absorb the traffic was wrong. For about an hour, personalized store pages were cached and served to other users as if they were shared static files; Valve's statement put it at around 34,000 users exposed. The lesson is precise: a cache key is a security boundary. Anything personalized must either never be cached at the edge or be keyed so it can only ever reach its owner. One wrong caching rule turned a traffic problem into a privacy incident on the store's busiest day of the year.</p>
 </div>

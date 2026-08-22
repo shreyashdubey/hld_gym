@@ -108,6 +108,12 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 <p>This is the hard part the question was invented to probe. Delivery over a flaky network isn't made reliable by hoping the network behaves — it's made reliable by a <em>ladder of acknowledgments</em>, each rung a distinct promise from a distinct party, plus retries that are safe to repeat. Every tick in the WhatsApp UI is a rung of a distributed-systems protocol. Candidates who treat ticks as UI polish fail this question; candidates who can say precisely <em>what each tick proves, who sends it, and what happens if it never comes</em> pass at the senior level. Spend your time here.</p>
 </div>
 
+<figure class="fig" data-mode="origins">
+  <img src="assets/photo/p3c04-partridge.jpg" alt="Craig Partridge in 2017" width="480" height="400" loading="lazy">
+  <figcaption>Craig Partridge, who in 1988 answered duplicated mail with the rule this ladder still rests on: put it on disk, then acknowledge it.
+    <span class="credit">Photo Imagining the Internet Center, Elon University, Craig Partridge at his Internet Hall of Fame induction, 2017, CC BY 3.0, downscaled</span></figcaption>
+</figure>
+
 <p>Rung one: <strong>client → server</strong>. A's phone sends the message and starts a retry timer. Until the server's ack arrives, the phone keeps the message in local storage and resends — after 2 seconds, 4, 8 — surviving app restarts, tunnels, and tower switches. The single tick ✓ means exactly one thing: <em>the server has this message durably</em>. Which forces the golden rule: <strong>persist before you ack</strong>. Write to Cassandra (and the recipient's inbox), then ack. Never the reverse. An ack-then-persist server that crashes in the gap has lied: the phone shows ✓, deletes its local copy, and a message the sender was told was safe is gone forever with a checkmark on it.</p>
 
 <p>But retries create a new bug: if the <em>ack</em> gets lost, the phone resends a message the server already has. Duplicate. This is exactly what Chapter 2.2 solved with idempotency keys, and here the key is <code>client_msg_id</code> — a UUID the <em>phone</em> generates at send time. The server keeps a short-lived dedup record (id → seq, TTL a day or so); a resend of a known id gets the same ack back and writes nothing. Retries plus idempotent ids turn flaky networks from a correctness problem into a mere latency problem. That sentence is worth saying verbatim at the whiteboard.</p>

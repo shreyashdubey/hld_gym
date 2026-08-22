@@ -238,6 +238,14 @@
 <p>Shopify runs on sharded MySQL, with each merchant's shop living on one shard — and shards fill up unevenly, because one merchant going viral inflates a shard (Chapter 2.6's problem wearing a different shirt). So they built <strong>Ghostferry</strong>, an open-source Go tool that is the migrate phase productized: batch-copy a shop's rows to the target shard while tailing the binlog to replay concurrent changes, with verifiers that check data integrity before, during, and after the move. On top of it, moving a shop between shards is a routine operation: the copy runs in the background at full traffic, and the move ends with a brief write-lock on <em>that one shop</em> — seconds, not hours — while the final binlog entries drain and the router repoints. That's the mature endgame: rebalancing so routine it's just another background operation, and "downtime" scoped to one tenant for seconds. Now the dark twin. In October 2010, Foursquare ran user check-ins on two MongoDB shards of 66GB RAM each. Growth skewed; one shard blew past its RAM and started thrashing to disk. They tried to fix it live, under peak load — adding a third shard and migrating chunks off the hot one — but freeing 5% of the data didn't free 5% of the memory: the deleted rows left the remaining data fragmented across the same number of pages. The site went down for about eleven hours while they compacted the database offline, and MongoDB's CTO published the postmortem. Same operation as Shopify's — moving data off a hot shard — but attempted as an emergency instead of rehearsed as a routine. The lesson seniors quote: reshard while it's a project, because done as a rescue it inherits the emergency.</p>
 </div>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/foursquare.svg" alt="Foursquare wordmark"
+       width="1049" height="126" loading="lazy">
+  <figcaption>Foursquare, whose check-in shard outgrew its RAM in October 2010 and took about eleven hours to come back.
+    <span class="credit">Foursquare wordmark (2021), public domain (below the threshold of
+    originality). Trademark of Foursquare Labs, Inc., used nominatively.</span></figcaption>
+</figure>
+
 <h2>How deep interviews actually go</h2>
 
 <p>Calibration, so you neither undershoot nor gold-plate. At the senior bar, an interviewer hearing "we need to change this live" expects you to <strong>volunteer</strong>, unprompted:</p>

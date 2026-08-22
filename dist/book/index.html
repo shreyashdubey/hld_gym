@@ -546,12 +546,22 @@ h1.ch-title {
    grayscale-to-ink pass: an altered mark is a trademark problem, and section 5
    of the contract requires it be reproduced unaltered. */
 .fig-mark { max-width: 17rem; }
+/* Height is fixed rather than `auto` so every mark reads at the same optical
+   weight. Intrinsic sizes across the set run from IEX at 60x39 to Bell Labs at
+   3133x938; on `width: auto` that shipped a 60px mark on one page and a full
+   column-width one on the next. Scaling uniformly is not altering a mark - the
+   geometry and colour are untouched - but rendering one at a twelfth the size
+   of its neighbours is a presentation defect. `max-width` still wins for the
+   very wide ones, and `contain` letterboxes rather than crops. */
 .fig-mark img {
   aspect-ratio: auto; object-fit: contain;
-  max-height: 4.5rem; height: auto; width: auto; max-width: 100%;
+  height: 3rem; width: auto; max-width: 100%;
   margin: 0 auto;
   filter: none; mix-blend-mode: normal;
 }
+/* A roundel or seal at the wordmark height is a smudge; give the near-square
+   ones room. Matched on the class the placement pass sets, not on the file. */
+.fig-mark.fig-seal img { height: 6rem; }
 .fig figcaption {
   font-size: .82rem; line-height: 1.5; color: var(--ink-2); margin-top: 10px;
 }
@@ -1073,6 +1083,8 @@ details[open] > summary { margin-bottom: 8px; }
 <p>A candidate interviewing for a senior role at Meta described their design round like this: the interviewer kept asking one question, over and over — "and what if you had 100 times more users?" Each time, part of the design melted. A single database became sharded. A simple fanout hit a celebrity account and had to become a hybrid push-pull system. The candidate redesigned their sharding strategy three times in one interview. That wasn't the interview going badly — that <em>was</em> the interview. Meta's design rounds deliberately push a working design until it breaks, because how you respond to your own design breaking is the senior signal. Expect it, and you can even enjoy it: when your design breaks, say "good — here's what breaks first, and here's the fix," and you're demonstrating exactly what they came to see.</p>
 </div>
 
+
+
 <h2>Operational maturity: design something you'd be on call for</h2>
 
 <p>This is the newest and least-prepared-for part of the senior bar. Interviewers increasingly grade whether you think past the launch: How do you know the system is healthy? What do you watch — latency, error rate, queue depth? How do you roll out a change without betting the company on it? How do you roll back? What does the 3am page look like, and what did you build so it never fires?</p>
@@ -1257,6 +1269,8 @@ details[open] > summary { margin-bottom: 8px; }
 <p>Google did something rare for the interview world: it published the method. The Site Reliability Workbook — Google's own book on running production systems — contains a chapter introducing NALSD, and it walks through a worked example in exactly the style of the interview: designing a system that joins ad-click logs with search-query logs to compute click-through rates. The chapter starts with a design that fits on one machine, shows with arithmetic why one machine can't keep up — the log rate exceeds what one disk can write and seek through — and then scales up step by step: sharding the logs, computing how many disks the IOPS demand, how many machines the disks imply, and what the failure of any one of them does. Google's SREs use this method for real capacity planning, and the interview is a compressed version of the same exercise. If you want to know what the Google grader is trained to look for, the training material is sitting in public: every design claim is followed by the arithmetic that earns it.</p>
 </div>
 
+
+
 <p>The other Google signature: decisions tied to <strong>SLOs</strong>. An SLO — service level objective — is a promised target, like "99.9% of reads complete in under 100 ms." Google-calibrated candidates use the SLO as the arbiter of design arguments: "at 99.9% availability I can serve this from one region and eat the occasional blip; if you want 99.99%, that's under an hour of downtime a year, and now I need multi-zone redundancy and automated failover, which is why I'm asking which one we're promising." The SLO turns a taste argument into an engineering argument. Ask for the target early, and spend from it like a budget.</p>
 
 <h2>Palantir: the decomp round</h2>
@@ -1431,6 +1445,8 @@ details[open] > summary { margin-bottom: 8px; }
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>A recursive resolver is a hyper-organized receptionist. You ask, "where does Priya Sharma live?" She checks her notebook first — she wrote it down last week, with "valid until Friday" in the margin (the TTL). If the note has expired, she works the chain: the national directory ("try the Maharashtra office"), the state office ("try her housing society"), then the society office, which knows the flat number. You only ever talked to the receptionist. Where the analogy breaks: there are millions of receptionists like her, each keeping her own notebook — which is why the offices at the top of the chain don't collapse under the load.</p>
 </div>
+
+
 
 <div class="box story"><div class="box-tag">War story — Dyn, 2016: the day the internet forgot its own names</div>
 <p>On 21 October 2016, Twitter, Netflix, Reddit, Spotify and GitHub all "went down" for millions of people across the US East Coast — except none of them was down. Their servers were healthy. What broke was Dyn, the company running authoritative DNS for all of them. The Mirai botnet — roughly a hundred thousand hacked webcams and DVRs, conscripted through factory-default passwords — hammered Dyn's DNS servers in three waves through the day. A site whose name won't resolve might as well not exist. Users whose resolvers still held cached answers kept browsing — until the short TTLs expired minutes later and the caches drained. The lesson stuck industry-wide: big companies now run <em>two independent authoritative DNS providers</em> in parallel. When an interviewer asks "what are this design's single points of failure?", DNS is the one almost everyone forgets — because it fails so rarely that people forget it can.</p>
@@ -1657,6 +1673,8 @@ Cache-Control: max-age=60
 
 <p>The framing that reads senior: <strong>choose by direction and latency, then say the operational cost out loud</strong>. One-way push? SSE — and mention it rides plain HTTP through every proxy and CDN. Genuinely two-way and interactive? WebSockets — and mention drain-on-deploy and reconnect storms in the same breath. A status page checked occasionally? "Polling every 30 seconds is honest and correct here" — resisting the gold-plating is itself a senior signal. The junior tell interviewers listen for: "WebSockets for everything," which volunteers to run the hardest, most stateful option for problems that never asked for it.</p>
 
+
+
 <div class="box story"><div class="box-tag">War story — WhatsApp: two million open lines per server</div>
 <p>WhatsApp's product <em>is</em> a persistent connection. Every phone running the app holds one always-on TCP connection to a WhatsApp server — no polling, ever — so a message is pushed the instant it arrives, without burning battery on "anything new?" requests. The legendary part is the density. The early team ran a heavily tuned stack — Erlang on FreeBSD, built around the ejabberd messaging server — and in 2012 published benchmarks showing a <em>single server</em> holding over two million concurrent TCP connections. Erlang made that sane: millions of isolated, lightweight processes at a few kilobytes each, so "one process per connected phone" is a design, not a fantasy. The efficiency shaped the company — when Facebook paid $19 billion for WhatsApp in 2014, roughly 450 million users were served by about fifty employees, around thirty of them engineers. The senior lesson: in persistent-connection systems, <strong>concurrent connections — not requests per second — are the scaling axis</strong>. When you say "WebSockets" in an interview, beat the interviewer to the follow-up: how many connections per box, what they cost in memory, and what happens when a deploy or a blip disconnects a million phones at once.</p>
 </div>
@@ -1806,6 +1824,8 @@ Cache-Control: max-age=60
 <p>Slack's Web API originally paginated the obvious way: numbered pages backed by MySQL <code>LIMIT/OFFSET</code>. It worked — until Enterprise Grid brought customers with hundreds of thousands of users in one workspace. A deep page of a huge member list meant MySQL scanning and discarding enormous numbers of rows per request, and membership churn between requests drifted the page boundaries, duplicating or dropping users. Slack's engineers documented the move to cursor-based pagination on methods like <code>conversations.members</code>: responses return an opaque base64 <code>next_cursor</code> encoding the last item seen, and the next request resumes from an index seek at that position. Bounded cost at any depth, stable pages under churn — and an opaque cursor kept them free to change what's inside it. Their guidance to consumers became blunt: if an endpoint offers cursors, use them.</p>
 </div>
 
+
+
 <h3>Filtering and sorting: small feature, sharp edges</h3>
 
 <p>Filters and sorts ride in query parameters: <code>GET /orders?status=shipped&amp;sort=-created_at</code> (minus prefix = descending, a common convention). Two rules. <strong>Whitelist what's sortable and filterable</strong> — every sortable field promises an index; accept <code>sort=anything</code> and you've handed strangers a full-table-scan button on your primary database. <strong>Bind cursors to their sort</strong> — a cursor encodes a position within one specific ordering, so if the client changes sort or filters mid-walk, reject the stale cursor cleanly instead of returning garbage.</p>
@@ -1844,6 +1864,8 @@ Cache-Control: max-age=60
 <div class="box story"><div class="box-tag">War story — Stripe: idempotency as an API promise</div>
 <p>Stripe moves payments over the public internet, where timeouts aren't an edge case — they're weather. So idempotency keys have been first-class in their API for over a decade, and their design is the reference implementation everyone copies. Clients send an <code>Idempotency-Key</code> header (docs recommend a random V4 UUID) on POSTs. Stripe saves the status code and body of the first request made with a key — <em>whether it succeeded or failed</em> — and replays that saved result for every later request with the same key, so a client retrying into an error sees the same error, not a confusing second outcome. Keys are pruned after 24 hours. Reuse a key with different parameters and Stripe rejects it rather than guess which request you meant; a retry racing the original mid-flight is refused with a conflict. Their engineering writing pushed the pattern into the wider industry — it's now an IETF draft header — and it's why "how do clients safely retry payments?" has a canonical answer you're expected to know cold.</p>
 </div>
+
+
 
 <h2>Versioning: v1 forever is the real answer</h2>
 
@@ -2054,6 +2076,7 @@ Cache-Control: max-age=60
 <p>But large shops do drop enforcement, for three concrete reasons worth knowing. First, every FK check is extra work on every write — a lookup into the parent table, plus locking on the parent row that can create surprising contention. Second, the big online schema-migration tools that let you alter huge tables without downtime don't play well with them — GitHub's gh-ost explicitly does not support foreign keys at all. Third, foreign keys can't cross shards: once <code>users</code> and <code>bookings</code> live on different machines, there is no database left that can see both sides of the constraint. At that point the rule moves into application code plus periodic integrity-check jobs that hunt for orphaned rows. That's the honest trade: you give up an automatic guarantee and buy it back with vigilance.</p>
 
 <div class="box story"><div class="box-tag">War story — GitHub and MySQL</div>
+
 <p>GitHub has run on MySQL since the beginning — Rails app, one primary accepting all writes, replicas fanning out reads. Their schema philosophy is deliberately conservative, and their tooling shows what "careful schema at scale" costs. Altering a table with hundreds of millions of rows in MySQL was so painful — the classic approaches use triggers that add load to an already-hot primary — that in 2016 GitHub built and open-sourced <strong>gh-ost</strong>: a tool that builds a ghost copy of the table, replays changes by tailing MySQL's replication log instead of using triggers, then swaps the tables atomically. A schema change on a giant table becomes a slow, throttleable, pausable background operation instead of a scary lock. Notably, gh-ost's own documentation lists foreign keys as unsupported — one reason GitHub's schemas avoid FK constraints and enforce integrity in the application. And the "single primary" part of the story has teeth too: in October 2018, just 43 seconds of lost connectivity between their East Coast data center and the rest of the network caused automated tooling to fail writes over to the West Coast — leaving seconds of writes stranded on the old primary and putting GitHub into degraded mode for roughly 24 hours while they reconciled the two histories. A single-writer design is beautifully simple right up until the moment the "single" part is disputed.</p>
 </div>
 
@@ -2194,6 +2217,7 @@ INSERT INTO bookings (user_id, show_id, seat_id) VALUES (…);
 <p>Somewhere in most loops, someone asks: "SQL or NoSQL here?" There's a trap in the question. The answer interviewers dread is the blog-post recitation — "SQL gives ACID and joins, NoSQL scales horizontally…" — because it's what people say when they've read comparisons instead of operating databases. The advice from the Hello Interview guides is blunt and worth internalizing: <strong>pick one database and know it deeply — broad SQL-vs-NoSQL comparisons read as inexperience</strong>. The dichotomy is mostly dead anyway: Postgres handles JSON documents, full-text search, and replicates nicely; DynamoDB has transactions. What separates candidates is depth in <em>something</em>: "Postgres. Here's the schema, here are the three indexes and why, here's the unique constraint doing my concurrency work, here's what I'd watch in production." Specific beats broad, every single round.</p>
 
 <div class="box story"><div class="box-tag">War story — Instagram on Postgres</div>
+
 <p>When Facebook bought Instagram in April 2012 for a billion dollars, Instagram had about 30 million users and <strong>13 employees</strong> — and the backend was deliberately boring: Django, PostgreSQL, Memcached, Redis. Their engineering motto was literally "do the simple thing first." When one Postgres box could no longer hold the data, they didn't switch databases — they went deeper into the one they knew: several thousand <em>logical</em> shards (implemented as Postgres schemas) mapped onto a handful of physical machines, so future growth meant moving shards, not rewriting code. Needing unique IDs generated across all those shards without any central bottleneck, they built a 64-bit ID inside Postgres itself — a few lines of PL/pgSQL packing 41 bits of timestamp, 13 bits of shard ID, and a 10-bit per-shard sequence — after deciding that running extra ID-generation infrastructure wasn't worth the operational load for a tiny team. Years of hypergrowth, handled by one deeply-understood database and a simple schema. That's the strongest available counterexample to "you need NoSQL to scale."</p>
 </div>
 
@@ -2377,6 +2401,9 @@ CREATE INDEX shows_by_movie   ON shows (movie_id, starts_at);</code></pre>
 <div class="box story"><div class="box-tag">War story — where "the numbers" come from</div>
 <p>The table has a documented lineage. Peter Norvig published an early version in his 2001 essay "Teach Yourself Programming in Ten Years," as approximate timings every programmer should internalize. Then Jeff Dean — the Google engineer behind MapReduce, Bigtable, and Spanner — put a slide titled <em>"Numbers Everyone Should Know"</em> into his 2009 LADIS keynote, and it went viral the way engineering slides occasionally do. Dean's point was never trivia: he and Sanjay Ghemawat were famous inside Google for refusing to build anything until the envelope math closed. In his talks, Dean estimates rendering an image-search page of 30 thumbnails — read them serially from disk at ~10 ms a seek and it's over half a second; read them in parallel and it's tens of milliseconds — the entire architecture choice falling out of arithmetic you can do in your head. A researcher named Colin Scott later built a version of the table projected across the years, revealing the deeper lesson: SSDs and networks got dramatically faster since 2009, but the cross-ocean row barely moved. Silicon improves; the speed of light doesn't.</p>
 </div>
+
+
+
 
 <h2>Units, powers, and ruthless rounding</h2>
 
@@ -2604,6 +2631,8 @@ CREATE INDEX shows_by_movie   ON shows (movie_id, starts_at);</code></pre>
 <h2>Scaling up: the honest defense of one big box</h2>
 
 <p><strong>Vertical scaling</strong> means making one machine stronger: more CPU cores, more RAM, faster disks. <strong>Horizontal scaling</strong> means adding machines and spreading the work. The industry spent fifteen years romanticizing the second and forgetting how absurdly powerful the first has become.</p>
+
+
 
 <p>Here's one machine in the mid-2020s: cloud instances rent with hundreds of CPU cores and terabytes of RAM — the biggest memory-optimized ones pass 20 TB. A single NVMe SSD does on the order of a million random reads per second, and a server holds a stack of them. Run the numbers from the estimation chapter: a service doing a few thousand requests per second with a working set of a few hundred gigabytes fits on <em>one machine</em> with room to spare. That's not a toy — that's a successful business.</p>
 
@@ -2860,6 +2889,8 @@ CREATE INDEX shows_by_movie   ON shows (movie_id, starts_at);</code></pre>
 <p>The order is a judgment call interviewers probe: X first, nearly free once you're stateless. Z when a data tier outgrows one machine. Y when the <em>team's</em> shape demands it — not because a conference said so. Which brings us to the company that learned this in public.</p>
 
 <div class="box story"><div class="box-tag">War story — Pinterest</div>
+
+
 <p>In 2011–2012 Pinterest was among the fastest-growing sites the web had seen — past 10 million users with a single-digit engineering team. Under that pressure they adopted everything that promised infinite scale, and their famous "Scaling Pinterest" retrospective shows the September 2011 stack: MySQL <em>plus</em> Cassandra <em>plus</em> MongoDB <em>plus</em> Membase <em>plus</em> Redis <em>plus</em> Memcached <em>plus</em> Elasticsearch, with multiple sharding schemes at once. Each clustered "auto-scaling" technology, pushed to its limit, failed in its own novel way — and every novel failure was an all-hands emergency with no answers on the internet. So they reversed course and simplified brutally: sharded MySQL (4,096 logical shards at launch, each object's shard baked into its 64-bit ID), Redis, Memcached, Solr — mature tools with boring, documented failure modes. Their stated lessons became canon: keep it simple; use known, proven technology; clone stateless web servers behind load balancers for traffic (the X-axis) and shard data where you must (the Z-axis). The architecture that carried Pinterest through hypergrowth was less exotic than what many ten-person startups run today.</p>
 </div>
 
@@ -3136,6 +3167,10 @@ return value                           # hit path: one fast lookup, done</code><
 
 <div class="box story"><div class="box-tag">War story — Instagram's Bieber problem</div>
 <p>In Instagram's early years, engineers had a name for a whole class of load spike: the Justin Bieber problem. When Bieber posted, millions of likes arrived within minutes, and the naive implementation — count the like rows when someone views the post — meant re-running an expensive count over rows being hammered with concurrent writes. Co-founder Mike Krieger has said he still remembers Bieber's user ID in the database — 6860189 — because that account was so often the source of the latest fire; spikes were reliably Bieber-shaped enough that checking his account was a legitimate first diagnostic. The fix is the pattern you now know: stop recomputing — keep a denormalized, cached like count, updated incrementally, and treat ultra-popular content as its own class. Real traffic is brutally skewed; a design that handles average keys but melts on the top ten isn't done.</p>
+
+
+
+
 </div>
 
 <h2>Negative caching: remember the "no" too</h2>
@@ -3311,6 +3346,8 @@ return value                           # hit path: one fast lookup, done</code><
 <p>How long does the edge keep a copy? You tell it, with a <strong>TTL</strong> (time to live), usually via the <code>Cache-Control</code> response header. <code>max-age=3600</code> means "any cache may serve this for an hour without asking me again." The trade-off is the same one from the caching chapter: long TTL = fewer origin hits but staler content; short TTL = fresher but your origin works harder.</p>
 
 <p>What counts as "the same file"? The <strong>cache key</strong> — by default the URL, plus any headers or query parameters you choose. Get it wrong in either direction and things go sideways. Include too much (say, a per-user session cookie) and every user misses — hit rate quietly hits 0% while your origin takes full traffic. Include too little and you serve the wrong bytes: if <code>?size=small</code> isn't in the key, the desktop user gets the thumbnail. The truly dangerous version is caching a <em>personalized</em> response under a shared key — then user A is served user B's page.</p>
+
+
 
 <div class="box story"><div class="box-tag">War story — Steam's Christmas cache leak</div>
 <p>On December 25, 2015, Steam users started seeing other people's account pages — strangers' email addresses, purchase histories, partial payment info. Valve took the store offline. It wasn't a hack: Steam was under a denial-of-service attack, and a caching configuration deployed to absorb the traffic was wrong. For about an hour, personalized store pages were cached and served to other users as if they were shared static files; Valve's statement put it at around 34,000 users exposed. The lesson is precise: a cache key is a security boundary. Anything personalized must either never be cached at the edge or be keyed so it can only ever reach its owner. One wrong caching rule turned a traffic problem into a privacy incident on the store's busiest day of the year.</p>
@@ -3613,6 +3650,8 @@ width, height, created_at, ...</code></pre>
 </table>
 
 <p>The senior framing: this is a <strong>durability-versus-latency budget</strong>, spendable differently per system. A committed answer: semi-sync to one follower in the same region (survives machine death, ~1ms cost), async to another region (disaster recovery without a 70ms cross-country toll on every commit). Say that with the numbers attached and you sound like someone who has carried the pager.</p>
+
+
 
 <h2>Replication lag: the bug your users find before you do</h2>
 
@@ -4035,6 +4074,8 @@ width, height, created_at, ...</code></pre>
 
 <p>This is the <strong>hot partition</strong> (or hot key, or celebrity) problem, and it gets a full chapter (2.6). The preview: <strong>cache</strong> the hot thing in front of the shard, <strong>split the entity itself</strong> (append a suffix — <code>bieber-1</code> through <code>bieber-16</code> — spreading one giant key over many shards, at the cost of gathering on read), or <strong>isolate it</strong> — with a directory, moving the whale to its own shard is a one-line map edit, a big reason directories keep beating elegant math in real companies.</p>
 
+
+
 <div class="box story"><div class="box-tag">War story — Discord and the partitions that ran hot</div>
 <p>In 2017 Discord moved its messages to Cassandra, partitioned by <code>(channel_id, bucket)</code> — the bucket a ten-day time window, so one channel's history is chopped into slices of time rather than one endless partition. Sensible design. By 2022 the cluster held trillions of messages across 177 nodes and had become, in their own telling, an on-call nightmare — largely from hot partitions. When something big happened in a huge channel, traffic concentrated on the one partition holding that channel's current bucket; the node holding it fell behind, and latency rippled outward to unrelated channels on the same node, with Cassandra's JVM garbage-collection pauses amplifying every incident. The 2023 fix came in two parts. They migrated to ScyllaDB — a C++ rewrite of Cassandra, no garbage collector, shard-per-core — same data model, calmer engine. But the deeper fix was architectural: Rust-based "data services" between API and database doing <strong>request coalescing</strong> — a thousand users ask for the same hot message page, one query reaches the database, everyone shares the answer. A Rust migrator moved trillions of messages in about nine days; the fleet shrank from 177 nodes to 72, and message-read p99 fell from 40–125 ms to around 15 ms. The interview lesson: a hot key is not a sharding problem, so more shards can't fix it — you need coalescing, caching, or isolation <em>in front of</em> the shard.</p>
 </div>
@@ -4315,6 +4356,8 @@ width, height, created_at, ...</code></pre>
 <figcaption>After a partition, two cart versions exist. An app-level union keeps every add. LWW would keep one branch and delete an acknowledged write with no trace.</figcaption>
 </figure>
 
+
+
 <div class="box story"><div class="box-tag">War story — Amazon Dynamo: the paper that chose a side</div>
 <p>During the 2004 holiday shopping season, Amazon suffered a string of outages traced to pushing their Oracle-based infrastructure past its limits — clustering and replication on the leading commercial database of the day simply couldn't sustain the availability and scale the retail business demanded. The post-mortem question was blunt: what does the shopping cart actually <em>require</em>? Answer: it must <strong>always accept adds</strong>. Every refused "add to cart" during a partition is a customer walking away with their wallet — availability is literally revenue. So Amazon built Dynamo, a key-value store that inverted the traditional priorities: always-writable via sloppy quorums and hinted handoff, vector clocks to detect concurrent versions, and conflicts surfaced <em>at read time</em> for the application to merge — the cart merges by union of items. The paper is honest about the cost: after a merge, a deleted item can occasionally resurrect in your cart, and Amazon judged "a deleted item reappears (rarely)" a fair price for "adds never fail." The 2007 paper became one of the most influential systems papers ever written — Cassandra, Riak, and Voldemort are its direct descendants. And the epilogue completes this chapter's argument: DynamoDB, the 2012 managed service, offers <em>both</em> — eventually consistent reads by default at half the cost of strongly consistent ones, strong reads when you ask, and last-writer-wins for its cross-region global tables. Even the company that wrote the availability manifesto ended up selling consistency as a per-request checkbox.</p>
 </div>
@@ -4510,6 +4553,8 @@ width, height, created_at, ...</code></pre>
 <p>Around 2010, LinkedIn's data plumbing was drowning in exactly the problem pub/sub solves. Activity data — page views, clicks, profile visits — and operational metrics had to flow from many source systems into many destinations: the warehouse, Hadoop, search indexes, monitoring, recommendations. Each connection was its own hand-built, point-to-point pipeline, so the pipeline count grew like sources × destinations, and every new destination meant another fragile custom feed. Jay Kreps, Neha Narkhede, and Jun Rao replaced the tangle with one idea: a distributed, partitioned, replicated <em>commit log</em>. Every event is appended once to a durable, ordered log; any consumer reads at its own pace, tracking its own position — even rewinding to replay history. Publish once, consume anywhere; the N×M mess became N+M. Open-sourced in 2011, and by 2019 LinkedIn's deployment carried around seven trillion messages a day. The name? Kreps had taken a lot of literature classes, and since it was "a system optimized for writing," he named it after a writer: Franz Kafka. Chapter 3.17 has you build a mini version yourself.</p>
 </div>
 
+
+
 <h2>Delivery guarantees: an honest conversation</h2>
 
 <p>Here's the question that separates people who've used queues from people who've read about them: <em>when a consumer crashes halfway through a message, what happens?</em></p>
@@ -4635,6 +4680,8 @@ width, height, created_at, ...</code></pre>
 <div class="box story"><div class="box-tag">War story — Shopify and the flash-sale firehose</div>
 <p>Shopify's platform hosts the internet's most violent traffic spikes: celebrity "drops," where a merchant releases limited stock and a fanbase descends in the same minute, and Black Friday/Cyber Monday, where the platform peaked around $4.2 million in sales <em>per minute</em> in 2023. Their survival strategy is queues at two layers. Inside the request path, Shopify pushes everything non-essential into background jobs — their job infrastructure routinely queues tens of thousands of jobs per second, handling webhooks, emails, fraud analysis, and analytics off the user's clock, so checkout stays fast while the backlog absorbs the surge. And for flash sales, they queue <em>the humans</em>: when a drop would overwhelm inventory, buyers land in a throttled checkout queue — a waiting room — admitted in batches sized to what the inventory database can survive, instead of a hundred thousand simultaneous purchases stampeding the same stock rows. Same principle at both layers: don't provision for the spike — absorb it, and drain at a rate you chose.</p>
 </div>
+
+
 
 <h2>Choosing a tool: Kafka vs RabbitMQ vs SQS</h2>
 
@@ -4833,6 +4880,7 @@ else:
 <p>Cost: two small integers per key, one increment per request. Accuracy: approximate — but how approximate?</p>
 
 <div class="box story"><div class="box-tag">War story — Cloudflare: rate limiting at the edge</div>
+
 <p>When Cloudflare built rate limiting as a product, the constraint was brutal: it had to work for millions of customer domains, enforced across every edge server they run, without melting memory. A timestamp log per visitor per domain was arithmetic suicide at that scale, so they went with the sliding window counter — two counters per key and the weighted-overlap estimate. Then they did the responsible thing: measured how wrong the approximation actually is. They analyzed 400 million requests from 270,000 distinct sources and found the estimator made the wrong call on just 0.003% of requests, with the estimated rate differing from the true rate by about 6% on average — and none of the wrongly-allowed traffic got through at anywhere near abusive volume. In their write-up they note the pleasant irony: the approximation's smoothing across window boundaries isn't a bug, it's the feature — it's exactly what defeats the boundary-burst trick. That analysis is why "sliding window counter" is the answer most senior engineers give by default: near-exact behavior at fixed-window prices, validated at internet scale.</p>
 </div>
 
@@ -5363,6 +5411,8 @@ x-ratelimit-reset: 1755088800</code></pre>
 <p>Flickr hit this problem before Twitter did: they federated their MySQL database into many shards in the mid-2000s, needed globally unique photo IDs, and wrote the solution up in 2010. They considered GUIDs (UUIDs) and rejected them for exactly the index-locality and size reasons above — random 128-bit keys index badly in MySQL. Their solution was almost comically low-tech: a dedicated MySQL box whose only job is a one-row table with an auto-increment column. Issuing an ID is a single <code>REPLACE INTO</code> statement — a MySQL quirk that deletes and re-inserts the row, bumping the counter — then read the counter back. That's a "ticket server": the centralized counter, kept, but isolated on hardware whose only job is counting. One box is a single point of failure, so Flickr ran two: one configured to issue only odd numbers, the other only even (MySQL's <code>auto_increment_increment</code> and <code>auto_increment_offset</code> settings), with clients round-robining between them. Either box can die and the other keeps issuing, and they can never collide. The cost they accepted with open eyes: a network round trip per ID, and IDs that are only <em>roughly</em> ordered across the odd/even pair. It carried billions of Flickr photo IDs. Simple, boring, operable — very senior.</p>
 </div>
 
+
+
 <p>Here's the whole decision compressed:</p>
 
 <table>
@@ -5518,6 +5568,8 @@ x-ratelimit-reset: 1755088800</code></pre>
 <h3>Redlock, and an honest paragraph about it</h3>
 
 <p>You might diagnose a different weakness first — "the lock lives in <em>one</em> Redis; what if Redis dies?" — and reach for Redlock, an algorithm by Redis's creator that acquires the lock on a majority of five independent Redis nodes, tolerating node failures. In 2016, Martin Kleppmann (of <em>Designing Data-Intensive Applications</em>) published a widely-read critique, antirez published a sharp rebuttal, and the exchange became the field's favorite argument. Kleppmann's core point survives contact with both essays, and it's the distinction to carry out of this chapter: decide whether your lock is for <strong>efficiency</strong> or for <strong>correctness</strong>. An efficiency lock prevents <em>wasted work</em> — two workers computing the same expensive report; if it rarely fails, you pay some duplicate compute and nobody is harmed, and a single Redis <code>SET NX PX</code> is the right amount of machinery (Redlock's five nodes buy little here). A correctness lock prevents <em>disaster</em> — double refunds, two nodes writing the same file. And for that job, Redlock still isn't enough, because more Redis nodes do nothing about the GC-pause timeline above: Redlock's safety quietly depends on assumptions about clocks and pause times that real machines violate. Kleppmann's verdict, roughly: fine for efficiency (though overkill), insufficient for correctness.</p>
+
+
 
 <p>So what <em>does</em> protect correctness? A preview, because chapter 2.3 finishes this properly: a <strong>fencing token</strong>. The lock service hands every holder a number that only increases — A gets token 33, and after A's lease expires, B gets 34. Every write carries its token, and the <em>storage being written</em> rejects any token older than the newest it has seen. When zombie A thaws and writes with 33 after B wrote with 34, storage refuses. Notice what moved: the enforcement left the lock and moved into the resource — the one place a frozen process can't lie to. Getting tokens that are guaranteed to only increase requires consensus (ZooKeeper, etcd), which is chapter 2.3's whole subject. Until then, the operational rule of thumb: single-Redis locks for efficiency, and for correctness make the operation <strong>idempotent</strong> — safe to run twice, chapter 2.2 — so that when the lock fails you anyway, nothing burns.</p>
 
@@ -5714,6 +5766,8 @@ COMMIT;</code></pre>
 
 <p>The name, by the way, is older than microservices: Hector Garcia-Molina and Kenneth Salem coined "sagas" in a 1987 paper about breaking up long-running transactions inside a single database. The microservices world dug the idea out of the library because it was suddenly the exact shape of the problem.</p>
 
+
+
 <h2>Who runs the saga? Choreography vs orchestration</h2>
 
 <p>Somebody has to know what step comes next and what to do on failure. There are exactly two answers.</p>
@@ -5741,6 +5795,8 @@ COMMIT;</code></pre>
 <p>The senior move is to commit with a reason, not to present the table and shrug. A good verbatim line: <em>"This flow moves money across four services, and support will need to see exactly where any order is stuck — I'll orchestrate it from the order service. For one-way reactions like 'send a confirmation email when an order confirms,' choreography: just subscribe to the event, nothing to unwind."</em> Both patterns, each where it belongs, decision anchored to visibility and rollback needs.</p>
 
 <div class="box story"><div class="box-tag">War story — Uber builds Cadence</div>
+
+
 <p>By the mid-2010s, Uber had the saga problem at company scale: business flows like driver onboarding — document checks, background verification, activation — span many services and can take days, and dozens of teams were each hand-rolling the same fragile machinery of queues, cron jobs, and "current_step" database columns to track where each flow stood. Every homegrown orchestrator had the same bugs: state lost on crashes, flows stuck with no owner, retries and timers reinvented badly. Maxim Fateev and Samar Abbas — who had met at Amazon around 2009 building Simple Workflow Service, AWS's coordination engine — reunited at Uber's Seattle office in 2015 and built Cadence: a shared orchestration engine that records every step of a workflow as an event history in a database, so when a worker crashes, the workflow replays its history and resumes exactly where it left off, timers and retries included. Orchestration code went from infrastructure every team rebuilt to a platform they all shared; Uber open-sourced it in 2017 and runs a huge number of internal flows on it. In 2019 the pair left to found Temporal — a fork of Cadence — and today companies like Netflix, Datadog, and Coinbase run their sagas on it. The lesson for your whiteboard: orchestration-with-durable-state is so consistently needed that it became a product category ("durable execution"). Mentioning that category is staff-level garnish; knowing <em>why</em> the orchestrator must persist its state — because the orchestrator can crash mid-saga too — is senior table stakes.</p>
 </div>
 
@@ -5835,6 +5891,8 @@ COMMIT;</code></pre>
 <p>One price tag, and you must volunteer it: the outbox delivers <strong>at-least-once</strong>. If the relay publishes an event and crashes before marking the row sent, it will publish it again on restart. Duplicates are not a bug in your implementation — they are a guaranteed, designed-in behavior, and every consumer must handle them: processing the same event twice must have the same effect as processing it once. That property is idempotency, it's the outbox's inseparable partner, and it's the entire subject of the next chapter.</p>
 
 <div class="box story"><div class="box-tag">War story — Airbnb's SpinalTap</div>
+
+
 <p>As Airbnb broke its Rails monolith (internally nicknamed "monorail") into services through the mid-2010s, dozens of downstream systems needed to know the moment core data changed — a reservation created, a listing price updated — to refresh search indexes, caches, risk checks, and dependent services. Teams gluing this together with dual writes and periodic re-syncs got exactly the drift this chapter predicts: consumers whose view of the data quietly disagreed with the source database. Airbnb's answer was SpinalTap, a change-data-capture service they open-sourced in 2018: it tails MySQL's binlog — the database's own journal of committed changes — plus DynamoDB streams, and publishes every committed mutation to Kafka as a standardized event, in commit order. That last phrase is the whole point: the events aren't what application code <em>claims</em> happened, they're what the database <em>actually committed</em>, so publish-without-write and write-without-publish become structurally impossible. It's the outbox idea graduated into platform infrastructure: stop trusting application code to remember to tell the world; read the truth from the database's log and tell the world yourself.</p>
 </div>
 
@@ -5971,6 +6029,8 @@ COMMIT;</code></pre>
 
 <div class="box story"><div class="box-tag">War story — Knight Capital</div>
 <p>On August 1, 2012, Knight Capital — then one of the biggest stock-trading firms in the US — deployed new order-routing code to its eight production servers. The deploy missed one. Worse, the release reused an old feature flag, and on that eighth server the flag activated dead test code from years earlier called Power Peg — code built to keep sending child orders until a counter said "the parent order is filled, stop." The code that updated that counter had been moved years before, so the eighth server never saw "done." It fired orders continuously into the open market: millions of orders, around four million executions across roughly 150 stocks, in about 45 minutes. The loss was over $440 million — more than the company's cash on hand — and Knight had to be rescued and was ultimately acquired. Strip away the finance and the root cause is this chapter's theme: work executing with no durable record of what was already done. One missing "have I already processed this?" check is a company-ending event.</p>
+
+
 </div>
 
 <h2>Idempotency keys, done properly</h2>
@@ -6732,6 +6792,8 @@ COMMIT;</code></pre>
 
 <p>The honest decision rule, committed and justified: <strong>realtime collaborative text with a server you control → OT or a server-based sequence CRDT, both defensible; say why you picked yours. Offline-first, peer-to-peer, or multi-leader sync → CRDT, no contest. Non-text shared state — counters, sets, presence, settings → small CRDTs, they're practically free. Global invariants → neither; coordinate.</strong> And there's a third path the next story earns: if you have a central server <em>and</em> your data isn't text, you may not need either algorithm at full strength.</p>
 
+
+
 <div class="box story"><div class="box-tag">War story — Figma's multiplayer</div>
 <p>When Figma built multiplayer editing (shipped 2016; detailed in Evan Wallace's 2019 post "How Figma's multiplayer technology works"), they studied OT first — it's what Google Docs uses — and rejected it as more complexity than a design tool needed. But they didn't adopt full CRDTs either. A Figma document is a tree of objects, each a bag of properties, and their protocol is CRDT-<em>inspired</em>: concurrent changes to <em>different</em> properties of one object both survive; concurrent changes to the <em>same</em> property resolve last-writer-wins, with the central server — which every edit flows through — deciding "last" by arrival order, so no clock-skew roulette. That's the LWW register's data loss, accepted with eyes open: if two designers set the same rectangle's fill in the same instant, one fill wins, and the loser sees it happen and can re-apply in a click. The same trade on prose would eat sentences. Because the server is authoritative, they skipped the machinery decentralized CRDTs need; child ordering uses fractional indexing — positions as fractions between neighbors — rather than sequence-CRDT lists. The lesson interviewers want you to extract: Figma scoped the problem — design objects, central server, property granularity is enough — then bought exactly as much merge machinery as that problem required, not a bit more.</p>
 </div>
@@ -7002,6 +7064,8 @@ COMMIT;</code></pre>
 <div class="box story"><div class="box-tag">War story — Netflix</div>
 <p>On Christmas Eve 2012, an AWS maintenance process accidentally deleted production state data for Elastic Load Balancers in us-east-1. Netflix ran essentially everything in that one region — and streaming died on TVs across the Americas on one of the biggest movie nights of the year, for hours, over something Netflix's own engineers could not touch. The response reshaped the company: Netflix rebuilt its user-facing path to run active-active across multiple AWS regions, so any region can absorb another's users. Then the properly senior part: they built <strong>Chaos Kong</strong>, a tool that deliberately evacuates an <em>entire region</em> in production — on a regular schedule, not during emergencies — to prove the failover works. Because they'd rehearsed region evacuation many times before ever needing it in anger, shifting a real failing region's traffic became a practiced routine instead of a bet. That's the whole GameDay philosophy in one company: the outage you've rehearsed is an inconvenience; the one you haven't is an incident.</p>
 </div>
+
+
 
 <h2>Cells: walls inside the region</h2>
 
@@ -7302,9 +7366,13 @@ COMMIT;</code></pre>
 
 <p>The senior answer refuses to pick one policy for all users: <strong>push for normal accounts, pull for celebrities, merge at read time.</strong> When a normal user posts, fan out to their 200 followers — trivial. When a celebrity posts, write it once to a celebrity-posts store and fan out nothing. When you open your feed, the system fetches your precomputed timeline and merges in recent posts from the handful of celebrities you follow. The load profile of each entity class gets the strategy that suits it, with a follower-count threshold deciding who counts as a celebrity.</p>
 
+
+
 <div class="box story"><div class="box-tag">War story — Twitter's celebrity fanout</div>
 <p>In Raffi Krikorian's famous "Timelines at Scale" talk (he ran Twitter's platform engineering), Twitter had about 150 million active users and roughly 300K QPS of timeline reads, served by fan-out-on-write: every tweet was copied into each follower's Redis-backed home timeline. Then follower counts exploded. Lady Gaga had around 31 million followers — one tweet from her meant ~31 million timeline writes, and a fanout that could take minutes to finish. The visible symptom was almost comic: replies raced ahead of the original. A follower with a fast fanout path would receive someone's <em>reply</em> to Gaga's tweet before Gaga's tweet itself reached their timeline — conversations arriving before the thing they replied to. Twitter's fix was the hybrid: high-follower accounts are excluded from fanout entirely; their tweets are fetched and merged into timelines at read time, while ordinary accounts keep the push path. This design — push for the many, pull for the few, merge at read — is now the textbook answer, and interviewers expect you to reinvent it on the spot when they say "100 million followers."</p>
 </div>
+
+
 
 <figure class="diagram">
 <svg viewBox="0 0 720 360" role="img" aria-label="Hybrid fanout: push path for normal users, pull path for celebrities, merged at read time">
@@ -7920,7 +7988,11 @@ COMMIT;</code></pre>
 
 <p>Alerting has a philosophy, and it fits in two lines. <strong>Page on symptoms, not causes.</strong> <strong>Every page must be actionable.</strong></p>
 
+
+
 <p>A symptom is user pain: checkout success rate dropping, feed p99 doubling, messages not delivering. A cause is machinery: CPU at 85%, one pod restarting, disk at 70%. The story that opened this chapter is the philosophy violated in both directions at once — noise with no action to take, and real pain with no page at all. Causes belong on dashboards, where you consult them <em>after</em> a symptom fires, to diagnose. Symptoms belong on pagers. The test for every alert you keep: when this fires at 3am, is there a specific action the on-call takes? If the honest answer is "look at it and go back to bed," delete the page or demote it to a ticket. An alert nobody acts on isn't an alert — it's a lullaby.</p>
+
+
 
 <div class="box story"><div class="box-tag">War story — Knight Capital's 97 unread alarms</div>
 <p>On August 1, 2012, Knight Capital — then handling a sizable share of all US stock trading — deployed new order-routing code to its eight SMARS trading servers. A technician missed one server. That eighth machine still ran a piece of code called Power Peg, dead since 2003, and the new deployment reused an old feature flag that switched the zombie code back on. When markets opened at 9:30am, the eighth server began firing millions of unintended orders into the market. It took 45 minutes to stop, moved prices across roughly 150 stocks, and left Knight with about $460 million in losses — the firm collapsed into a rescue acquisition within a year. The observability detail is the painful part, documented in the SEC's order: starting at 8:01am — <em>89 minutes before the market opened</em> — an internal system sent 97 automated emails to Knight staff flagging an error, "Power Peg disabled," on the exact server that was about to malfunction. Nobody acted, and the SEC noted why: the emails weren't designed as alerts, just informational messages nobody was assigned to read. Ninety-seven warnings, zero pages, no kill switch, and a 17-year-old company gone in 45 minutes. This is what "every alert must be actionable, and someone must own it" costs when it's violated: an unowned, unactionable alert is indistinguishable from silence.</p>
@@ -8219,6 +8291,8 @@ COMMIT;</code></pre>
 
 <p>Half one: <strong>checkpoints</strong>. Periodically — say every 30 seconds — the framework snapshots all state to durable storage (S3, HDFS), along with the log offsets that state corresponds to. The naive way is to pause the world, dump everything, resume: unacceptable at any real throughput. The elegant way is the <strong>Chandy-Lamport idea</strong> (1985, and Flink's checkpointing is a descendant of it): take a consistent snapshot of a running system <em>without stopping it</em>. The source injects a <strong>barrier</strong> — a special marker — into the stream, right after, say, offset 4,182. The barrier flows along with the data. When an operator sees the barrier, it snapshots its own state <em>at that moment</em> and forwards the barrier downstream. Since every operator snapshots at the same logical point — "I have processed everything before the barrier and nothing after" — the collected pieces form one consistent picture of the whole pipeline, taken while the pipeline kept running.</p>
 
+
+
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>A restaurant manager wants an exact count of orders in progress without closing the kitchen. She slips a red card into the ticket rail between two orders. Each station — grill, fry, plating — keeps working, and the moment the red card reaches it, that station writes down its current tickets and passes the card on. No two stations pause, yet everything written down describes the same instant in the flow of orders: everything before the card, nothing after. That's a barrier snapshot. Where the analogy stretches: with multiple input streams, an operator must wait until the card arrives on <em>all</em> of them before writing (barrier alignment) — the grill station waiting for the card from both the dine-in rail and the delivery rail.</p>
 </div>
@@ -8260,6 +8334,8 @@ COMMIT;</code></pre>
 <div class="box story"><div class="box-tag">War story — Alibaba runs Singles' Day on Flink</div>
 <p>Alibaba's Singles' Day (November 11) is the largest shopping event on Earth, and its famous real-time GMV dashboard — GMV is gross merchandise value, the running total of money spent, the giant number journalists watch tick upward all day — is a stream processing job. Around 2016, Alibaba forked Apache Flink into an internal version called Blink to harden it for search, recommendations, and that dashboard; in January 2019 they went all-in, acquiring data Artisans — the company Flink's creators founded, later renamed Ververica — for a reported €90 million, and contributing Blink's improvements back upstream. The scale numbers are the point: during Double 11 in 2020, Alibaba's Flink deployment peaked at about <strong>4 billion events per second</strong>, roughly 7 TB of data per second, feeding dashboards executives and media were staring at in real time. At that scale, every mechanism in this chapter stops being theory: checkpointing must not stall the pipeline, watermarks must not hold windows hostage, and recovery must replay minutes of history at a rate that dwarfs most companies' total traffic. The same year they began running batch and stream workloads on the one engine — the kappa idea, "one codebase for both," executed at the most extreme scale on record.</p>
 </div>
+
+
 
 <h2>Replay: the superpower you're actually buying</h2>
 
@@ -8433,6 +8509,7 @@ COMMIT;</code></pre>
 </ul>
 
 <div class="box story"><div class="box-tag">War story — Akamai and the one-hit wonders</div>
+
 <p>Akamai's CDN servers cache web objects on disk. Their researchers measured something embarrassing: roughly <strong>three-quarters of all requested URLs were fetched exactly once and never again</strong> — "one-hit wonders." Every one was written to disk cache, never read, then evicted to make room for the next never-read object. The fix, published in Maggs and Sitaraman's paper on Akamai's algorithms, was a Bloom filter as a bouncer for the cache itself: record every requested URL in the filter, but only write an object to disk on its <em>second</em> request — when the filter says "seen before." One-hit wonders never touch the disk. Disk writes fell by nearly half, and the hit rate went <em>up</em>, because space wasted on single-use objects now held things people actually re-requested. A false positive just means some object gets cached on its first hit — zero harm. Billions of URLs, a few gigabytes of RAM, no correctness risk: a sketch in exactly the right seat.</p>
 </div>
 
@@ -8451,6 +8528,7 @@ COMMIT;</code></pre>
 <p>In practice you rarely build one: Redis ships HLL as a native type. <code>PFADD campaign:123 user_9871</code> on every impression, <code>PFCOUNT campaign:123</code> for the dashboard, and — the part that matters for distributed systems — <code>PFMERGE</code> to combine counters. BigQuery, Snowflake, Spark, and Druid all expose an equivalent under names like <code>APPROX_COUNT_DISTINCT</code>.</p>
 
 <div class="box story"><div class="box-tag">War story — Redis ships HLL, Reddit counts views with it</div>
+
 <p>In April 2014, Salvatore Sanfilippo (antirez) added HyperLogLog to Redis 2.8.9 as a first-class data type. His design notes are a small masterclass in the trade: a dense HLL is exactly 12KB and counts to billions with 0.81% standard error, while small counters use a sparse encoding of a few dozen bytes, so a million mostly-small counters stay cheap. He named the commands <code>PFADD</code>, <code>PFCOUNT</code>, <code>PFMERGE</code> — the "PF" honors Philippe Flajolet, the French researcher who invented the algorithm and had died three years earlier. Reddit's engineering team later described rebuilding post view counts on exactly this: storing every viewer ID per post was off the table at their scale, so view events stream through Kafka into per-post HLLs in Redis, and the "N views" number on every Reddit post became a sub-1%-error estimate. Nobody can tell 1,024,590 views from 1,031,000 on a screen — but the memory bill can tell a set from a sketch.</p>
 </div>
 
@@ -8925,6 +9003,8 @@ COMMIT;</code></pre>
 <p>Shopify runs on sharded MySQL, with each merchant's shop living on one shard — and shards fill up unevenly, because one merchant going viral inflates a shard (Chapter 2.6's problem wearing a different shirt). So they built <strong>Ghostferry</strong>, an open-source Go tool that is the migrate phase productized: batch-copy a shop's rows to the target shard while tailing the binlog to replay concurrent changes, with verifiers that check data integrity before, during, and after the move. On top of it, moving a shop between shards is a routine operation: the copy runs in the background at full traffic, and the move ends with a brief write-lock on <em>that one shop</em> — seconds, not hours — while the final binlog entries drain and the router repoints. That's the mature endgame: rebalancing so routine it's just another background operation, and "downtime" scoped to one tenant for seconds. Now the dark twin. In October 2010, Foursquare ran user check-ins on two MongoDB shards of 66GB RAM each. Growth skewed; one shard blew past its RAM and started thrashing to disk. They tried to fix it live, under peak load — adding a third shard and migrating chunks off the hot one — but freeing 5% of the data didn't free 5% of the memory: the deleted rows left the remaining data fragmented across the same number of pages. The site went down for about eleven hours while they compacted the database offline, and MongoDB's CTO published the postmortem. Same operation as Shopify's — moving data off a hot shard — but attempted as an emergency instead of rehearsed as a routine. The lesson seniors quote: reshard while it's a project, because done as a rescue it inherits the emergency.</p>
 </div>
 
+
+
 <h2>How deep interviews actually go</h2>
 
 <p>Calibration, so you neither undershoot nor gold-plate. At the senior bar, an interviewer hearing "we need to change this live" expects you to <strong>volunteer</strong>, unprompted:</p>
@@ -9017,6 +9097,8 @@ COMMIT;</code></pre>
 <p>Clock check: five minutes gone, scope agreed, flag already planted on the read path — that's where the deep dives will go.</p>
 
 <div class="box story"><div class="box-tag">War story — TinyURL, bit.ly, and the redirect that became a business</div>
+
+
 <p>The whole product category exists because of a unicycle forum. In 2002, Kevin Gilbertson, a unicyclist from Blaine, Minnesota, got tired of long URLs wrapping and breaking in emails to his unicycling newsgroup, so he built TinyURL — the first notable shortener, and one of the oldest still running. It stayed hobby-sized until Twitter's 140-character limit made every long URL painfully expensive; in May 2009 Twitter made bit.ly (launched 2008) its default shortener, replacing TinyURL, and traffic exploded — competitor tr.im announced shutdown within months of losing that slot. Then Twitter built its own wrapper, t.co, and took the default back. That should have killed bit.ly. Instead the company had realized the redirect log <em>is</em> the product — every click says who clicked what, when, from where — and it survived by selling that analytics layer to marketers. Remember this at 301-versus-302 time: the boring response code is a revenue decision.</p>
 </div>
 
@@ -9885,6 +9967,8 @@ ORDER BY freq DESC LIMIT 10;</code></pre>
 
 <div class="box story"><div class="box-tag">War story — HBO Max and the intern's test email</div>
 <p>On June 17, 2021, a large chunk of HBO Max's subscriber base received an email with the subject line "Integration Test Email #1" — an empty template blasted to the real production mailing list. HBO Max's own tweet became famous: "We mistakenly sent out an empty test email to a portion of our HBO Max mailing list this evening… yes, it was the intern." Twitter responded with #DearIntern, thousands of engineers sharing their own worst sends in solidarity. The kind part of the story is the intern being forgiven; the engineering part is why it happened at all: the platform allowed a test event to resolve to a production audience of millions with no guardrail between "send" and forty million inboxes. A notification platform is the last line of defense against every producer's worst day. That's why the design above puts audience-size checks, staged ramp-up (send to 1%, watch, then proceed), and a per-campaign kill switch inside the platform — not in the good intentions of whoever clicks the button.</p>
+
+
 </div>
 
 <h2>Deep dive 3 — third parties throttle, fail, and lie</h2>
@@ -10134,6 +10218,8 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 <div class="box crux"><div class="box-tag">The crux</div>
 <p>This is the hard part the question was invented to probe. Delivery over a flaky network isn't made reliable by hoping the network behaves — it's made reliable by a <em>ladder of acknowledgments</em>, each rung a distinct promise from a distinct party, plus retries that are safe to repeat. Every tick in the WhatsApp UI is a rung of a distributed-systems protocol. Candidates who treat ticks as UI polish fail this question; candidates who can say precisely <em>what each tick proves, who sends it, and what happens if it never comes</em> pass at the senior level. Spend your time here.</p>
 </div>
+
+
 
 <p>Rung one: <strong>client → server</strong>. A's phone sends the message and starts a retry timer. Until the server's ack arrives, the phone keeps the message in local storage and resends — after 2 seconds, 4, 8 — surviving app restarts, tunnels, and tower switches. The single tick ✓ means exactly one thing: <em>the server has this message durably</em>. Which forces the golden rule: <strong>persist before you ack</strong>. Write to Cassandra (and the recipient's inbox), then ack. Never the reverse. An ack-then-persist server that crashes in the gap has lied: the phone shows ✓, deletes its local copy, and a message the sender was told was safe is gone forever with a checkmark on it.</p>
 
@@ -10519,6 +10605,8 @@ client → server:  receipt {convo_id, seq, type: delivered|read}
 <div class="box crux"><div class="box-tag">The crux</div>
 <p>Push or pull is not a style preference — it's forced by the shape of the follow graph, and the follow graph is a power law. Pull-for-everyone dies on reads: 200K feed requests/sec × ~400 followed accounts each = 80 million outbox reads per second, most of them recomputing the same merge they computed five minutes ago. Push-for-everyone dies on writes: one celebrity post = 100M+ writes, minutes of total fleet capacity for one tap. Neither pure strategy survives, so the design must be hybrid — and the senior signal is <em>where you put the threshold and why</em>. This is the room that's on fire. If you take one thing from this chapter into the interview, take this paragraph.</p>
 </div>
+
+
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
 <p>Push is newspaper home delivery: the work happens at dawn, one copy dropped at every subscriber's door, and reading is instant. Pull is the newsstand: nothing is delivered anywhere; you walk over and ask for today's papers, and they assemble your bundle while you wait. Home delivery is wonderful — until one "paper" has 600 million subscribers and the delivery van fleet spends all day on a single edition. So you do what cities actually do: home delivery for the neighborhood papers, and for the mega-publication everyone reads, you just pick it up at the stand — it's one stand, it's always stocked, and the trip is cheap because you only visit a handful of stands. The analogy breaks in one place: real newsstands have queues, but a celebrity's outbox is a tiny, heavily cached read that scales to any number of readers.</p>
@@ -11203,6 +11291,8 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 
 <p><strong>The read/sync path.</strong> Every device keeps one cursor per namespace — its position in that namespace's journal. Devices hold a long-poll connection to the notifier; when a commit lands, the notifier pokes every device subscribed to that namespace, and each device pulls <code>changes?cursor=C</code>, gets the new manifests, diffs them against local state, downloads only the blocks it doesn't already have, assembles the new file version in a temp file, and renames it into place — the local filesystem's own atomic swap, mirroring the server's. Cursors make sync stateless-server and resumable: a laptop closed for three weeks just replays the journal from its old cursor. Same protocol whether you were gone three seconds or three weeks.</p>
 
+
+
 <div class="box story"><div class="box-tag">War story — Dropbox's Magic Pocket</div>
 <p>The metadata/data split isn't academic — it's what let Dropbox pull off one of the boldest infrastructure moves of the decade. From its founding, Dropbox kept file blocks in Amazon S3 and metadata on its own servers. Around 2013 they decided the economics no longer worked at their scale and spent two and a half years building Magic Pocket, a custom exabyte-scale blob store, then quietly moved more than 90% of over 500 petabytes of user data onto their own hardware, finishing in early 2016. The migration ran a custom data mover for months while the sync product kept working — possible only because blocks are immutable and content-addressed, so the data plane could be swapped underneath the sync logic like changing warehouses without reprinting a single instruction sheet. Their 2018 IPO filing put the payoff on paper: infrastructure costs fell $39.5M in 2016 and another $35.1M in 2017 — about $75M over two years — and gross margin climbed from 33% in 2015 to 54% in 2016 to 67% in 2017, with the filing naming the migration as a main cause. When your interviewer asks why you're splitting metadata from data, this is the answer with a dollar sign on it.</p>
 </div>
@@ -11617,6 +11707,8 @@ WHERE event_id=:e AND seat_id='14B'
 <p>On December 9, 2022, Bad Bunny played the 87,000-capacity Estadio Azteca in Mexico City — and thousands of fans holding tickets bought through Ticketmaster Mexico were turned away at the gates, their tickets scanned as invalid or duplicates. Ticketmaster's first explanation was counterfeits. Mexico's consumer-protection agency Profeco investigated and concluded otherwise: the tickets were genuine, and the system had oversold the venue. Profeco said it could fine Ticketmaster up to 10% of its annual sales in Mexico; Ticketmaster ended up refunding 2,155 affected customers 100% of the ticket price <em>plus 20% compensation</em> — about 18.2 million pesos, roughly a million US dollars. Notice the shape of the failure: not a crashed website, but duplicate valid-looking tickets for the same physical seats — the invariant this whole chapter defends. And the resolution matched our reconciliation rule: once overselling reaches humans, all you can do is refund with interest and eat the reputational bill. The database guard is cheaper.</p>
 </div>
 
+
+
 <h2>Deep dive 2: the waiting room — admission control as architecture</h2>
 
 <p>Back to the 200:1 ratio. The inventory island and the store servers can comfortably serve a few thousand active shoppers. Ten million people are outside. The waiting room's job is to turn an uncontrolled stampede into a controlled drip, and to be <em>fair and honest</em> while doing it.</p>
@@ -11659,6 +11751,8 @@ WHERE event_id=:e AND seat_id='14B'
 <div class="box story"><div class="box-tag">War story — Taylor Swift's Eras Tour presale, November 2022</div>
 <p>On November 15, 2022, Ticketmaster opened the Verified Fan presale for the Eras Tour. The plan was textbook admission control: 3.5 million fans pre-registered, about 1.5 million got invite codes sized to what the system could handle. What showed up, by Ticketmaster's own account, was around 14 million — code-holders, code-less hopefuls, and a "staggering number of bot attacks" — generating a record 3.5 <em>billion</em> system requests that day, roughly four times their previous record. The site crashed repeatedly, sales were paused mid-drop, fans queued for hours, and days later Ticketmaster canceled the general public sale outright, citing insufficient remaining inventory. Taylor Swift called watching it "excruciating"; the US Senate held hearings. The architecture lesson is precise: the admission plan was sized to <em>invited</em> demand, but admission wasn't fully enforced at the edge — uninvited users and bots still reached the real infrastructure. A waiting room only works as the <em>only</em> door, standing in front of everything, with the cheap static queue page absorbing the millions who will never get in.</p>
 </div>
+
+
 
 <h2>Deep dive 3: taking money without taking it twice</h2>
 
@@ -12013,6 +12107,7 @@ WHERE event_id=:e AND seat_id='14B'
 <p>Every fetch starts with resolving a hostname. At 11,500 fetches/second, forwarding every lookup upstream melts your resolver — and each remote resolution costs 20–200ms. The fix is boring and mandatory: a <strong>local caching resolver on every fetcher node</strong>, async lookups so slow resolutions never block the event loop, and pre-resolution while a host waits in the timer heap. Host-hash sharding helps here too — a host's lookups always hit the same node's cache, so hit rates are excellent.</p>
 
 <div class="box story"><div class="box-tag">War story — Mercator</div>
+
 <p>Mercator was the research crawler built at Compaq's Systems Research Center by Allan Heydon and Marc Najork. Their 1999 paper's most quoted finding wasn't about queues at all: profiling showed <strong>DNS resolution consuming 87% of each thread's elapsed time</strong>. The culprit was a synchronized resolver interface — Java's, and <code>gethostbyname</code> underneath it, allowed one uncached lookup outstanding at a time — so their fully parallel crawler was quietly single-file through DNS. They wrote their own multi-threaded resolver firing parallel requests at a local nameserver, and DNS dropped from 87% to 25% of elapsed time. Their 2001 follow-up report is where the two-level frontier this chapter draws comes from, timer heap and all — right down to running about three times as many back queues as crawler threads, the same rule of thumb we used above. The DNS lesson generalizes: your architecture is only as parallel as its most serialized dependency, and that dependency is usually something so mundane you never drew it on the whiteboard.</p>
 </div>
 
@@ -12828,6 +12923,8 @@ COMMIT;  -- then enqueue the run_ids</code></pre>
 
 <p>That constant is the decision. Not "sketches are cool" — "exact costs 240 GB and scales with an attacker's imagination; the sketch costs under 8 GB across the fleet and doesn't."</p>
 
+
+
 <p><strong>3. CPU and shard count.</strong> A sketch update is 4 hashes and 4 random memory writes — ~300 ns once cache misses are counted, so about 3M sketch updates/sec on one core. The sketch isn't the whole cost of an event, though: decoding the message and the heap check dominate it, so call the end-to-end work 1 microsecond, or <strong>1M events/sec per core</strong>. At 10M/sec that's 10 cores pinned flat, and nobody runs a core at 100% — so about 20 busy cores. I'll commit to <strong>32 shards</strong> (power of two, comfortable headroom). Each handles ~300K events/sec, about 18M per minute-bucket. Hold onto that 18M — it sets the error bound later.</p>
 
 <div class="box analogy"><div class="box-tag">Analogy</div>
@@ -13387,6 +13484,8 @@ COMMIT;  -- then enqueue the run_ids</code></pre>
 
 <div class="box story"><div class="box-tag">War story — Google, click fraud, and the $90 million audit</div>
 <p>In 2005, Lane's Gifts &amp; Collectibles — an Arkansas retailer — led a class action claiming Google billed advertisers for fraudulent clicks. Google settled in 2006 for up to $90 million in advertising credits, but the technically interesting part is what the settlement required: an independent expert, NYU professor Alexander Tuzhilin, was brought in to examine Google's invalid-click detection from the inside. His report concluded Google's efforts were reasonable — and it publicly documented the architecture: layered filters, most fraudulent clicks discarded <em>proactively</em> by automated real-time filters before they ever reached a bill, backed by offline analysis and manual investigation, with credits issued retroactively for whatever got through. Two lessons for your whiteboard. First, "dedup and fraud filtering" isn't gold-plating — it's the difference between an invoice and a legal liability, and a court once made a professor audit exactly this pipeline. Second, notice the shape Tuzhilin described is the shape we just drew: cheap online filters inline, expensive offline judgment at settlement, money corrected after the fact. The industry converged there because billing wrong is worse than billing late.</p>
+
+
 </div>
 
 <h2>Backfill: when the logic itself was wrong</h2>
@@ -13696,6 +13795,8 @@ COMMIT;  -- then enqueue the run_ids</code></pre>
 
 <p>Where does the money truth live? Not in a <code>balance</code> column that gets <code>UPDATE</code>-ed. In a <strong>double-entry, append-only ledger</strong> — the design accountants have stress-tested for five hundred years, for the same reason we want it: fraud and error detection by construction.</p>
 
+
+
 <p><strong>Double-entry:</strong> every movement of money is recorded twice — it leaves one account and enters another, a debit and a credit, and the amounts of every transaction sum to zero. Money is never created or destroyed in the ledger; it only moves between named accounts: <code>psp_receivable</code> (the PSP holds money it owes us), <code>merchant_payable</code> (we owe the merchant), <code>platform_revenue</code> (our cut), <code>refunds_clearing</code>. A $50.00 sale with a $5.00 platform fee:</p>
 
 <figure class="diagram">
@@ -13784,6 +13885,8 @@ COMMIT;  -- then enqueue the run_ids</code></pre>
 </ul>
 
 <p>The unmatched-transaction workflow is part of the design, not an ops afterthought: breaks auto-retry matching for the lag window, then land in a review queue with the full audit trail attached (this is where <code>payment_events</code> pays for itself), and the <strong>reconciliation break count is a paging metric — nonzero after the lag window means an engineer looks today.</strong> A payments system that reconciles daily discovers its bugs in 24 hours. One that doesn't discovers them at tax time, or on Reddit.</p>
+
+
 
 <div class="box story"><div class="box-tag">War story — Coinbase and the charges nobody sent</div>
 <p>In February 2018, Coinbase customers started reporting something terrifying: crypto purchases from weeks earlier were reappearing on their card statements as fresh charges — some users reported duplicates stacking up dozens deep, with bank accounts drained and overdraft fees piling on. The internet's instant verdict was "Coinbase double-charged us." The truth was stranger: the card networks had reclassified digital-currency purchases under a new merchant category code (to treat them like cash advances), and during that reprocessing, earlier transactions were <em>reversed and re-charged</em> down on the rails, below anything Coinbase's own code touched. It took days of joint investigation before Visa and the payment processor Worldpay issued a joint statement taking responsibility and confirming the erroneous charges would be reversed — explicitly stating the issue was not caused by Coinbase. Two lessons for your whiteboard. First: your code can be perfect and duplicates can still appear, because the rails beneath your PSP are themselves distributed systems that retry — which is exactly why reconciliation against settlement data is mandatory, not paranoid. Second: when money looks wrong, the company that can produce a complete, timestamped ledger of what it actually did clears its name in days instead of months.</p>
@@ -14027,6 +14130,8 @@ COMMIT;  -- then enqueue the run_ids</code></pre>
 <h3>The commitment</h3>
 
 <p>"For this product I commit to <strong>server-ordered OT</strong>, Jupiter-style. My reasons, tied to our requirements: (1) We already require a central server — permissions with mid-session revocation, durable history, and comments all need one, so OT's precondition costs us nothing extra. (2) Estimation showed every doc fits on one server, so the total order is free, and with it OT needs exactly one transform-pair for span-based text ops — a small, testable core. (3) The document stays a plain string: snapshots are just text, history is readable, memory per room is tiny — no per-character metadata or tombstone growth on billion-doc storage. (4) Our offline requirement is 'tolerate blips,' not 'edit on a plane for a week' — and blips are handled by the same transform machinery, as I'll show. I'd flip to a CRDT if the requirements flipped: offline-first, peer-to-peer, or end-to-end encryption, where no server may read — let alone transform — anyone's ops. The cost I accept: transform code must be <em>exactly</em> correct and deterministic everywhere it runs, client and server, forever — I'll treat it like crypto code: tiny, property-tested, versioned."</p>
+
+
 
 <div class="box story"><div class="box-tag">War story — Etherpad</div>
 <p>Chapter 2.4 told you what it costs to <em>build</em> OT: Google Wave burned two years on its transform engine, and the engineer who wrote it went on record that implementing OT sucks. Etherpad tells you the other half — what it costs to <em>own</em> one for a decade, which is precisely what the commitment above signs you up for. Etherpad launched in November 2008, the first web app of its kind to pull off genuinely real-time collaborative editing in a browser, and its engine is a changeset library called Easysync doing exactly what we just designed: the server keeps an ordered list of revision records numbered 0, 1, 2…, and a changeset that arrives built against an older revision gets pushed forward through every revision since. Google bought the company in December 2009 to fold the team into Wave, open-sourced the code that same month under Apache 2.0, and shut the original service down the following May. Then comes the part worth your attention. The community rebuilt the product from nothing — the original was Java and Scala, "Etherpad Lite" is JavaScript on Node.js, described by its own maintainers as an almost complete rewrite — and carried Easysync across unchanged. New language, new runtime, new people, same transform library, because the transform layer is the one piece nobody volunteers to re-derive.</p>
@@ -15667,7 +15772,9 @@ DEL  key                -&gt; OK</code></pre>
 <p>One durability decision falls out, and it's where I spend the "search is derived" freedom the first time. Lucene-based engines keep a write-ahead log (the translog) and can fsync it on every request. I'll relax that to fsync-per-batch, accepting that a hard crash loses the last second of indexing — <strong>because truth is in Postgres and the events are still in Kafka</strong>, so recovery is a replay, not a loss. In a primary datastore that trade would be reckless. In a derived one it's free performance.</p>
 
 <div class="box story"><div class="box-tag">War story — the library everything is built on</div>
+
 <p>Almost every search system you've touched traces to one person's side project. Doug Cutting wrote Lucene in Java in 1999 and put it on SourceForge; it moved to the Apache Software Foundation in 2001 and became a top-level project in 2005. Lucene isn't a server — it's a library implementing exactly this section: analyzer chain, term dictionary, compressed posting lists, immutable segments, background merges, tombstone bitmaps. Everything since has wrapped it. Solr, created by Yonik Seeley at CNET in 2004 and donated to Apache in 2006, wrapped it in an HTTP server. Elasticsearch came from Shay Banon, who had earlier written a Lucene wrapper called Compass and, by his own retelling, began the rewrite while building a recipe search app for his wife; the first release landed in February 2010 and added what Lucene never had — sharding, replication, and cluster coordination. So when an interviewer says "open up Elasticsearch," the honest answer is: inside is Lucene doing the segment dance on one machine, and around it is a distributed system whose whole job is to shard documents, fan out queries, and merge results. Two separate problems — and knowing which is which is most of this interview.</p>
+
 </div>
 
 <h2>Deep dive 4: distributing it — shard by document, never by term</h2>
@@ -15679,6 +15786,7 @@ DEL  key                -&gt; OK</code></pre>
 <p><strong>Shard by document</strong> (what everyone ships): each shard holds 1/12 of the documents and a complete index over just those. Every query goes to every shard, but each does its whole job locally with zero cross-talk and returns 10 IDs and 10 scores. Adding shards adds capacity linearly, and losing one costs 1/12 of the <em>corpus</em> — every query still returns mostly-right results instead of some queries returning nothing.</p>
 
 <div class="box story"><div class="box-tag">War story — Google published this in 2003</div>
+
 <p>If doc-sharding feels like folklore, it isn't: it's in "Web Search for a Planet: The Google Cluster Architecture" (Barroso, Dean, and Hölzle, IEEE Micro, 2003), one of the quietly most influential systems papers ever written. It describes Google's index split into pieces each holding a randomly chosen subset of documents; a query is broadcast to one replica of every index shard, each returns its best local hits, results are merged, and a second pool of <em>document servers</em> fetches titles and snippets for the winners. Two phases, exactly as above. The paper's other argument was economic and equally durable: because the workload is embarrassingly parallel across doc shards, throughput comes from adding cheap commodity PCs rather than bigger machines, with replication supplying both throughput and fault tolerance. Twenty years on, the shard-and-merge shape of every search cluster you will ever operate descends from that paper.</p>
 </div>
 
@@ -16012,6 +16120,8 @@ DEL  key                -&gt; OK</code></pre>
 <div class="box story"><div class="box-tag">War story — Backblaze publishes its dead drives</div>
 <p>Backblaze does something almost nobody else does: since 2013 they publish <strong>Drive Stats</strong>, a quarterly report on every drive in their fleet — model, size, days in service, annualized failure rate — with the raw daily data as an open download. It now covers hundreds of thousands of drives and has become the industry's de facto public reference for how drives actually fail, including the finding that failure rates vary enormously <em>between models</em>, not just between vendors. That transparency is the culture point; the architecture point is just as good. Backblaze stores data in <strong>Vaults</strong>, splitting each file into 20 shards — <strong>17 data and 3 parity</strong> — one shard per storage pod across 20 pods, so a file survives three pods failing outright, and they open-sourced their Reed-Solomon implementation in 2015. Two lessons: measure your own fleet's real failure rate instead of trusting a datasheet, and choose failure domains such that the thing that fails together is a thing your code can afford to lose.</p>
 </div>
+
+
 
 <h3>End-to-end integrity: bits rot, and silence is the enemy</h3>
 
@@ -17017,6 +17127,8 @@ DEL  key                -&gt; OK</code></pre>
 <p>Well under a second, no lost orders, no invented ones — and this only works because of determinism. If the standby could produce even slightly different output, promoting it would silently rewrite the market's history.</p>
 
 <div class="box story"><div class="box-tag">War story — Nasdaq and the Facebook IPO, 18 May 2012</div>
+
+
 <p>Facebook's IPO was the biggest in Nasdaq's history, and it broke on the one component that isn't the continuous matching engine: the opening cross, the batch algorithm that computes a single opening price from all accumulated interest. The cross calculates a price, then checks whether any orders arrived or were cancelled during the calculation — and if so, recalculates. With that much volume, cancellations kept streaming in faster than the loop could finish, so it recalculated and never converged. The open was delayed roughly half an hour, and about 30,000 orders sat in limbo for more than two hours while traders couldn't learn whether they owned Facebook stock. Nasdaq later paid a <strong>$10 million SEC penalty</strong> — the largest ever levied against an exchange at the time — and set up a fund of about $62 million to compensate member firms. The engineering lesson is this chapter's thesis seen from the other side: a race between "compute the result" and "the inputs keep changing" is exactly what one ordered stream and a deterministic consumer eliminate. Take a sequence-numbered snapshot of the inputs, compute from it, and later messages belong to the next round instead of poisoning the current one.</p>
 </div>
 
@@ -17049,6 +17161,8 @@ DEL  key                -&gt; OK</code></pre>
 <p>The sequencer decides order, so fairness reduces to a physical question: does everyone have an equal shot at reaching it first? That's why exchanges cut every colocation cross-connect to the <em>same physical length</em> — the cabinet nearest the engine gets the same coil of extra fiber as the one across the hall, so nobody's photons take a shorter trip. Fairness measured in meters. Beyond that: one pipeline for everyone, no premium express lane, no order type that skips a stage.</p>
 
 <div class="box story"><div class="box-tag">War story — IEX and the 350-microsecond coil</div>
+
+
 <p>IEX — the venue at the centre of Michael Lewis's <em>Flash Boys</em> — took the opposite approach to latency: it deliberately added some. Between its point of presence and its matching engine sits a physical coil of roughly 38 miles of fiber optic cable, wound into a box, delaying every message by <strong>350 microseconds</strong> in each direction. The reason is a specific unfairness. When a large order sweeps several venues it reaches the nearest one first, and a fast trader who sees that fill can race ahead to the other venues and move prices before the rest of the order lands. IEX's delay means that by the time an order emerges from the coil, IEX's own pricing logic has already processed the public market data and repriced its <em>pegged</em> orders — orders that don't name a fixed price but track the wider market's best bid or offer automatically. So the racer arrives to find the price already moved. It was fiercely contested; opponents argued a deliberate delay violated the requirement that quotations be "immediately" accessible. The SEC approved IEX as a national securities exchange in June 2016, taking the view that a delay under a millisecond is too small to matter. The point for your interview: latency and fairness are different goals, and a venue sometimes chooses fairness. Know which one your design optimizes, and be able to say why.</p>
 </div>
 

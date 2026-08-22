@@ -135,6 +135,13 @@ GET  /ns/{ns}/changes?cursor=C   long-poll -&gt; changes since C, new cursor</co
 
 <p><strong>The read/sync path.</strong> Every device keeps one cursor per namespace — its position in that namespace's journal. Devices hold a long-poll connection to the notifier; when a commit lands, the notifier pokes every device subscribed to that namespace, and each device pulls <code>changes?cursor=C</code>, gets the new manifests, diffs them against local state, downloads only the blocks it doesn't already have, assembles the new file version in a temp file, and renames it into place — the local filesystem's own atomic swap, mirroring the server's. Cursors make sync stateless-server and resumable: a laptop closed for three weeks just replays the journal from its old cursor. Same protocol whether you were gone three seconds or three weeks.</p>
 
+<figure class="fig fig-mark" data-mode="origins">
+  <img src="assets/mark/dropbox.svg" alt="The Dropbox logo"
+       width="512" height="101" loading="lazy">
+  <figcaption>Dropbox, which spent two and a half years building its own blob store so it could move more than 500 petabytes off somebody else's.
+    <span class="credit">Dropbox logo, public domain (below the threshold of originality). Trademark of Dropbox, Inc., used nominatively.</span></figcaption>
+</figure>
+
 <div class="box story"><div class="box-tag">War story — Dropbox's Magic Pocket</div>
 <p>The metadata/data split isn't academic — it's what let Dropbox pull off one of the boldest infrastructure moves of the decade. From its founding, Dropbox kept file blocks in Amazon S3 and metadata on its own servers. Around 2013 they decided the economics no longer worked at their scale and spent two and a half years building Magic Pocket, a custom exabyte-scale blob store, then quietly moved more than 90% of over 500 petabytes of user data onto their own hardware, finishing in early 2016. The migration ran a custom data mover for months while the sync product kept working — possible only because blocks are immutable and content-addressed, so the data plane could be swapped underneath the sync logic like changing warehouses without reprinting a single instruction sheet. Their 2018 IPO filing put the payoff on paper: infrastructure costs fell $39.5M in 2016 and another $35.1M in 2017 — about $75M over two years — and gross margin climbed from 33% in 2015 to 54% in 2016 to 67% in 2017, with the filing naming the migration as a main cause. When your interviewer asks why you're splitting metadata from data, this is the answer with a dollar sign on it.</p>
 </div>
