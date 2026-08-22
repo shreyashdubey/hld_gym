@@ -23,6 +23,10 @@ class VoiceConfig:
     # remembers to stop it. Announced at the start, never enforced silently.
     session_cap_secs: float = 12 * 60
 
+    # The free diagnostic round is interviewer-only and shorter: it exists to
+    # produce a failure map, not a walkthrough. Announced up front, same rule.
+    diagnostic_cap_secs: float = 6 * 60
+
     # OpenAI TTS voices. Different on purpose — the handoff must be audible.
     interviewer_voice: str = "onyx"
     coach_voice: str = "shimmer"
@@ -35,15 +39,16 @@ class VoiceConfig:
     tts_model: str = "gpt-4o-mini-tts"
 
     # Playground auth (see playground/auth.py). Dictation touches none of
-    # this. Defaulted to empty/604800 here so a bare VoiceConfig() -- used
-    # throughout this suite -- keeps working with no auth env set at all;
-    # token_secret's *actual* "no default" refusal is enforced separately,
-    # by playground/auth.py's token_secret_from_env(), called once at
-    # server.py's import time (the same way _allowed_origins() refuses a
-    # "*" wildcard). A dataclass default here is just Python constructor
-    # convenience, not a green light to ship with an empty secret.
+    # this. Defaulted to empty/604800 so a bare VoiceConfig() -- used
+    # throughout this suite -- works with no auth env set at all. The
+    # signing secret is deliberately *not* a field here: it is read once at
+    # server.py import time via token_secret_from_env(), which has no
+    # default and refuses to start rather than let anyone forge a session.
+    # A second, silently-empty-defaulting copy on this dataclass -- the
+    # obvious place a future caller would reach for, since every other
+    # PLAYGROUND_* knob lives here -- would hand that caller "" and undo the
+    # whole point. An unset google_client_id is caught in login().
     google_client_id: str = ""
-    token_secret: str = ""
     session_ttl_secs: int = 604800  # 7 days
 
     def __post_init__(self) -> None:

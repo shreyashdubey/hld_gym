@@ -51,16 +51,19 @@ class TestVoiceConfig(unittest.TestCase):
         constructs VoiceConfig() bare throughout."""
         c = VoiceConfig()
         self.assertEqual(c.google_client_id, "")
-        self.assertEqual(c.token_secret, "")
         self.assertEqual(c.session_ttl_secs, 604800)
 
     def test_from_env_reads_the_google_client_id_as_a_plain_string(self):
         c = VoiceConfig.from_env({"PLAYGROUND_GOOGLE_CLIENT_ID": "abc123.apps.googleusercontent.com"})
         self.assertEqual(c.google_client_id, "abc123.apps.googleusercontent.com")
 
-    def test_from_env_reads_the_token_secret_as_a_plain_string(self):
+    def test_the_signing_secret_is_not_a_config_field(self):
+        """It has no default anywhere, on purpose -- token_secret_from_env()
+        raises instead. A VoiceConfig field would have re-added a silently
+        empty-defaulting copy of it. See config.py's comment."""
+        self.assertNotIn("token_secret", VoiceConfig.__dataclass_fields__)
         c = VoiceConfig.from_env({"PLAYGROUND_TOKEN_SECRET": "s3cret"})
-        self.assertEqual(c.token_secret, "s3cret")
+        self.assertFalse(hasattr(c, "token_secret"))
 
     def test_from_env_coerces_session_ttl_secs_to_int(self):
         """The float-coercion path already existed; int fields shared no
@@ -76,6 +79,13 @@ class TestVoiceConfig(unittest.TestCase):
         exc_msg = str(ctx.exception)
         self.assertIn("PLAYGROUND_SESSION_TTL_SECS", exc_msg)
         self.assertIn("a week", exc_msg)
+
+    def test_diagnostic_cap_defaults_to_six_minutes(self):
+        self.assertEqual(VoiceConfig().diagnostic_cap_secs, 360.0)
+
+    def test_diagnostic_cap_is_env_overridable(self):
+        config = VoiceConfig.from_env({"PLAYGROUND_DIAGNOSTIC_CAP_SECS": "120"})
+        self.assertEqual(config.diagnostic_cap_secs, 120.0)
 
 
 if __name__ == "__main__":
