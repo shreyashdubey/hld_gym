@@ -71,7 +71,7 @@ def validate_html(cid, html, kind="chapter"):
     if re.search(r'\bstyle\s*=', html): err(f"{cid}: inline style= forbidden")
     # No attribute allowlist exists, so an event handler would sail straight
     # through. Cheap to close, and permitting <img> is exactly when it matters.
-    if re.search(r'<[^>]+\son[a-z]+\s*=', html): err(f"{cid}: event handler attribute forbidden")
+    if re.search(r'<[^>]+\son[a-z]+\s*=', html, re.IGNORECASE): err(f"{cid}: event handler attribute forbidden")
     if "<img" in html:
         if kind != "origin":
             err(f"{cid}: <img> forbidden (use inline SVG)")
@@ -139,7 +139,7 @@ def validate_cards(cid, data):
         if not cardid.startswith(cid): err(f"{cid}: card id {cardid} must start with chapter id")
         if c.get("suit") not in CARD_SUITS: err(f"{cid}:{cardid}: suit must be one of {sorted(CARD_SUITS)}")
         if not isinstance(c.get("year"), int): err(f"{cid}:{cardid}: year must be an integer")
-        for field in ("title", "body", "prompt", "answer", "cite"):
+        for field in ("title", "sub", "body", "prompt", "answer", "cite"):
             if not str(c.get(field, "")).strip():
                 err(f"{cid}:{cardid}: '{field}' is required")
         # A card with no prompt is a decoration, and decoration is the one thing
@@ -171,11 +171,12 @@ def validate_cites(cid, html, side, cards):
         if k:
             used.add(k)
             if k not in src: err(f"{cid}:{c.get('id')}: cite '{k}' has no sidecar entry")
-    # Greedy, not lazy: a lazy match stops at the first nested </div> (e.g. the
-    # box-tag), missing everything after it, including the data-cite this checks for.
-    for box in re.findall(r'<div class="box origin".*</div>', html, re.S):
-        if "data-cite=" not in box:
-            err(f"{cid}: origin box carries no data-cite")
+    # ohtml is one whole .origin.html file and the origin box is its top-level
+    # element, so "does the box carry a citation" is just "does the file".
+    # Regex over nested HTML bought only a choice between a non-greedy match
+    # that stopped at the box-tag div and a greedy one that ran past the box.
+    if "data-cite=" not in html:
+        err(f"{cid}: origin content carries no data-cite")
     for k, s in src.items():
         if s.get("type") not in CITE_TYPES: err(f"{cid}:{k}: type must be one of {sorted(CITE_TYPES)}")
         if not isinstance(s.get("year"), int): err(f"{cid}:{k}: year must be an integer")

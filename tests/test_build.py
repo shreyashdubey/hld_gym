@@ -86,13 +86,15 @@ def _validate(html, kind):
 
 def test_img_rejected_in_chapter_allowed_in_origin():
     img = '<p><img src="assets/lamport.webp" alt="Leslie Lamport in 1989"></p>'
-    assert _validate(img, "chapter"), "chapter fragments must still reject <img>"
+    errs = _validate(img, "chapter")
+    assert any("<img> forbidden" in e for e in errs), errs
     assert not _validate(img, "origin"), f"origin <img> wrongly rejected: {_validate(img, 'origin')}"
 
 
 def test_origin_img_must_be_relative_and_described():
     external = '<p><img src="https://example.com/x.jpg" alt="x"></p>'
-    assert _validate(external, "origin"), "external img src must be rejected"
+    errs = _validate(external, "origin")
+    assert any('src must start with "assets/"' in e for e in errs), errs
     bare = '<p><img src="/other/x.webp" alt="x"></p>'
     assert _validate(bare, "origin"), "img src outside assets/ must be rejected"
     noalt = '<p><img src="assets/x.webp"></p>'
@@ -104,6 +106,12 @@ def test_event_handler_attributes_rejected_everywhere():
     check would make an author typo an injection."""
     for kind in ("chapter", "origin"):
         assert _validate('<p onclick="alert(1)">x</p>', kind), f"on*= not caught in {kind}"
+
+
+def test_event_handler_attributes_are_case_insensitive():
+    for kind in ("chapter", "origin"):
+        assert _validate(f'<p onClick="alert(1)">x</p>', kind), f"onClick not caught in {kind}"
+        assert _validate(f'<p ONMOUSEOVER="x">y</p>', kind), f"ONMOUSEOVER not caught in {kind}"
 
 
 CARD_OK = {
@@ -147,6 +155,17 @@ def test_card_needs_prompt_and_answer():
         bad = json.loads(json.dumps(CARD_OK))
         del bad["cards"][0][field]
         assert _validate_cards(bad), f"missing {field} was accepted"
+
+
+def test_card_needs_sub():
+    """sub carries the date and place - the field that makes a card historical
+    rather than trivia."""
+    bad = json.loads(json.dumps(CARD_OK))
+    del bad["cards"][0]["sub"]
+    assert _validate_cards(bad), "missing sub was accepted"
+    bad = json.loads(json.dumps(CARD_OK))
+    bad["cards"][0]["sub"] = ""
+    assert _validate_cards(bad), "empty sub was accepted"
 
 
 def test_card_body_capped_at_60_words():
@@ -195,7 +214,8 @@ def test_good_sidecar_passes():
 
 def test_dangling_data_cite_fails():
     html = '<div class="box origin"><p><span class="fact" data-cite="ghost">x</span></p></div>'
-    assert _validate_cites(html, CITE_OK)
+    errs = _validate_cites(html, CITE_OK)
+    assert any("ghost" in e and "sidecar" in e for e in errs), errs
 
 
 def test_origin_box_without_any_cite_fails():
@@ -226,6 +246,14 @@ def test_card_cite_must_resolve():
     html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
     cards = [{"id": "ptest-c1", "cite": "nowhere"}]
     assert _validate_cites(html, CITE_OK, cards)
+
+
+def test_nested_div_inside_origin_box_still_finds_cite():
+    """The box-tag div nests inside the origin box. A naive non-greedy regex
+    stops at its </div> and never reaches the citation."""
+    html = ('<div class="box origin"><div class="box-tag">Place, 1998</div>'
+            '<p><span class="fact" data-cite="src1">1998</span></p></div>')
+    assert not _validate_cites(html, CITE_OK), _validate_cites(html, CITE_OK)
 
 
 def test_assets_copied_to_origins():
