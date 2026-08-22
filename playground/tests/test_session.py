@@ -225,5 +225,38 @@ class TestSessionContextBinding(unittest.TestCase):
         self.assertIn("added Cache", text)
 
 
+class TestDiagnosticKind(unittest.TestCase):
+    def setUp(self):
+        self.s = Session(VoiceConfig(diagnostic_cap_secs=120), kind="diagnostic")
+
+    def test_default_kind_is_sprint(self):
+        self.assertEqual(Session(VoiceConfig()).kind, "sprint")
+
+    def test_a_diagnostic_session_has_no_coach(self):
+        # The free round withholds the walkthrough by design; a diagnostic
+        # session that could become a coach would hand out the paid product.
+        with self.assertRaises(RuntimeError):
+            self.s.switch_to_coach()
+
+    def test_a_diagnostic_session_never_offers_draw_diagram(self):
+        names = [t.name for t in self.s.tools().standard_tools]
+        self.assertEqual(names, ["end_round"])
+
+    def test_round_over_and_closing_start_false(self):
+        self.assertFalse(self.s.round_over)
+        self.assertFalse(self.s.closing)
+
+    def test_closing_appends_the_time_is_up_instruction(self):
+        self.s.closing = True
+        contents = [m["content"] for m in self.s.system_messages()]
+        self.assertTrue(any("call end_round" in c for c in contents))
+
+    def test_closing_is_ignored_for_a_sprint_session(self):
+        sprint = Session(VoiceConfig())
+        sprint.closing = True
+        contents = [m["content"] for m in sprint.system_messages()]
+        self.assertFalse(any("call end_round" in c for c in contents))
+
+
 if __name__ == "__main__":
     unittest.main()

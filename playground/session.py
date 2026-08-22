@@ -66,9 +66,22 @@ END_ROUND = FunctionSchema(
 
 
 class Session:
-    def __init__(self, config: VoiceConfig) -> None:
+    def __init__(self, config: VoiceConfig, kind: str = "sprint") -> None:
         self.config = config
+        # "sprint" is today's interviewer->coach session; "diagnostic" is the
+        # free round: interviewer only, its own shorter cap, and it ends in a
+        # written failure map instead of a walkthrough (see the 2026-08-23
+        # spec). The kind never changes after construction.
+        self.kind = kind
+        self.cap_secs = config.diagnostic_cap_secs if kind == "diagnostic" else config.session_cap_secs
         self.mode = "interview"
+        # Set by the server's end path exactly once; guards the three end
+        # triggers (end_round, the finish click, the cap) from racing a
+        # second grading pass. Session only stores it.
+        self.round_over = False
+        # When True on a diagnostic session, system_messages() tells the
+        # interviewer time is up -- the cap's announced closing turn.
+        self.closing = False
         self.board = BoardContext()
         # Bound by whoever builds the pipeline, once the LLMContext exists.
         # Every caller that changes mode or board state then calls
@@ -83,6 +96,12 @@ class Session:
         self._started_at: float | None = None
 
     def switch_to_coach(self) -> None:
+        if self.kind == "diagnostic":
+            # The free round withholds the walkthrough by design -- the coach
+            # is what $19 buys. Structural, not conventional: a diagnostic
+            # session that could switch would also pick up draw_diagram and
+            # the answer key through tools()/system_messages().
+            raise RuntimeError("a diagnostic session has no coach")
         self.mode = "coach"
 
     def tts_voice(self) -> str:
@@ -109,6 +128,14 @@ class Session:
         summary = self.board.last_change_summary
         if summary:
             messages.append({"role": "system", "content": f"Since the last update: {summary}."})
+        if self.kind == "diagnostic" and self.closing:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Time is up. Say one closing sentence -- thank them, no "
+                    "teaching, no verdict -- then call end_round."
+                ),
+            })
         return messages
 
     def start(self, now: float) -> None:
@@ -121,10 +148,11 @@ class Session:
     def remaining_secs(self, now: float) -> float:
         """Never negative -- a caller doing `remaining <= handover_threshold`
         math shouldn't have to clamp it themselves. config.session_cap_secs
-        before start() is called, since nothing has been spent yet."""
+        before start() is called, since nothing has been spent yet.
+        Diagnostic sessions run under config.diagnostic_cap_secs via self.cap_secs."""
         if self._started_at is None:
-            return self.config.session_cap_secs
-        return max(0.0, self.config.session_cap_secs - (now - self._started_at))
+            return self.cap_secs
+        return max(0.0, self.cap_secs - (now - self._started_at))
 
     def expired(self, now: float) -> bool:
         return self.remaining_secs(now) <= 0

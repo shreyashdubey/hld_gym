@@ -28,5 +28,18 @@ class TestSessionCap(unittest.TestCase):
         self.assertEqual(self.s.remaining_secs(now=9999.0), 0)
 
 
+class TestDiagnosticCap(unittest.TestCase):
+    def test_a_diagnostic_session_runs_under_its_own_cap(self):
+        s = Session(VoiceConfig(session_cap_secs=600, diagnostic_cap_secs=120), kind="diagnostic")
+        s.start(now=1000.0)
+        self.assertEqual(s.remaining_secs(now=1000.0), 120)
+        self.assertTrue(s.expired(now=1120.0))
+
+    def test_a_sprint_session_still_runs_under_the_session_cap(self):
+        s = Session(VoiceConfig(session_cap_secs=600, diagnostic_cap_secs=120))
+        s.start(now=1000.0)
+        self.assertEqual(s.remaining_secs(now=1000.0), 600)
+
+
 if __name__ == "__main__":
     unittest.main()
