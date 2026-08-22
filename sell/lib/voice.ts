@@ -31,7 +31,7 @@ export type VoiceSession = {
     visitor a working feature was down. */
 export async function connectVoice(opts: {
   url?: string;
-  mode?: "dictation" | "playground";
+  mode?: "dictation" | "playground" | "diagnostic";
   /* Our own session token (see lib/auth.ts), sent as
      "Authorization: Bearer <token>" -- never in the URL: a token in a query
      string leaks into every server log line it passes through. Only
