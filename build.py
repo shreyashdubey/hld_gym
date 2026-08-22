@@ -51,10 +51,22 @@ errors, warnings = [], []
 def err(m): errors.append(m)
 def warn(m): warnings.append(m)
 
+def _is_year(v):
+    # bool is a subclass of int in Python, so isinstance(True, int) is True and
+    # a JSON `true` would sail through as a year. This is a history book, so a
+    # year of 3 or 20260 is a typo, not a date.
+    return isinstance(v, int) and not isinstance(v, bool) and 1800 <= v <= 2100
+
 def check_assets(cid, html):
     """A broken image is a silent failure in the browser and a loud one here."""
-    for ref in re.findall(r'(?:src|href)="(assets/[^"]+)"', html):
-        if not (ASSETS / ref[len("assets/"):]).exists():
+    root = ASSETS.resolve()
+    for ref in re.findall(r'(?:src|href)="([^"]+)"', html, re.I):
+        if not ref.startswith("assets/"):
+            continue
+        p = (ASSETS / ref[len("assets/"):]).resolve()
+        if not p.is_relative_to(root):
+            err(f"{cid}: asset '{ref}' escapes src/assets/"); continue
+        if not p.is_file():
             err(f"{cid}: asset '{ref}' does not exist in src/assets/")
 
 def font_css():
@@ -72,15 +84,15 @@ def validate_html(cid, html, kind="chapter"):
     # No attribute allowlist exists, so an event handler would sail straight
     # through. Cheap to close, and permitting <img> is exactly when it matters.
     if re.search(r'<[^>]+\son[a-z]+\s*=', html, re.IGNORECASE): err(f"{cid}: event handler attribute forbidden")
-    if "<img" in html:
+    if re.search(r'<img\b', html, re.I):
         if kind != "origin":
             err(f"{cid}: <img> forbidden (use inline SVG)")
         else:
-            for tag in re.findall(r'<img\b[^>]*>', html):
-                src = re.search(r'\ssrc="([^"]*)"', tag)
-                if not src or not src.group(1).startswith("assets/"):
+            for tag in re.findall(r'<img\b[^>]*>', html, re.I):
+                srcm = re.search(r'\ssrc="([^"]*)"', tag, re.I)
+                if not srcm or not srcm.group(1).startswith("assets/"):
                     err(f'{cid}: <img> src must start with "assets/"')
-                if not re.search(r'\salt="[^"]', tag):
+                if not re.search(r'\salt="[^"]', tag, re.I):
                     err(f"{cid}: <img> needs a non-empty alt")
     # The external-URL ban is unconditional; the assets/ check above is what
     # lets origin images through it, because a relative path has no scheme.
@@ -131,14 +143,17 @@ def validate_cards(cid, data):
     """A card is a Leitner item with a picture. Its id shares the namespace with
     quiz ids, so the prefix rule and the uniqueness rule are the same ones."""
     if data.get("chapter") != cid: err(f"{cid}: cards 'chapter' field mismatch")
-    cards, seen = data.get("cards", []), set()
+    cards = data.get("cards", [])
+    if not isinstance(cards, list):
+        err(f"{cid}: cards 'cards' must be a list"); return []
+    seen = set()
     for c in cards:
         cardid = c.get("id", "?")
         if cardid in seen: err(f"{cid}: duplicate card id {cardid}")
         seen.add(cardid)
         if not cardid.startswith(cid): err(f"{cid}: card id {cardid} must start with chapter id")
         if c.get("suit") not in CARD_SUITS: err(f"{cid}:{cardid}: suit must be one of {sorted(CARD_SUITS)}")
-        if not isinstance(c.get("year"), int): err(f"{cid}:{cardid}: year must be an integer")
+        if not _is_year(c.get("year")): err(f"{cid}:{cardid}: year must be an integer 1800-2100")
         for field in ("title", "sub", "body", "prompt", "answer", "cite"):
             if not str(c.get(field, "")).strip():
                 err(f"{cid}:{cardid}: '{field}' is required")
@@ -161,8 +176,15 @@ def validate_cites(cid, html, side, cards):
     """Offline integrity check. Never fetches: link-checking needs the network
     and must not live in a build."""
     src = side.get("sources", {})
+    if not isinstance(src, dict):
+        err(f"{cid}: cites 'sources' must be an object"); return
+    if not isinstance(side.get("unverified", []), list):
+        err(f"{cid}: cites 'unverified' must be a list"); return
+    # A citation inside a comment is not a citation. Strip before scanning, or
+    # `<!-- data-cite="x" -->` satisfies the gate this function exists to hold.
+    live = re.sub(r'<!--.*?-->', '', html, flags=re.S)
     used = set()
-    for attr in re.findall(r'data-cite="([^"]+)"', html):
+    for attr in re.findall(r'data-cite="([^"]+)"', live):
         for k in attr.split():
             used.add(k)
             if k not in src: err(f"{cid}: data-cite '{k}' has no sidecar entry")
@@ -171,24 +193,31 @@ def validate_cites(cid, html, side, cards):
         if k:
             used.add(k)
             if k not in src: err(f"{cid}:{c.get('id')}: cite '{k}' has no sidecar entry")
-    # ohtml is one whole .origin.html file and the origin box is its top-level
-    # element, so "does the box carry a citation" is just "does the file".
-    # Regex over nested HTML bought only a choice between a non-greedy match
-    # that stopped at the box-tag div and a greedy one that ran past the box.
-    if "data-cite=" not in html:
-        err(f"{cid}: origin content carries no data-cite")
+    # the gate: what resolved, not what the text looks like. An empty
+    # data-cite="" yields no key and must fail here, same as no data-cite at all.
+    if not used:
+        err(f"{cid}: origin content carries no citation")
     for k, s in src.items():
         if s.get("type") not in CITE_TYPES: err(f"{cid}:{k}: type must be one of {sorted(CITE_TYPES)}")
-        if not isinstance(s.get("year"), int): err(f"{cid}:{k}: year must be an integer")
+        if not _is_year(s.get("year")): err(f"{cid}:{k}: year must be an integer 1800-2100")
         if not str(s.get("title", "")).strip(): err(f"{cid}:{k}: title is required")
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(s.get("checked", ""))):
             err(f"{cid}:{k}: 'checked' must be an ISO date (YYYY-MM-DD)")
+        # ~15-20% of primary sources 403 later; 'quote' is the exact string
+        # captured at verification time, so a dead link never forces a re-hunt.
+        if s.get("type") in PRIMARY and not str(s.get("quote", "")).strip():
+            err(f"{cid}:{k}: primary sources need a 'quote' captured at verification time")
         if k not in used: warn(f"{cid}: source '{k}' is never cited")
     if used and not any(src[k].get("type") in PRIMARY for k in used if k in src):
         err(f"{cid}: no primary source cited (need one of {sorted(PRIMARY)})")
     # A year in the prose that disagrees with the year of the source it points
-    # at is the single commonest failure in this content type.
-    for k, txt in re.findall(r'<span class="fact" data-cite="([^" ]+)"[^>]*>([^<]*)</span>', html):
+    # at is the single commonest failure in this content type. Match the tag
+    # first, then pull data-cite out of it - a hardcoded attribute order
+    # ("class=... data-cite=...") is defeated by writing them the other way round.
+    for tag, txt in re.findall(r'(<span\b[^>]*class="fact"[^>]*>)([^<]*)</span>', live, re.I):
+        m = re.search(r'data-cite="([^" ]+)"', tag)
+        if not m: continue
+        k = m.group(1)
         years = {int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", txt)}
         if years and k in src and src[k].get("year") not in years:
             err(f"{cid}: fact '{txt[:40]}' cites {k} (year {src[k].get('year')})")

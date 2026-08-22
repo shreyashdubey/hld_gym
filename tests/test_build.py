@@ -182,6 +182,17 @@ def test_card_needs_sub():
     assert _validate_cards(bad), "empty sub was accepted"
 
 
+def test_card_year_rejects_bool_string_and_out_of_range():
+    """bool is a subclass of int in Python, so isinstance(True, int) is True -
+    a JSON `true` must not sail through as a year."""
+    bad = json.loads(json.dumps(CARD_OK)); bad["cards"][0]["year"] = True
+    assert _validate_cards(bad), "year: true was accepted"
+    bad = json.loads(json.dumps(CARD_OK)); bad["cards"][0]["year"] = "1989"
+    assert _validate_cards(bad), "year as a string was accepted"
+    bad = json.loads(json.dumps(CARD_OK)); bad["cards"][0]["year"] = 3
+    assert _validate_cards(bad), "an out-of-range year (3) was accepted"
+
+
 def test_card_body_capped_at_60_words():
     bad = json.loads(json.dumps(CARD_OK))
     bad["cards"][0]["body"] = "word " * 61
@@ -192,6 +203,17 @@ def test_card_asset_must_be_relative():
     bad = json.loads(json.dumps(CARD_OK))
     bad["cards"][0]["asset"] = "https://example.com/x.webp"
     assert _validate_cards(bad)
+
+
+def test_cards_object_instead_of_list_fails_cleanly():
+    """{"cards": {"a": {...}}} - an object where a list belongs - must fail
+    the build, not raise. A validator that crashes tells an author nothing
+    about which file is wrong."""
+    sys.path.insert(0, str(ROOT))
+    import build
+    build.errors.clear()
+    build.validate_cards("ptest", {"chapter": "ptest", "cards": {"a": {"id": "x"}}})
+    assert build.errors, "a 'cards' object instead of a list should fail, not crash"
 
 
 def test_cards_reach_origins_only():
@@ -226,6 +248,20 @@ def test_good_sidecar_passes():
     assert not _validate_cites(html, CITE_OK), _validate_cites(html, CITE_OK)
 
 
+def test_empty_data_cite_value_fails():
+    """data-cite="" is the most direct fake: the presence of the literal
+    attribute text must not stand in for an id that actually resolved."""
+    html = '<div class="box origin"><p><span class="fact" data-cite="">1998</span></p></div>'
+    assert _validate_cites(html, CITE_OK), "an empty data-cite value was accepted"
+
+
+def test_commented_out_citation_fails():
+    """A citation inside an HTML comment is not a citation."""
+    html = ('<div class="box origin"><!-- <span class="fact" data-cite="src1">1998</span> -->'
+            '<p>no real cite</p></div>')
+    assert _validate_cites(html, CITE_OK), "a commented-out data-cite satisfied the gate"
+
+
 def test_dangling_data_cite_fails():
     html = '<div class="box origin"><p><span class="fact" data-cite="ghost">x</span></p></div>'
     errs = _validate_cites(html, CITE_OK)
@@ -249,11 +285,45 @@ def test_year_mismatch_between_text_and_source():
     assert _validate_cites(html, CITE_OK), "1989 in text against a 1998 source should fail"
 
 
+def test_year_mismatch_caught_regardless_of_attribute_order():
+    """The check must not hardcode 'class="fact" data-cite=...' - writing the
+    two attributes the other way round must not dodge it."""
+    html = '<div class="box origin"><p><span data-cite="src1" class="fact">1989</span></p></div>'
+    assert _validate_cites(html, CITE_OK), "reversed attribute order dodged the year check"
+
+
 def test_checked_date_required_and_iso():
     side = json.loads(json.dumps(CITE_OK))
     side["sources"]["src1"]["checked"] = "last tuesday"
     html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
     assert _validate_cites(html, side)
+
+
+def test_primary_source_requires_quote():
+    """~15-20% of primary sources 403 later; 'quote' is captured at
+    verification time so a dead link never forces a re-hunt. Enforce it."""
+    side = json.loads(json.dumps(CITE_OK))
+    del side["sources"]["src1"]["quote"]
+    html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
+    assert _validate_cites(html, side), "a primary source with no quote was accepted"
+
+
+def test_secondary_source_quote_is_optional():
+    side = json.loads(json.dumps(CITE_OK))
+    side["sources"]["src2"] = {"type": "blog", "title": "A Blog", "year": 1998,
+                                "checked": "2026-08-22"}
+    html = ('<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p>'
+            '<p><span class="fact" data-cite="src2">1998</span></p></div>')
+    errs = _validate_cites(html, side)
+    assert not any("quote" in e for e in errs), errs
+
+
+def test_source_year_rejects_bool_and_out_of_range():
+    side = json.loads(json.dumps(CITE_OK)); side["sources"]["src1"]["year"] = True
+    html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
+    assert _validate_cites(html, side), "source year: true was accepted"
+    side = json.loads(json.dumps(CITE_OK)); side["sources"]["src1"]["year"] = 20260
+    assert _validate_cites(html, side), "an out-of-range source year (20260) was accepted"
 
 
 def test_card_cite_must_resolve():
@@ -268,6 +338,18 @@ def test_nested_div_inside_origin_box_still_finds_cite():
     html = ('<div class="box origin"><div class="box-tag">Place, 1998</div>'
             '<p><span class="fact" data-cite="src1">1998</span></p></div>')
     assert not _validate_cites(html, CITE_OK), _validate_cites(html, CITE_OK)
+
+
+def test_sources_non_dict_fails_cleanly():
+    errs = _validate_cites("<div class='box origin'></div>",
+                            {"chapter": "ptest", "sources": ["not", "a", "dict"]})
+    assert errs, "a non-object 'sources' should fail, not crash"
+
+
+def test_unverified_non_list_fails_cleanly():
+    errs = _validate_cites("<div class='box origin'></div>",
+                            {"chapter": "ptest", "sources": {}, "unverified": "nope"})
+    assert errs, "a non-list 'unverified' should fail, not crash"
 
 
 def test_assets_copied_to_origins():
@@ -286,6 +368,26 @@ def test_missing_asset_is_a_build_error():
     build.errors.clear()
     build.check_assets("ptest", '<p><img src="assets/does-not-exist.webp" alt="x"></p>')
     assert build.errors, "a reference to a nonexistent asset should fail the build"
+
+
+def test_check_assets_rejects_path_traversal():
+    """src="assets/../../build.py" passed both the prefix check and the
+    existence check, then was never copied into dist/origins/assets/ - a
+    broken image the build called fine."""
+    sys.path.insert(0, str(ROOT))
+    import build
+    build.errors.clear()
+    build.check_assets("ptest", '<img src="assets/../../build.py" alt="x">')
+    assert build.errors, "a path escaping src/assets/ should fail the build"
+
+
+def test_check_assets_rejects_a_directory():
+    """src="assets/somedir" must not pass just because the path exists."""
+    sys.path.insert(0, str(ROOT))
+    import build
+    build.errors.clear()
+    build.check_assets("ptest", '<img src="assets/" alt="x">')
+    assert build.errors, "a directory reference should fail the build"
 
 
 def main():
