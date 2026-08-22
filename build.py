@@ -201,10 +201,18 @@ def credits_html(entries, shipped, n_diagrams):
     drawn = [r for r in rels if not r.startswith(CREDITED_DIRS)]
     marks = [(r, e) for r, e in rows if str(e.get("kind", "")).strip() == "mark"]
     photos = [(r, e) for r, e in rows if str(e.get("kind", "")).strip() != "mark"]
+    # Collapsed, because this footer is static template chrome: app.js never
+    # touches it, so it renders under every route. Expanded it measured
+    # 12,427px against a 14,848px home page - 84% of the scroll, on every
+    # screen, for a table nobody reads front to back. Attribution has to be
+    # present and it has to be findable; it does not have to be unfoldable.
+    # A <summary> the reader opens is the same discharge as a table they
+    # scroll past, and CC BY only asks for reasonable-to-the-medium.
     o = ['<footer class="view" role="contentinfo" aria-labelledby="credits-h">',
          '  <div class="content">',
          '    <div class="rail-sep"></div>',
-         '    <h2 id="credits-h">Image credits</h2>']
+         '    <details class="credits">',
+         '    <summary id="credits-h">Image credits</summary>']
     o.append(f'    <p class="deck-note">{len(drawn)} of the images that ship here, together with '
              f'all {n_diagrams} diagrams, are originally authored geometry, drawn to a fixed house '
              f'system and traced from no photograph. None of that is third-party work and none of '
@@ -253,7 +261,7 @@ def credits_html(entries, shipped, n_diagrams):
         if notice:
             o.append(f'    <details><summary>Full licence notice for <code>{escape(r)}</code>, '
                      f'required verbatim</summary><pre>{escape(notice)}</pre></details>')
-    o += ['  </div>', '</footer>']
+    o += ['    </details>', '  </div>', '</footer>']
     return "\n".join(o)
 
 def font_css():
