@@ -228,6 +228,24 @@ def test_card_cite_must_resolve():
     assert _validate_cites(html, CITE_OK, cards)
 
 
+def test_assets_copied_to_origins():
+    src = ROOT / "src" / "assets"
+    dst = ROOT / "dist" / "origins" / "assets"
+    if not any(p.is_file() and p.name != ".gitkeep" for p in src.glob("*")):
+        return  # nothing to copy yet; the missing-asset test below is the real guard
+    for p in src.iterdir():
+        if p.is_file() and p.name != ".gitkeep":
+            assert (dst / p.name).exists(), f"{p.name} was not copied into dist/origins/assets/"
+
+
+def test_missing_asset_is_a_build_error():
+    sys.path.insert(0, str(ROOT))
+    import build
+    build.errors.clear()
+    build.check_assets("ptest", '<p><img src="assets/does-not-exist.webp" alt="x"></p>')
+    assert build.errors, "a reference to a nonexistent asset should fail the build"
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

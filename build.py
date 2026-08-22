@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Assemble dist/book/ and dist/origins/ from src/. Validates chapters + quizzes; fails loudly."""
-import base64, json, re, sys
+import base64, json, re, shutil, sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent
 SRC = ROOT / "src"
 CH = SRC / "chapters"
+ASSETS = SRC / "assets"
 # The sprint presell page owns dist/ root (and so the site root); the book
 # lives one level down at /book, and its story-first twin at /origins.
 DIST = ROOT / "dist"
@@ -49,6 +50,12 @@ FONTS = [
 errors, warnings = [], []
 def err(m): errors.append(m)
 def warn(m): warnings.append(m)
+
+def check_assets(cid, html):
+    """A broken image is a silent failure in the browser and a loud one here."""
+    for ref in re.findall(r'(?:src|href)="(assets/[^"]+)"', html):
+        if not (ASSETS / ref[len("assets/"):]).exists():
+            err(f"{cid}: asset '{ref}' does not exist in src/assets/")
 
 def font_css():
     css = []
@@ -236,6 +243,7 @@ def main():
             if of.exists():
                 ohtml = of.read_text()
                 validate_html(cid, ohtml, "origin")
+                check_assets(cid, ohtml)
                 words = len(re.sub(r"<[^>]+>", " ", ohtml).split())
                 if words > 260:
                     err(f"{cid}: origin story is {words} words (limit 260)")
@@ -245,6 +253,9 @@ def main():
             if cf.exists():
                 try:
                     cards_all[cid] = validate_cards(cid, json.loads(cf.read_text()))
+                    for c in cards_all.get(cid, []):
+                        if c.get("asset"):
+                            check_assets(cid, f'src="{c["asset"]}"')
                 except json.JSONDecodeError as e:
                     err(f"{cid}: cards json invalid: {e}")
             elif of.exists():
@@ -274,6 +285,13 @@ def main():
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(render(mode, toc, templates, quiz_all, cards_all, origins if mode == "origins" else {}))
         print(f"Built {out} ({out.stat().st_size / 1024:.0f} KB, {ready} chapters)")
+
+        if mode == "origins" and ASSETS.exists():
+            dest = out.parent / "assets"
+            shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(ASSETS, dest, ignore=shutil.ignore_patterns(".gitkeep"))
+            n = sum(1 for _ in dest.rglob("*") if _.is_file())
+            print(f"  copied {n} asset(s) → {dest}")
 
 if __name__ == "__main__":
     main()
