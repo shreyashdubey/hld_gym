@@ -15,5 +15,5 @@ export const dynamic = "force-static";
  * in the committed dist/ whether or not anything changed. An untrue lastmod is
  * worse than none, and Google discounts the field anyway. */
 export default function sitemap(): MetadataRoute.Sitemap {
-  return [{ url: `${SITE}/` }, { url: `${SITE}/book/` }];
+  return [{ url: `${SITE}/` }, { url: `${SITE}/book/` }, { url: `${SITE}/origins/` }];
 }
