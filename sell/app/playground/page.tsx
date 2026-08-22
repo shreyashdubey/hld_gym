@@ -170,9 +170,23 @@ export default function PlaygroundPage() {
            honest recovery: a genuinely stale token retried forever with no
            way back to a working state is worse than one extra sign-in click
            on the rarer case where this was actually just the service being
-           briefly down. */
+           briefly down.
+
+           setSignedIn(false) below unmounts the entire signedIn===true
+           branch this render -- the "voice service unreachable" button
+           label and hint live inside it, so without this message the *far
+           more common* case (the service is briefly down, the token was
+           fine) went completely silent: a valid-token visitor got logged
+           out with no explanation at all, in this repo whose first rule is
+           never to claim the product does something it does not -- silence
+           about a failure is exactly that, by omission. Found by browser
+           verification with the service down and a valid token, not by
+           reading the diff. */
         clearToken();
         setSignedIn(false);
+        setAuthError(
+          "The voice service isn't reachable right now — the board below still works. Sign in and try again once it's back.",
+        );
       }
       setState(denied ? "denied" : "unavailable");
     }

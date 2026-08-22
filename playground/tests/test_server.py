@@ -500,8 +500,17 @@ class TestPlaygroundAuthGate(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 401)
 
     def test_a_tampered_token_is_a_401(self):
+        """Tampers the *first* character of the signature, not the last --
+        found flaky during a security-review re-run: a base64url-encoded
+        32-byte HMAC digest has 2 unused padding bits in its final
+        character, so flipping the last character sometimes decodes to the
+        exact same bytes (measured: ~5.75% of the time), and the "tampered"
+        token verifies fine. The first character has no such don't-care
+        bits -- confirmed deterministic across 2000 trials, 0 misses."""
         token = self._token()
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        payload_part, sig_part = token.split(".")
+        tampered_sig = ("A" if sig_part[0] != "A" else "B") + sig_part[1:]
+        tampered = f"{payload_part}.{tampered_sig}"
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(
                 offer(self.request, mode="playground", authorization=f"Bearer {tampered}")
@@ -545,6 +554,15 @@ class TestPlaygroundAuthGate(unittest.TestCase):
                                 )
                             )
             self.assertEqual(answer["pc_id"], fake.pc_id)
+            # The load-bearing assertion for the renegotiate-bypass fix: the
+            # session offer() actually *creates* must be recorded as
+            # mode="playground", not just whatever the request happened to
+            # claim -- a security review mutated the construction site's
+            # `mode=mode` to a hardcoded `mode="dictation"` and every other
+            # test in this suite still passed, because none of them checked
+            # what got written into _sessions. This one does.
+            self.assertEqual(_sessions[fake.pc_id].mode, "playground")
+            self.assertEqual(_sessions[fake.pc_id].email, "learner@example.com")
         finally:
             _sessions.pop(fake.pc_id, None)
 
@@ -558,6 +576,8 @@ class TestPlaygroundAuthGate(unittest.TestCase):
                             offer(self.request, mode="dictation", authorization=None)
                         )
             self.assertEqual(answer["pc_id"], fake.pc_id)
+            self.assertEqual(_sessions[fake.pc_id].mode, "dictation")
+            self.assertIsNone(_sessions[fake.pc_id].email)
         finally:
             _sessions.pop(fake.pc_id, None)
 
@@ -667,8 +687,15 @@ class TestRenegotiateAuthGateBypass(unittest.TestCase):
         self.secret = _TOKEN_SECRET
         self.fake = _FakeConnection()
         self.fake.pc_id = "victim-playground-pc-id"
+        # email matches the token test_a_valid_token_still_renegotiates_it_normally
+        # signs below -- that test is about the mode gate, not ownership;
+        # see TestRenegotiateOwnership for the different-user 403 case.
         _sessions[self.fake.pc_id] = _Session(
-            connection=self.fake, runner=None, task=None, mode="playground"
+            connection=self.fake,
+            runner=None,
+            task=None,
+            mode="playground",
+            email="learner@example.com",
         )
 
     def tearDown(self):
@@ -703,6 +730,64 @@ class TestRenegotiateAuthGateBypass(unittest.TestCase):
         answer = asyncio.run(offer(request, mode="playground", authorization=f"Bearer {token}"))
         self.assertEqual(self.fake.renegotiate_calls, 1)
         self.assertEqual(answer["pc_id"], self.fake.pc_id)
+
+
+class TestRenegotiateOwnership(unittest.TestCase):
+    """Authenticated is not the same as authorized: a valid token proves
+    *a* Google account signed in, not that it is *this session's* account
+    -- and with no allowlist, any Google account is the entire set a token
+    can come from. _authenticate_playground_request used to return the
+    verified email only for offer() to throw it away, so a second learner's
+    own perfectly valid token could renegotiate someone *else's* live
+    playground session. A security review demonstrated this live before it
+    shipped. _Session.email pins the owner at creation; the renegotiate
+    branch now requires a match."""
+
+    def setUp(self):
+        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        from playground.server import _TOKEN_SECRET
+
+        self.secret = _TOKEN_SECRET
+        self.fake = _FakeConnection()
+        self.fake.pc_id = "victim-playground-pc-id"
+        _sessions[self.fake.pc_id] = _Session(
+            connection=self.fake,
+            runner=None,
+            task=None,
+            mode="playground",
+            email="victim@example.com",
+        )
+
+    def tearDown(self):
+        _sessions.pop(self.fake.pc_id, None)
+
+    def _token_for(self, email):
+        return sign_token(email, self.secret, now=time.time(), ttl_secs=3600)
+
+    def test_the_owning_user_can_renegotiate_their_own_session(self):
+        request = OfferRequest(sdp="real-sdp", type="offer", pc_id=self.fake.pc_id)
+        answer = asyncio.run(
+            offer(request, mode="playground", authorization=f"Bearer {self._token_for('victim@example.com')}")
+        )
+        self.assertEqual(self.fake.renegotiate_calls, 1)
+        self.assertEqual(answer["pc_id"], self.fake.pc_id)
+
+    def test_a_different_authenticated_user_gets_403_not_200(self):
+        """The exploit as demonstrated: a token minted for a *different*,
+        entirely valid Google account. Must be rejected as a permissions
+        problem (403), distinct from not being authenticated at all (401)
+        -- and the attacker's SDP must never reach renegotiate()."""
+        request = OfferRequest(sdp="attacker-sdp", type="offer", pc_id=self.fake.pc_id)
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                offer(
+                    request,
+                    mode="playground",
+                    authorization=f"Bearer {self._token_for('attacker@example.com')}",
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(self.fake.renegotiate_calls, 0)
 
 
 if __name__ == "__main__":

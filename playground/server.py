@@ -201,6 +201,15 @@ class _Session(NamedTuple):
     # what the session actually is, fixed at creation and never taken from
     # an untrusted later request -- closes that. See offer().
     mode: Mode
+    # The verified email that authenticated this session's creation --
+    # None for dictation, which authenticates nothing. Recorded so the
+    # renegotiate branch below can require the *same* identity on a repeat
+    # request, not just *some* valid token: without this, any Google
+    # account -- there is no allowlist -- could renegotiate any other
+    # signed-in user's live playground session, since a valid-but-unrelated
+    # token satisfied _authenticate_playground_request just fine. A
+    # security review demonstrated this live before it shipped.
+    email: str | None = None
     # None for dictation, which has no Session and so nothing to cap. Held
     # here for the same reason `task` is: a task with no other reference
     # can be garbage-collected mid-run.
@@ -365,12 +374,24 @@ async def offer(
     `uuid4().hex` an attacker cannot guess, and today's default bind to
     127.0.0.1 keeps it off the network entirely, but neither of those is an
     auth check, and sell/PROGRESS.md records that both evaporate the day
-    this is hosted."""
+    this is hosted.
+
+    Authenticated is not the same as authorized: a valid token proves *a*
+    Google account signed in, not that it is *this session's* account, and
+    with no allowlist any Google account is the entire set a token can come
+    from. So a renegotiate of an existing playground session also checks
+    the verified email against the one recorded on the session at creation
+    (_Session.email) -- a second learner's own perfectly valid token must
+    not renegotiate someone else's live session. A security review
+    demonstrated this live before it shipped too."""
     existing = _sessions.get(request.pc_id) if request.pc_id else None
+    authenticated_email = None
     if mode == "playground" or (existing is not None and existing.mode == "playground"):
-        _authenticate_playground_request(authorization)
+        authenticated_email = _authenticate_playground_request(authorization)
 
     if existing is not None:
+        if existing.mode == "playground" and authenticated_email != existing.email:
+            raise HTTPException(status_code=403, detail="not your session")
         await existing.connection.renegotiate(sdp=request.sdp, type=request.type)
         return existing.connection.get_answer()
 
@@ -416,7 +437,12 @@ async def offer(
         # own teardown paths do, and none of those can run before this
         # function returns.
         _sessions[answer["pc_id"]] = _Session(
-            connection=connection, runner=runner, task=task, mode=mode, cap_task=None
+            connection=connection,
+            runner=runner,
+            task=task,
+            mode=mode,
+            email=authenticated_email,
+            cap_task=None,
         )
         if pg_session is not None:
             cap_task = asyncio.create_task(_enforce_cap(connection, worker, pg_session))
