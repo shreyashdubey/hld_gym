@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Board from "@/components/Board";
+import FailureMap from "@/components/FailureMap";
 import { connectVoice, type VoiceSession } from "@/lib/voice";
 import {
   clearToken,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/auth";
 import { extractGraph, type BoardElement, type BoardGraph } from "@/lib/board";
 import { layoutTopology, type Topology } from "@/lib/layout";
+import { parseFailureMap, type FailureMoment } from "@/lib/failureMap";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
 /* idle/connecting/live plus three distinct terminal states, not one shared
@@ -29,15 +31,42 @@ import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
      "ended"       — a live session's connection closed on its own with no
                       error ahead of it — today, only the session cap's own
                       cut, which the interviewer has already handed the
-                      coach's walkthrough ahead of. Not a failure. */
-type PlaygroundState = "idle" | "connecting" | "live" | "ended" | "unavailable" | "denied";
+                      coach's walkthrough ahead of. Not a failure.
+     "grading"     : a diagnostic round's finish control was used; the
+                      server is grading, then it delivers the map and closes.
+     "graded"      : the diagnostic round's map has arrived (or was lost),
+                      the terminal state for that round kind. */
+type PlaygroundState =
+  | "idle" | "connecting" | "live" | "grading" | "graded"
+  | "ended" | "unavailable" | "denied";
 
 export default function PlaygroundPage() {
-  const [state, setState] = useState<PlaygroundState>("idle");
+  const [state, setStateReact] = useState<PlaygroundState>("idle");
   const [said, setSaid] = useState<string[]>([]);
   const [backfill, setBackfill] = useState<BoardGraph | null>(null);
+  const [map, setMap] = useState<FailureMoment[] | null | undefined>(undefined);
+  /* State, not a ref: the live block's own render (finish vs. stop, and
+     their hints) depends on which kind is running, so this has to be
+     something a render can read. The connectVoice callbacks below never
+     read it back -- they close over the `kind` argument `start` was called
+     with instead, which is the one already correct for the round that
+     specific callback belongs to. */
+  const [roundKind, setRoundKind] = useState<"playground" | "diagnostic">("playground");
   const session = useRef<VoiceSession | null>(null);
   const excalidrawAPI = useRef<ExcalidrawImperativeAPI | null>(null);
+  const gradingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /* onDisconnect fires from a server event and needs the state as of right
+     now, not whatever `state` closed over when the session was opened --
+     `start` runs once per round and its closures are stale by the time a
+     server message arrives minutes later. A ref kept in lockstep with every
+     setState call (below) is the standard fix; reading it from an updater
+     passed to setState itself would work too, but only by calling setMap as
+     a side effect of that updater, which React may invoke more than once. */
+  const stateRef = useRef<PlaygroundState>("idle");
+  const setState = useCallback((s: PlaygroundState) => {
+    stateRef.current = s;
+    setStateReact(s);
+  }, []);
 
   /* Every session bills OpenAI credit by the minute, so /api/offer gates
      mode=playground on our own session token -- see
@@ -89,7 +118,7 @@ export default function PlaygroundPage() {
         })
         .catch(() => setAuthError("Sign-in failed — try again."));
     }).catch(() => setAuthError("Google sign-in isn't available right now."));
-  }, [signedIn]);
+  }, [signedIn, setState]);
 
   const onGraphChange = useCallback((graph: BoardGraph) => {
     session.current?.send("board", { graph });
@@ -132,7 +161,22 @@ export default function PlaygroundPage() {
     session.current = null;
     setState("ended");
     void opened?.disconnect().catch(() => {});
-  }, []);
+  }, [setState]);
+
+  /* The diagnostic round's own end control: no cap handover to wait for,
+     because there is no coach on the other end of it. The server grades,
+     delivers the map, then closes on its own -- the onMessage branch below
+     clears this timeout the moment a map arrives. 20s is generous for one
+     LLM call plus a retry; past it the honest state is a lost map, not a
+     spinner sitting on a page that is about to ask for money. */
+  const finish = useCallback(() => {
+    session.current?.send("finish", {});
+    setState("grading");
+    gradingTimeout.current = setTimeout(() => {
+      setMap(null);
+      setState("graded");
+    }, 20_000);
+  }, [setState]);
 
   useEffect(
     () => () => {
@@ -142,13 +186,26 @@ export default function PlaygroundPage() {
     [],
   );
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (kind: "playground" | "diagnostic") => {
+    setRoundKind(kind);
+    setMap(undefined);
     setState("connecting");
     try {
       const opened = await connectVoice({
-        mode: "playground",
+        mode: kind,
         token: getStoredToken() ?? undefined,
         onMessage: (m) => {
+          /* Checked first: a failure-map message is the diagnostic round's
+             terminal delivery, not a transcript line or a draw call, and it
+             can arrive at any point after "live" (including mid-sentence,
+             if the round ends on the cap rather than the finish control). */
+          const fm = parseFailureMap(m);
+          if (fm) {
+            if (gradingTimeout.current) clearTimeout(gradingTimeout.current);
+            setMap(fm.moments);
+            setState("graded");
+            return;
+          }
           const msg = m as { type?: string; text?: string; topology?: Topology };
           if (msg?.type === "transcript" && msg.text) setSaid((s) => [...s, msg.text!]);
           /* topology is a model tool-call payload, not user input — it arrives
@@ -167,9 +224,29 @@ export default function PlaygroundPage() {
              interviewer has already handed over to the coach). Only the
              former is reported as "unreachable"; a round that ran its
              course and ended on schedule is not a failure and must not
-             read as one. */
+             read as one.
+
+             A diagnostic round is different: there is no coach handover, so
+             its own connection closing (for any non-error reason) is either
+             the server delivering the map and then hanging up -- already
+             handled above, state is "graded" -- or the round ending with
+             nothing delivered. "grading" is left alone; the finish timeout
+             above is the one that decides a lost map, not this handler
+             racing it. Reading stateRef rather than the `state` this
+             closure captured at connect time: this callback can fire
+             minutes later, long after "live" gave way to "grading". `kind`
+             (the argument this `start` call closed over), not the
+             `roundKind` state, for the same reason -- it can only ever
+             belong to the round this exact callback was created for. */
           if (session.current !== opened) return;
           session.current = null;
+          if (kind === "diagnostic" && reason !== "error") {
+            const s = stateRef.current;
+            if (s === "graded" || s === "grading") return;
+            setMap(null);
+            setState("graded");
+            return;
+          }
           setState(reason === "error" ? "unavailable" : "ended");
         },
       });
@@ -226,7 +303,7 @@ export default function PlaygroundPage() {
       }
       setState(denied ? "denied" : "unavailable");
     }
-  }, [onDraw]);
+  }, [onDraw, setState]);
 
   return (
     <main className="playground">
@@ -247,18 +324,41 @@ export default function PlaygroundPage() {
       )}
       {signedIn === true && state === "live" && (
         <>
-          <button type="button" className="btn" onClick={stop}>
-            end the round
-          </button>
+          {roundKind === "diagnostic" ? (
+            <button type="button" className="btn" onClick={finish}>
+              finish and get my report
+            </button>
+          ) : (
+            <button type="button" className="btn" onClick={stop}>
+              end the round
+            </button>
+          )}
           <p className="hint">
-            Ends the session now rather than waiting for the cap. The board
-            below keeps everything on it either way.
+            {roundKind === "diagnostic"
+              ? "Ends the interview and grades it. The report appears here."
+              : "Ends the session now rather than waiting for the cap. The board below keeps everything on it either way."}
           </p>
         </>
       )}
-      {signedIn === true && state !== "live" && (
+      {signedIn === true && state === "grading" && (
+        <p className="hint">Grading your round now. Your report lands here in a few seconds.</p>
+      )}
+      {signedIn === true && state === "graded" && (
         <>
-          <button type="button" className="btn" onClick={start} disabled={state === "connecting"}>
+          <FailureMap moments={map ?? null} />
+          <button type="button" className="btn ghost" onClick={() => start("diagnostic")}>
+            sit another round
+          </button>
+        </>
+      )}
+      {signedIn === true && state !== "live" && state !== "grading" && state !== "graded" && (
+        <>
+          <button
+            type="button"
+            className="btn ghost"
+            onClick={() => start("playground")}
+            disabled={state === "connecting"}
+          >
             {state === "denied"
               ? "microphone permission denied"
               : state === "unavailable"
@@ -283,6 +383,23 @@ export default function PlaygroundPage() {
                 : state === "ended"
                   ? "That round ended — no error, just the connection closing on its own. Start another whenever you're ready."
                   : "Sessions run for a capped length. The interviewer hands over to the coach before time is up, so you always get the walkthrough."}
+          </p>
+          {/* The diagnostic round is this page's primary action now, so it
+              carries the one accent .btn beside the sprint round's demoted
+              .btn.ghost -- two accent fills would leave the eye with no
+              primary action (DESIGN-SYSTEM.md §2.2). */}
+          <button
+            type="button"
+            className="btn"
+            onClick={() => start("diagnostic")}
+            disabled={state === "connecting"}
+          >
+            sit the diagnostic round (6 min)
+          </button>
+          <p className="hint">
+            A short interview, no coach. It ends in a written report: the moments
+            where you would have been cut, in your own words, each linked to the free
+            chapter that covers it.
           </p>
         </>
       )}
