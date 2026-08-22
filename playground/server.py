@@ -19,6 +19,7 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.workers.runner import WorkerRunner
 from pydantic import BaseModel
 
+from playground import grading
 from playground.auth import (
     AuthError,
     GoogleUnavailableError,
@@ -29,9 +30,10 @@ from playground.auth import (
 )
 from playground.config import VoiceConfig
 from playground.pipelines import build_dictation_worker, build_playground_worker
+from playground.relay import server_message
 from playground.session import Session
 
-Mode = Literal["dictation", "playground"]
+Mode = Literal["dictation", "playground", "diagnostic"]
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +281,45 @@ async def _end_session(conn: SmallWebRTCConnection) -> None:
         await session.runner.cancel(reason="connection ended")
 
 
+async def _run_diagnostic_end(
+    session: Session,
+    connection: SmallWebRTCConnection,
+    config: VoiceConfig,
+    grade_fn=None,
+    flush_secs: float = 1.0,
+) -> None:
+    """The one end path for all three diagnostic triggers: end_round, the
+    client's finish control, and the cap. round_over makes it first-wins --
+    the loop is single-threaded and there is no await between the check and
+    the set, so two triggers cannot both grade. The teardown lives in a
+    finally so a surprise in grading or delivery can never leave a live
+    session billing with nobody coming back for it; grade_fn itself never
+    raises (see grading.grade), the finally is belt for the braces.
+
+    grade_fn defaults to None, not to grading.grade directly: a default bound
+    at def time is captured once, at import, before any test (or future
+    caller) could ever patch playground.server.grading.grade -- so the
+    default is resolved here, inside the body, against the module attribute
+    as it stands at call time."""
+    if session.round_over:
+        return
+    session.round_over = True
+    try:
+        fn = grade_fn if grade_fn is not None else grading.grade
+        turns = session.context.get_messages() if session.context is not None else []
+        board = session.board.messages()
+        board_text = board[0]["content"] if board else ""
+        moments = await fn(turns, board_text, model=config.llm_model)
+        connection.send_app_message(
+            server_message({"type": "failure_map", "moments": moments})
+        )
+        # ponytail: fixed flush sleep before teardown; a delivery ack from the
+        # client is the upgrade if maps ever go missing in practice.
+        await asyncio.sleep(flush_secs)
+    finally:
+        await _end_session(connection)
+
+
 async def _enforce_cap(
     connection: SmallWebRTCConnection, worker: PipelineWorker, pg_session: Session
 ) -> None:
@@ -344,6 +385,44 @@ async def _enforce_cap(
     await _end_session(connection)
 
 
+async def _enforce_diagnostic_cap(
+    connection: SmallWebRTCConnection,
+    worker: PipelineWorker,
+    pg_session: Session,
+    config: VoiceConfig,
+    closing_secs: float = 30.0,
+) -> None:
+    """The diagnostic sibling of _enforce_cap. No coach handover ever --
+    switch_to_coach() raises for a diagnostic session (see
+    playground/session.py), so this must never call it. Instead,
+    closing_secs before the cap the interviewer is told time is up
+    (Session.closing + push_context, then one LLMRunFrame: the same
+    announced-not-silent mechanism the sprint handover uses), which normally
+    ends the round via end_round well before the cap. If it does not, the
+    cap runs the end path itself: the candidate still gets their map, just
+    without a spoken goodbye. Same poll cadence and sleep maths as
+    _enforce_cap, for the same recorded reasons."""
+    closing_requested = False
+    while connection.pc_id in _sessions:
+        now = time.monotonic()
+        if pg_session.expired(now):
+            break
+        remaining = pg_session.remaining_secs(now)
+        if not closing_requested and remaining <= closing_secs and not pg_session.round_over:
+            pg_session.closing = True
+            pg_session.push_context()
+            await worker.queue_frames([LLMRunFrame()])
+            closing_requested = True
+        sleep_for = remaining if closing_requested else remaining - closing_secs
+        await asyncio.sleep(min(sleep_for, 1.0) if sleep_for > 0 else 0.05)
+    if connection.pc_id in _sessions and not pg_session.round_over:
+        await _run_diagnostic_end(pg_session, connection, config)
+    else:
+        # Ended by end_round/finish (their _run_diagnostic_end tears down
+        # already), or the visitor disconnected. Idempotent either way.
+        await _end_session(connection)
+
+
 def _extract_board_graph(message: object) -> dict | None:
     """Pure parser: a raw connection-level "app-message" payload -> the board
     graph dict it carries, or None if this isn't a well-formed board update.
@@ -371,6 +450,16 @@ def _extract_board_graph(message: object) -> dict | None:
     payload = data.get("d")
     graph = payload.get("graph") if isinstance(payload, dict) else None
     return graph if isinstance(graph, dict) else None
+
+
+def _extract_finish(message: object) -> bool:
+    """True for the client's finish control: {"type": "client-message",
+    "data": {"t": "finish", ...}}. Same envelope walk as
+    _extract_board_graph, same reason it is module-level and pure."""
+    if not (isinstance(message, dict) and message.get("type") == "client-message"):
+        return False
+    data = message.get("data")
+    return isinstance(data, dict) and data.get("t") == "finish"
 
 
 def _apply_board_message(session: Session, message: object) -> None:
@@ -426,14 +515,22 @@ async def offer(
     the verified email against the one recorded on the session at creation
     (_Session.email) -- a second learner's own perfectly valid token must
     not renegotiate someone else's live session. A security review
-    demonstrated this live before it shipped too."""
+    demonstrated this live before it shipped too.
+
+    mode=diagnostic is gated identically to mode=playground -- it spends
+    real OpenAI credit per minute exactly the same way -- and the
+    renegotiate identity check above now keys on "not dictation" rather than
+    "playground" specifically, for the same recorded reasons, now that a
+    second metered mode exists."""
     existing = _sessions.get(request.pc_id) if request.pc_id else None
     authenticated_email = None
-    if mode == "playground" or (existing is not None and existing.mode == "playground"):
+    if mode in ("playground", "diagnostic") or (
+        existing is not None and existing.mode != "dictation"
+    ):
         authenticated_email = _authenticate_playground_request(authorization)
 
     if existing is not None:
-        if existing.mode == "playground" and authenticated_email != existing.email:
+        if existing.mode != "dictation" and authenticated_email != existing.email:
             raise HTTPException(status_code=403, detail="not your session")
         await existing.connection.renegotiate(sdp=request.sdp, type=request.type)
         return _require_answer(existing.connection)
@@ -454,13 +551,24 @@ async def offer(
         # already-initialize()d connection, or it leaks a live peer
         # connection nothing will ever clean up.
         config = VoiceConfig.from_env()
-        if mode == "playground":
-            worker, pg_session = build_playground_worker(connection, config)
+        if mode in ("playground", "diagnostic"):
+            if mode == "diagnostic":
+
+                async def _on_round_end(s: Session) -> None:
+                    await _run_diagnostic_end(s, connection, config)
+
+                worker, pg_session = build_playground_worker(
+                    connection, config, kind="diagnostic", on_round_end=_on_round_end
+                )
+            else:
+                worker, pg_session = build_playground_worker(connection, config)
             pg_session.start(now=time.monotonic())
 
             @connection.event_handler("app-message")
             async def _on_app_message(conn: SmallWebRTCConnection, message: object) -> None:
                 _apply_board_message(pg_session, message)
+                if pg_session.kind == "diagnostic" and _extract_finish(message):
+                    await _run_diagnostic_end(pg_session, connection, config)
         else:
             # Dictation has no Session, no LLM turn to hand over -- so
             # nothing for _enforce_cap to do.
@@ -493,7 +601,12 @@ async def offer(
             cap_task=None,
         )
         if pg_session is not None:
-            cap_task = asyncio.create_task(_enforce_cap(connection, worker, pg_session))
+            if pg_session.kind == "diagnostic":
+                cap_task = asyncio.create_task(
+                    _enforce_diagnostic_cap(connection, worker, pg_session, config)
+                )
+            else:
+                cap_task = asyncio.create_task(_enforce_cap(connection, worker, pg_session))
             _sessions[registered_pc_id] = _sessions[registered_pc_id]._replace(cap_task=cap_task)
 
         connection.add_event_handler("closed", _end_session)

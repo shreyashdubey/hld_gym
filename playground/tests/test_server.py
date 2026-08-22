@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import playground.server as server
 from playground.auth import AuthError, GoogleUnavailableError, sign_token
 from playground.config import VoiceConfig
 from playground.server import (
@@ -183,6 +184,9 @@ class _FakeContext:
     def set_tools(self, tools):
         self.tools = tools
 
+    def get_messages(self):
+        return self.messages
+
 
 class TestApplyBoardMessage(unittest.TestCase):
     """_apply_board_message is the second (and last) caller of
@@ -232,6 +236,8 @@ class _FakeConnection:
         # echoes back and what _enforce_cap's `connection.pc_id in _sessions`
         # reads -- both need the same value here.
         self.pc_id = "fake-pc-id"
+        # _run_diagnostic_end's failure-map delivery -- see TestRunDiagnosticEnd.
+        self.app_messages = []
 
     async def initialize(self, sdp, type):
         pass
@@ -241,6 +247,9 @@ class _FakeConnection:
 
     async def renegotiate(self, sdp, type):
         self.renegotiate_calls += 1
+
+    def send_app_message(self, message):
+        self.app_messages.append(message)
 
     def event_handler(self, name):
         def decorator(fn):
@@ -399,6 +408,12 @@ class _FakeCapWorker:
 class _FakeCapConnection:
     def __init__(self, pc_id):
         self.pc_id = pc_id
+        # _enforce_diagnostic_cap's fallback end path (_run_diagnostic_end)
+        # delivers the failure map through this -- see TestEnforceDiagnosticCap.
+        self.app_messages = []
+
+    def send_app_message(self, message):
+        self.app_messages.append(message)
 
 
 class _FakeTTS:
@@ -957,6 +972,150 @@ class TestEndSessionCancelsTheCapTask(unittest.TestCase):
         self.assertTrue(cap.cancelled() or cap.cancelling())
         self.assertEqual(runner.cancel_calls, 1)
         self.assertNotIn(conn.pc_id, _sessions)
+
+
+class TestExtractFinish(unittest.TestCase):
+    """_extract_finish is _extract_board_graph's sibling parser -- the
+    client's finish control instead of a board update. Module-level and
+    pure for the same reason."""
+
+    def test_true_for_a_finish_client_message(self):
+        msg = {"type": "client-message", "data": {"t": "finish", "d": {}}}
+        self.assertTrue(server._extract_finish(msg))
+
+    def test_false_for_board_messages_and_junk(self):
+        self.assertFalse(server._extract_finish({"type": "client-message", "data": {"t": "board", "d": {}}}))
+        self.assertFalse(server._extract_finish({"type": "other"}))
+        self.assertFalse(server._extract_finish("finish"))
+        self.assertFalse(server._extract_finish({"type": "client-message", "data": "finish"}))
+
+
+class TestDiagnosticAuthGate(unittest.TestCase):
+    """A diagnostic session spends real OpenAI credit per minute exactly
+    like a playground one, so it gets the same token check -- see
+    TestPlaygroundAuthGate for the gate's full coverage; this just proves
+    mode=diagnostic actually routes through it. Same TestClient setup as
+    TestOffer/TestHealth above."""
+
+    def setUp(self):
+        _fake_openai_key(self)
+        from playground.server import app
+
+        self.client = TestClient(app)
+
+    def test_mode_diagnostic_without_a_token_is_401(self):
+        response = self.client.post(
+            "/api/offer?mode=diagnostic", json={"sdp": "x", "type": "offer"}
+        )
+        self.assertEqual(response.status_code, 401)
+
+
+def _make_fake_session_entry(connection, mode="diagnostic"):
+    """The same _Session-with-a-fake-runner shape TestEndSessionCancelsTheCapTask
+    and friends build inline -- pulled into one helper here since three new
+    test classes below all need it for a diagnostic session registered in
+    _sessions."""
+    return _Session(
+        connection=connection,
+        runner=_FakeWorkerRunner(),
+        task=None,
+        mode=mode,
+        email="e@x",
+        cap_task=None,
+    )
+
+
+class TestRunDiagnosticEnd(unittest.IsolatedAsyncioTestCase):
+    """_run_diagnostic_end is the one end path all three diagnostic triggers
+    (end_round, the client's finish control, the cap) share -- grades,
+    delivers the failure map, tears down. Proven directly here rather than
+    only through offer()'s wiring."""
+
+    def _session(self):
+        s = Session(VoiceConfig(), kind="diagnostic")
+        s.context = _FakeContext()
+        return s
+
+    async def test_it_grades_sends_the_map_and_tears_down(self):
+        session = self._session()
+        connection = _FakeConnection()
+        server._sessions[connection.pc_id] = _make_fake_session_entry(connection)
+
+        async def grade_fn(turns, board_text, model, client=None):
+            return [{"quote": "q", "probe": "p", "gap": "g", "chapter": "/book/#ch/p1c06"}]
+
+        await server._run_diagnostic_end(
+            session, connection, VoiceConfig(), grade_fn=grade_fn, flush_secs=0
+        )
+        [sent] = connection.app_messages
+        self.assertEqual(sent["label"], "rtvi-ai")
+        self.assertEqual(sent["data"]["type"], "failure_map")
+        self.assertEqual(len(sent["data"]["moments"]), 1)
+        self.assertNotIn(connection.pc_id, server._sessions)  # torn down
+        self.assertTrue(session.round_over)
+
+    async def test_a_failed_grader_sends_null_moments_not_nothing(self):
+        session = self._session()
+        connection = _FakeConnection()
+        server._sessions[connection.pc_id] = _make_fake_session_entry(connection)
+
+        async def grade_fn(turns, board_text, model, client=None):
+            return None
+
+        await server._run_diagnostic_end(
+            session, connection, VoiceConfig(), grade_fn=grade_fn, flush_secs=0
+        )
+        [sent] = connection.app_messages
+        self.assertIsNone(sent["data"]["moments"])
+
+    async def test_the_three_end_triggers_cannot_grade_twice(self):
+        session = self._session()
+        connection = _FakeConnection()
+        server._sessions[connection.pc_id] = _make_fake_session_entry(connection)
+        calls = []
+
+        async def grade_fn(turns, board_text, model, client=None):
+            calls.append(1)
+            return []
+
+        await server._run_diagnostic_end(
+            session, connection, VoiceConfig(), grade_fn=grade_fn, flush_secs=0
+        )
+        await server._run_diagnostic_end(
+            session, connection, VoiceConfig(), grade_fn=grade_fn, flush_secs=0
+        )
+        self.assertEqual(len(calls), 1)
+
+
+class TestEnforceDiagnosticCap(unittest.IsolatedAsyncioTestCase):
+    """The diagnostic sibling of TestEnforceCap: no coach handover, ever --
+    switch_to_coach() raises for a diagnostic session (see test_session.py),
+    so _enforce_diagnostic_cap must never reach it. The two assertions that
+    matter: the closing turn is requested (announced, never a silent cut),
+    and the end path runs -- the coach handover never does."""
+
+    async def test_closing_turn_then_end_path_never_a_handover(self):
+        config = VoiceConfig(diagnostic_cap_secs=0.3)
+        session = Session(config, kind="diagnostic")
+        session.context = _FakeContext()
+        session.start(now=time.monotonic())
+        connection = _FakeCapConnection(f"pc-{id(session)}")
+        worker = _FakeCapWorker()
+        server._sessions[connection.pc_id] = _make_fake_session_entry(connection)
+        ended = []
+
+        async def grade_fn(turns, board_text, model, client=None):
+            ended.append(1)
+            return []
+
+        with patch.object(server.grading, "grade", grade_fn):
+            await server._enforce_diagnostic_cap(
+                connection, worker, session, config, closing_secs=0.1
+            )
+        self.assertTrue(session.closing)          # the announced closing turn
+        self.assertTrue(worker.queued)             # LLMRunFrame was queued
+        self.assertEqual(session.mode, "interview")  # never a coach
+        self.assertEqual(ended, [1])                # the end path ran
 
 
 if __name__ == "__main__":
