@@ -81,6 +81,12 @@ async def _end_round(session: Session, tts: OpenAITTSService, params) -> None:
     await params.result_callback({"ok": True})
 
 
+# A Task with no strong reference can be garbage-collected mid-run, and
+# on_round_end is a full LLM call -- a multi-second window. Held here until
+# done, the same reason server.py keeps its runner and cap tasks on _Session.
+_ROUND_END_TASKS: set[asyncio.Task] = set()
+
+
 async def _end_diagnostic_round(session: Session, on_round_end, params) -> None:
     """Handler for end_round in a diagnostic session: no coach, no voice
     switch -- the round ends in a written failure map instead. Ack first so
@@ -90,7 +96,9 @@ async def _end_diagnostic_round(session: Session, on_round_end, params) -> None:
     own processing."""
     await params.result_callback({"ok": True})
     if on_round_end is not None:
-        asyncio.create_task(on_round_end(session))
+        task = asyncio.create_task(on_round_end(session))
+        _ROUND_END_TASKS.add(task)
+        task.add_done_callback(_ROUND_END_TASKS.discard)
 
 
 async def _draw_diagram(connection: SmallWebRTCConnection, params) -> None:
