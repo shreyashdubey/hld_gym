@@ -4,6 +4,7 @@ One repo, four pipelines, one deployment.
 
 ```
 build.py     src/       →  dist/book/index.html     the book, 51 chapters, free
+                        →  dist/origins/            the same book, story-first
 sell/        next       →  dist/                    the sell page, site root
 reel/        scenes     →  dist/reels/*.mp4         the reel feed
 playground/  pipecat    →  (not deployed)           the voice service, local only
@@ -18,14 +19,18 @@ under `dist/` is what goes live. Nothing builds in the cloud.
 That is also why `dist/` is committed rather than ignored, and why each pipeline
 writes to its own subtree and never clears the others:
 
-- `build.py` writes only `dist/book/index.html`.
+- `build.py` writes only `dist/book/` and `dist/origins/`. One pass, two
+  outputs: the same 51 chapters, the same quiz, compiled twice. `/origins`
+  additionally gets an `assets/` directory copied from `src/assets/` — the
+  only images in the whole product.
 - `sell`'s `publish:book` rsyncs its export to `dist/` with
-  `--exclude 'book/' --exclude 'reels/'`. **Those two excludes are the only
-  thing stopping `--delete` from wiping 4.6MB of book and the reel encodes**,
-  both produced by entirely different pipelines.
+  `--exclude 'book/' --exclude 'reels/' --exclude 'origins/'`. **Those three
+  excludes are the only thing stopping `--delete` from wiping 4.6MB of book,
+  the origins view and the reel encodes**, all produced by entirely different
+  pipelines.
 - `reel/make.sh` writes only `dist/reels/`.
-- `publish:book` also carries a third exclude, `--exclude 'playground/'`, for
-  a different reason than the two above: nothing would be *wiped* by dropping
+- `publish:book` also carries a fourth exclude, `--exclude 'playground/'`, for
+  a different reason than the three above: nothing would be *wiped* by dropping
   it, `out/playground/` would simply start landing in `dist/playground/` and
   go live on the next `git push`. It stays until someone deliberately decides
   Playground belongs on the sales page — see the note below and the design
@@ -49,6 +54,7 @@ this is the one pipeline whose output is split across two directories.
 |---|---|
 | the sell page | `sell/AGENTS.md`, then `sell/SYSTEM.md` |
 | a chapter | `STYLE_GUIDE.md`, exemplar `src/chapters/p0c01.*` |
+| an origins story | `STYLE_GUIDE.md` §7, then `docs/superpowers/specs/2026-08-22-origins-design.md` |
 | a reel | `reel/` header comments; `docs/kernels.md` for the source material |
 | anything visual | `sell/DESIGN-SYSTEM.md` |
 | the voice service | `playground/README.md`, then `docs/superpowers/specs/2026-08-21-playground-design.md` |
@@ -61,7 +67,7 @@ recognises.
 ## Commands
 
 ```bash
-python3 build.py              # book → dist/book/index.html (--check validates only)
+python3 build.py              # book → dist/book/ and dist/origins/ (--check validates only)
 cd sell  && npm run preview   # build the sell page and serve the whole site on :4173
 cd reel  && node preview.mjs  # regenerate the reel review pages
 cd reel  && ./make.sh 02 dark # render one reel: master here, web encode into dist/reels/

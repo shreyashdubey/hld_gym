@@ -426,6 +426,7 @@ function renderHome() {
   html += `<p>
       ${cont ? `<a class="btn" href="#ch/${cont.id}">${gym || resumed ? 'Continue' : 'Start reading'}: ${cont.title}</a>` : ''}
       ${gym ? `<a class="btn ghost" href="#review">Review due · ${due}</a>` : ''}
+      ${ORIGINS ? `<a class="btn ghost" href="#cards">The collection · ${allCards().filter(c => cardEarned(c.id)).length}/${allCards().length}</a>` : ''}
     </p>`;
 
   if (gym) {
@@ -901,6 +902,39 @@ function renderReview() {
   nextItem();
 }
 
+function renderCollection() {
+  const cards = allCards();
+  const earned = cards.filter(c => cardEarned(c.id));
+  const suits = ['person', 'incident', 'artifact', 'ripple'];
+  const pct = cards.length ? Math.round(100 * earned.length / cards.length) : 0;
+  VIEW.innerHTML = `<div class="content"><p class="eyebrow">The collection</p>
+    <h1 class="ch-title">${earned.length} of ${cards.length}</h1>
+    <p>Every card here came out of a real, dated, sourced event. You keep one by answering it, not by reading it.</p>
+    <div class="coll-bar"><span style="width:${pct}%"></span></div>
+    <div class="coll-suits">${suits.map(s => {
+      const all = cards.filter(c => c.suit === s);
+      const got = all.filter(c => cardEarned(c.id));
+      return `<div class="coll-suit"><b>${s}</b><span>${got.length}/${all.length}</span></div>`;
+    }).join('')}</div>
+    <div class="coll-grid"></div></div>`;
+  const grid = VIEW.querySelector('.coll-grid');
+  if (!cards.length) {
+    grid.innerHTML = '<p>No cards yet. They arrive with the chapters that have an origin story.</p>';
+    return;
+  }
+  cards.forEach(c => {
+    const got = cardEarned(c.id);
+    const a = document.createElement('a');
+    a.className = 'coll-card card-' + c.suit + (got ? ' earned' : '');
+    a.href = `#ch/${c.chapter}`;
+    a.innerHTML = `<span class="coll-year">${c.year}</span><span class="coll-title"></span><span class="coll-suit-tag">${c.suit}</span>`;
+    // an unearned card must not leak its own answer from the collection page
+    a.querySelector('.coll-title').textContent = got ? c.title : '— locked —';
+    a.title = got ? c.title : 'Answer this card in its chapter to keep it';
+    grid.appendChild(a);
+  });
+}
+
 function renderBoss(part) {
   const p = TOC.parts.find(x => x.n === +part);
   if (!p) { location.hash = '#home'; return; }
@@ -960,6 +994,7 @@ function route() {
   if (h.startsWith('#ch/')) renderChapter(h.slice(4));
   else if (!GYM() && (h === '#review' || h.startsWith('#boss/'))) { location.replace('#home'); return; }
   else if (h === '#review') renderReview();
+  else if (h === '#cards') renderCollection();
   else if (h.startsWith('#boss/')) renderBoss(h.slice(6));
   else renderHome();
   renderSidebar();
