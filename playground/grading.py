@@ -106,3 +106,30 @@ def parse_and_check(raw: str, transcript: str) -> list[dict] | None:
             continue  # the model does not mint URLs
         kept.append({"quote": quote, "probe": probe, "gap": gap, "chapter": chapter})
     return kept
+
+
+async def grade(turns: list, board_text: str, model: str, client=None) -> list[dict] | None:
+    """One retry, then None -- the caller renders None as the honest
+    lost-map line. Never raises: a buyer must never meet a broken grader at
+    the moment they decide to pay, and this call sits exactly there."""
+    if client is None:
+        # Imported lazily so the test suite never needs the SDK's env checks.
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI()
+    messages = build_grading_messages(turns, board_text)
+    transcript = transcript_text(turns)
+    for attempt in (1, 2):
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                response_format={"type": "json_object"},
+            )
+            moments = parse_and_check(response.choices[0].message.content or "", transcript)
+            if moments is not None:
+                return moments
+            logger.warning("grading attempt %d returned unusable output", attempt)
+        except Exception:
+            logger.exception("grading attempt %d failed", attempt)
+    return None

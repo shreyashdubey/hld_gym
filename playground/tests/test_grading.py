@@ -1,3 +1,5 @@
+import asyncio
+import json
 import unittest
 
 from playground import rep
@@ -101,6 +103,87 @@ class TestGapChapters(unittest.TestCase):
     def test_every_chapter_link_points_into_the_free_book(self):
         for url in GAP_CHAPTERS.values():
             self.assertTrue(url.startswith("/book/#ch/"), url)
+
+
+class _FakeCompletions:
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = 0
+
+    async def create(self, **kwargs):
+        self.calls += 1
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+
+        class _Msg:
+            content = reply
+
+        class _Choice:
+            message = _Msg()
+
+        class _Resp:
+            choices = [_Choice()]
+
+        return _Resp()
+
+
+class _FakeClient:
+    def __init__(self, replies):
+        self.completions = _FakeCompletions(replies)
+
+        class _Chat:
+            pass
+
+        self.chat = _Chat()
+        self.chat.completions = self.completions
+
+
+GOOD = json.dumps(
+    {
+        "moments": [
+            {
+                "quote": "we'll just shard it",
+                "probe": "the shard key",
+                "gap": "no key named",
+                "gap_area": "cache_aside_vs_read_through",
+            }
+        ]
+    }
+)
+
+
+class TestGrade(unittest.TestCase):
+    def _grade(self, replies):
+        from playground.grading import grade
+
+        client = _FakeClient(replies)
+        result = asyncio.run(
+            grade(TURNS, "Components: App", model="test-model", client=client)
+        )
+        return result, client.completions.calls
+
+    def test_a_good_first_reply_needs_no_retry(self):
+        result, calls = self._grade([GOOD])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(calls, 1)
+
+    def test_unusable_output_gets_exactly_one_retry(self):
+        result, calls = self._grade(["not json", GOOD])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(calls, 2)
+
+    def test_two_failures_is_none_never_an_exception(self):
+        # A buyer must never meet a broken grader: the caller turns None into
+        # the honest lost-map line, so grade() must not raise.
+        result, calls = self._grade([RuntimeError("api down"), RuntimeError("api down")])
+        self.assertIsNone(result)
+        self.assertEqual(calls, 2)
+
+    def test_an_empty_map_is_returned_not_retried(self):
+        result, calls = self._grade([json.dumps({"moments": []})])
+        self.assertEqual(result, [])
+        self.assertEqual(calls, 1)
 
 
 if __name__ == "__main__":
