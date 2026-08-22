@@ -63,7 +63,6 @@ TOC.parts.forEach(p => p.chapters.forEach((c, i) => CHAPTERS.push({ ...c, part: 
 const chById = id => CHAPTERS.find(c => c.id === id);
 const isReady = id => !!document.querySelector(`template[data-ch="${id}"]`);
 const chQuiz = id => QUIZ[id] || [];
-const hasOrigin = id => ORIGINS && !!document.querySelector(`template[data-origin="${id}"]`);
 const chCards = id => (ORIGINS && CARDS[id]) || [];
 const mastered = id => (S.levels[id] || {})[3] >= 80;
 
@@ -109,6 +108,11 @@ function gradeItem(itemId, correct) {
   const it = S.items[itemId] || { box: 0, due: null, right: 0, wrong: 0 };
   if (correct) { it.right++; it.box = Math.min(5, (it.box || 0) + 1); }
   else { it.wrong++; it.box = 1; }
+  /* box cannot carry this: from box 0 a right and a wrong answer both land on 1.
+     Quiz items get the field too and ignore it. No migration — blank() does not
+     enumerate item fields, so a saved state reads undefined as not-earned until
+     the card is next answered. */
+  it.ok = !!correct;   // last outcome, so a card can grey again after a miss
   it.due = new Date(Date.now() + INTERVALS[it.box] * DAY).toISOString().slice(0, 10);
   S.items[itemId] = it;
   bumpHeat(); touchStreak(); save();
@@ -325,7 +329,7 @@ function renderQuizItem(q, onAnswer, num) {
 }
 
 /* ---------- cards ---------- */
-const cardEarned = id => ((S.items[id] || {}).box || 0) > 0;
+const cardEarned = id => !!(S.items[id] || {}).ok;
 
 /* Free text, then self-grade. Weaker than a graded MCQ and chosen anyway: it is
    production rather than recognition, which is the thing learning-and-retention.md
@@ -339,7 +343,6 @@ function renderCard(card, onAnswer) {
   wrap.innerHTML = `<div class="card-suit">${card.suit}</div>
     <div class="card-prompt"></div>
     <div class="card-face" hidden>
-      ${card.asset ? `<img class="card-art" src="${card.asset}" alt="">` : ''}
       <div class="card-title"></div>
       <div class="card-sub"></div>
       <div class="card-body"></div>
@@ -348,7 +351,16 @@ function renderCard(card, onAnswer) {
   wrap.querySelector('.card-title').textContent = card.title;
   wrap.querySelector('.card-sub').textContent = card.sub || '';
   wrap.querySelector('.card-body').textContent = card.body;
-  if (card.asset) wrap.querySelector('.card-art').alt = card.title;
+  if (card.asset) {
+    /* setAttribute, not interpolation into innerHTML: a stray quote in an
+       authored asset path would close the src attribute and inject a handler. */
+    const face = wrap.querySelector('.card-face');
+    const img = document.createElement('img');
+    img.className = 'card-art';
+    img.setAttribute('src', card.asset);
+    img.alt = card.title;
+    face.insertBefore(img, face.firstChild);
+  }
 
   const ta = document.createElement('textarea');
   ta.className = 'card-answer';
