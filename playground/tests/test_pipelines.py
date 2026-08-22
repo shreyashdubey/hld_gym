@@ -9,6 +9,7 @@ import unittest
 from types import SimpleNamespace
 
 from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregator
+from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 
 from playground.config import VoiceConfig
@@ -182,6 +183,18 @@ class TestToolModeSplit(unittest.TestCase):
         names = {t.name for t in session.context.tools.standard_tools}
         self.assertEqual(names, {"draw_diagram"})
         self.assertNotIn("end_round", names)
+
+    def test_a_diagnostic_worker_registers_end_round_and_never_draw_diagram(self):
+        """The structural half of the tools() guarantee: a diagnostic session
+        never coaches, so draw_diagram must not even be registered as a
+        callable function on the llm service, not just absent from the
+        advertised tool schema."""
+        worker, _ = build_playground_worker(
+            SmallWebRTCConnection(), VoiceConfig(), kind="diagnostic"
+        )
+        llm = next(p for p in _flatten(worker.pipeline) if isinstance(p, OpenAILLMService))
+        self.assertIn("end_round", llm._functions)
+        self.assertNotIn("draw_diagram", llm._functions)
 
 
 class TestEndDiagnosticRound(unittest.IsolatedAsyncioTestCase):

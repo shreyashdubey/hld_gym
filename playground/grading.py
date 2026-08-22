@@ -28,6 +28,20 @@ GAP_CHAPTERS = {
 }
 
 
+def _turn_parts(content: object) -> list[str]:
+    """The text fragments of one turn's content, in order. content may be a
+    string, a parts list, or missing -- none of those may crash a grading
+    pass. Shared by transcript_text and conversation_text so both tolerate
+    the same junk shapes the same way."""
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, list):
+        return [
+            part.get("text", "") for part in content if isinstance(part, dict) and part.get("text")
+        ]
+    return []
+
+
 def transcript_text(turns: list) -> str:
     """The candidate's words, in order, and nothing else. Turns come out of a
     live LLMContext, so content may be a string, a parts list, or missing --
@@ -36,16 +50,27 @@ def transcript_text(turns: list) -> str:
     for turn in turns:
         if not isinstance(turn, dict) or turn.get("role") != "user":
             continue
-        content = turn.get("content")
-        if isinstance(content, str):
-            out.append(content)
-        elif isinstance(content, list):
-            out.extend(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and part.get("text")
-            )
+        out.extend(_turn_parts(turn.get("content")))
     return "\n".join(s for s in out if s)
+
+
+def conversation_text(turns: list) -> str:
+    """The round in order, both voices -- the grader must see what the
+    interviewer actually pressed on, or the probe field is a guess. The
+    verbatim-quote check still runs against transcript_text (candidate
+    only), so an interviewer line can never be quoted as the candidate's."""
+    speaker = {"user": "Candidate", "assistant": "Interviewer"}
+    out = []
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        label = speaker.get(turn.get("role"))
+        if label is None:
+            continue
+        parts = [p for p in _turn_parts(turn.get("content")) if p]
+        if parts:
+            out.append(f"{label}: {' '.join(parts)}")
+    return "\n".join(out)
 
 
 def build_grading_messages(turns: list, board_text: str) -> list[dict]:
@@ -65,12 +90,13 @@ def build_grading_messages(turns: list, board_text: str) -> list[dict]:
         "- At most 3 moments, and ONLY moments the transcript actually "
         "supports. Fewer is fine. An empty list is fine.\n"
         "- quote: the candidate's words, copied verbatim from the transcript. "
-        "Never paraphrase, never invent.\n"
+        "Never paraphrase, never invent. A quote must be the candidate's own "
+        "words -- never the interviewer's line, even a striking one.\n"
         "- probe: what was being pressed on, one line.\n"
         "- gap: the miss, named plainly, one line.\n"
         "- gap_area: exactly one of: " + ", ".join(GAP_CHAPTERS) + "."
     )
-    user = "Transcript (candidate's words only):\n" + transcript_text(turns)
+    user = "The round, in order:\n" + conversation_text(turns)
     if board_text:
         user += "\n\nFinal whiteboard:\n" + board_text
     return [

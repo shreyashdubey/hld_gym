@@ -50,6 +50,12 @@ class TestGradingMessages(unittest.TestCase):
         for key in GAP_CHAPTERS:
             self.assertIn(key, text)
 
+    def test_the_grader_also_sees_the_interviewer_s_turns(self):
+        # The probe field ("what the interviewer was pressing on") is a
+        # guess unless the grader can actually see what was asked.
+        text = str(build_grading_messages(TURNS, ""))
+        self.assertIn("What's the shard key?", text)
+
 
 class TestParseAndCheck(unittest.TestCase):
     TRANSCRIPT = "we'll just shard it\nthe cache goes and fetches it"

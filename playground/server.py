@@ -610,6 +610,15 @@ async def offer(
             async def _on_app_message(conn: SmallWebRTCConnection, message: object) -> None:
                 _apply_board_message(pg_session, message)
                 if pg_session.kind == "diagnostic" and _extract_finish(message):
+                    # Inline on purpose (up to ~46s): the round is over, and
+                    # nothing else uses this handler in the meantime -- a
+                    # second finish (or a stray board message) arriving while
+                    # this await is in flight just re-enters _run_diagnostic_end,
+                    # which returns immediately on round_over. Contrast
+                    # _end_diagnostic_round (pipelines.py), which spawns a
+                    # task for the same work because it runs inside the
+                    # pipeline's own processing, where a multi-second await
+                    # would block the pipeline itself.
                     await _run_diagnostic_end(pg_session, connection, config)
         else:
             # Dictation has no Session, no LLM turn to hand over -- so
