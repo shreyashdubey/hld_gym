@@ -476,6 +476,42 @@ def test_fact_span_with_dangling_key_reports_only_the_dangling_key():
     assert not any("carries no data-cite" in e or 'class="fact"' in e for e in errs), \
         f"double-reported one mistake as two. {errs}"
 
+def test_year_check_reads_a_multi_class_fact_span():
+    """The requirement check and the year check must agree on what a fact span
+    is. When only the requirement check was lenient, `class="num fact"` counted
+    as the chapter's citation and then silently skipped the year check - the
+    spec calls year drift the single commonest failure in this content type."""
+    html = '<div class="box origin"><p><span class="num fact" data-cite="src1">1989</span></p></div>'
+    errs = _validate_cites(html, CITE_OK)
+    assert any("1989" in e for e in errs), f"multi-class fact span dodged the year check: {errs}"
+
+
+def test_year_check_reads_a_multi_class_span_with_reversed_attributes():
+    html = '<div class="box origin"><p><span data-cite="src1" class="num fact">1989</span></p></div>'
+    errs = _validate_cites(html, CITE_OK)
+    assert any("1989" in e for e in errs), f"reversed order + multi-class dodged the year check: {errs}"
+
+
+def test_year_check_is_case_insensitive_like_the_requirement_check():
+    html = '<div class="box origin"><p><span CLASS="Num Fact" data-cite="src1">1989</span></p></div>'
+    errs = _validate_cites(html, CITE_OK)
+    assert any("1989" in e for e in errs), f"uppercase multi-class dodged the year check: {errs}"
+
+
+def test_both_fact_checks_share_one_matcher():
+    """Any span the requirement check accepts as the chapter's citation must be
+    a span the year check reads. Asserted over the shapes an author might write,
+    so the two can never drift apart again unnoticed."""
+    for cls, attrs in (('class="fact"', ''), ('class="num fact"', ''),
+                       ('class="fact big"', ''), ('CLASS="Fact"', ''),
+                       ('class="num fact"', 'id="x" ')):
+        html = f'<div class="box origin"><p><span {attrs}{cls} data-cite="src1">1989</span></p></div>'
+        errs = _validate_cites(html, CITE_OK)
+        assert not any('class="fact"' in e for e in errs), \
+            f"{cls} was not accepted as a citation: {errs}"
+        assert any("1989" in e for e in errs), \
+            f"{cls} was accepted as a citation but its year went unchecked: {errs}"
+
 
 def main():
     failed = 0

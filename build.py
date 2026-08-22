@@ -176,6 +176,14 @@ CITE_TYPES = {"paper", "rfc", "postmortem", "blog", "commit", "pr", "cve",
 # A blog post or a vendor doc is a source; it is not evidence. Recon caught
 # vLLM's blog claiming 24x where the SOSP paper says 2-4x.
 PRIMARY = {"paper", "rfc", "postmortem", "commit", "pr", "cve", "oral-history"}
+# One matcher, both fact checks, deliberately lenient: `class="num fact"`, a
+# reversed attribute order and `<SPAN CLASS="Fact">` are all fact spans. Lenient
+# because a false failure on the requirement check costs an author a confusing
+# build break. Shared because two matchers that disagree are worse than either
+# one alone - a span the build counts as your citation then skipped the year
+# check, which is the commonest failure in this content type. Opening tag only;
+# the year check wraps it to capture the text.
+FACT_SPAN = r'<span\b[^>]*class="[^"]*\bfact\b[^"]*"[^>]*>'
 
 def validate_cites(cid, html, side, cards):
     """Offline integrity check. Never fetches: link-checking needs the network
@@ -197,7 +205,7 @@ def validate_cites(cid, html, side, cards):
     # nothing citable and dodged the year check below, which keys on .fact spans.
     # At least one, not all: a cite on the box or on a clause stays legal.
     facts = set()
-    for tag in re.findall(r'<span\b[^>]*class="[^"]*\bfact\b[^"]*"[^>]*>', live, re.I):
+    for tag in re.findall(FACT_SPAN, live, re.I):
         m = re.search(r'data-cite="([^"]+)"', tag)
         if m: facts.update(m.group(1).split())
     used = set(prose)   # prose + deck: what the sidecar cross-checks answer to
@@ -237,7 +245,7 @@ def validate_cites(cid, html, side, cards):
     # at is the single commonest failure in this content type. Match the tag
     # first, then pull data-cite out of it - a hardcoded attribute order
     # ("class=... data-cite=...") is defeated by writing them the other way round.
-    for tag, txt in re.findall(r'(<span\b[^>]*class="fact"[^>]*>)([^<]*)</span>', live, re.I):
+    for tag, txt in re.findall(f'({FACT_SPAN})([^<]*)</span>', live, re.I):
         m = re.search(r'data-cite="([^" ]+)"', tag)
         if not m: continue
         k = m.group(1)
