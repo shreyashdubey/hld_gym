@@ -384,6 +384,61 @@ class TestCapTaskRegistrationOrder(unittest.TestCase):
                 _sessions.pop(answer["pc_id"], None)
 
 
+class TestDiagnosticCapTaskRoutesToDiagnosticCap(unittest.TestCase):
+    """offer()'s cap-task branch picks _enforce_diagnostic_cap for a
+    kind="diagnostic" session, never _enforce_cap -- which would call
+    switch_to_coach() on a session that raises for it (see
+    Session.switch_to_coach). Same stubbing pattern as
+    TestCapTaskRegistrationOrder: both cap functions are patched with
+    recording stubs, so this proves the routing without loading any real
+    model (SmartTurn/Silero) or running a real poll loop."""
+
+    def setUp(self):
+        _fake_openai_key(self)
+        self.fake = _FakeConnection()
+        self.request = OfferRequest(sdp="x", type="offer")
+        self.auth = f"Bearer {sign_token('learner@example.com', _TOKEN_SECRET, now=time.time(), ttl_secs=3600)}"
+
+    def test_a_diagnostic_session_gets_the_diagnostic_cap_not_the_sprint_one(self):
+        calls = []
+
+        async def fake_diagnostic_cap(connection, worker, pg_session, config):
+            calls.append("diagnostic")
+
+        async def fake_sprint_cap(connection, worker, pg_session):
+            calls.append("sprint")
+
+        fake_session = Session(VoiceConfig(), kind="diagnostic")
+
+        async def scenario():
+            answer = await offer(self.request, mode="diagnostic", authorization=self.auth)
+            # Same reason as TestCapTaskRegistrationOrder: one trip round the
+            # loop so the scheduled cap task actually takes its first step.
+            await asyncio.sleep(0)
+            return answer
+
+        answer = None
+        try:
+            with patch("playground.server.SmallWebRTCConnection", return_value=self.fake):
+                with patch(
+                    "playground.server.build_playground_worker",
+                    return_value=(object(), fake_session),
+                ):
+                    with patch("playground.server.WorkerRunner", _FakeWorkerRunner):
+                        with patch(
+                            "playground.server._enforce_diagnostic_cap",
+                            side_effect=fake_diagnostic_cap,
+                        ):
+                            with patch(
+                                "playground.server._enforce_cap", side_effect=fake_sprint_cap
+                            ):
+                                answer = asyncio.run(scenario())
+            self.assertEqual(calls, ["diagnostic"])
+        finally:
+            if answer is not None:
+                _sessions.pop(answer["pc_id"], None)
+
+
 class _FakeCapRunner:
     def __init__(self):
         self.cancel_calls = []
@@ -732,9 +787,23 @@ class TestRenegotiateAuthGateBypass(unittest.TestCase):
             mode="playground",
             email="learner@example.com",
         )
+        # A second victim, a diagnostic session this time -- it bills OpenAI
+        # credit exactly like playground, so the same gate (now generalised
+        # to "not dictation" rather than "== playground") has to cover it
+        # too. See test_mode_dictation_cannot_renegotiate_a_diagnostic_session_without_a_token.
+        self.diag = _FakeConnection()
+        self.diag.pc_id = "victim-diagnostic-pc-id"
+        _sessions[self.diag.pc_id] = _Session(
+            connection=self.diag,
+            runner=None,
+            task=None,
+            mode="diagnostic",
+            email="learner@example.com",
+        )
 
     def tearDown(self):
         _sessions.pop(self.fake.pc_id, None)
+        _sessions.pop(self.diag.pc_id, None)
 
     def test_mode_dictation_cannot_renegotiate_a_playground_session_without_a_token(self):
         """The exploit as the review demonstrated it: no Authorization
@@ -745,6 +814,15 @@ class TestRenegotiateAuthGateBypass(unittest.TestCase):
             asyncio.run(offer(request, mode="dictation", authorization=None))
         self.assertEqual(ctx.exception.status_code, 401)
         self.assertEqual(self.fake.renegotiate_calls, 0)
+
+    def test_mode_dictation_cannot_renegotiate_a_diagnostic_session_without_a_token(self):
+        """Same exploit, the second metered mode: mode=dictation must not
+        renegotiate onto a live diagnostic session's pc_id either."""
+        request = OfferRequest(sdp="attacker-sdp", type="offer", pc_id=self.diag.pc_id)
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(offer(request, mode="dictation", authorization=None))
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(self.diag.renegotiate_calls, 0)
 
     def test_mode_playground_also_cannot_renegotiate_it_without_a_token(self):
         """The half of this that already worked before the fix -- kept
@@ -792,9 +870,21 @@ class TestRenegotiateOwnership(unittest.TestCase):
             mode="playground",
             email="victim@example.com",
         )
+        # The same ownership check, on the second metered mode -- see
+        # test_a_different_authenticated_user_gets_403_on_a_diagnostic_session_too.
+        self.diag = _FakeConnection()
+        self.diag.pc_id = "victim-diagnostic-pc-id"
+        _sessions[self.diag.pc_id] = _Session(
+            connection=self.diag,
+            runner=None,
+            task=None,
+            mode="diagnostic",
+            email="victim@example.com",
+        )
 
     def tearDown(self):
         _sessions.pop(self.fake.pc_id, None)
+        _sessions.pop(self.diag.pc_id, None)
 
     def _token_for(self, email):
         return sign_token(email, self.secret, now=time.time(), ttl_secs=3600)
@@ -824,6 +914,20 @@ class TestRenegotiateOwnership(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 403)
         self.assertEqual(self.fake.renegotiate_calls, 0)
 
+    def test_a_different_authenticated_user_gets_403_on_a_diagnostic_session_too(self):
+        """Same exploit, the second metered mode: a valid-but-unrelated
+        token must not renegotiate someone else's live diagnostic session."""
+        request = OfferRequest(sdp="attacker-sdp", type="offer", pc_id=self.diag.pc_id)
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                offer(
+                    request,
+                    mode="diagnostic",
+                    authorization=f"Bearer {self._token_for('attacker@example.com')}",
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(self.diag.renegotiate_calls, 0)
 
 
 class _NoAnswerConnection(_FakeConnection):
@@ -1040,6 +1144,7 @@ class TestRunDiagnosticEnd(unittest.IsolatedAsyncioTestCase):
         session = self._session()
         connection = _FakeConnection()
         server._sessions[connection.pc_id] = _make_fake_session_entry(connection)
+        self.addCleanup(server._sessions.pop, connection.pc_id, None)
 
         async def grade_fn(turns, board_text, model, client=None):
             return [{"quote": "q", "probe": "p", "gap": "g", "chapter": "/book/#ch/p1c06"}]
@@ -1058,6 +1163,7 @@ class TestRunDiagnosticEnd(unittest.IsolatedAsyncioTestCase):
         session = self._session()
         connection = _FakeConnection()
         server._sessions[connection.pc_id] = _make_fake_session_entry(connection)
+        self.addCleanup(server._sessions.pop, connection.pc_id, None)
 
         async def grade_fn(turns, board_text, model, client=None):
             return None
@@ -1072,6 +1178,7 @@ class TestRunDiagnosticEnd(unittest.IsolatedAsyncioTestCase):
         session = self._session()
         connection = _FakeConnection()
         server._sessions[connection.pc_id] = _make_fake_session_entry(connection)
+        self.addCleanup(server._sessions.pop, connection.pc_id, None)
         calls = []
 
         async def grade_fn(turns, board_text, model, client=None):
@@ -1102,6 +1209,7 @@ class TestEnforceDiagnosticCap(unittest.IsolatedAsyncioTestCase):
         connection = _FakeCapConnection(f"pc-{id(session)}")
         worker = _FakeCapWorker()
         server._sessions[connection.pc_id] = _make_fake_session_entry(connection)
+        self.addCleanup(server._sessions.pop, connection.pc_id, None)
         ended = []
 
         async def grade_fn(turns, board_text, model, client=None):

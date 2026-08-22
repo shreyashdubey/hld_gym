@@ -281,6 +281,18 @@ async def _end_session(conn: SmallWebRTCConnection) -> None:
         await session.runner.cancel(reason="connection ended")
 
 
+# _run_diagnostic_end sets session.round_over before grading, but the session
+# stays registered in _sessions until its own `finally` runs -- so
+# _enforce_diagnostic_cap's tail (which reads round_over to decide whether to
+# run the end path itself or just tear down) has to be able to tell "an end
+# path is in flight, grading" apart from "gone". Bounding grading is what
+# keeps that window finite: grading.grade already never raises, but nothing
+# upstream previously bounded how long it could hang against a slow or
+# wedged provider, and the whole point of an in-flight end path owning its
+# own teardown is that it actually finishes.
+_GRADING_TIMEOUT_SECS = 45.0
+
+
 async def _run_diagnostic_end(
     session: Session,
     connection: SmallWebRTCConnection,
@@ -300,7 +312,15 @@ async def _run_diagnostic_end(
     at def time is captured once, at import, before any test (or future
     caller) could ever patch playground.server.grading.grade -- so the
     default is resolved here, inside the body, against the module attribute
-    as it stands at call time."""
+    as it stands at call time.
+
+    The grade call is bounded by _GRADING_TIMEOUT_SECS: grading.grade itself
+    never raises, but with no bound here a hung provider call would hang this
+    function's own teardown along with it -- and _enforce_diagnostic_cap's
+    tail deliberately stands down (does nothing) once it sees round_over is
+    already set, trusting this function's finally to be the one that tears
+    the session down. A timeout renders the honest lost-map line (None),
+    same as a failed grading attempt does."""
     if session.round_over:
         return
     session.round_over = True
@@ -309,7 +329,12 @@ async def _run_diagnostic_end(
         turns = session.context.get_messages() if session.context is not None else []
         board = session.board.messages()
         board_text = board[0]["content"] if board else ""
-        moments = await fn(turns, board_text, model=config.llm_model)
+        try:
+            moments = await asyncio.wait_for(
+                fn(turns, board_text, model=config.llm_model), _GRADING_TIMEOUT_SECS
+            )
+        except asyncio.TimeoutError:
+            moments = None
         connection.send_app_message(
             server_message({"type": "failure_map", "moments": moments})
         )
@@ -401,26 +426,50 @@ async def _enforce_diagnostic_cap(
     ends the round via end_round well before the cap. If it does not, the
     cap runs the end path itself: the candidate still gets their map, just
     without a spoken goodbye. Same poll cadence and sleep maths as
-    _enforce_cap, for the same recorded reasons."""
+    _enforce_cap, for the same recorded reasons.
+
+    closing_secs is clamped to at most 20% of the session's own cap
+    (mirroring _enforce_cap's 80%-elapsed handover point) so an
+    env-shortened diagnostic_cap_secs can't make closing_secs bigger than
+    the whole round -- which would open the round already announcing "time
+    is up".
+
+    The tail below has three outcomes, not two: still registered with the
+    round not over (nobody else ended it -- this cap task owns the end
+    path); no longer registered (the visitor disconnected -- just tear
+    down); or still registered *with* round_over already set. That third
+    case is a live race, not a missed one: _run_diagnostic_end sets
+    round_over before it grades, and only pops the session (in its own
+    finally) once grading, delivery, and the flush sleep are done -- which
+    can take longer than the time left on the cap when the closing turn was
+    only just requested. Calling _end_session here in that window would kill
+    the connection out from under send_app_message before the map ever
+    reaches the client. round_over already means an end path is in flight
+    and owns its own teardown (bounded by _GRADING_TIMEOUT_SECS, so it is
+    guaranteed to actually run that finally) -- so this task simply stands
+    down and lets it finish."""
+    closing = min(closing_secs, pg_session.cap_secs * 0.2)
     closing_requested = False
     while connection.pc_id in _sessions:
         now = time.monotonic()
         if pg_session.expired(now):
             break
         remaining = pg_session.remaining_secs(now)
-        if not closing_requested and remaining <= closing_secs and not pg_session.round_over:
-            pg_session.closing = True
-            pg_session.push_context()
-            await worker.queue_frames([LLMRunFrame()])
+        if not closing_requested and remaining <= closing:
+            if not pg_session.round_over:
+                pg_session.closing = True
+                pg_session.push_context()
+                await worker.queue_frames([LLMRunFrame()])
             closing_requested = True
-        sleep_for = remaining if closing_requested else remaining - closing_secs
+        sleep_for = remaining if closing_requested else remaining - closing
         await asyncio.sleep(min(sleep_for, 1.0) if sleep_for > 0 else 0.05)
     if connection.pc_id in _sessions and not pg_session.round_over:
         await _run_diagnostic_end(pg_session, connection, config)
-    else:
-        # Ended by end_round/finish (their _run_diagnostic_end tears down
-        # already), or the visitor disconnected. Idempotent either way.
+    elif connection.pc_id not in _sessions:
         await _end_session(connection)
+    # else: an end path already set round_over and owns the teardown -- its
+    # finally runs on exception and cancellation alike, so nobody-comes-back
+    # is on it, not on this task racing it to _end_session.
 
 
 def _extract_board_graph(message: object) -> dict | None:
