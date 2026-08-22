@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble dist/index.html from src/. Validates chapters + quizzes; fails loudly."""
+"""Assemble dist/book/ and dist/origins/ from src/. Validates chapters + quizzes; fails loudly."""
 import base64, json, re, sys
 from pathlib import Path
 
@@ -107,7 +107,7 @@ def render(mode, toc, templates, quiz_all, cards_all, origins):
     canonical = f"{SITE}/{m['dir']}/"
     tpl = (SRC / "template.html").read_text()
     body = "\n".join(templates)
-    if mode == "origins":
+    if origins:
         body += "\n" + "\n".join(origins.values())
     return (tpl
         .replace("{{MODE}}", mode)
