@@ -168,6 +168,66 @@ def test_cards_reach_origins_only():
     assert '"p2c03-c1"' not in book, "cards leaked into /book"
 
 
+CITE_OK = {
+    "chapter": "ptest",
+    "sources": {
+        "src1": {"type": "paper", "title": "A Paper", "year": 1998,
+                 "url": "https://example.com/p", "checked": "2026-08-22",
+                 "quote": "exact string from the source"},
+    },
+    "unverified": [],
+}
+
+
+def _validate_cites(html, side, cards=()):
+    sys.path.insert(0, str(ROOT))
+    import build
+    build.errors.clear()
+    build.warnings.clear()
+    build.validate_cites("ptest", html, side, list(cards))
+    return list(build.errors)
+
+
+def test_good_sidecar_passes():
+    html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
+    assert not _validate_cites(html, CITE_OK), _validate_cites(html, CITE_OK)
+
+
+def test_dangling_data_cite_fails():
+    html = '<div class="box origin"><p><span class="fact" data-cite="ghost">x</span></p></div>'
+    assert _validate_cites(html, CITE_OK)
+
+
+def test_origin_box_without_any_cite_fails():
+    html = '<div class="box origin"><p>Confident history, no source.</p></div>'
+    assert _validate_cites(html, CITE_OK)
+
+
+def test_primary_source_required():
+    side = json.loads(json.dumps(CITE_OK))
+    side["sources"]["src1"]["type"] = "blog"
+    html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
+    assert _validate_cites(html, side), "a chapter cited only to a blog should fail"
+
+
+def test_year_mismatch_between_text_and_source():
+    html = '<div class="box origin"><p><span class="fact" data-cite="src1">1989</span></p></div>'
+    assert _validate_cites(html, CITE_OK), "1989 in text against a 1998 source should fail"
+
+
+def test_checked_date_required_and_iso():
+    side = json.loads(json.dumps(CITE_OK))
+    side["sources"]["src1"]["checked"] = "last tuesday"
+    html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
+    assert _validate_cites(html, side)
+
+
+def test_card_cite_must_resolve():
+    html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
+    cards = [{"id": "ptest-c1", "cite": "nowhere"}]
+    assert _validate_cites(html, CITE_OK, cards)
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):

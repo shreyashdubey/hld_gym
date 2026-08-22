@@ -144,6 +144,47 @@ def validate_cards(cid, data):
             err(f'{cid}:{cardid}: asset must start with "assets/"')
     return cards
 
+CITE_TYPES = {"paper", "rfc", "postmortem", "blog", "commit", "pr", "cve",
+              "book", "talk", "docs", "oral-history"}
+# A blog post or a vendor doc is a source; it is not evidence. Recon caught
+# vLLM's blog claiming 24x where the SOSP paper says 2-4x.
+PRIMARY = {"paper", "rfc", "postmortem", "commit", "pr", "cve", "oral-history"}
+
+def validate_cites(cid, html, side, cards):
+    """Offline integrity check. Never fetches: link-checking needs the network
+    and must not live in a build."""
+    src = side.get("sources", {})
+    used = set()
+    for attr in re.findall(r'data-cite="([^"]+)"', html):
+        for k in attr.split():
+            used.add(k)
+            if k not in src: err(f"{cid}: data-cite '{k}' has no sidecar entry")
+    for c in cards:
+        k = c.get("cite")
+        if k:
+            used.add(k)
+            if k not in src: err(f"{cid}:{c.get('id')}: cite '{k}' has no sidecar entry")
+    # Greedy, not lazy: a lazy match stops at the first nested </div> (e.g. the
+    # box-tag), missing everything after it, including the data-cite this checks for.
+    for box in re.findall(r'<div class="box origin".*</div>', html, re.S):
+        if "data-cite=" not in box:
+            err(f"{cid}: origin box carries no data-cite")
+    for k, s in src.items():
+        if s.get("type") not in CITE_TYPES: err(f"{cid}:{k}: type must be one of {sorted(CITE_TYPES)}")
+        if not isinstance(s.get("year"), int): err(f"{cid}:{k}: year must be an integer")
+        if not str(s.get("title", "")).strip(): err(f"{cid}:{k}: title is required")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(s.get("checked", ""))):
+            err(f"{cid}:{k}: 'checked' must be an ISO date (YYYY-MM-DD)")
+        if k not in used: warn(f"{cid}: source '{k}' is never cited")
+    if used and not any(src[k].get("type") in PRIMARY for k in used if k in src):
+        err(f"{cid}: no primary source cited (need one of {sorted(PRIMARY)})")
+    # A year in the prose that disagrees with the year of the source it points
+    # at is the single commonest failure in this content type.
+    for k, txt in re.findall(r'<span class="fact" data-cite="([^" ]+)"[^>]*>([^<]*)</span>', html):
+        years = {int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", txt)}
+        if years and k in src and src[k].get("year") not in years:
+            err(f"{cid}: fact '{txt[:40]}' cites {k} (year {src[k].get('year')})")
+
 def render(mode, toc, templates, quiz_all, cards_all, origins):
     """Compose one output. `mode` keys into MODES and lands on <body data-mode>,
     which is how app.js knows which view it is running as."""
@@ -210,6 +251,16 @@ def main():
                 # cards and story ship together — a story with no deck is a
                 # chapter that got halfway
                 err(f"{cid}: has .origin.html but no .cards.json")
+
+            if of.exists():
+                sf = CH / f"{cid}.cite.json"
+                if not sf.exists():
+                    err(f"{cid}: has .origin.html but no .cite.json")
+                else:
+                    try:
+                        validate_cites(cid, ohtml, json.loads(sf.read_text()), cards_all.get(cid, []))
+                    except json.JSONDecodeError as e:
+                        err(f"{cid}: cite json invalid: {e}")
 
     for w in warnings: print("WARN", w)
     if errors:
