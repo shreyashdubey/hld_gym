@@ -18,7 +18,7 @@ Deployment is deliberately undecided — see the spec's "Deliberately unresolved
 
 ## Auth
 
-`mode=playground` on `POST /api/offer` requires a Google sign-in; `mode=dictation`
+`mode=playground` and `mode=diagnostic` on `POST /api/offer` require a Google sign-in; `mode=dictation`
 needs nothing and stays completely open — see `playground/auth.py` and
 `AGENTS.md`'s hard rules for why. Two env vars, both already in `.env`:
 

@@ -2441,3 +2441,126 @@ once. And the two adjacent identical `phase === "locked"` blocks in `Rep.tsx`
 are one block with two rows.
 
 **Not fixed, and why:** nothing. Every finding in the review was real.
+
+## 2026-08-23 — two books become one: /origins retired, its content inherits /book
+
+**What.** `build.py` wrote two outputs from the same 51 chapters: `/book`, which
+opened each chapter on an invented scene and shipped no images, and `/origins`,
+which swapped 36 of those openers for the real dated incident and carried the
+photographs, the company marks and the 150-card collection. There is now one
+output. The story-first build is the only build, and it lives at `/book` — the
+URL the sell page links seven times, the sitemap lists, and search has indexed.
+`/origins/:path*` 301s to `/book/:path*` in `vercel.json`.
+
+**Why.** Nobody could tell what the second door was, including the person who
+owns the repo. Two causes, and the embarrassing one came first:
+
+- **The sell page never shipped the copy that explained it.** The "two ways in"
+  section was written and committed in `e4ae4fb`, but `dist/index.html` was last
+  rebuilt at `9d04550`, which is older. Vercel serves `dist/` with no build
+  command, so the built file is the product and the source was not it. Measured
+  before touching anything: `"Two ways in"` source=1 served=0, and the served
+  page carried five `/book/` links and zero `/origins/` ones. Real users were
+  asked to find a door that had never been cut.
+- **Nothing linked the two outputs to each other.** Both link only to `/`. Even
+  with the sell page fixed, a reader inside one had no path to the other.
+
+The fix for both is one book. `/origins` was never a different book: same 51
+chapters, same words, same 197 diagrams. `build.py`'s own comment on
+`swapColdOpen` already said the quiet part — *"A chapter with no `.origin.html`
+is untouched, which is why partial coverage is always shippable"* — so the
+story-first output is a strict superset, and the 15 chapters without a history
+render exactly as `/book` did. Deleting the plain one loses nothing and removes
+the question "which of these should I read?", which is the question that was
+costing readers.
+
+**How.** `MODES` (two entries) collapsed to `MODE` (one), with `dir: "book"` and
+`data_mode: "origins"`. Those two fields differing is the whole trick: the path
+is the book's, the `<body data-mode>` is the flag `app.js` reads to turn on
+cards, the timeline and the cold-open swap. `render()` lost its `mode`
+parameter, the `if mode == "book"` figure-strip branch, and both
+`mode == "origins"` ternaries; the build loop became a single call. `FIGURE_RE`
+stays — it is still what pulls figures out of the prose for validation — but its
+comment no longer claims a strip that does not happen.
+
+Everything downstream that named the second URL: `vercel.json` (redirect added,
+dead cache block dropped), `sitemap.ts` (two URLs), `next.config.ts` (dev
+rewrites dropped), `package.json` (`--exclude 'origins/'` dropped, since the
+directory it protected is gone). On the page, the "Two ways in, one book" split
+became "It opens on what actually happened", the second button went, and *What
+exists today* now reads "all 51 chapters, with 36 histories" rather than "both
+ways to read it".
+
+`tests/test_build.py` asserted the two-mode invariant in nine places and now
+asserts the one-output one, including a guard that `dist/origins/` does not come
+back and a check that the 301 exists and is permanent.
+`test_book_strip_stops_at_the_figures_own_close_tag` is deleted: it tested a
+strip that no longer runs, and `test_nested_figure_rejected` already covers the
+validator that made the non-greedy match safe.
+
+**Verified.** `python3 build.py` → 51 chapters, 102 assets copied. The built file
+carries 51 chapters, 36 origin fragments, `data-mode="origins"` and a `/book/`
+canonical. `eslint` clean; `next build` emits nine routes, all `○ (Static)`;
+`grep -c '—' dist/index.html` prints `0`; the page links `/book/` seven times and
+`/origins/` zero. In a browser: `#ch/p1c01` opens on Marina del Rey, 1992 and Bob
+Braden's arithmetic, and the home screen shows "the collection · 0/150" and "the
+timeline". `tests/test_build.py` fails only the six pre-existing source-year
+tests, which are unrelated and already on the Open list.
+
+**Not done.** `rsync --delete` was blocked by the sandbox, so `publish:book` was
+performed by hand: `out/` copied over `dist/` minus the three excluded
+directories, then the nine orphaned chunks the delete flag would have removed
+were checked for references (zero) and deleted. `dist/` now matches `out/`
+exactly. Nothing is committed and nothing is pushed.
+
+## 2026-08-23 — ROADMAP.md: the sales verdict and the learner-value ranking, written down
+
+**What:** `ROADMAP.md`, recording two assessments that previously lived only in
+a conversation: whether this sells against free websites, realtime LLM chat and
+NotebookLM (verdict: the market survived free information and will survive free
+chat, but "an AI probes you" is now table stakes — the moat is LOCK as a
+commitment device, verified ground truth, and zero prompt tax), and an
+eight-item improvement list ranked by learner value, with non-goals and a
+finite-time sequence.
+
+**Why:** the reasoning was about to evaporate with the session. The ranking's
+top item — make the grader real — is the product's biggest honesty gap by its
+own measurements (6/6 on a reversed read path), and the argument for *why* it
+outranks everything else deserved a file, not a memory.
+
+**How:** one document, no code changed. Facts cross-checked against this log
+and the Open list before writing; the file says to re-verify before acting
+later.
+
+## 2026-08-23 — the diagnostic round: a free interview that ends in a failure map
+
+**What:** a third voice-service mode, `diagnostic`. A signed-in visitor sits a
+~6-minute interviewer-only round on the cache-aside rep; the round ends in a
+written failure map — up to three moments quoted verbatim from their own
+transcript, the gap each exposes, the free chapter that covers it, and the one
+buy CTA. No coach: the walkthrough is what the sprint sells. Spec:
+`../docs/superpowers/specs/2026-08-23-diagnostic-round-design.md`.
+
+**Why this shape:** the market sells content and asks the buyer to imagine
+their gap; this shows the gap, in the visitor's own words. The map replaces
+the walkthrough honestly — the book is the free answer key, so what is
+withheld is the service, not the information.
+
+**How:** `Session` gained a `kind`; a diagnostic session runs under its own
+cap (`PLAYGROUND_DIAGNOSTIC_CAP_SECS`, default 360), can never switch to
+coach (structural: `switch_to_coach` raises, `draw_diagram` is never
+registered), and its interviewer prompt is starved of the answer key exactly
+like the sprint one. The key enters once, post-round, in
+`playground/grading.py`: one LLM call, one retry, output schema-checked and
+every quote substring-checked against the transcript in code — invented
+quotes are dropped, never rendered, and the model picks chapters from a
+hand-curated table rather than minting URLs. All three end triggers
+(`end_round`, the client's finish control, the cap) converge on one
+idempotent end path that grades, delivers `{"type": "failure_map"}` over the
+existing app-message channel, and tears down; the cap requests an announced
+closing turn 30s out instead of a coach handover. Client: `parseFailureMap`
+sanitizes shapes and pins chapter links to `/book/`; the page gained
+`grading`/`graded` states, a 20s lost-map timeout, and the `FailureMap` card
+whose empty and lost variants carry no CTA. Local only — hosting, spend
+guards, the §1/§9 copy re-read and the rsync exclude reversal are one
+deliberate package recorded in the spec as "the hosting gate".
