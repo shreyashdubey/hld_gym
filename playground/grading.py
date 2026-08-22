@@ -58,9 +58,9 @@ def build_grading_messages(turns: list, board_text: str) -> list[dict]:
         + "\n\nThe follow-ups a strong candidate can answer:\n"
         + "\n".join(f"- Q: {p['q']}\n  A: {p['a']}" for p in rep.PROBES)
         + "\n\nFind the moments where this candidate would have been cut in a "
-        "real loop. Return JSON only, exactly this shape:\n"
-        "{'moments': [{'quote': '...', 'probe': '...', 'gap': '...', "
-        "'gap_area': '...'}]}\n\n"
+        "real loop. Return JSON only: an object with key moments, a list of "
+        "at most 3 objects, each with string keys quote, probe, gap, "
+        "gap_area.\n\n"
         "Rules:\n"
         "- At most 3 moments, and ONLY moments the transcript actually "
         "supports. Fewer is fine. An empty list is fine.\n"
