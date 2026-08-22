@@ -36,7 +36,8 @@ ALLOWED_TAGS = set("p h2 h3 ul ol li strong em code pre table thead tbody tr th 
                    "svg g rect circle ellipse line path polyline polygon text tspan defs marker title "
                    "details summary div span dfn br blockquote".split())
 ALLOWED_DIV = {"box", "box-tag", "analogy", "story", "lens", "crux", "feynman", "fey-prompt",
-               "fey-model", "exercise", "ex-q", "takeaways", "diagram"}
+               "fey-model", "exercise", "ex-q", "takeaways", "diagram",
+               "origin", "origin-seam", "origin-body", "card", "card-face", "card-back"}
 FONTS = [
     ("Archivo", "normal", "300 700", "Archivo-normal-300_700.woff2"),
     ("Literata", "normal", "200 900", "Literata-normal-200_900.woff2"),
@@ -57,12 +58,29 @@ def font_css():
                    f"font-display:swap;src:url(data:font/woff2;base64,{data}) format('woff2');}}")
     return "\n".join(css)
 
-def validate_html(cid, html):
+def validate_html(cid, html, kind="chapter"):
+    """kind is "chapter" or "origin". Origin fragments are the only place an
+    <img> is permitted, and only pointing at the sibling assets directory."""
     if re.search(r'\bstyle\s*=', html): err(f"{cid}: inline style= forbidden")
+    # No attribute allowlist exists, so an event handler would sail straight
+    # through. Cheap to close, and permitting <img> is exactly when it matters.
+    if re.search(r'<[^>]+\son[a-z]+\s*=', html): err(f"{cid}: event handler attribute forbidden")
+    if "<img" in html:
+        if kind != "origin":
+            err(f"{cid}: <img> forbidden (use inline SVG)")
+        else:
+            for tag in re.findall(r'<img\b[^>]*>', html):
+                src = re.search(r'\ssrc="([^"]*)"', tag)
+                if not src or not src.group(1).startswith("assets/"):
+                    err(f'{cid}: <img> src must start with "assets/"')
+                if not re.search(r'\salt="[^"]', tag):
+                    err(f"{cid}: <img> needs a non-empty alt")
+    # The external-URL ban is unconditional; the assets/ check above is what
+    # lets origin images through it, because a relative path has no scheme.
     if re.search(r'https?://', html): err(f"{cid}: external URL found")
-    if "<img" in html: err(f"{cid}: <img> forbidden (use inline SVG)")
+    allowed = ALLOWED_TAGS | ({"img"} if kind == "origin" else set())
     for tag in re.findall(r'<([a-zA-Z][a-zA-Z0-9-]*)', html):
-        if tag.lower() not in ALLOWED_TAGS:
+        if tag.lower() not in allowed:
             err(f"{cid}: tag <{tag}> not allowed")
     for m in re.finditer(r'<div class="([^"]+)"', html):
         for cls in m.group(1).split():
@@ -147,6 +165,15 @@ def main():
             templates.append(f'<template data-ch="{cid}">\n{html}\n</template>')
             ready += 1
 
+            of = CH / f"{cid}.origin.html"
+            if of.exists():
+                ohtml = of.read_text()
+                validate_html(cid, ohtml, "origin")
+                words = len(re.sub(r"<[^>]+>", " ", ohtml).split())
+                if words > 260:
+                    err(f"{cid}: origin story is {words} words (limit 260)")
+                origins[cid] = f'<template data-origin="{cid}">\n{ohtml}\n</template>'
+
     for w in warnings: print("WARN", w)
     if errors:
         for e in errors: print("FAIL", e)
@@ -157,7 +184,7 @@ def main():
     for mode, m in MODES.items():
         out = DIST / m["dir"] / "index.html"
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(render(mode, toc, templates, quiz_all, cards_all, origins))
+        out.write_text(render(mode, toc, templates, quiz_all, cards_all, origins if mode == "origins" else {}))
         print(f"Built {out} ({out.stat().st_size / 1024:.0f} KB, {ready} chapters)")
 
 if __name__ == "__main__":

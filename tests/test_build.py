@@ -67,6 +67,45 @@ def test_no_unreplaced_placeholders():
         assert not left, f"{p} has unreplaced placeholders: {sorted(set(left))}"
 
 
+def test_origin_fragment_reaches_origins_only():
+    book = (ROOT / "dist" / "book" / "index.html").read_text()
+    origins = (ROOT / "dist" / "origins" / "index.html").read_text()
+    assert 'data-origin="p2c03"' in origins, "origin fragment missing from /origins"
+    assert 'data-origin="' not in book, "origin fragment leaked into /book"
+
+
+def _validate(html, kind):
+    """Drive build.py's validator directly. It accumulates into a module global,
+    so reset it around each call."""
+    sys.path.insert(0, str(ROOT))
+    import build
+    build.errors.clear()
+    build.validate_html("ptest", html, kind)
+    return list(build.errors)
+
+
+def test_img_rejected_in_chapter_allowed_in_origin():
+    img = '<p><img src="assets/lamport.webp" alt="Leslie Lamport in 1989"></p>'
+    assert _validate(img, "chapter"), "chapter fragments must still reject <img>"
+    assert not _validate(img, "origin"), f"origin <img> wrongly rejected: {_validate(img, 'origin')}"
+
+
+def test_origin_img_must_be_relative_and_described():
+    external = '<p><img src="https://example.com/x.jpg" alt="x"></p>'
+    assert _validate(external, "origin"), "external img src must be rejected"
+    bare = '<p><img src="/other/x.webp" alt="x"></p>'
+    assert _validate(bare, "origin"), "img src outside assets/ must be rejected"
+    noalt = '<p><img src="assets/x.webp"></p>'
+    assert _validate(noalt, "origin"), "img without alt must be rejected"
+
+
+def test_event_handler_attributes_rejected_everywhere():
+    """build.py has no attribute allowlist at all. Allowing <img> without this
+    check would make an author typo an injection."""
+    for kind in ("chapter", "origin"):
+        assert _validate('<p onclick="alert(1)">x</p>', kind), f"on*= not caught in {kind}"
+
+
 def main():
     failed = 0
     for name, fn in sorted(globals().items()):
