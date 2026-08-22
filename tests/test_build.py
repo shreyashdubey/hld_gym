@@ -67,12 +67,23 @@ def test_no_unreplaced_placeholders():
         assert not left, f"{p} has unreplaced placeholders: {sorted(set(left))}"
 
 
+def _a_shipping_origin():
+    """A chapter that still has an origin layer, and its first card id.
+    Discovered, not hard-coded: chapters get retired when they fail the O1 gate,
+    and retiring one must not break the two tests below."""
+    ch = ROOT / "src" / "chapters"
+    cf = next(f for f in sorted(ch.glob("*.cards.json"))
+              if (ch / f"{f.name.split('.')[0]}.origin.html").exists())
+    return cf.name.split(".")[0], json.loads(cf.read_text())["cards"][0]["id"]
+
+
 def test_origin_fragment_reaches_origins_only():
     book = (ROOT / "dist" / "book" / "index.html").read_text()
     origins = (ROOT / "dist" / "origins" / "index.html").read_text()
+    cid, _ = _a_shipping_origin()
     # match the emitted element, not the bare attribute: app.js ships in both
     # outputs and its `template[data-origin="..."]` selector is not a fragment
-    assert '<template data-origin="p2c03">' in origins, "origin fragment missing from /origins"
+    assert f'<template data-origin="{cid}">' in origins, "origin fragment missing from /origins"
     assert "<template data-origin" not in book, "origin fragment leaked into /book"
 
 
@@ -234,8 +245,9 @@ def test_cards_object_instead_of_list_fails_cleanly():
 def test_cards_reach_origins_only():
     book = (ROOT / "dist" / "book" / "index.html").read_text()
     origins = (ROOT / "dist" / "origins" / "index.html").read_text()
-    assert '"p2c03-c1"' in origins, "cards missing from /origins"
-    assert '"p2c03-c1"' not in book, "cards leaked into /book"
+    _, card = _a_shipping_origin()
+    assert f'"{card}"' in origins, "cards missing from /origins"
+    assert f'"{card}"' not in book, "cards leaked into /book"
 
 
 CITE_OK = {
