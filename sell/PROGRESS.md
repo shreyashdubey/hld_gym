@@ -2235,14 +2235,78 @@ tampered signature, a wrong secret, malformed/junk/empty tokens,
 failure handling against a stubbed verifier (never a real network call).
 Five mutations were run against the working tree and reverted: an expired
 token accepted (caught), the signature check skipped (caught, 4 tests),
-`compare_digest` swapped for `==` (**not caught** — behaviourally identical
-for correctness, since only constant-time comparison differs; this is a
-known, accepted gap in what a functional test suite can prove), the service
-starting with no secret (caught), and dictation gated by mistake (caught,
-4 tests — 2 of them incidentally, in `TestConnectionLeakGuard`, which had
-never needed to pass an `authorization` argument before). 138 Python tests
-total (105 existing + 33 new), 36 `sell` tests unchanged, both `npm run
-lint` and `tsc --noEmit` clean, `npm run build` still ends `○ (Static)`.
-`VoiceConfig` gained its first `int` field (`session_ttl_secs`) and
-`from_env()` gained int coercion alongside the float coercion it already
-had — a gap the brief flagged rather than one found the hard way.
+`compare_digest` swapped for `==` (caught — see the security-review
+correction below), the service starting with no secret (caught), and
+dictation gated by mistake (caught, 4 tests — 2 of them incidentally, in
+`TestConnectionLeakGuard`, which had never needed to pass an
+`authorization` argument before). 138 Python tests total (105 existing +
+33 new), 36 `sell` tests unchanged, both `npm run lint` and `tsc --noEmit`
+clean, `npm run build` still ends `○ (Static)`. `VoiceConfig` gained its
+first `int` field (`session_ttl_secs`) and `from_env()` gained int coercion
+alongside the float coercion it already had — a gap the brief flagged
+rather than one found the hard way.
+
+**Security review, same day: one Critical, one wrong claim in this very
+entry, five cheap minors.** The Critical: `offer()`'s renegotiate branch (a
+repeat `POST /api/offer` carrying an existing `pc_id`) gated on *that
+request's own claimed* `mode` query param, not on what the session being
+touched actually was. `?mode=dictation` needs no token — so a caller who
+knew a **playground** session's `pc_id` could renegotiate it, unauthenticated,
+by simply claiming `mode=dictation`, and take over its live, billing
+connection: the attacker's SDP becomes the remote description, and they
+hear the interviewer on someone else's cap. `?mode=playground` on the same
+`pc_id` correctly 401'd — only the cross-mode route was open. Fixed by
+recording each session's real mode on `_Session` itself at creation
+(`mode: Mode`, not inferred from `cap_task is not None`, which happened to
+be an equally correct discriminator today but ties the auth gate to a
+completely different feature — the cost cap — by accident rather than by
+name) and gating on `existing.mode`, not the request's `mode` param, when
+`request.pc_id` names a session that already exists. `pc_id` is a
+`uuid4().hex` an attacker cannot guess, and the service binds `127.0.0.1`
+by default, so this was not reachable in today's deployment — but neither
+of those is an auth check, and both are exactly the two things this entry
+already named as evaporating the day this is hosted. Regression-tested
+directly (`TestRenegotiateAuthGateBypass`, `playground/tests/test_server.py`):
+proved caught by reverting the fix and watching the new test fail, then
+restored.
+
+**The wrong claim, in the paragraph directly above:** this entry originally
+said `compare_digest` swapped for `==` was **not caught**, "a known, accepted
+gap in what a functional test suite can prove." That is false, and the
+security review proved it false by writing the test: patch
+`playground.auth.hmac.compare_digest` with a spy, drive the real
+`verify_token()`, and assert the spy fired. Unmutated, it fires once;
+with `==` substituted, it never fires at all, because `==` is a language
+operator the patch cannot intercept — the spy's silence *is* the signal.
+That is a functional test exercising the real code path, not a source
+grep, and it now lives in `test_auth.py`
+(`test_verify_token_actually_calls_compare_digest_not_a_plain_equality`).
+The mutation table is 5/5, not 4/5. The lesson worth keeping isn't about
+HMAC — it's that "a functional suite structurally cannot observe X" is a
+claim to verify by trying, not a conclusion to write down on the strength
+of it sounding right.
+
+Five minors, all fixed same pass: `sell/lib/auth.ts` gained tests
+(`isTokenLikelyValid` is a parser — base64url decode, `JSON.parse`, an
+expiry compare — on the auth path, and had none); `clearToken` (written,
+exported, never called) is now wired into the client-side-valid-but-
+server-rejected path it existed for; `/api/login` no longer echoes
+`google-auth`'s raw exception text (which included the caller's own
+submitted credential) into the 401 body — a fixed message goes to the
+caller, the detail goes to the server log; `verify_google_id_token`'s
+`except Exception` no longer reports a Google outage (a cert-fetch
+transport failure) as "bad credential" the same way it reports an actually
+bad one; and `playground/.env.example` now lists
+`PLAYGROUND_GOOGLE_CLIENT_ID` and `PLAYGROUND_TOKEN_SECRET` as commented
+placeholders, so `cp .env.example .env` no longer hands a fresh clone a
+service that fails closed with no clue why.
+
+**One thing the review flagged that was not a bug:** it read the
+`http://localhost:3000` / Google Cloud Console origin error in the browser
+console as a real misconfiguration needing a fix. It is not — Google's own
+exported credentials JSON already lists both `http://localhost:3000` and
+`http://127.0.0.1:3000` as authorized origins for this client ID, matching
+both `.env` files exactly. The browser error was origin-propagation delay,
+which Google documents as taking up to several hours after a client ID is
+created or edited. No Google config was changed, and no doc note was added
+telling a future reader to change it.

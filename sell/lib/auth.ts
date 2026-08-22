@@ -1,6 +1,15 @@
 "use client";
 
-import { VOICE_URL } from "./voice";
+/* Deliberately not `import { VOICE_URL } from "./voice.ts"` -- voice.ts
+   pulls in @pipecat-ai/client-js and @pipecat-ai/small-webrtc-transport,
+   both meant for a bundler (Next/Turbopack), not Node's own ESM loader.
+   `npm test` runs this file's tests directly under Node
+   (--experimental-strip-types), and importing voice.ts made even the pure
+   parser tests below fail to load at all (confirmed: Node's loader choked
+   resolving small-webrtc-transport's own `lodash/cloneDeep` import, which
+   only a bundler tolerates). Same default, same env var, restated in one
+   line rather than shared. */
+const VOICE_URL = process.env.NEXT_PUBLIC_VOICE_URL ?? "http://localhost:7860";
 
 /* Playground's own session token -- never Google's. Google issues an ID
    token that expires in about an hour; the voice service

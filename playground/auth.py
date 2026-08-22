@@ -21,17 +21,33 @@ import json
 import os
 from typing import Callable, Mapping
 
+from google.auth import exceptions as google_auth_exceptions
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
 
 class AuthError(Exception):
     """Any rejection on the auth path -- expired, tampered, malformed, no
-    signature, a failed Google verification, a verified token with no email.
+    signature, a rejected Google credential, a verified token with no email.
     One type so server.py has exactly one except clause to turn into a 401.
     Never lets a raw exception (a KeyError, a binascii.Error, ValueError
     from json.loads) escape as an unhandled 500 -- every failure here is an
-    expected rejection, not a bug."""
+    expected rejection, not a bug.
+
+    Its message can carry google-auth's own exception text, which may embed
+    the caller's own submitted credential (confirmed live: a malformed
+    token produces "Wrong number of segments in token: b'...'" with the
+    token inline). Fine to log; server.py deliberately does not put
+    str(AuthError) in an HTTP response body -- see login()."""
+
+
+class GoogleUnavailableError(Exception):
+    """Google itself couldn't be reached to verify the token -- a
+    google.auth.exceptions.TransportError fetching its public certs, not a
+    rejected credential. Kept distinct from AuthError so server.py can
+    report this as a 503 (try again shortly) rather than a 401 (sign in
+    again) -- collapsing the two would tell a learner their own sign-in was
+    wrong when the real problem is Google being briefly unreachable."""
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -134,6 +150,12 @@ def verify_google_id_token(
 
     try:
         claims = verifier(id_token, client_id)
+    except google_auth_exceptions.TransportError as e:
+        # A network/DNS/HTTP failure fetching Google's own public certs --
+        # Google being briefly unreachable, not a bad credential. Caught
+        # ahead of the blanket `except Exception` below so it isn't
+        # misreported as one.
+        raise GoogleUnavailableError(str(e)) from e
     except Exception as e:
         raise AuthError(f"Google sign-in verification failed: {e}") from e
     email = claims.get("email") if isinstance(claims, dict) else None

@@ -5,6 +5,7 @@ are one service rather than two. See docs/superpowers/specs/2026-08-21-playgroun
 """
 
 import asyncio
+import logging
 import os
 import time
 from typing import Literal, Mapping, NamedTuple
@@ -20,6 +21,7 @@ from pydantic import BaseModel
 
 from playground.auth import (
     AuthError,
+    GoogleUnavailableError,
     sign_token,
     token_secret_from_env,
     verify_google_id_token,
@@ -30,6 +32,8 @@ from playground.pipelines import build_dictation_worker, build_playground_worker
 from playground.session import Session
 
 Mode = Literal["dictation", "playground"]
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -127,12 +131,30 @@ async def login(request: LoginRequest) -> LoginResponse:
     session. Anyone with a Google account is let in -- there is no allowlist,
     a decision made knowingly (see sell/PROGRESS.md). Verification failures
     (bad signature, wrong audience, expired, no email claim) are all 401,
-    never a 500 -- see playground/auth.py's AuthError."""
+    never a 500 -- see playground/auth.py's AuthError. Google being
+    unreachable (GoogleUnavailableError, a TransportError fetching its own
+    certs) is a 503, not a 401 -- a learner's credential wasn't rejected,
+    Google just couldn't be asked.
+
+    Neither exception's own message reaches the caller: AuthError's message
+    can carry google-auth's raw exception text, which embeds the caller's
+    *own* submitted credential (confirmed live -- a malformed token's
+    message was "Wrong number of segments in token: b'...'" with the token
+    inline). Nothing secret leaks, since it's the caller's own input, but
+    reflecting a credential into devtools, proxy logs and error trackers is
+    a habit not worth forming. The real detail is logged server-side only;
+    the response body gets a fixed message."""
     config = VoiceConfig.from_env()
     try:
         email = verify_google_id_token(request.id_token, config.google_client_id)
+    except GoogleUnavailableError as e:
+        logger.warning("Google sign-in temporarily unavailable: %s", e)
+        raise HTTPException(
+            status_code=503, detail="Google sign-in is temporarily unavailable"
+        ) from e
     except AuthError as e:
-        raise HTTPException(status_code=401, detail=str(e)) from e
+        logger.warning("Google sign-in rejected: %s", e)
+        raise HTTPException(status_code=401, detail="Google sign-in failed") from e
     token = sign_token(email, _TOKEN_SECRET, now=time.time(), ttl_secs=config.session_ttl_secs)
     return LoginResponse(token=token, email=email)
 
@@ -169,6 +191,16 @@ class _Session(NamedTuple):
     connection: SmallWebRTCConnection
     runner: WorkerRunner
     task: asyncio.Task
+    # The mode this session was actually created with -- not to be confused
+    # with the `mode` query param a *later* request to the same pc_id can
+    # claim. offer()'s renegotiate branch (a repeat POST carrying an
+    # existing pc_id) used to gate only on that later request's own claimed
+    # mode, which let an unauthenticated `?mode=dictation` renegotiate onto
+    # a *playground* session's pc_id and take over its live, billing
+    # connection with no token at all. Gating on this field instead --
+    # what the session actually is, fixed at creation and never taken from
+    # an untrusted later request -- closes that. See offer().
+    mode: Mode
     # None for dictation, which has no Session and so nothing to cap. Held
     # here for the same reason `task` is: a task with no other reference
     # can be garbage-collected mid-run.
@@ -321,14 +353,26 @@ async def offer(
 
     mode=playground is gated on our own session token (Authorization: Bearer
     <token>, minted by /api/login) -- see _authenticate_playground_request.
-    mode=dictation stays completely open: no token, no gate, by design."""
-    if mode == "playground":
+    mode=dictation stays completely open: no token, no gate, by design.
+
+    The gate checks the *existing* session's own recorded mode, not just
+    this request's mode param, precisely because request.pc_id lets a
+    caller renegotiate an existing connection below without going through
+    the "new session" path at all. Gating on the param alone let
+    `?mode=dictation` (no token required) renegotiate onto a *playground*
+    session's pc_id and take over its live, billing connection -- a
+    security review caught this before it shipped. A pc_id is a
+    `uuid4().hex` an attacker cannot guess, and today's default bind to
+    127.0.0.1 keeps it off the network entirely, but neither of those is an
+    auth check, and sell/PROGRESS.md records that both evaporate the day
+    this is hosted."""
+    existing = _sessions.get(request.pc_id) if request.pc_id else None
+    if mode == "playground" or (existing is not None and existing.mode == "playground"):
         _authenticate_playground_request(authorization)
 
-    if request.pc_id and request.pc_id in _sessions:
-        session = _sessions[request.pc_id]
-        await session.connection.renegotiate(sdp=request.sdp, type=request.type)
-        return session.connection.get_answer()
+    if existing is not None:
+        await existing.connection.renegotiate(sdp=request.sdp, type=request.type)
+        return existing.connection.get_answer()
 
     connection = SmallWebRTCConnection()
     await connection.initialize(sdp=request.sdp, type=request.type)
@@ -372,7 +416,7 @@ async def offer(
         # own teardown paths do, and none of those can run before this
         # function returns.
         _sessions[answer["pc_id"]] = _Session(
-            connection=connection, runner=runner, task=task, cap_task=None
+            connection=connection, runner=runner, task=task, mode=mode, cap_task=None
         )
         if pg_session is not None:
             cap_task = asyncio.create_task(_enforce_cap(connection, worker, pg_session))

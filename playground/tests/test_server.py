@@ -7,7 +7,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from playground.auth import AuthError, sign_token
+from playground.auth import AuthError, GoogleUnavailableError, sign_token
 from playground.config import VoiceConfig
 from playground.server import (
     LoginRequest,
@@ -210,6 +210,7 @@ class _FakeConnection:
 
     def __init__(self):
         self.disconnect_calls = 0
+        self.renegotiate_calls = 0
         # Real SmallWebRTCConnection.pc_id is what get_answer()["pc_id"]
         # echoes back and what _enforce_cap's `connection.pc_id in _sessions`
         # reads -- both need the same value here.
@@ -220,6 +221,9 @@ class _FakeConnection:
 
     async def disconnect(self):
         self.disconnect_calls += 1
+
+    async def renegotiate(self, sdp, type):
+        self.renegotiate_calls += 1
 
     def event_handler(self, name):
         def decorator(fn):
@@ -405,7 +409,9 @@ class TestEnforceCap(unittest.TestCase):
         connection = _FakeCapConnection(f"pc-{id(session)}")
         runner = _FakeCapRunner()
         worker = _FakeCapWorker()
-        _sessions[connection.pc_id] = _Session(connection=connection, runner=runner, task=None)
+        _sessions[connection.pc_id] = _Session(
+            connection=connection, runner=runner, task=None, mode="playground"
+        )
         asyncio.run(_enforce_cap(connection, worker, session))
         return worker, runner
 
@@ -603,6 +609,37 @@ class TestLogin(unittest.TestCase):
                 asyncio.run(login(LoginRequest(id_token="bad-token")))
         self.assertEqual(ctx.exception.status_code, 401)
 
+    def test_the_401_body_does_not_echo_the_caller_supplied_credential(self):
+        """A security-review finding: google-auth's own exception text can
+        embed the caller's raw submitted token (confirmed live -- a
+        malformed token's message was literally "Wrong number of segments
+        in token: b'...'" with the token inline). Nothing secret leaks --
+        it's the caller's own input -- but reflecting a credential into
+        devtools, proxy logs and error trackers is a habit not to form. The
+        response body must carry a fixed message, never str(AuthError)."""
+        submitted = "attacker-controlled-value-should-never-appear-in-the-response"
+        with patch(
+            "playground.server.verify_google_id_token",
+            side_effect=AuthError(f"Google sign-in verification failed: {submitted}"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(login(LoginRequest(id_token="bad-token")))
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertNotIn(submitted, str(ctx.exception.detail))
+
+    def test_google_being_unreachable_is_a_503_not_a_401(self):
+        """GoogleUnavailableError (a TransportError fetching Google's own
+        certs) means Google couldn't be asked, not that the credential was
+        rejected -- reporting it as a 401 would tell a learner their
+        sign-in was wrong when the real problem is on Google's side."""
+        with patch(
+            "playground.server.verify_google_id_token",
+            side_effect=GoogleUnavailableError("could not fetch certs"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(login(LoginRequest(id_token="some-token")))
+        self.assertEqual(ctx.exception.status_code, 503)
+
     def test_a_missing_id_token_is_a_4xx_at_the_http_boundary_not_a_500(self):
         from playground.server import app
 
@@ -610,6 +647,62 @@ class TestLogin(unittest.TestCase):
         r = client.post("/api/login", json={})
         self.assertGreaterEqual(r.status_code, 400)
         self.assertLess(r.status_code, 500)
+
+
+class TestRenegotiateAuthGateBypass(unittest.TestCase):
+    """The security-review-caught bug: offer()'s renegotiate branch (a
+    repeat POST carrying an existing pc_id) used to gate only on *this
+    request's own claimed* mode param, not on what the existing session
+    actually is. That let an unauthenticated `?mode=dictation` renegotiate
+    onto a live *playground* session's pc_id and take over its connection --
+    the attacker's SDP becomes the remote description of a session someone
+    else is paying OpenAI credit for. Driven directly against a session
+    registered in _sessions, not through the full offer()-builds-a-worker
+    path -- this is about the gate, not the pipeline."""
+
+    def setUp(self):
+        os.environ["OPENAI_API_KEY"] = "sk-secret-do-not-leak"
+        from playground.server import _TOKEN_SECRET
+
+        self.secret = _TOKEN_SECRET
+        self.fake = _FakeConnection()
+        self.fake.pc_id = "victim-playground-pc-id"
+        _sessions[self.fake.pc_id] = _Session(
+            connection=self.fake, runner=None, task=None, mode="playground"
+        )
+
+    def tearDown(self):
+        _sessions.pop(self.fake.pc_id, None)
+
+    def test_mode_dictation_cannot_renegotiate_a_playground_session_without_a_token(self):
+        """The exploit as the review demonstrated it: no Authorization
+        header, mode=dictation, the victim's pc_id. Must 401, and the
+        attacker's SDP must never reach renegotiate()."""
+        request = OfferRequest(sdp="attacker-sdp", type="offer", pc_id=self.fake.pc_id)
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(offer(request, mode="dictation", authorization=None))
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(self.fake.renegotiate_calls, 0)
+
+    def test_mode_playground_also_cannot_renegotiate_it_without_a_token(self):
+        """The half of this that already worked before the fix -- kept
+        alongside the dictation case so both routes to the same session are
+        visible in one place."""
+        request = OfferRequest(sdp="attacker-sdp", type="offer", pc_id=self.fake.pc_id)
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(offer(request, mode="playground", authorization=None))
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(self.fake.renegotiate_calls, 0)
+
+    def test_a_valid_token_still_renegotiates_it_normally(self):
+        """The fix must not turn into a second bug: the legitimate owner of
+        the session, using the same mode as its own client always would,
+        must still get through."""
+        token = sign_token("learner@example.com", self.secret, now=time.time(), ttl_secs=3600)
+        request = OfferRequest(sdp="real-sdp", type="offer", pc_id=self.fake.pc_id)
+        answer = asyncio.run(offer(request, mode="playground", authorization=f"Bearer {token}"))
+        self.assertEqual(self.fake.renegotiate_calls, 1)
+        self.assertEqual(answer["pc_id"], self.fake.pc_id)
 
 
 if __name__ == "__main__":

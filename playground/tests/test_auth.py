@@ -1,4 +1,6 @@
+import hmac
 import unittest
+from unittest.mock import patch
 
 from playground.auth import (
     AuthError,
@@ -85,6 +87,29 @@ class TestSignAndVerifyToken(unittest.TestCase):
         with self.assertRaises(AuthError):
             verify_token(None, "secret", now=1000.0)
 
+    def test_verify_token_actually_calls_compare_digest_not_a_plain_equality(self):
+        """`==` on two bytes objects is functionally identical to
+        hmac.compare_digest for every other test in this file -- both
+        reject a mismatch, both accept a match, so nothing above this test
+        can tell them apart. The difference is purely that `==`
+        short-circuits on the first differing byte, which leaks timing
+        information a patient attacker can use to forge a valid signature
+        one byte at a time. Proven by spying on the real
+        hmac.compare_digest call from inside a real verify_token() run, not
+        by reading the source: this fails if compare_digest is ever swapped
+        for `==`, because `==` would never call the spy at all."""
+        token = sign_token("a@example.com", "secret", now=1000.0, ttl_secs=3600)
+        real_compare_digest = hmac.compare_digest
+        calls = []
+
+        def spy(a, b):
+            calls.append((a, b))
+            return real_compare_digest(a, b)
+
+        with patch("playground.auth.hmac.compare_digest", side_effect=spy):
+            verify_token(token, "secret", now=1000.0)
+        self.assertEqual(len(calls), 1)
+
 
 class TestTokenSecretFromEnv(unittest.TestCase):
     """The service refuses to start without PLAYGROUND_TOKEN_SECRET, the
@@ -138,6 +163,28 @@ class TestVerifyGoogleIdToken(unittest.TestCase):
             verify_google_id_token(
                 "some-id-token", "client-id", verifier=lambda idt, aud: {"sub": "12345"}
             )
+
+    def test_google_being_unreachable_raises_a_distinct_error_not_auth_error(self):
+        """A TransportError fetching Google's own public certs means Google
+        couldn't be asked, not that the credential was rejected -- these
+        must not collapse into the same exception, or a Google outage gets
+        reported to a learner as their own sign-in being wrong."""
+        from google.auth import exceptions as google_auth_exceptions
+
+        from playground.auth import GoogleUnavailableError
+
+        def unreachable_verifier(idt, aud):
+            raise google_auth_exceptions.TransportError("connection refused")
+
+        with self.assertRaises(GoogleUnavailableError):
+            verify_google_id_token("some-id-token", "client-id", verifier=unreachable_verifier)
+        # And specifically not AuthError -- the two must stay distinguishable.
+        try:
+            verify_google_id_token("some-id-token", "client-id", verifier=unreachable_verifier)
+        except AuthError:
+            self.fail("a TransportError must not be reported as AuthError")
+        except GoogleUnavailableError:
+            pass
 
 
 if __name__ == "__main__":

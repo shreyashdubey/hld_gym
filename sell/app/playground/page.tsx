@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Board from "@/components/Board";
 import { connectVoice, type VoiceSession } from "@/lib/voice";
 import {
+  clearToken,
   getStoredToken,
   isTokenLikelyValid,
   loginWithGoogleIdToken,
@@ -155,6 +156,24 @@ export default function PlaygroundPage() {
          spec requires a denied mic to say so out loud, not report a
          running board as a dead service. */
       const denied = err instanceof Error && err.message === "microphone unavailable";
+      if (!denied) {
+        /* A token that looked client-side-valid (isTokenLikelyValid, on
+           mount) can still be rejected server-side -- a rotated secret,
+           clock skew, a forged value. This catch can't tell that apart from
+           the service just being down: @pipecat-ai/small-webrtc-transport
+           swallows the actual HTTP status internally during its own
+           reconnection retries before client.connect() ever rejects (traced
+           in the installed package's negotiate()/attemptReconnection() --
+           the specific 401 is gone by the time this catch runs, only an
+           unhelpful `undefined` rejection reaches here). Clearing the token
+           and re-requiring sign-in on *any* non-mic connect failure is the
+           honest recovery: a genuinely stale token retried forever with no
+           way back to a working state is worse than one extra sign-in click
+           on the rarer case where this was actually just the service being
+           briefly down. */
+        clearToken();
+        setSignedIn(false);
+      }
       setState(denied ? "denied" : "unavailable");
     }
   }, [onDraw]);
