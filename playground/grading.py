@@ -114,9 +114,13 @@ async def grade(turns: list, board_text: str, model: str, client=None) -> list[d
     the moment they decide to pay, and this call sits exactly there."""
     if client is None:
         # Imported lazily so the test suite never needs the SDK's env checks.
-        from openai import AsyncOpenAI
+        try:
+            from openai import AsyncOpenAI
 
-        client = AsyncOpenAI()
+            client = AsyncOpenAI()
+        except Exception:
+            logger.exception("grading client could not be constructed")
+            return None
     messages = build_grading_messages(turns, board_text)
     transcript = transcript_text(turns)
     for attempt in (1, 2):

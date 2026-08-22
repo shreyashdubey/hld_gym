@@ -185,6 +185,15 @@ class TestGrade(unittest.TestCase):
         self.assertEqual(result, [])
         self.assertEqual(calls, 1)
 
+    def test_a_client_that_cannot_be_built_is_none_never_an_exception(self):
+        from unittest import mock
+
+        from playground.grading import grade
+
+        with mock.patch("openai.AsyncOpenAI", side_effect=RuntimeError("no key")):
+            result = asyncio.run(grade(TURNS, "", model="test-model"))
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()
