@@ -18237,6 +18237,7 @@ function renderHome() {
       ${cont ? `<a class="btn" href="#ch/${cont.id}">${gym || resumed ? 'Continue' : 'Start reading'}: ${cont.title}</a>` : ''}
       ${gym ? `<a class="btn ghost" href="#review">Review due · ${due}</a>` : ''}
       ${ORIGINS ? `<a class="btn ghost" href="#cards">The collection · ${allCards().filter(c => cardEarned(c.id)).length}/${allCards().length}</a>` : ''}
+      ${ORIGINS ? `<a class="btn ghost" href="#timeline">The timeline</a>` : ''}
     </p>`;
 
   if (gym) {
@@ -18745,6 +18746,31 @@ function renderCollection() {
   });
 }
 
+/* The one thing 51 separate chapters cannot teach: these ideas arrived in an
+   order, and each was a reaction to the one before. No new content — the spine
+   is just every card's year, sorted. */
+function renderTimeline() {
+  const cards = allCards().slice().sort((a, b) => a.year - b.year || a.id.localeCompare(b.id));
+  const got = cards.filter(c => cardEarned(c.id)).length;
+  VIEW.innerHTML = `<div class="content"><p class="eyebrow">One history</p>
+    <h1 class="ch-title">The timeline</h1>
+    <p>${got} of ${cards.length} moments lit. Every idea in this book was a reaction to the one before it.</p>
+    <ol class="tl"></ol></div>`;
+  const ol = VIEW.querySelector('.tl');
+  let lastYear = null;
+  cards.forEach(c => {
+    const earned = cardEarned(c.id);
+    const li = document.createElement('li');
+    li.className = 'tl-node card-' + c.suit + (earned ? ' earned' : '');
+    li.innerHTML = `<span class="tl-year">${c.year === lastYear ? '' : c.year}</span>
+      <a class="tl-label" href="#ch/${c.chapter}"></a>`;
+    li.querySelector('.tl-label').textContent = earned ? c.title : '— not yet earned —';
+    ol.appendChild(li);
+    lastYear = c.year;
+  });
+  if (!cards.length) ol.innerHTML = '<li>The timeline fills as chapters get their stories.</li>';
+}
+
 function renderBoss(part) {
   const p = TOC.parts.find(x => x.n === +part);
   if (!p) { location.hash = '#home'; return; }
@@ -18805,6 +18831,7 @@ function route() {
   else if (!GYM() && (h === '#review' || h.startsWith('#boss/'))) { location.replace('#home'); return; }
   else if (h === '#review') renderReview();
   else if (h === '#cards') renderCollection();
+  else if (h === '#timeline') renderTimeline();
   else if (h.startsWith('#boss/')) renderBoss(h.slice(6));
   else renderHome();
   renderSidebar();
