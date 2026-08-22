@@ -385,6 +385,7 @@ Everything in this table is an error that stops the build, unless it says warnin
 | `style=` and `on…=` | rejected in any fragment. The event-handler check is case-insensitive, so `onClick=` fails too |
 | `https://` | rejected in any fragment, `.origin.html` included |
 | tags | §3's allowlist, plus `img` in origin fragments |
+| `data-key` | every Feynman `data-key` must start with the chapter id. Use `<id>-o1` in the origin fragment; `<id>-f1` is the chapter's own and the two must not collide |
 | div classes | an unknown class is a **warning**. Origin and card classes already known: `origin`, `origin-seam`, `origin-body`, `card`, `card-face`, `card-back` |
 | JSON shape | `cards` must be a list; `sources` must be an object; `unverified`, if present, must be a list |
 | card ids | must start with the chapter id; unique within the file |
