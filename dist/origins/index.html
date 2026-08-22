@@ -17932,6 +17932,10 @@ function dueItems() {
       if (st && st.due && st.due <= t) out.push({ ...q, chapter: chId });
     }
   }
+  for (const c of allCards()) {
+    const st = S.items[c.id];
+    if (st && st.due && st.due <= t) out.push(c);
+  }
   return out.sort(() => Math.random() - 0.5);
 }
 
@@ -18128,6 +18132,78 @@ function renderQuizItem(q, onAnswer, num) {
     onAnswer(correct);
   }
   return wrap;
+}
+
+/* ---------- cards ---------- */
+const cardEarned = id => ((S.items[id] || {}).box || 0) > 0;
+
+/* Free text, then self-grade. Weaker than a graded MCQ and chosen anyway: it is
+   production rather than recognition, which is the thing learning-and-retention.md
+   says the book has none of. It is also how every spaced-repetition tool works.
+   The card face is hidden until the reader commits, or the prompt would be
+   answerable by reading the answer. */
+function renderCard(card, onAnswer) {
+  const wrap = document.createElement('div');
+  const earned = cardEarned(card.id);
+  wrap.className = 'card card-' + card.suit + (earned ? ' earned' : '');
+  wrap.innerHTML = `<div class="card-suit">${card.suit}</div>
+    <div class="card-prompt"></div>
+    <div class="card-face" hidden>
+      ${card.asset ? `<img class="card-art" src="${card.asset}" alt="">` : ''}
+      <div class="card-title"></div>
+      <div class="card-sub"></div>
+      <div class="card-body"></div>
+    </div>`;
+  wrap.querySelector('.card-prompt').textContent = card.prompt;
+  wrap.querySelector('.card-title').textContent = card.title;
+  wrap.querySelector('.card-sub').textContent = card.sub || '';
+  wrap.querySelector('.card-body').textContent = card.body;
+  if (card.asset) wrap.querySelector('.card-art').alt = card.title;
+
+  const ta = document.createElement('textarea');
+  ta.className = 'card-answer';
+  ta.setAttribute('aria-label', card.prompt);
+  ta.placeholder = 'Say it before you look. A wrong guess still beats reading the answer cold.';
+  wrap.insertBefore(ta, wrap.querySelector('.card-face'));
+
+  const reveal = document.createElement('button');
+  reveal.className = 'btn ghost'; reveal.type = 'button';
+  reveal.textContent = 'Show the card';
+  wrap.appendChild(reveal);
+
+  reveal.addEventListener('click', () => {
+    reveal.remove();
+    ta.disabled = true;
+    wrap.querySelector('.card-face').hidden = false;
+    const model = document.createElement('div');
+    model.className = 'card-model';
+    model.textContent = card.answer;
+    wrap.appendChild(model);
+    const grade = document.createElement('div');
+    grade.className = 'card-grade';
+    [['Got it', true], ['Missed it', false]].forEach(([label, ok]) => {
+      const b = document.createElement('button');
+      b.className = 'btn' + (ok ? '' : ' ghost'); b.type = 'button'; b.textContent = label;
+      b.addEventListener('click', () => {
+        grade.remove();
+        wrap.classList.toggle('earned', ok);
+        wrap.classList.toggle('missed', !ok);
+        onAnswer(ok);
+      });
+      grade.appendChild(b);
+    });
+    wrap.appendChild(grade);
+  });
+  return wrap;
+}
+
+function allCards() {
+  const out = [];
+  for (const [chId, cards] of Object.entries(CARDS)) {
+    if (!isReady(chId)) continue;
+    for (const c of cards) out.push({ ...c, chapter: chId, kind: 'card' });
+  }
+  return out;
 }
 
 /* ---------- views ---------- */
@@ -18499,6 +18575,7 @@ function renderChapter(id) {
     <div class="ch-body"></div>
     <div class="quiz-wrap"><h2>Quiz</h2><p style="font-size:.9rem;color:var(--ink-2)">${gym ? 'Three levels. Pass Level 3 with 80% to earn the stamp. Answers go into your review queue.' : 'Three levels, hardest last. Every option explains itself once you pick — including the ones that are wrong.'}</p>
     <div class="q-level-tabs"></div><div class="q-zone"></div></div>
+    <div class="deck-wrap"></div>
     <div class="ch-nav"></div>
   </div>`;
   const body = VIEW.querySelector('.ch-body');
@@ -18580,6 +18657,18 @@ function renderChapter(id) {
   });
   openLevel(1);
 
+  // the deck
+  const cards = chCards(id);
+  const deck = VIEW.querySelector('.deck-wrap');
+  if (cards.length) {
+    deck.innerHTML = `<h2>The deck</h2><p class="deck-note">${cards.length} cards from this chapter's story. Answer to keep one — unanswered cards stay grey and never enter your review queue.</p><div class="deck"></div>`;
+    const zone = deck.querySelector('.deck');
+    cards.forEach(c => zone.appendChild(renderCard(c, ok => {
+      if (ok && !cardEarned(c.id)) addXP(15, 'card earned');
+      gradeItem(c.id, ok);
+    })));
+  }
+
   // prev/next
   const i = CHAPTERS.indexOf(chById(id));
   const prev = CHAPTERS.slice(0, i).reverse().find(c2 => isReady(c2.id));
@@ -18611,12 +18700,13 @@ function renderReview() {
     head.className = 'review-item-tag';
     head.textContent = `${i + 1}/${due.length} · from ${ch ? ch.title : q.chapter}`;
     zone.appendChild(head);
-    zone.appendChild(renderQuizItem(q, ok => {
+    const cb = ok => {
       gradeItem(q.id, ok);
       if (ok) { right++; addXP(5); }
       i++;
       setTimeout(nextItem, ok ? 900 : 2600);
-    }));
+    };
+    zone.appendChild(q.kind === 'card' ? renderCard(q, cb) : renderQuizItem(q, cb));
   }
   nextItem();
 }
