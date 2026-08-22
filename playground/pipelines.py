@@ -1,6 +1,7 @@
 """Both pipelines. Dictation is the Playground pipeline with the LLM and TTS
 stages removed, which is the reason they share a service."""
 
+import asyncio
 from functools import partial
 
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
@@ -80,6 +81,18 @@ async def _end_round(session: Session, tts: OpenAITTSService, params) -> None:
     await params.result_callback({"ok": True})
 
 
+async def _end_diagnostic_round(session: Session, on_round_end, params) -> None:
+    """Handler for end_round in a diagnostic session: no coach, no voice
+    switch -- the round ends in a written failure map instead. Ack first so
+    the pipeline is never left waiting on a tool result, then hand off to
+    the server's end path (grading, delivery, teardown) as its own task:
+    grading is a full LLM call and this callback runs inside the pipeline's
+    own processing."""
+    await params.result_callback({"ok": True})
+    if on_round_end is not None:
+        asyncio.create_task(on_round_end(session))
+
+
 async def _draw_diagram(connection: SmallWebRTCConnection, params) -> None:
     """Handler for the draw_diagram tool call.
 
@@ -98,14 +111,17 @@ async def _draw_diagram(connection: SmallWebRTCConnection, params) -> None:
 
 
 def build_playground_worker(
-    connection: SmallWebRTCConnection, config: VoiceConfig
+    connection: SmallWebRTCConnection,
+    config: VoiceConfig,
+    kind: str = "sprint",
+    on_round_end=None,
 ) -> tuple[PipelineWorker, Session]:
     """mic -> VAD -> STT -> context -> LLM -> TTS -> speaker.
 
     The interviewer never sees the answer key (playground.personas); the key
     enters the session only when end_round calls session.switch_to_coach().
     """
-    session = Session(config)
+    session = Session(config, kind=kind)
 
     transport = SmallWebRTCTransport(
         webrtc_connection=connection,
@@ -135,8 +151,14 @@ def build_playground_worker(
     # of its own, and without server.py reaching into this function's locals.
     session.tts = tts
 
-    llm.register_function("end_round", partial(_end_round, session, tts))
-    llm.register_function("draw_diagram", partial(_draw_diagram, connection))
+    if kind == "diagnostic":
+        llm.register_function("end_round", partial(_end_diagnostic_round, session, on_round_end))
+        # No draw_diagram: a diagnostic session never coaches, so nothing may
+        # ever call it -- not registering it is the structural half of the
+        # tools() guarantee.
+    else:
+        llm.register_function("end_round", partial(_end_round, session, tts))
+        llm.register_function("draw_diagram", partial(_draw_diagram, connection))
 
     aggregators = LLMContextAggregatorPair(
         context,

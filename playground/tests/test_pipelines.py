@@ -184,5 +184,39 @@ class TestToolModeSplit(unittest.TestCase):
         self.assertNotIn("end_round", names)
 
 
+class TestEndDiagnosticRound(unittest.IsolatedAsyncioTestCase):
+    async def test_it_acks_then_fires_the_round_end_callback(self):
+        from playground.pipelines import _end_diagnostic_round
+
+        session = Session(VoiceConfig(), kind="diagnostic")
+        ended = []
+
+        async def on_round_end(s):
+            ended.append(s)
+
+        acked = []
+
+        class _Params:
+            async def result_callback(self, payload):
+                acked.append(payload)
+
+        await _end_diagnostic_round(session, on_round_end, _Params())
+        await asyncio.sleep(0)  # let the created task run
+        self.assertEqual(acked, [{"ok": True}])
+        self.assertEqual(ended, [session])
+
+    async def test_no_callback_is_a_clean_ack_and_nothing_else(self):
+        from playground.pipelines import _end_diagnostic_round
+
+        acked = []
+
+        class _Params:
+            async def result_callback(self, payload):
+                acked.append(payload)
+
+        await _end_diagnostic_round(Session(VoiceConfig(), kind="diagnostic"), None, _Params())
+        self.assertEqual(acked, [{"ok": True}])
+
+
 if __name__ == "__main__":
     unittest.main()
