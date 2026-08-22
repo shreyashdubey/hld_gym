@@ -172,9 +172,17 @@ def validate_cards(cid, data):
     return cards
 
 CITE_TYPES = {"paper", "rfc", "postmortem", "blog", "commit", "pr", "cve",
-              "book", "talk", "docs", "oral-history"}
+              "book", "talk", "docs", "oral-history", "news"}
 # A blog post or a vendor doc is a source; it is not evidence. Recon caught
 # vLLM's blog claiming 24x where the SOSP paper says 2-4x.
+# `news` is contemporaneous journalism - a newspaper or trade report. For a
+# pre-web event it is often the only contemporaneous record, and three authors
+# typed such sources `blog` because nothing else fit. It is deliberately NOT
+# primary: a newspaper reporting a hearing is not the hearing record, and a
+# trade weekly reporting an outage is not the postmortem. Relaxing the primary
+# bar so older events could clear it would gut the one gate that makes this mode
+# credible - a chapter on a pre-web event still has to find a paper, a hearing
+# record or an archive alongside its press coverage. Honest typing, same bar.
 PRIMARY = {"paper", "rfc", "postmortem", "commit", "pr", "cve", "oral-history"}
 # One matcher, both fact checks, deliberately lenient: `class="num fact"`, a
 # reversed attribute order and `<SPAN CLASS="Fact">` are all fact spans. Lenient
@@ -241,17 +249,50 @@ def validate_cites(cid, html, side, cards):
     # carry the chapter's only paper: the rule exists so the story rests on one.
     if prose and not any(src[k].get("type") in PRIMARY for k in prose if k in src):
         err(f"{cid}: origin prose cites no primary source (need one of {sorted(PRIMARY)})")
-    # A year in the prose that disagrees with the year of the source it points
-    # at is the single commonest failure in this content type. Match the tag
-    # first, then pull data-cite out of it - a hardcoded attribute order
-    # ("class=... data-cite=...") is defeated by writing them the other way round.
+    # A date attached to the wrong source. Match the tag first, then pull
+    # data-cite out of it - a hardcoded attribute order ("class=... data-cite=...")
+    # is defeated by writing them the other way round.
+    #
+    # THE RULE IS ONE-DIRECTIONAL AND MUST STAY THAT WAY. Do not "fix" it back
+    # into an equality test. A document cannot report an event that has not
+    # happened yet, but it can report one that already has:
+    #   text year > source year -> impossible, error. A 1985 report cannot
+    #                              describe a 1990 event.
+    #   text year < source year -> a retrospective source. A 2015 Fed paper
+    #                              reconstructing a 1985 incident, a 2011 blog
+    #                              recalling a 2010 decision. The normal case in
+    #                              historical writing. Silent.
+    #   equal                   -> fine.
+    # The symmetric version fired on the normal case, and authors dodged it by
+    # keeping dates out of .fact spans altogether - steering them away from the
+    # exact construct O5 exists to encourage.
+    #
+    # Several years in one span ("between 1979 and 1998", "in 2006: everyone had
+    # until 1 January 2007"): it fires only when *all* of them postdate the
+    # source - hence min(), not max(). A document cannot report the past it did
+    # not live through, but it very much can announce a future date: a deadline,
+    # an effective date, a scheduled cutover. p3c01 is exactly that shape, an
+    # ISO notice published in 2006 setting a 1 January 2007 implementation date,
+    # and max() called it an error. One year in the span at or before the source
+    # anchors the span in that document's own present, which makes a later year
+    # in the same breath a forecast rather than an impossibility. When every
+    # year postdates the source there is no anchor and no reading of that
+    # document produces any of those dates.
+    # ponytail: the ceiling is "1979 and 2005" cited to a 1998 source - 1979
+    # anchors it, so 2005 goes unchecked. Tighten to per-year only if the
+    # sidecar ever grows a field saying which year the fact is actually about;
+    # without one, per-year fails the legitimate deadline case above.
     for tag, txt in re.findall(f'({FACT_SPAN})([^<]*)</span>', live, re.I):
         m = re.search(r'data-cite="([^" ]+)"', tag)
         if not m: continue
         k = m.group(1)
-        years = {int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", txt)}
-        if years and k in src and src[k].get("year") not in years:
-            err(f"{cid}: fact '{txt[:40]}' cites {k} (year {src[k].get('year')})")
+        years = [int(y) for y in re.findall(r"\b(?:19|20)\d{2}\b", txt)]
+        sy = src[k].get("year") if k in src else None
+        # _is_year, not truthiness: a source with a junk year is already reported
+        # above, and `min(years) > "1985"` would crash the build instead.
+        if years and _is_year(sy) and min(years) > sy:
+            err(f"{cid}: fact '{txt[:40]}' dates {min(years)} to {k}, published {sy} "
+                f"(a source cannot report an event later than itself)")
 
 def render(mode, toc, templates, quiz_all, cards_all, origins):
     """Compose one output. `mode` keys into MODES and lands on <body data-mode>,
