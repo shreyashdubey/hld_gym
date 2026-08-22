@@ -51,6 +51,15 @@ errors, warnings = [], []
 def err(m): errors.append(m)
 def warn(m): warnings.append(m)
 
+# Every asset path an origin story or a card actually points at, filled by
+# check_assets and consumed by copy_assets. src/assets/ is a source directory
+# that agents also use as a scratchpad (licences.json, style-reference sketches),
+# so shipping the directory wholesale published working notes. Copying only what
+# is referenced is the only rule that stays correct when the next unnoticed file
+# lands there; an extension allowlist would still have shipped ref-*.svg.
+referenced = set()
+IMAGE_EXTS = {".svg", ".webp", ".png", ".jpg", ".jpeg", ".avif", ".gif"}
+
 def _is_year(v):
     # bool is a subclass of int in Python, so isinstance(True, int) is True and
     # a JSON `true` would sail through as a year. This is a history book, so a
@@ -67,7 +76,26 @@ def check_assets(cid, html):
         if not p.is_relative_to(root):
             err(f"{cid}: asset '{ref}' escapes src/assets/"); continue
         if not p.is_file():
-            err(f"{cid}: asset '{ref}' does not exist in src/assets/")
+            err(f"{cid}: asset '{ref}' does not exist in src/assets/"); continue
+        referenced.add(p)
+
+def unwired_images(assets_dir, referenced):
+    """Image files nobody points at. The cost of copying only referenced files
+    is that a drawn-but-unwired portrait silently does not ship, and 16 have
+    gone missing that way before, so it warns rather than passing quietly."""
+    return sorted(p for p in assets_dir.rglob("*")
+                  if p.is_file() and p.suffix.lower() in IMAGE_EXTS and p.resolve() not in referenced)
+
+def copy_assets(assets_dir, dest, referenced):
+    """Copy exactly the referenced assets, nothing else. Returns what shipped."""
+    shutil.rmtree(dest, ignore_errors=True)
+    root = assets_dir.resolve()
+    shipped = sorted(p for p in referenced if p.is_relative_to(root))
+    for p in shipped:
+        d = dest / p.relative_to(root)
+        d.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(p, d)
+    return shipped
 
 def font_css():
     css = []
@@ -375,6 +403,10 @@ def main():
                     except json.JSONDecodeError as e:
                         err(f"{cid}: cite json invalid: {e}")
 
+    if ASSETS.exists():
+        for p in unwired_images(ASSETS, referenced):
+            warn(f"asset '{p.name}' is referenced by no chapter or card — not shipped")
+
     for w in warnings: print("WARN", w)
     if errors:
         for e in errors: print("FAIL", e)
@@ -390,9 +422,7 @@ def main():
 
         if mode == "origins" and ASSETS.exists():
             dest = out.parent / "assets"
-            shutil.rmtree(dest, ignore_errors=True)
-            shutil.copytree(ASSETS, dest, ignore=shutil.ignore_patterns(".gitkeep"))
-            n = sum(1 for _ in dest.rglob("*") if _.is_file())
+            n = len(copy_assets(ASSETS, dest, referenced))
             print(f"  copied {n} asset(s) → {dest}")
 
 if __name__ == "__main__":

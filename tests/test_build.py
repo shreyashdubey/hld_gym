@@ -3,7 +3,7 @@
 
 Run: python3 tests/test_build.py
 """
-import json, re, sys
+import json, re, sys, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -367,14 +367,21 @@ def test_unverified_non_list_fails_cleanly():
     assert errs, "a non-list 'unverified' should fail, not crash"
 
 
-def test_assets_copied_to_origins():
+def test_referenced_assets_reach_origins():
+    """Was test_assets_copied_to_origins, which asserted that *every* file in
+    src/assets/ ships - the assertion that put licences.json on the open
+    internet. What must ship is what a card or an origin story points at."""
     src = ROOT / "src" / "assets"
     dst = ROOT / "dist" / "origins" / "assets"
-    if not any(p.is_file() and p.name != ".gitkeep" for p in src.glob("*")):
-        return  # nothing to copy yet; the missing-asset test below is the real guard
-    for p in src.iterdir():
-        if p.is_file() and p.name != ".gitkeep":
-            assert (dst / p.name).exists(), f"{p.name} was not copied into dist/origins/assets/"
+    refs = set()
+    for f in (ROOT / "src" / "chapters").iterdir():
+        if f.name.endswith((".cards.json", ".origin.html")):
+            refs |= set(re.findall(r'"assets/([^"]+)"', f.read_text()))
+    refs = {r for r in refs if (src / r).is_file()}
+    if not refs:
+        return  # nothing wired up yet; the missing-asset test below is the real guard
+    for r in sorted(refs):
+        assert (dst / r).exists(), f"{r} is referenced but missing from dist/origins/assets/"
 
 
 def test_missing_asset_is_a_build_error():
@@ -511,6 +518,68 @@ def test_both_fact_checks_share_one_matcher():
             f"{cls} was not accepted as a citation: {errs}"
         assert any("1989" in e for e in errs), \
             f"{cls} was accepted as a citation but its year went unchecked: {errs}"
+
+
+def _build():
+    sys.path.insert(0, str(ROOT))
+    import build
+    return build
+
+
+def _asset_fixture(td):
+    """A src/assets/ in miniature: one wired portrait, one working note, one
+    portrait nobody wired up."""
+    src = Path(td) / "assets"
+    src.mkdir()
+    (src / "p9c99-person.svg").write_text("<svg/>")
+    (src / "licences.json").write_text('{"note": "internal"}')
+    (src / "p9c98-person.svg").write_text("<svg/>")
+    return src, Path(td) / "dist" / "assets", {(src / "p9c99-person.svg").resolve()}
+
+
+def test_working_file_does_not_reach_dist():
+    """licences.json is an internal triage note naming which Commons files are
+    mis-licensed. It is a working file in a source directory, and the wholesale
+    copytree published it."""
+    build = _build()
+    with tempfile.TemporaryDirectory() as td:
+        src, dest, referenced = _asset_fixture(td)
+        build.copy_assets(src, dest, referenced)
+        assert not (dest / "licences.json").exists(), "a .json working file reached the public output"
+
+
+def test_shipped_assets_contain_no_working_files():
+    """The same guard against the real built site, not a fixture."""
+    build = _build()
+    dst = ROOT / "dist" / "origins" / "assets"
+    if not dst.exists():
+        return  # nothing built; test_both_outputs_exist is the guard for that
+    stray = sorted(p.name for p in dst.rglob("*")
+                   if p.is_file() and p.suffix.lower() not in build.IMAGE_EXTS)
+    assert not stray, f"non-image working files reached dist/origins/assets/: {stray}"
+
+
+def test_referenced_svg_does_reach_dist():
+    build = _build()
+    with tempfile.TemporaryDirectory() as td:
+        src, dest, referenced = _asset_fixture(td)
+        shipped = build.copy_assets(src, dest, referenced)
+        assert (dest / "p9c99-person.svg").exists(), "a referenced .svg was not copied"
+        assert [p.name for p in shipped] == ["p9c99-person.svg"], \
+            f"copy_assets shipped more than the referenced set: {[p.name for p in shipped]}"
+
+
+def test_unreferenced_image_warns_and_does_not_ship():
+    """The cost of copying only referenced files: a drawn portrait nobody wired
+    up silently vanishes. 16 went missing once already, so it must be loud."""
+    build = _build()
+    with tempfile.TemporaryDirectory() as td:
+        src, dest, referenced = _asset_fixture(td)
+        build.copy_assets(src, dest, referenced)
+        assert not (dest / "p9c98-person.svg").exists(), "an unreferenced image shipped anyway"
+        unwired = [p.name for p in build.unwired_images(src, referenced)]
+        assert unwired == ["p9c98-person.svg"], \
+            f"an unreferenced portrait was not surfaced (or a working file was): {unwired}"
 
 
 def main():
