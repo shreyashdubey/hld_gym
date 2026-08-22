@@ -171,7 +171,7 @@ Chapters in `/origins` ship three extra files in `src/chapters/`, alongside the 
 2. `<id>.cards.json` — the deck, 4 suits
 3. `<id>.cite.json` — the source ledger
 
-They ship **together or not at all**. `build.py` rejects an `.origin.html` with no `.cards.json`, and an `.origin.html` with no `.cite.json`: a card's provenance is the story that produced it, and a story with no ledger is a claim.
+They ship **together or not at all**. `build.py` holds one direction of that: it rejects an `.origin.html` with no `.cards.json`, and an `.origin.html` with no `.cite.json` — a card's provenance is the story that produced it, and a story with no ledger is a claim. The other direction is on you: a `.cards.json` with no story still builds, and a `.cite.json` with no story is never even read.
 
 The story **replaces** the chapter's fictional cold open in `/origins`. Do not delete the fiction from `<id>.html` — `/book` still renders it, and `/origins` swaps it out at render time. If a later paragraph of the chapter refers back to the fictional scenario ("that queue you were staring at"), that reference is now dangling in one of the two views, and the chapter file does need an edit.
 
@@ -197,7 +197,11 @@ off — this is free and already shipped 51 times.
 item. A name that is never asked about is decoration by definition.
 
 **O5 — every date, number and quoted string carries `data-cite`.** Resolving to the
-chapter's `.cite.json`. Build-enforced.
+chapter's `.cite.json`. The build enforces the floor, not the rule: the story's own prose
+must carry at least one `data-cite` key, every key you write must resolve, and at least
+one key **cited in the prose** must be a primary source. Card `cite` keys satisfy none of
+those three — a deck always cites something, so counting it would make the gate unfirable.
+Whether a *particular* date is cited is not machine-checkable and is yours to hold.
 
 **O6 — no subject is reused across chapters.** `src/origins.json` holds the claim.
 Because of the dedup tax, roughly 30 chapters must find a story that is not their
@@ -216,7 +220,7 @@ irrelevance label does nothing measurable.
 off downstream. This is the part that makes the story repeatable out loud, which is the
 output mode the whole book is justified by.
 
-One correction to O5's last two words, because you will otherwise find it out the hard way: the build enforces that every `data-cite` key you write resolves to a source, and that the chapter yields at least one resolving key. It cannot tell that you left a date uncited. See "What `build.py` checks" for the exact line between what the build holds and what you hold.
+O5's floor is per-chapter and the rule is per-fact, so read the two apart: the build can tell that your story cites nothing at all, and that a key you wrote names no source, and that nothing the story cites is primary. It cannot tell that you left a date uncited. See "What `build.py` checks" for the exact line between what the build holds and what you hold.
 
 ### Running O1, and failing it honestly
 
@@ -337,7 +341,7 @@ O4 is checked by a person, so check it: read `<id>.quiz.json` before writing the
 
 `quote` is stored when you verify, not when you cite — roughly 15–20% of primary sources 403 later, and the stored string means a dead link never forces a re-hunt. The build requires it on every primary source, which is the same rule stated as a check. `unverified` is a real array and an empty one is a claim: anything you could not confirm goes in it, and **does not go in the prose**.
 
-At least one cited source per chapter must be **primary**: `paper`, `rfc`, `postmortem`, `commit`, `pr`, `cve` or `oral-history`. A blog post or a vendor doc is a source, not evidence — vLLM's blog claims 24× where the SOSP paper says 2–4×.
+At least one source **cited in the story's prose** must be **primary**: `paper`, `rfc`, `postmortem`, `commit`, `pr`, `cve` or `oral-history`. A card cannot carry it for you — the build reads only the prose keys for this check, because the rule exists so the *story* rests on a primary source. A blog post or a vendor doc is a source, not evidence — vLLM's blog claims 24× where the SOSP paper says 2–4×.
 
 Open every source yourself. Not a search snippet, the actual page or PDF. Five failure modes, all met live:
 
@@ -381,7 +385,7 @@ Everything in this table is an error that stops the build, unless it says warnin
 | companion files | an `.origin.html` with no `.cards.json`, or with no `.cite.json`, fails |
 | word count | tag-stripped `.origin.html` must be ≤260 words |
 | `<img>` | origin fragments only; `src` must start `assets/`; `alt` must be non-empty; the file must exist in `src/assets/`. The tag and its attributes are matched case-insensitively |
-| `assets/` references | every `src=`/`href=` beginning `assets/`, and every card `asset`, must resolve to a real file inside `src/assets/`. A path that climbs out with `../` is rejected by name |
+| `assets/` references | in an origin fragment, every `src=`/`href=` beginning `assets/` — plus every card `asset` — must resolve to a real file inside `src/assets/`. A path that climbs out with `../` is rejected by name. The chapter's own `.html` is not scanned for these; it has no need, since `<img>` is banned there |
 | `style=` and `on…=` | rejected in any fragment. The event-handler check is case-insensitive, so `onClick=` fails too |
 | `https://` | rejected in any fragment, `.origin.html` included |
 | tags | §3's allowlist, plus `img` in origin fragments |
@@ -391,15 +395,15 @@ Everything in this table is an error that stops the build, unless it says warnin
 | card ids | must start with the chapter id; unique within the file |
 | card fields | `suit` one of the four; `year` an integer 1800–2100 (a JSON `true` does not count as one); `title`, `sub`, `body`, `prompt`, `answer`, `cite` all non-empty; `body` ≤60 words; `asset`, if present, starts `assets/` |
 | `data-cite` keys | every key in the fragment, and every card `cite`, must name a `sources` entry. Keys inside an HTML comment are ignored, because a citation in a comment is not a citation |
-| the citation gate | at least one citation key must resolve for the chapter — an `.origin.html` with no `data-cite` at all, or only an empty `data-cite=""`, fails |
+| the citation gate | the **prose** must yield at least one `data-cite` key — an `.origin.html` with no `data-cite` at all, or only an empty `data-cite=""`, or only one inside an HTML comment, fails. Card `cite` keys do not count toward this gate |
 | source fields | `type` one of the eleven; `year` an integer 1800–2100; `title` non-empty; `checked` matching `YYYY-MM-DD`; `quote` non-empty on every primary-type source |
-| primary source | at least one cited source must be of a primary type |
+| primary source | at least one source cited **in the prose** must be of a primary type. A card citing the only paper does not satisfy it |
 | year agreement | a year inside a `<span class="fact" … data-cite="key">` must equal that source's `year`. Attribute order does not matter |
 | unused source | a source nothing cites is a **warning** |
 
 **What it does not check, and you therefore must.** Three of the nine rules have no validator at all, one has a weaker one than it looks, and one field is unchecked:
 
-- **O5** is per-fact; the build's gate is per-chapter. One resolving citation anywhere satisfies it — and card `cite` keys count toward it, so a fragment carrying no `data-cite` at all still passes if the deck cites something. Nothing tells you that you left a date uncited. The year-agreement check likewise fires only on a `.fact` span whose `data-cite` holds a single key.
+- **O5** is per-fact; the build's gate is per-chapter. One `data-cite` anywhere in the prose satisfies it, so a story with nineteen uncited dates and one cited one passes. Nothing tells you which date you left uncited. The year-agreement check likewise fires only on a `.fact` span whose `data-cite` holds a single key. What the gate *no longer* accepts: card `cite` keys, which are excluded from both it and the primary-source check.
 - **O2** — that the last sentence is a wall and not a prize — is read by a person.
 - **O4** — that every proper noun is answerable on a card or in an existing quiz item — is read by a person.
 - **O6** — that your subject is unclaimed — is read by a person, against `src/origins.json`.

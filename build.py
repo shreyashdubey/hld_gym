@@ -164,6 +164,11 @@ def validate_cards(cid, data):
         asset = c.get("asset")
         if asset and not str(asset).startswith("assets/"):
             err(f'{cid}:{cardid}: asset must start with "assets/"')
+        # the path lands in an <img src> attribute. app.js sets it with
+        # setAttribute so it cannot break out, but a quote or bracket here is a
+        # typo either way, and the check_assets regex stops at the first quote.
+        if asset and re.search(r"[\"'<>\s]", str(asset)):
+            err(f"{cid}:{cardid}: asset must not contain quotes, angle brackets or whitespace")
     return cards
 
 CITE_TYPES = {"paper", "rfc", "postmortem", "blog", "commit", "pr", "cve",
@@ -183,20 +188,23 @@ def validate_cites(cid, html, side, cards):
     # A citation inside a comment is not a citation. Strip before scanning, or
     # `<!-- data-cite="x" -->` satisfies the gate this function exists to hold.
     live = re.sub(r'<!--.*?-->', '', html, flags=re.S)
-    used = set()
+    prose = set()   # keys the story itself cites
     for attr in re.findall(r'data-cite="([^"]+)"', live):
         for k in attr.split():
-            used.add(k)
+            prose.add(k)
             if k not in src: err(f"{cid}: data-cite '{k}' has no sidecar entry")
+    used = set(prose)   # prose + deck: what the sidecar cross-checks answer to
     for c in cards:
         k = c.get("cite")
         if k:
             used.add(k)
             if k not in src: err(f"{cid}:{c.get('id')}: cite '{k}' has no sidecar entry")
-    # the gate: what resolved, not what the text looks like. An empty
+    # the gate: what the *prose* resolved, not what the text looks like. An empty
     # data-cite="" yields no key and must fail here, same as no data-cite at all.
-    if not used:
-        err(f"{cid}: origin content carries no citation")
+    # Cards are excluded on purpose: `cite` is a required card field, so every
+    # deck cites something and a gate that counted them could never fire.
+    if not prose:
+        err(f"{cid}: origin prose carries no data-cite (card cites do not count)")
     for k, s in src.items():
         if s.get("type") not in CITE_TYPES: err(f"{cid}:{k}: type must be one of {sorted(CITE_TYPES)}")
         if not _is_year(s.get("year")): err(f"{cid}:{k}: year must be an integer 1800-2100")
@@ -208,8 +216,10 @@ def validate_cites(cid, html, side, cards):
         if s.get("type") in PRIMARY and not str(s.get("quote", "")).strip():
             err(f"{cid}:{k}: primary sources need a 'quote' captured at verification time")
         if k not in used: warn(f"{cid}: source '{k}' is never cited")
-    if used and not any(src[k].get("type") in PRIMARY for k in used if k in src):
-        err(f"{cid}: no primary source cited (need one of {sorted(PRIMARY)})")
+    # ...and the primary source has to be one the story leans on. A card cannot
+    # carry the chapter's only paper: the rule exists so the story rests on one.
+    if prose and not any(src[k].get("type") in PRIMARY for k in prose if k in src):
+        err(f"{cid}: origin prose cites no primary source (need one of {sorted(PRIMARY)})")
     # A year in the prose that disagrees with the year of the source it points
     # at is the single commonest failure in this content type. Match the tag
     # first, then pull data-cite out of it - a hardcoded attribute order

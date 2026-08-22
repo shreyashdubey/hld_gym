@@ -205,6 +205,21 @@ def test_card_asset_must_be_relative():
     assert _validate_cards(bad)
 
 
+def test_card_asset_rejects_attribute_breakers():
+    """The path lands in an <img src>. A quote would close the attribute, and
+    check_assets' regex stops at the first quote so it would not catch it."""
+    for bad_asset in ('assets/x.webp" onerror="alert(1)',
+                      "assets/x.webp' onerror='alert(1)",
+                      "assets/<script>.webp",
+                      "assets/two words.webp"):
+        bad = json.loads(json.dumps(CARD_OK))
+        bad["cards"][0]["asset"] = bad_asset
+        assert _validate_cards(bad), f"accepted asset {bad_asset!r}"
+    ok = json.loads(json.dumps(CARD_OK))
+    ok["cards"][0]["asset"] = "assets/fine-name_1.webp"
+    assert not _validate_cards(ok), "rejected a clean asset path"
+
+
 def test_cards_object_instead_of_list_fails_cleanly():
     """{"cards": {"a": {...}}} - an object where a list belongs - must fail
     the build, not raise. A validator that crashes tells an author nothing
@@ -388,6 +403,49 @@ def test_check_assets_rejects_a_directory():
     build.errors.clear()
     build.check_assets("ptest", '<img src="assets/" alt="x">')
     assert build.errors, "a directory reference should fail the build"
+
+def test_prose_with_no_cite_fails_even_when_cards_cite():
+    """The gate is on the story, not the deck. `cite` is a required card field,
+    so every deck cites something and folding card keys into the gate made it
+    unfirable: an origin story with zero sourced claims sailed through."""
+    html = '<div class="box origin"><p>Confident history, no source.</p></div>'
+    cards = [{"id": "ptest-c1", "cite": "src1"}]
+    assert _validate_cites(html, CITE_OK, cards), "an unsourced story passed because its cards cited"
+
+
+def test_empty_prose_cite_fails_even_when_cards_cite():
+    """data-cite="" yields no key. A citing card must not paper over it."""
+    html = '<div class="box origin"><p><span class="fact" data-cite="">1998</span></p></div>'
+    cards = [{"id": "ptest-c1", "cite": "src1"}]
+    assert _validate_cites(html, CITE_OK, cards), 'data-cite="" plus a citing card passed the gate'
+
+
+def test_primary_source_must_be_cited_in_prose():
+    """A card cannot carry the chapter's only primary source. The rule exists so
+    the *story* rests on a paper, RFC, postmortem, commit, PR, CVE or oral history."""
+    side = json.loads(json.dumps(CITE_OK))
+    side["sources"]["blog1"] = {"type": "blog", "title": "A Blog", "year": 1998,
+                                "checked": "2026-08-22"}
+    html = '<div class="box origin"><p><span class="fact" data-cite="blog1">1998</span></p></div>'
+    cards = [{"id": "ptest-c1", "cite": "src1"}]   # src1 is the paper
+    errs = _validate_cites(html, side, cards)
+    assert any("primary" in e for e in errs), errs
+
+
+def test_prose_primary_cite_with_cards_passes_clean():
+    """The shape a real chapter has: prose on the paper, deck citing too."""
+    html = '<div class="box origin"><p><span class="fact" data-cite="src1">1998</span></p></div>'
+    cards = [{"id": "ptest-c1", "cite": "src1"}]
+    assert not _validate_cites(html, CITE_OK, cards), _validate_cites(html, CITE_OK, cards)
+
+
+def test_commented_cite_is_not_a_prose_citation():
+    """Comments are stripped before the scan, so a commented cite is not prose -
+    and a citing card must not stand in for the one the author commented out."""
+    html = ('<div class="box origin"><!-- <span class="fact" data-cite="src1">1998</span> -->'
+            '<p>no real cite</p></div>')
+    cards = [{"id": "ptest-c1", "cite": "src1"}]
+    assert _validate_cites(html, CITE_OK, cards), "a commented-out cite plus a citing card passed"
 
 
 def main():
