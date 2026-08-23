@@ -819,6 +819,16 @@ function renderChapter(id) {
   swapColdOpen(body, id);
   initDiagrams(body);
 
+  /* Section seams: the chapter reads as n numbered stretches, not one wall.
+     Same count the rail's progress map runs on. */
+  const secs = [...body.querySelectorAll('h2')];
+  if (secs.length > 1) secs.forEach((h, i) => {
+    const m = document.createElement('div');
+    m.className = 'sec-mark';
+    m.textContent = `section ${i + 1} of ${secs.length}`;
+    h.before(m);
+  });
+
   // feynman blocks
   VIEW.querySelectorAll('.feynman').forEach(f => {
     const key = f.dataset.key;
