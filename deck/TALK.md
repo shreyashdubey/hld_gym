@@ -63,12 +63,16 @@ you start.
 > I don't spend a minute on them.
 >
 > And this market already pays, at every price. interviewing.io sells one
-> human mock for $179 to $339 and runs waitlists. Hello Interview
-> bootstrapped to over a hundred thousand engineers at about $47 a month.
-> NeetCode is one person making around ten million a year. Alex Xu sold a
-> million books. Notice the pattern in all four: the content is free, the
-> money is in judgment and structure on top. And none of them sells the
-> graded rebuild-from-memory loop. That open slot is the product.
+> human mock starting at a hundred and seventy-nine dollars, more if you
+> want an interviewer from a specific company, and claims fifty billion
+> dollars in job offers won by its users. Hello Interview bootstrapped to
+> over a hundred thousand engineers at roughly forty dollars a month.
+> NeetCode is one person running what he himself calls a ten-million-dollar
+> business. Alex Xu's books are the category's best-sellers and his
+> newsletter has a million readers. Notice the pattern in all four: the
+> content is free, the money is in judgment and structure on top. And none
+> of them sells the graded rebuild-from-memory loop. That open slot is the
+> product.
 >
 > How I reach them: the free book is the funnel. It gets posted, with my
 > name on it, where these people already are: r/ExperiencedDevs,
@@ -172,8 +176,9 @@ guided learning, a JEE-prep vertical in India), which is exactly why my
 moat is the verified corpus and the calibration data, not the chat.
 
 **"Why would anyone pay when ChatGPT is free?"**
-They already do: interviewing.io $179 a session, Hello Interview about $47
-a month, and mid-2026 Reddit is full of people splitting premium accounts.
+They already do: interviewing.io from $179 a session, Hello Interview about
+$40 a month, and mid-2026 Reddit is full of people splitting premium
+accounts.
 Nobody pays for explanation anymore; they pay for judgment against ground
 truth. ChatGPT is structurally bad at that: it's tuned to be agreeable, and
 DIY users publicly bomb real exams because of it.

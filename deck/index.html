@@ -118,6 +118,13 @@
   .dots { position: fixed; bottom: 2.4vmin; right: 3vmin; display: flex; gap: 1vmin; }
   .dots i { width: 1vmin; height: 1vmin; background: var(--line); }
   .dots i.on { background: var(--accent); }
+  .fsBtn {
+    position: fixed; bottom: 2vmin; left: 3vmin;
+    font-family: var(--font-mono); font-size: 1.7vmin; letter-spacing: .08em;
+    background: none; border: 1px solid var(--line-strong); color: var(--ink);
+    padding: .8vmin 1.6vmin; cursor: pointer;
+  }
+  .fsBtn:hover { border-color: var(--accent); color: var(--accent-ink); }
 </style>
 </head>
 <body>
@@ -189,10 +196,10 @@
     <div class="col">
       <h2>Proof the market pays, today</h2>
       <ul>
-        <li><strong>interviewing.io</strong>: $179 to $339 for one human mock. Sells out into waitlists.</li>
-        <li><strong>Hello Interview</strong>: ~$47/mo, bootstrapped, 100,000+ engineers served.</li>
-        <li><strong>NeetCode</strong>: one person, ~$10M a year.</li>
-        <li><strong>Alex Xu / ByteByteGo</strong>: ~1M books sold, 1M-reader newsletter.</li>
+        <li><strong>interviewing.io</strong>: one human mock starts at $179, more with company-specific interviewers. "$50B in job offers" won by its users, by its own count.</li>
+        <li><strong>Hello Interview</strong>: premium ₹3,199/mo (~$38, geo-priced), bootstrapped, "100,000+ engineers".</li>
+        <li><strong>NeetCode</strong>: one person. Pro at $119/yr; a self-described $10M+ business.</li>
+        <li><strong>Alex Xu / ByteByteGo</strong>: best-selling System Design Interview books, a 1,000,000-reader newsletter.</li>
       </ul>
       <p class="gap">Every winner: free content first, paid judgment on top. Nobody sells the graded rebuild-from-memory loop. That open slot is us.</p>
     </div>
@@ -240,6 +247,7 @@
 </section>
 
 <div class="dots"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+<button class="fsBtn" id="fs">⛶ fullscreen</button>
 
 <script>
   const slides = [...document.querySelectorAll(".slide")];
@@ -257,8 +265,21 @@
       const h = document.documentElement;
       h.dataset.theme = h.dataset.theme === "paper" ? "dark" : "paper";
     }
+    if (e.key === "f") toggleFs();
   });
-  addEventListener("click", e => go(cur + (e.clientX > innerWidth / 2 ? 1 : -1)));
+  addEventListener("click", e => {
+    if (e.target.closest(".fsBtn")) return;
+    go(cur + (e.clientX > innerWidth / 2 ? 1 : -1));
+  });
+  const fs = document.getElementById("fs");
+  function toggleFs() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  }
+  fs.addEventListener("click", toggleFs);
+  document.addEventListener("fullscreenchange", () => {
+    fs.textContent = document.fullscreenElement ? "⛶ exit" : "⛶ fullscreen";
+  });
 </script>
 </body>
 </html>
