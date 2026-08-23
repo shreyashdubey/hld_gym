@@ -183,6 +183,40 @@ Nobody pays for explanation anymore; they pay for judgment against ground
 truth. ChatGPT is structurally bad at that: it's tuned to be agreeable, and
 DIY users publicly bomb real exams because of it.
 
+**"Your moat can be built with AI. So what's the moat?"**
+Start by agreeing, it disarms the question: "Yes. AI can draft my content,
+and it drafted some of it. What AI cannot do is tell you whether it's
+right." Then the three things AI does not produce:
+
+1. **Verification.** In published studies of AI-generated exam questions,
+   expert reviewers found error rates from 1% to 60% depending on topic,
+   which is why the standard is 100% human review, and why AI drafts skew
+   easy while the hard, discriminating items stay human-written. The
+   economics say the same thing: drafting a question costs a few dollars,
+   a *verified* high-stakes question costs $1,500 to $2,500, and the gap is
+   entirely checking, not writing. AI collapsed the cost of writing. It did
+   not collapse the cost of being right. I sell being right.
+2. **Validation.** Anyone can prompt up a grader in an afternoon. Proving
+   the grader agrees with expert humans takes a bench of human-graded
+   transcripts and iteration; the literature's own finding is that LLM
+   judges are "reliable without being valid," consistent and wrong. My
+   grader ships with its agreement statistic, the way ELSA advertises
+   93.88% agreement with human raters. The number takes months to earn and
+   a prompt cannot fake it.
+3. **Outcome data.** Which predicted scores matched real interview results.
+   That only accumulates from real users over time, and no model can
+   generate it, because nobody reports their onsite result to a generator.
+
+Close with the precedent: "Chegg sold content: down 99%. UWorld sells
+verified practice: 90% of US med students. Both existed in the same AI era.
+The line between them is exactly the three things I just listed."
+
+If they push once more ("a funded team with an SME could still copy you"):
+concede that too, it's true of every seed-stage product, and name the
+actual defense: a compounding head start in a niche too small for a lab and
+too grubby for a big incumbent, plus the free book as owned distribution.
+Moats at this stage are speed and trust, not walls.
+
 **"Isn't this just a ChatGPT wrapper?"**
 The interviewer voice is the delivery; anyone can prompt that, and I say so
 on the page. The product is what a prompt can't be: 197 hand-verified
