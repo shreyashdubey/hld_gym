@@ -926,8 +926,16 @@ details[open] > summary { margin-bottom: 8px; }
 .btn.ghost { background: transparent; color: var(--accent-ink); }
 .btn.ghost:hover { background: var(--accent-soft); filter: none; }
 .btn:disabled { opacity: .4; cursor: default; }
-.ch-nav { display: flex; gap: 10px; justify-content: space-between; margin-top: 3.2em; flex-wrap: wrap; }
-.ch-nav a { max-width: 46%; }
+.ch-nav { margin-top: 3.2em; }
+.next-card {
+  display: block; text-decoration: none;
+  border: 1px solid var(--line); padding: 16px 20px;
+}
+.next-card:hover { border-color: var(--accent); background: var(--panel); }
+.nc-k { font-family: var(--font-mono); font-size: .68rem; letter-spacing: .1em; color: var(--ink-3); }
+.nc-t { display: block; margin-top: 5px; font-weight: 600; font-size: 1.05rem; color: var(--accent-ink); }
+.content .prev-link { display: inline-block; margin-top: 12px; font-size: .8rem; color: var(--ink-3); text-decoration: none; }
+.content .prev-link:hover { color: var(--ink); }
 
 /* ---------- home / dashboard ---------- */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0; margin: 24px 0; border: 1px solid var(--line); }
@@ -20509,13 +20517,18 @@ function renderChapter(id) {
     })));
   }
 
-  // prev/next
+  /* One obvious next action at the end: the next chapter as a full-width
+     card with its own read time; the way back demoted to a quiet line. */
   const i = CHAPTERS.indexOf(chById(id));
   const prev = CHAPTERS.slice(0, i).reverse().find(c2 => isReady(c2.id));
   const next = CHAPTERS.slice(i + 1).find(c2 => isReady(c2.id));
+  const nextMin = next ? Math.max(1, Math.round(
+    document.querySelector(`template[data-ch="${next.id}"]`).content.textContent.split(/\s+/).length / 220)) : 0;
   VIEW.querySelector('.ch-nav').innerHTML =
-    (prev ? `<a class="btn ghost" href="#ch/${prev.id}">← ${prev.title}</a>` : '<span></span>') +
-    (next ? `<a class="btn" href="#ch/${next.id}">${next.title} →</a>` : '');
+    (next ? `<a class="next-card" href="#ch/${next.id}">
+       <span class="nc-k">next up · ${next.part}.${next.idx} · ~${nextMin} min</span>
+       <span class="nc-t">${next.title} →</span></a>` : '') +
+    (prev ? `<a class="prev-link" href="#ch/${prev.id}">← back: ${prev.title}</a>` : '');
   /* A returning reader lands where they stopped, like a book keeps its
      bookmark — but only if they were meaningfully deep, so a quick revisit
      still opens at the title. */

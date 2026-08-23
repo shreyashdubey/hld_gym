@@ -1049,13 +1049,18 @@ function renderChapter(id) {
     })));
   }
 
-  // prev/next
+  /* One obvious next action at the end: the next chapter as a full-width
+     card with its own read time; the way back demoted to a quiet line. */
   const i = CHAPTERS.indexOf(chById(id));
   const prev = CHAPTERS.slice(0, i).reverse().find(c2 => isReady(c2.id));
   const next = CHAPTERS.slice(i + 1).find(c2 => isReady(c2.id));
+  const nextMin = next ? Math.max(1, Math.round(
+    document.querySelector(`template[data-ch="${next.id}"]`).content.textContent.split(/\s+/).length / 220)) : 0;
   VIEW.querySelector('.ch-nav').innerHTML =
-    (prev ? `<a class="btn ghost" href="#ch/${prev.id}">← ${prev.title}</a>` : '<span></span>') +
-    (next ? `<a class="btn" href="#ch/${next.id}">${next.title} →</a>` : '');
+    (next ? `<a class="next-card" href="#ch/${next.id}">
+       <span class="nc-k">next up · ${next.part}.${next.idx} · ~${nextMin} min</span>
+       <span class="nc-t">${next.title} →</span></a>` : '') +
+    (prev ? `<a class="prev-link" href="#ch/${prev.id}">← back: ${prev.title}</a>` : '');
   /* A returning reader lands where they stopped, like a book keeps its
      bookmark — but only if they were meaningfully deep, so a quick revisit
      still opens at the title. */
