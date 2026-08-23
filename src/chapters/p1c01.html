@@ -6,7 +6,7 @@
 
 <h2>Step one: turning a name into an address</h2>
 
-<p>You typed <code>hldgym.com</code>. That's a name for humans. The internet routes traffic by <strong>IP address</strong> — a number like <code>93.184.216.34</code> that identifies a machine. The translation service is <strong>DNS</strong> — the Domain Name System — the internet's phone book, except there is no single book. There's a chain of people who each know a little.</p>
+<p>You typed <code>hldgym.com</code>. That's a name for humans. The internet routes traffic by <strong>IP address</strong> — a number like <code>203.0.113.7</code> that identifies a machine. The translation service is <strong>DNS</strong> — the Domain Name System — the internet's phone book, except there is no single book. There's a chain of people who each know a little.</p>
 
 <p>First your browser checks its own memory: looked this up recently? Then the operating system checks its cache. If both are empty, your phone asks a <strong>recursive resolver</strong> — a server, usually run by your ISP or a public service like Google's <code>8.8.8.8</code> or Cloudflare's <code>1.1.1.1</code>, whose whole job is doing lookups for you. "Recursive" means it chases the answer down, however many hops it takes.</p>
 
@@ -14,37 +14,54 @@
 
 <figure class="diagram">
 <svg viewBox="0 0 720 310" role="img" aria-label="DNS resolution chain from browser through recursive resolver to root, TLD and authoritative servers">
-  <rect class="dg-node" x="15" y="130" width="120" height="56" rx="8"/>
-  <text class="dg-txt" x="30" y="153">Your phone</text>
-  <text class="dg-txt-s" x="22" y="172">browser + OS cache</text>
-  <rect class="dg-node-alt" x="225" y="130" width="175" height="56" rx="8"/>
-  <text class="dg-txt" x="240" y="153">Recursive resolver</text>
-  <text class="dg-txt-s" x="238" y="172">e.g. 8.8.8.8 — big cache</text>
-  <rect class="dg-node" x="520" y="25" width="185" height="52" rx="8"/>
-  <text class="dg-txt" x="545" y="48">Root servers</text>
-  <text class="dg-txt-s" x="532" y="66">know who runs .com</text>
-  <rect class="dg-node" x="520" y="134" width="185" height="52" rx="8"/>
-  <text class="dg-txt" x="535" y="157">.com TLD servers</text>
-  <text class="dg-txt-s" x="528" y="175">know hldgym.com's NS</text>
-  <rect class="dg-node" x="520" y="243" width="185" height="52" rx="8"/>
-  <text class="dg-txt" x="538" y="266">Authoritative NS</text>
-  <text class="dg-txt-s" x="534" y="284">holds the real record</text>
-  <line class="dg-edge" x1="135" y1="146" x2="222" y2="146" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="138" y="138">1. hldgym.com?</text>
-  <line class="dg-edge" x1="225" y1="176" x2="140" y2="176" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="130" y="198">8. 93.184.216.34</text>
-  <line class="dg-edge" x1="400" y1="140" x2="516" y2="60" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="408" y="98">2/3: "ask .com's servers"</text>
-  <line class="dg-edge" x1="400" y1="160" x2="516" y2="160" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="405" y="144">4/5: "ask</text>
-  <text class="dg-txt-s" x="405" y="158">hldgym's NS"</text>
-  <line class="dg-edge" x1="400" y1="180" x2="516" y2="260" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="418" y="232">6/7: IP + TTL</text>
-  <text class="dg-txt-s" x="225" y="215">cache hit? skip steps 2–7</text>
-  <text class="dg-txt-s" x="225" y="231">and answer in ~1 ms</text>
+  <g data-step="1" data-step-label="Cold cache. Your phone asks its one resolver, then waits — the resolver does all the climbing from here.">
+    <rect class="dg-node" x="15" y="130" width="120" height="56" rx="8"/>
+    <text class="dg-txt" x="30" y="153">Your phone</text>
+    <text class="dg-txt-s" x="22" y="172">browser + OS cache</text>
+    <rect class="dg-node-alt" x="225" y="130" width="175" height="56" rx="8"/>
+    <text class="dg-txt" x="240" y="153">Recursive resolver</text>
+    <text class="dg-txt-s" x="238" y="172">e.g. 8.8.8.8 — big cache</text>
+    <line class="dg-edge" x1="135" y1="146" x2="222" y2="146" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="138" y="138">1. hldgym.com?</text>
+  </g>
+  <g data-step="2" data-step-label="The root doesn't know hldgym.com. It knows who runs .com — one rung down the ladder.">
+    <rect class="dg-node" x="520" y="25" width="185" height="52" rx="8"/>
+    <text class="dg-txt" x="545" y="48">Root servers</text>
+    <text class="dg-txt-s" x="532" y="66">know who runs .com</text>
+    <line class="dg-edge" x1="400" y1="140" x2="516" y2="60" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="408" y="98">2/3: "ask .com's servers"</text>
+  </g>
+  <g data-step="3" data-step-label="The .com servers name the machines that hold hldgym.com's own records.">
+    <rect class="dg-node" x="520" y="134" width="185" height="52" rx="8"/>
+    <text class="dg-txt" x="535" y="157">.com TLD servers</text>
+    <text class="dg-txt-s" x="528" y="175">know hldgym.com's NS</text>
+    <line class="dg-edge" x1="400" y1="160" x2="516" y2="160" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="405" y="144">4/5: "ask</text>
+    <text class="dg-txt-s" x="405" y="158">hldgym's NS"</text>
+  </g>
+  <g data-step="4" data-step-label="The authoritative server finally answers: the IP, plus a TTL saying how long anyone may remember it.">
+    <rect class="dg-node" x="520" y="243" width="185" height="52" rx="8"/>
+    <text class="dg-txt" x="538" y="266">Authoritative NS</text>
+    <text class="dg-txt-s" x="534" y="284">holds the real record</text>
+    <line class="dg-edge" x1="400" y1="180" x2="516" y2="260" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="418" y="232">6/7: IP + TTL</text>
+  </g>
+  <g data-step="5" data-step-label="The answer comes home and every cache on the path keeps it. Next time, steps 2–7 never happen: ~1 ms.">
+    <line class="dg-edge" x1="225" y1="176" x2="140" y2="176" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="130" y="198">8. 203.0.113.7</text>
+    <text class="dg-txt-s" x="225" y="215">cache hit? skip steps 2–7</text>
+    <text class="dg-txt-s" x="225" y="231">and answer in ~1 ms</text>
+  </g>
 </svg>
 <figcaption>The full chain runs only on a cold cache. In real life the recursive resolver answers most queries straight from memory, and steps 2–7 never happen.</figcaption>
 </figure>
+
+<div class="feynman" data-key="p1c01-r1">
+<p class="fey-prompt">Scroll the diagram off the screen. Now, from memory: list every machine a cold lookup touches, in order, and what each one answers. The whiteboard will ask for this chain unprompted, so produce it unprompted.</p>
+<details class="fey-model"><summary>Check against the chain</summary>
+<p>Browser cache → OS cache → recursive resolver (the only machine your phone ever talks to) → root server ("ask .com") → .com TLD server ("ask hldgym.com's own name servers") → authoritative name server (the IP, plus a TTL) → back through the resolver, which caches it, to your phone. Warm cache: one hop, phone to resolver, ~1 ms.</p>
+</details>
+</div>
 
 <p>Every answer travels with a <strong>TTL</strong> — time to live — a number of seconds meaning "you may cache me this long before asking again." With billions of lookups a day, DNS only survives because nearly all of them are cache hits somewhere. And TTL is a genuine trade-off. A long TTL (24 hours) buys fast lookups and resilience — even if your DNS provider has a bad hour, cached answers keep working — but when you change the record, the old answer haunts caches for up to a day. A short TTL (60 seconds) lets you move fast but drains your safety cushion: caches empty quickly, and every resolver on Earth comes knocking again.</p>
 
@@ -65,11 +82,13 @@
 <p>On 21 October 2016, Twitter, Netflix, Reddit, Spotify and GitHub all "went down" for millions of people across the US East Coast — except none of them was down. Their servers were healthy. What broke was Dyn, the company running authoritative DNS for all of them. The Mirai botnet — roughly a hundred thousand hacked webcams and DVRs, conscripted through factory-default passwords — hammered Dyn's DNS servers in three waves through the day. A site whose name won't resolve might as well not exist. Users whose resolvers still held cached answers kept browsing — until the short TTLs expired minutes later and the caches drained. The lesson stuck industry-wide: big companies now run <em>two independent authoritative DNS providers</em> in parallel. When an interviewer asks "what are this design's single points of failure?", DNS is the one almost everyone forgets — because it fails so rarely that people forget it can.</p>
 </div>
 
-<p>One more piece of plumbing, because our next story needs it. DNS tells the world which <em>address</em> a name maps to. <strong>BGP</strong> — Border Gateway Protocol — is how the world knows which <em>wires</em> lead to that address: every network continuously announces "these IP blocks live here, route through me." DNS is the phone book; BGP is the road signs. Now watch a company take down both at once.</p>
+<p>One more piece of plumbing, because our next story needs it. DNS tells the world which <em>address</em> a name maps to. <strong>BGP</strong> — Border Gateway Protocol — is how the world knows which <em>wires</em> lead to that address: every network continuously announces "these IP blocks live here, route through me." DNS is the phone book; BGP is the road signs. And the road signs enable the internet's best magic trick, <strong>anycast</strong>: announce the same IP address from a hundred cities, and routing quietly delivers each user to the nearest copy. That is how the "13" root server addresses are really some two thousand anycast instances — many of them whole clusters — spread across the planet — the top of the DNS ladder never melts because it is everywhere at once — how <code>8.8.8.8</code> answers in a few milliseconds on every continent, and how serious DNS and CDN operators keep even the cold lookup a short trip. (Your phone may reach its resolver over DoH — DNS wrapped in HTTPS — these days; the chain behind it is unchanged.) Now watch a company take down both the phone book and the road signs at once.</p>
 
 <div class="box story"><div class="box-tag">War story — Facebook, October 2021: deleting yourself from the internet</div>
 <p>On 4 October 2021, Facebook, Instagram and WhatsApp vanished for about six hours. During routine maintenance, a command meant to audit capacity on Facebook's backbone — the private network linking its data centers — instead disconnected all of them; the audit tool that should have blocked the command had a bug. Then the design ate itself: Facebook's DNS servers were built to withdraw their BGP announcements whenever they couldn't reach the data centers, on the theory that a cut-off DNS server shouldn't advertise itself as healthy. The backbone died, so <em>every</em> DNS server concluded it was unhealthy, and all of them pulled themselves off the internet at once. Nothing could resolve <code>facebook.com</code> — including Facebook: internal tools ran on the same domains, so engineers couldn't fix it remotely and had to drive to data centers, slowed by degraded badge systems. Meanwhile every phone on Earth kept retrying lookups — Cloudflare's 1.1.1.1 resolver saw roughly thirty times its normal query load for Facebook's domains. Two senior lessons, gift-wrapped: automation that removes capacity on failed health checks needs a bounded blast radius (withdrawing <em>one</em> unhealthy site is failover; withdrawing <em>all</em> of them is self-destruction), and you need an out-of-band way into your systems that doesn't depend on them being up.</p>
 </div>
+
+<div class="checkpoint" data-item="p1c01-q02"></div>
 
 <p>Fine. Your phone holds an IP address. Note what it has <em>not</em> done yet: sent a single byte to your server.</p>
 
@@ -98,15 +117,21 @@
 <p>TCP is a phone call: you dial, hear "hello?", say "hi, it's me," and only then talk — and mid-conversation you can say "sorry, repeat that?" until you've heard everything, in order. UDP is dropping postcards into a mailbox: cheap, no setup, no confirmation, and if one goes missing you'll never know. Where the analogy breaks: postcards take days, which makes UDP sound slow — in reality both take milliseconds, and UDP is the <em>faster</em> one precisely because it skips the pleasantries. The difference is the promise, not the speed of the messenger.</p>
 </div>
 
+<div class="checkpoint" data-item="p1c01-q04"></div>
+
 <p>Handshake done: you have a reliable line. One problem — every router, ISP, and coffee-shop Wi-Fi box along the path can read the whole conversation, and could quietly rewrite it.</p>
 
 <h2>Step three: the whisper — TLS, and the price of privacy</h2>
 
 <p><strong>TLS</strong> (Transport Layer Security — the S in HTTPS) fixes two separate problems; keep them separate in your head. First, <strong>encryption</strong>: the conversation is scrambled so nobody along the path can read it. Second — the part people forget — <strong>identity</strong>: how do you know the machine answering is actually hldgym, and not the coffee-shop router impersonating it? The server presents a <strong>certificate</strong> — "this public key belongs to hldgym.com" — digitally signed by a <strong>certificate authority</strong>, one of a small set of organizations your browser already trusts. Encryption without identity would just be a beautifully private conversation with an imposter.</p>
 
-<p>Mechanics, one level deep: the two sides use slow asymmetric cryptography (public/private key math) to agree on a shared secret, then switch to fast symmetric encryption for the actual data. The negotiation costs round trips: TLS 1.2 needed two extra; <strong>TLS 1.3 got it to one</strong>, with session resumption for repeat visitors — even a "0-RTT" mode that sends the first request alongside the handshake.</p>
+<p>Mechanics, one level deep: the two sides use slow asymmetric cryptography (public/private key math) to agree on a shared secret, then switch to fast symmetric encryption for the actual data. The negotiation costs round trips: TLS 1.2 needed two extra; <strong>TLS 1.3 got it to one</strong>, with session resumption for repeat visitors — even a "0-RTT" mode that sends the first request alongside the handshake. But 0-RTT carries a price the deleted trip used to pay: that first flight can be captured and replayed by someone on the path, so servers only accept requests in it that are safe to receive twice. This chapter opened on Bob Braden fighting to delete this very round trip in 1994 — T/TCP died because it dropped the proof the trip was buying. Every scheme that has deleted it since, from TCP Fast Open's cookie to 0-RTT's replay-safe-only rule, has had to buy that proof back some other way. The trip was never waste. It was evidence.</p>
 
-<p>Now total the bill for a Sydney user's first request, at ~200 ms per round trip: DNS (cold) ≈ one trip, TCP = one, TLS 1.3 = one, then the HTTP request itself = one more. Four round trips ≈ 800 ms before the first response byte — for a server whose own dashboards show a 50 ms response. A real page then fetches dozens of images and scripts on top. That is where the missing seconds go, and no server optimization will find them, because they were never on the server.</p>
+<p>Now total the bill for a Sydney user's first request, at ~200 ms per round trip: DNS (cold) ≈ one trip to wherever the authoritative servers sit, TCP = one, TLS 1.3 = one, then the HTTP request itself = one more. Four round trips ≈ 800 ms before the first response byte — for a server whose own dashboards show a 50 ms response. A real page then fetches dozens of images and scripts on top. That is where the missing seconds go, and no server optimization will find them, because they were never on the server. One vocabulary note, because dashboards speak it: the median request (<strong>p50</strong>) rarely pays this bill — most visitors are warm somewhere. The Sydney first-timer lives out at <strong>p99</strong>, the latency your slowest 1% of requests exceed. Averages hide oceans; percentiles show them.</p>
+
+<p>And the bill so far prices only the <em>first byte</em>. TCP does not trust a brand-new connection with full speed: it starts with about ten packets in flight — roughly 14 KB — and doubles the allowance each round trip as acknowledgements come back. This is <strong>slow start</strong>, and it means a 1 MB page costs five or six <em>more</em> round trips after every handshake is done. It is the second thing keep-alive buys: a warm connection has already grown its sending window. It is also why performance teams fight to fit the first meaningful paint into the first ~14 KB — those bytes arrive a full trip ahead of the rest. (How a sender should slow down again on loss — loss-based CUBIC versus model-based BBR — is a live argument; the cautious start is not.)</p>
+
+<div class="netcheck"></div>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 400" role="img" aria-label="Ladder diagram of TCP, TLS and HTTP round trips between a client in Sydney and a server in Virginia">
@@ -114,37 +139,59 @@
   <text class="dg-txt" x="455" y="28">Server (Virginia)</text>
   <line class="dg-edge" x1="200" y1="40" x2="200" y2="320"/>
   <line class="dg-edge" x1="520" y1="40" x2="520" y2="320"/>
-  <rect class="dg-zone" x="140" y="55" width="440" height="80" rx="6"/>
-  <line class="dg-edge" x1="200" y1="68" x2="516" y2="90" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="340" y="70">SYN</text>
-  <line class="dg-edge" x1="520" y1="102" x2="204" y2="124" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="325" y="105">SYN-ACK</text>
-  <text class="dg-txt" x="25" y="90">TCP</text>
-  <text class="dg-txt-s" x="12" y="108">1 round trip</text>
-  <text class="dg-txt-s" x="595" y="130">t ≈ 200 ms</text>
-  <rect class="dg-zone" x="140" y="148" width="440" height="80" rx="6"/>
-  <line class="dg-edge" x1="200" y1="160" x2="516" y2="182" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="290" y="162">TLS ClientHello</text>
-  <line class="dg-edge" x1="520" y1="194" x2="204" y2="216" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="315" y="198">certificate + keys</text>
-  <text class="dg-txt" x="25" y="183">TLS 1.3</text>
-  <text class="dg-txt-s" x="12" y="201">1 round trip</text>
-  <text class="dg-txt-s" x="595" y="222">t ≈ 400 ms</text>
-  <rect class="dg-zone" x="140" y="240" width="440" height="80" rx="6"/>
-  <line class="dg-edge" x1="200" y1="252" x2="516" y2="274" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="330" y="254">GET /feed</text>
-  <line class="dg-edge" x1="520" y1="286" x2="204" y2="308" marker-end="url(#arrow)"/>
-  <text class="dg-txt-s" x="305" y="290">200 OK + body</text>
-  <text class="dg-txt" x="25" y="275">HTTP</text>
-  <text class="dg-txt-s" x="12" y="293">1 round trip</text>
-  <text class="dg-txt-s" x="595" y="314">t ≈ 600 ms</text>
-  <text class="dg-txt-s" x="140" y="350">First response byte after ~3 round trips ≈ 600 ms at 200 ms RTT.</text>
-  <text class="dg-txt-s" x="140" y="368">A cold DNS lookup adds roughly one more round trip before any of this.</text>
+  <g data-step="1" data-step-label="One round trip buys a reliable line. t ≈ 200 ms, and not one byte of yours has moved yet.">
+    <rect class="dg-zone" x="140" y="55" width="440" height="80" rx="6"/>
+    <line class="dg-edge" x1="200" y1="68" x2="516" y2="90" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="340" y="70">SYN</text>
+    <line class="dg-edge" x1="520" y1="102" x2="204" y2="124" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="325" y="105">SYN-ACK</text>
+    <text class="dg-txt" x="25" y="90">TCP</text>
+    <text class="dg-txt-s" x="12" y="108">1 round trip</text>
+    <text class="dg-txt-s" x="595" y="130">t ≈ 200 ms</text>
+  </g>
+  <g data-step="2" data-step-label="One more trip proves who is answering and encrypts the line. Running bill: ≈ 400 ms.">
+    <rect class="dg-zone" x="140" y="148" width="440" height="80" rx="6"/>
+    <line class="dg-edge" x1="200" y1="160" x2="516" y2="182" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="290" y="162">TLS ClientHello</text>
+    <line class="dg-edge" x1="520" y1="194" x2="204" y2="216" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="315" y="198">certificate + keys</text>
+    <text class="dg-txt" x="25" y="183">TLS 1.3</text>
+    <text class="dg-txt-s" x="12" y="201">1 round trip</text>
+    <text class="dg-txt-s" x="595" y="222">t ≈ 400 ms</text>
+  </g>
+  <g data-step="3" data-step-label="Only now does the question travel. First byte ≈ 600 ms — and a cold DNS lookup added ~200 ms before any of this.">
+    <rect class="dg-zone" x="140" y="240" width="440" height="80" rx="6"/>
+    <line class="dg-edge" x1="200" y1="252" x2="516" y2="274" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="330" y="254">GET /feed</text>
+    <line class="dg-edge" x1="520" y1="286" x2="204" y2="308" marker-end="url(#arrow)"/>
+    <text class="dg-txt-s" x="305" y="290">200 OK + body</text>
+    <text class="dg-txt" x="25" y="275">HTTP</text>
+    <text class="dg-txt-s" x="12" y="293">1 round trip</text>
+    <text class="dg-txt-s" x="595" y="314">t ≈ 600 ms</text>
+    <text class="dg-txt-s" x="140" y="350">First response byte after ~3 round trips ≈ 600 ms at 200 ms RTT.</text>
+    <text class="dg-txt-s" x="140" y="368">A cold DNS lookup adds roughly one more round trip before any of this.</text>
+  </g>
+  <g data-step="4" data-step-label="Now shrink the trip instead of the count: the same three round trips from an edge 10 ms away cost 30 ms. Fewer trips, or shorter trips — nothing else exists.">
+    <text class="dg-txt-s" x="140" y="388">Same three trips at 10 ms RTT (a nearby edge): first byte ≈ 30 ms. That is the entire CDN argument.</text>
+  </g>
 </svg>
 <figcaption>Why the first request is slow: three stacked round trips before a single response byte — none of them spent in your code. This math is the reason CDNs, keep-alive and QUIC exist.</figcaption>
 </figure>
 
+<div class="feynman" data-key="p1c01-r2">
+<p class="fey-prompt">Diagram off the screen. Reconstruct the first 600 ms from memory: three round trips, what crosses the ocean in each, and the running clock. Say it out loud at interview pace before you write it.</p>
+<details class="fey-model"><summary>Check the sequence</summary>
+<p>Trip one, TCP: SYN out, SYN-ACK back — a reliable line at ~200 ms. Trip two, TLS 1.3: ClientHello out; certificate and keys back — identity plus encryption at ~400 ms. Trip three, HTTP: GET out, 200 OK back — first byte at ~600 ms. A cold DNS lookup paid a trip before all of it, and slow start rations the bytes after it.</p>
+</details>
+</div>
+
 <p>This one diagram quietly explains a family of architecture decisions. Why do CDNs put servers in every city? To shrink the RTT that gets multiplied. Why do load balancers "terminate TLS at the edge"? To do the expensive handshakes near the user, then reuse warm connections to the backend. Why did Google invent QUIC? To collapse the number of trips. Different tools, one enemy.</p>
+
+<div class="box crux"><div class="box-tag">The kernel</div>
+<p>Time to first byte = (setup trips) × (round-trip time). Physics prices the trip; software only picks the count. Run it forward and this chapter falls out. Delete trips: keep-alive, connection pools, TLS 1.3, session resumption, QUIC's merged handshake. Shorten trips: CDNs, edge TLS termination. Slow start stretches the rule past the first byte — the first ~100 KB is still trip-priced, which is why a warm connection wins twice. And know where it breaks: once the window is open, a big transfer is bandwidth-bound, and moving a 2 GB file closer barely helps. At the whiteboard, say the kernel first and derive the tool from it. Reciting tools without the kernel is the junior tell.</p>
+</div>
+
+<div class="checkpoint" data-item="p1c01-q10"></div>
 
 <h2>The conversation itself: HTTP</h2>
 
@@ -161,7 +208,7 @@ Cache-Control: max-age=60
 
 {"items": ["…"]}</code></pre>
 
-<p>Status codes come in families, and the families matter more than the members: <strong>2xx</strong> success; <strong>3xx</strong> "look elsewhere"; <strong>4xx</strong> "your request is wrong" — the client's fault; <strong>5xx</strong> "I failed" — the server's fault. The split drives real behavior: retrying a 4xx is pointless (the same wrong request fails the same way), while a 5xx might be a passing overload, which is why retry logic keys off it. The headers are quiet workhorses too: <code>Cache-Control</code> powers every caching layer you'll meet later in this book, <code>Cookie</code> and <code>Authorization</code> carry identity. When we say "the CDN respects your caching policy," we mean it reads these headers.</p>
+<p>Status codes come in families, and the families matter more than the members: <strong>2xx</strong> success; <strong>3xx</strong> "look elsewhere"; <strong>4xx</strong> "your request is wrong" — the client's fault; <strong>5xx</strong> "I failed" — the server's fault. The split drives real behavior: a 4xx usually shouldn't be retried — the same wrong request fails the same way — while a 5xx might be a passing overload. But learn the two exceptions, because the senior questions live there. <strong>429 Too Many Requests</strong> is a 4xx that exists precisely to be retried: later, more politely, honoring its <code>Retry-After</code>. And retrying a 5xx blindly can be worse than not retrying at all — a 500 on "transfer ₹50,000" does not tell you the transfer <em>didn't happen</em>; the write may have committed and only the response died, and a naive retry pays twice. A retry is only safe when the request is <strong>idempotent</strong> — built so that running it twice leaves the world exactly as if it ran once. That word gets a whole chapter later in this book; it decides who may retry what. The headers are quiet workhorses too: <code>Cache-Control</code> powers every caching layer you'll meet later in this book, <code>Cookie</code> and <code>Authorization</code> carry identity. When we say "the CDN respects your caching policy," we mean it reads these headers.</p>
 
 <h2>HTTP/1.1, /2, /3: three fixes for the same traffic jam</h2>
 
@@ -169,38 +216,44 @@ Cache-Control: max-age=60
 
 <p>But HTTP/1.1 kept a painful rule: <strong>one request at a time per connection</strong>. A modern page needs dozens of resources, so everything queued behind everything else — <strong>head-of-line blocking</strong>: the guy at the front of the line holds up everyone behind him. Browsers coped with a hack: up to six parallel connections per site. Six lines instead of one.</p>
 
-<p><strong>HTTP/2</strong> (2015) fixed it properly — at one layer. One connection carries many <strong>streams</strong>, chunks interleaved, so a big slow download no longer blocks a small urgent one (<strong>multiplexing</strong>, plus header compression). But a flaw hid one layer down. TCP promises to deliver bytes <em>in order</em> — it has no idea streams exist. When one packet is lost, TCP holds back <em>everything</em> after it until the retransmission arrives, including bytes of unrelated streams. On a lossy network — hello, mobile — HTTP/2 can be <em>slower</em> than HTTP/1.1, whose six separate connections at least failed independently. The queue vanished from HTTP and reincarnated inside TCP.</p>
+<p><strong>HTTP/2</strong> (2015) fixed it properly — at one layer. One connection carries many <strong>streams</strong>, chunks interleaved, so a big slow download no longer blocks a small urgent one (<strong>multiplexing</strong>, plus header compression). But a flaw hid one layer down. TCP promises to deliver bytes <em>in order</em> — it has no idea streams exist. When one packet is lost, TCP holds back <em>everything</em> after it until the retransmission arrives, including bytes of unrelated streams. On a lossy network — hello, mobile — HTTP/2 can be <em>slower</em> than HTTP/1.1, whose six separate connections at least failed independently. The queue vanished from HTTP and reincarnated inside TCP. Name the law once, because this book will keep meeting it: <strong>any promise of in-order delivery is a queue, and a queue has a head</strong> — whoever holds it blocks everyone behind. TCP promised order across everything on the connection; that promise <em>is</em> the jam.</p>
 
-<p>How do you fix a queue that lives inside TCP? You can't patch TCP — it's baked into thirty years of operating systems and network boxes. You go around it. <strong>HTTP/3</strong> runs on <strong>QUIC</strong>, a transport Google built <em>on top of UDP</em> — using UDP as raw, promise-free material and implementing reliability, ordering and congestion control itself, <em>per stream</em>. Lose a packet from stream B, and only B waits; A and C keep flowing. QUIC also bakes TLS into its handshake — setup and encryption in one round trip, 0-RTT on resumption — and identifies connections by ID instead of by network addresses, so your download survives walking out of Wi-Fi range onto mobile data. The shape to remember: HTTP/2 removed the queue at the application layer; HTTP/3 removed it at the transport layer.</p>
+<p>How do you fix a queue that lives inside TCP? You can't patch TCP — it's baked into thirty years of operating systems and network boxes. The freezing even has a name: <strong>ossification</strong>. Middleboxes — NATs, firewalls, traffic "accelerators" — drop protocols they don't recognize and rewrite the TCP fields they do, so TCP can no longer evolve and nothing new can deploy beside it. SCTP, a genuinely better transport standardized back in 2000, never made it onto the open internet for exactly this reason — it lives on inside telecom cores, and tunneled over UDP inside WebRTC, but natively the middleboxes starved it. So you go around it. <strong>HTTP/3</strong> runs on <strong>QUIC</strong>, a transport Google built <em>on top of UDP</em> — the only other thing every middlebox passes — using it as raw, promise-free material and implementing reliability, ordering and congestion control itself, <em>per stream</em>. Lose a packet from stream B, and only B waits; A and C keep flowing. QUIC also bakes TLS into its handshake — setup and encryption in one round trip, 0-RTT on resumption, carrying the same replay rule — and encrypts almost all of its own headers, so no middlebox can ever grow dependencies on them: armor against the next thirty years of ossification, not just privacy. It identifies connections by ID instead of by network addresses, so your download survives walking out of Wi-Fi range onto mobile data; and it lives in userspace, so fixes ship in browser updates instead of OS decades. The shape to remember: HTTP/2 removed the queue at the application layer; HTTP/3 removed it at the transport layer.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 300" role="img" aria-label="Head-of-line blocking in HTTP/2 over TCP compared with independent streams in HTTP/3 over QUIC">
-  <text class="dg-txt" x="15" y="30">HTTP/2: all streams share one TCP pipe</text>
-  <rect class="dg-zone" x="15" y="45" width="690" height="80" rx="6"/>
-  <text class="dg-txt-s" x="22" y="69">A</text>
-  <line class="dg-edge" x1="38" y1="65" x2="378" y2="65"/>
-  <line class="dg-bad" x1="392" y1="65" x2="690" y2="65" stroke-dasharray="5 5"/>
-  <text class="dg-txt-s" x="22" y="89">B</text>
-  <line class="dg-edge" x1="38" y1="85" x2="378" y2="85"/>
-  <path class="dg-bad" d="M374 79 l12 12 m0 -12 l-12 12"/>
-  <line class="dg-bad" x1="392" y1="85" x2="690" y2="85" stroke-dasharray="5 5"/>
-  <text class="dg-txt-s" x="22" y="109">C</text>
-  <line class="dg-edge" x1="38" y1="105" x2="378" y2="105"/>
-  <line class="dg-bad" x1="392" y1="105" x2="690" y2="105" stroke-dasharray="5 5"/>
-  <text class="dg-txt-s" x="330" y="145">one lost packet → A, B and C all wait</text>
-  <text class="dg-txt" x="15" y="180">HTTP/3 (QUIC): independent streams over UDP</text>
-  <text class="dg-txt-s" x="22" y="209">A</text>
-  <line class="dg-good" x1="38" y1="205" x2="690" y2="205"/>
-  <text class="dg-txt-s" x="22" y="234">B</text>
-  <line class="dg-edge" x1="38" y1="230" x2="378" y2="230"/>
-  <path class="dg-bad" d="M374 224 l12 12 m0 -12 l-12 12"/>
-  <line class="dg-bad" x1="392" y1="230" x2="690" y2="230" stroke-dasharray="5 5"/>
-  <text class="dg-txt-s" x="22" y="259">C</text>
-  <line class="dg-good" x1="38" y1="255" x2="690" y2="255"/>
-  <text class="dg-txt-s" x="330" y="285">loss stalls only stream B — A and C keep flowing</text>
+  <g data-step="1" data-step-label="One TCP pipe, one ordering promise: a single lost packet stalls A, B and C alike — the head of the queue lives inside the transport.">
+    <text class="dg-txt" x="15" y="30">HTTP/2: all streams share one TCP pipe</text>
+    <rect class="dg-zone" x="15" y="45" width="690" height="80" rx="6"/>
+    <text class="dg-txt-s" x="22" y="69">A</text>
+    <line class="dg-edge" x1="38" y1="65" x2="378" y2="65"/>
+    <line class="dg-bad" x1="392" y1="65" x2="690" y2="65" stroke-dasharray="5 5"/>
+    <text class="dg-txt-s" x="22" y="89">B</text>
+    <line class="dg-edge" x1="38" y1="85" x2="378" y2="85"/>
+    <path class="dg-bad" d="M374 79 l12 12 m0 -12 l-12 12"/>
+    <line class="dg-bad" x1="392" y1="85" x2="690" y2="85" stroke-dasharray="5 5"/>
+    <text class="dg-txt-s" x="22" y="109">C</text>
+    <line class="dg-edge" x1="38" y1="105" x2="378" y2="105"/>
+    <line class="dg-bad" x1="392" y1="105" x2="690" y2="105" stroke-dasharray="5 5"/>
+    <text class="dg-txt-s" x="330" y="145">one lost packet → A, B and C all wait</text>
+  </g>
+  <g data-step="2" data-step-label="QUIC keeps a promise per stream: the same hole stalls only B. The promise shrank, so the queue shrank with it.">
+    <text class="dg-txt" x="15" y="180">HTTP/3 (QUIC): independent streams over UDP</text>
+    <text class="dg-txt-s" x="22" y="209">A</text>
+    <line class="dg-good" x1="38" y1="205" x2="690" y2="205"/>
+    <text class="dg-txt-s" x="22" y="234">B</text>
+    <line class="dg-edge" x1="38" y1="230" x2="378" y2="230"/>
+    <path class="dg-bad" d="M374 224 l12 12 m0 -12 l-12 12"/>
+    <line class="dg-bad" x1="392" y1="230" x2="690" y2="230" stroke-dasharray="5 5"/>
+    <text class="dg-txt-s" x="22" y="259">C</text>
+    <line class="dg-good" x1="38" y1="255" x2="690" y2="255"/>
+    <text class="dg-txt-s" x="330" y="285">loss stalls only stream B — A and C keep flowing</text>
+  </g>
 </svg>
 <figcaption>The same packet loss, two worlds apart. TCP delivers bytes in strict order, so one hole stalls every HTTP/2 stream. QUIC tracks each stream separately, so a hole in B never touches A or C.</figcaption>
 </figure>
+
+<div class="checkpoint" data-item="p1c01-q16" data-note="Natural place to end a session. The second half — how servers push news to you — starts fresh from here."></div>
 
 <p>Everything so far shares one silent assumption: the client speaks first. But suppose your app is a chat app, and somewhere in Virginia a message has just arrived <em>for</em> your user. The server has news, and HTTP has no way for a server to call you. So… how does your phone ever find out?</p>
 
@@ -214,7 +267,7 @@ Cache-Control: max-age=60
 
 <p><strong>Server-Sent Events (SSE)</strong>: stop pretending. The client makes one request, and the server sends a response that <em>never ends</em> — a stream of small events over one held-open connection. One-directional (server → client), built into browsers with automatic reconnection, and because it's ordinary HTTP, load balancers, proxies and CDNs handle it without ceremony. The quietly correct answer for feeds, notifications, dashboards, live scores — and it's how LLM chat interfaces stream their token-by-token replies.</p>
 
-<p><strong>WebSockets</strong>: the full upgrade. The connection starts as an HTTP request with an "upgrade me" header, then sheds HTTP and becomes a raw two-way pipe — <strong>full duplex</strong>: both sides send anything, anytime, with a few bytes of overhead per message. The tool for genuinely bidirectional, low-latency traffic: chat, multiplayer games, collaborative editors, trading. The price: you now run a <em>stateful</em> service. Each server holds thousands of long-lived connections, so load balancers must route sensibly, deploys must drain connections gracefully, a momentary blip triggers a reconnect stampede, and heartbeats and re-authentication are yours to build. Stateless HTTP forgives operational sloppiness; WebSockets do not.</p>
+<p><strong>WebSockets</strong>: the full upgrade. The connection starts as an HTTP request with an "upgrade me" header, then sheds HTTP and becomes a raw two-way pipe — <strong>full duplex</strong>: both sides send anything, anytime, with a few bytes of overhead per message. The tool for genuinely bidirectional, low-latency traffic: chat, multiplayer games, collaborative editors, trading. The price: you now run a <em>stateful</em> service. Each server holds thousands of long-lived connections — an idle one costs roughly 50 KB of kernel buffers and application state, so ~100K connections per untuned box is a sane planning number — so load balancers must route sensibly, deploys must drain connections gracefully, a momentary blip triggers a reconnect stampede, and heartbeats and re-authentication are yours to build. Stateless HTTP forgives operational sloppiness; WebSockets do not.</p>
 
 <figure class="diagram">
 <svg viewBox="0 0 720 330" role="img" aria-label="Timelines comparing short polling, long polling, server-sent events and WebSockets">
@@ -297,30 +350,47 @@ Cache-Control: max-age=60
 <p>WhatsApp's product <em>is</em> a persistent connection. Every phone running the app holds one always-on TCP connection to a WhatsApp server — no polling, ever — so a message is pushed the instant it arrives, without burning battery on "anything new?" requests. The legendary part is the density. The early team ran a heavily tuned stack — Erlang on FreeBSD, built around the ejabberd messaging server — and in 2012 published benchmarks showing a <em>single server</em> holding over two million concurrent TCP connections. Erlang made that sane: millions of isolated, lightweight processes at a few kilobytes each, so "one process per connected phone" is a design, not a fantasy. The efficiency shaped the company — when Facebook paid $19 billion for WhatsApp in 2014, roughly 450 million users were served by about fifty employees, around thirty of them engineers. The senior lesson: in persistent-connection systems, <strong>concurrent connections — not requests per second — are the scaling axis</strong>. When you say "WebSockets" in an interview, beat the interviewer to the follow-up: how many connections per box, what they cost in memory, and what happens when a deploy or a blip disconnects a million phones at once.</p>
 </div>
 
+<p>The story hides one more senior probe, so take it with you: a held connection only solves the <em>last</em> hop. Your friend's "send" lands on any stateless API server — but your socket lives on connection server 47 of 400. How does the message find it? Every persistent-connection system needs a routing tier: a <strong>session registry</strong> (which server holds this user's socket) or a <strong>pub/sub bus</strong> that every connection server subscribes to. WhatsApp's Erlang registry — one process per phone, addressable by name — <em>is</em> that answer; "one socket per phone" was never the whole design. When you say "WebSockets" at a whiteboard, the next question is "and how does a message find the socket?" — now you have the shape. The full design is a Part 3 chapter.</p>
+
+<p>And connect the stampede to this chapter's kernel: every held connection is a handshake you paid once and have been amortizing ever since. A 30-second blip presents the whole invoice at once — millions of phones re-doing TCP, TLS and authentication in the same minute, against servers sized for the cheap steady state. Steady state is easy; the transitions are the design.</p>
+
+<div class="checkpoint" data-item="p1c01-q11"></div>
+
 <h2>Inside the walls: REST vs gRPC</h2>
 
 <p>One boundary left. Everything above was the public internet: browsers, oceans, 200 ms round trips. Behind your load balancer is a different world — your services talking to each other at 0.5 ms RTT, but at brutal volume, because one user request commonly fans out into dozens of internal calls.</p>
 
 <p>At the public edge, <strong>REST</strong> — resource-shaped URLs, HTTP verbs, JSON bodies — earns its throne. Every language, tool and intern speaks it; you can debug it by reading it; HTTP caching understands it. But between internal services, JSON's charms invert: it's text, so it's bulky; parsing burns CPU; and nothing checks that the <code>user</code> object one service sends still matches what the next expects — you find out at runtime, in production.</p>
 
-<p><strong>gRPC</strong> is the internal-traffic specialist. You define every call and message in a schema file (<strong>Protocol Buffers</strong>, or protobuf), and code generation produces typed client and server stubs in each language — calling another service looks like an ordinary typed function call, and mismatches fail at compile time, not at 2 am. On the wire, protobuf is compact binary — typically a few times smaller than the same JSON, and much cheaper to parse. Underneath, gRPC rides HTTP/2: warm, multiplexed, long-lived connections. It streams in both directions and has <strong>deadlines</strong> built in — each call carries its own time budget, so a slow downstream fails fast instead of piling up waiting callers. At tens of thousands of internal calls per second, the saved serialization and connection overhead is real CPU and real money.</p>
+<p><strong>gRPC</strong> is the internal-traffic specialist. You define every call and message in a schema file (<strong>Protocol Buffers</strong>, or protobuf), and code generation produces typed client and server stubs in each language — calling another service looks like an ordinary typed function call, and misuse fails at build time — <em>within your own binary</em>. Across services the guarantee is different, and knowing the difference is what reads senior: two services are never compiled together, because every rolling deploy has version N and N+1 talking for hours. Protobuf's real cross-service contract is wire-level evolution discipline — fields are identified by number, old readers skip fields they don't know, and you may add fields freely but never renumber one, never change its type, never reuse a deleted number. What pages you at 2 am with protobuf is a reused field number silently decoding as garbage — quieter than JSON's loud parse error, which is why <code>.proto</code> files get code-review scrutiny like public APIs. On the wire, protobuf is compact binary — typically a few times smaller than the same JSON, and much cheaper to parse. Underneath, gRPC rides HTTP/2: warm, multiplexed, long-lived connections. It streams in both directions and has <strong>deadlines</strong> built in — each call carries its own time budget, so a slow downstream fails fast instead of piling up waiting callers. At tens of thousands of internal calls per second, the saved serialization and connection overhead is real CPU and real money.</p>
 
 <p>The costs, honestly: browsers can't speak native gRPC (you need a proxy layer like gRPC-Web, which is why it stays behind the edge), binary payloads can't be debugged by squinting at curl output, and schemas demand discipline. So the pattern interviewers expect: <strong>REST at the public edge; gRPC for chatty internal paths</strong> — with the judgment call that plenty of successful companies run JSON internally forever, because gRPC's payoff arrives with call volume and team scale, not on day one.</p>
 
 <div class="box lens"><div class="box-tag">At the whiteboard</div>
-<p>This material surfaces constantly at senior loops — rarely as its own question, always as a depth probe inside a bigger design. A passing answer prices the network instead of hand-waving at it: it counts round trips, names what's cached where, and picks real-time transports by direction and latency with the operational cost said out loud. Probes to expect verbatim:</p>
+<p>This material surfaces constantly at senior loops — rarely as its own question, always as a depth probe inside a bigger design. A passing answer prices the network instead of hand-waving at it: it counts round trips, names what's cached where, and picks real-time transports by direction and latency with the operational cost said out loud. But the level is decided on the <em>follow-ups</em>, so practice the ladder, not just the first rung:</p>
 <ul>
-<li>"Walk me through what happens when you type a URL and hit Enter" — grading whether you know where the milliseconds go, not whether you can recite steps.</li>
-<li>"Users in Australia see 2-second latency but the servers are fast — why, and what do you do?" — they want RTT × handshake math, then edge termination and connection reuse, not server tuning.</li>
-<li>"For this chat feature: polling or WebSockets? What breaks at 10 million concurrent connections?" — they want a committed choice, connection-per-server arithmetic, and the reconnect-storm failure mode raised before they ask.</li>
-<li>"Why gRPC between your services but REST outside?" — they want the payload/CPU/typing argument and the honest admission of when it isn't worth it.</li>
+<li>"Walk me through what happens when you type a URL and hit Enter." First move: count the trips and price them; never just recite steps.
+<details><summary>Then they push</summary><p>"Which of those steps disappear on the second request — and who remembered what?" Browser DNS cache, resolver cache, the kept-alive connection, the TLS session ticket, the already-grown congestion window. "And which single change removes the most trips for a first-time visitor?" Edge termination — the handshakes happen 10 ms away instead of 200.</p></details></li>
+<li>"Users in Australia see 2-second latency but the servers are fast — why, and what do you do?" First move: RTT × handshake math, then edge termination and connection reuse, not server tuning.
+<details><summary>Then they push</summary><p>"You shipped the edge. p50 is fixed, but mobile p99 is still 1.8 s — now what?" Packet loss on cellular plus TCP head-of-line blocking under HTTP/2; the direction of the fix is HTTP/3. "How do you prove that before migrating two production apps?" Measure from the client, split by geography and network type — the missing time was never on the server, so the server's dashboards cannot see it.</p></details></li>
+<li>"For this chat feature: polling or WebSockets?" First move: a committed choice by direction and latency, with the operational cost in the same breath.
+<details><summary>Then they push</summary><p>"10 million concurrent — what does the fleet look like?" ~50 KB per idle connection, ~100K per box, so ~100 servers — and capacity planned for the reconnect storm, not the steady state. "A message arrives for a user — how does it find their socket?" A session registry or a pub/sub tier across the connection servers. Raising the stampede and the routing tier before they ask is the senior signal.</p></details></li>
+<li>"Why gRPC between your services but REST outside?" First move: the payload/CPU/typing argument at internal call volume, plus the honest admission of when it isn't worth it.
+<details><summary>Then they push</summary><p>"What actually breaks when you evolve a .proto?" Nothing at compile time across services — wire compatibility is the contract: numbered fields, additive changes, never reuse a number. "Your three-person startup's CTO wants gRPC everywhere, including the public API — talk them down." Browsers need a proxy layer, debuggability drops, and the payoff arrives with a call volume you don't have. That restraint is itself the senior answer.</p></details></li>
 </ul>
 </div>
 
 <div class="feynman" data-key="p1c01-f1">
 <p class="fey-prompt">Explain to a junior engineer, in four or five sentences, why the very first HTTPS request to a website is slow but the second one is fast.</p>
 <details class="fey-model"><summary>Compare with a model answer</summary>
-<p>Before the first request can even be sent, your device does three rounds of setup: it looks up the site's IP address with DNS, does the TCP handshake to establish a reliable connection, and does the TLS handshake to encrypt it and verify the site's identity. Each of those is at least one full round trip to a server that might be thousands of kilometers away, so at 200 ms per trip you've spent 600–800 ms before the server sees your request at all. The second request skips almost everything: the DNS answer is cached on your device, and the TCP+TLS connection is kept alive and reused, so your request rides an already-open, already-encrypted line. That's why setup cost, not server speed, usually dominates first-load latency — and why so much of system design (CDNs, keep-alive, QUIC) is really about paying that cost less often or closer to the user.</p>
+<p>Before the first request can even be sent, your device does three rounds of setup: it looks up the site's IP address with DNS, does the TCP handshake to establish a reliable connection, and does the TLS handshake to encrypt it and verify the site's identity. Each of those is at least one full round trip to a server that might be thousands of kilometers away, so at 200 ms per trip you've spent 600–800 ms before the server sees your request at all. The second request skips almost everything: the DNS answer is cached on your device, and the TCP+TLS connection is kept alive and reused, so your request rides an already-open, already-encrypted line whose sending window has already grown. That's why setup cost, not server speed, usually dominates first-load latency — and why so much of system design (CDNs, keep-alive, QUIC) is really about paying that cost less often or closer to the user.</p>
+</details>
+</div>
+
+<div class="feynman" data-key="p1c01-f2">
+<p class="fey-prompt">You chose SSE for the live score strip. The interviewer leans in: "Why not WebSockets — one technology for every real-time need?" Defend the choice out loud first, at interview pace, in under 30 seconds. Then write the skeleton of what you said, including one cost you accept.</p>
+<details class="fey-model"><summary>Compare with a defended answer</summary>
+<p>The data flows one way — server to millions of viewers — so I won't pay for a duplex pipe I'd use in one direction. SSE is plain HTTP, so every proxy, load balancer and CDN between us already handles it, and the browser reconnects on its own. WebSockets would make this a stateful tier: drain-on-deploy, reconnect storms, heartbeats — operational cost with no matching requirement. The cost I accept: if the product later needs client-to-server interactivity, I add a WebSocket path for that feature. A concession with a boundary beats loyalty to a technology.</p>
 </details>
 </div>
 
@@ -328,33 +398,53 @@ Cache-Control: max-age=60
 
 <div class="exercise">
 <div class="ex-q"><p>A user in Sydney opens your site for the first time (nothing cached anywhere). Your only servers are in Virginia; RTT is 230 ms; TLS 1.3. Estimate time-to-first-byte, then name the two changes that cut it most.</p></div>
-<details><summary>Answer</summary><p>Count trips: DNS ≈ 1 RTT, TCP handshake = 1, TLS 1.3 = 1, request/response = 1. About 4 × 230 ms ≈ 900 ms before the first byte. Biggest levers: (1) move the connection endpoint closer — a CDN or edge PoP near Sydney turns the 230 ms RTT into ~10–20 ms for DNS, TCP and TLS, saving ~600 ms even if the origin fetch still crosses the ocean once; (2) make fewer trips — keep-alive plus TLS session resumption (or HTTP/3's combined handshake) collapses repeat-visit setup to zero or one trip. Both levers attack the network math; nothing about the server changed.</p></details>
+<details><summary>Hint</summary><p>List the four things that must happen before the first response byte. Each costs about one round trip.</p></details>
+<details><summary>Answer</summary><p>Count trips: DNS ≈ 1 RTT, TCP handshake = 1, TLS 1.3 = 1, request/response = 1. About 4 × 230 ms ≈ 900 ms before the first byte. Biggest levers: (1) move the connection endpoint closer — a CDN or edge PoP (point of presence: a small server site near users) near Sydney turns the 230 ms RTT into ~10–20 ms for DNS, TCP and TLS, saving ~600 ms even if the origin fetch still crosses the ocean once — and serious DNS providers already answer via anycast, so even the cold lookup is a short trip; (2) make fewer trips — keep-alive plus TLS session resumption (or HTTP/3's combined handshake) collapses repeat-visit setup to zero or one trip. Both levers attack the network math; nothing about the server changed. One honesty check: ~900 ms buys the first <em>byte</em>, not the page — a 1 MB body pays roughly five more trips to slow start, which the same two levers also shrink.</p></details>
 </div>
 
 <div class="exercise">
 <div class="ex-q"><p>Pick a transport — short polling, long polling, SSE, or WebSockets — for each, with a one-sentence justification: (a) a rider's map showing the driver's live location; (b) a collaborative document editor; (c) a page showing progress of a 20-minute report-generation job; (d) a live cricket score strip with millions of viewers.</p></div>
+<details><summary>Hint</summary><p>For each: which direction does the data flow, and how stale can it be before it is useless?</p></details>
 <details><summary>Answer</summary><p>(a) One-way, frequent, small updates: SSE — don't pay for a duplex pipe you use one way. (b) WebSockets — edits flow both directions with low latency, the exact case that justifies stateful connections. (c) Short polling every 15–30 seconds — the job is slow and staleness is harmless; anything fancier is over-engineering, and saying so is the senior move. (d) SSE — one-way fanout of tiny events over plain HTTP, which your proxies and CDNs can help distribute; a WebSocket per casual visitor would be millions of stateful connections carrying strictly one-way data.</p></details>
 </div>
 
 <div class="exercise">
 <div class="ex-q"><p>Your API domain's DNS TTL is 30 seconds "so we can fail over fast." Your DNS provider suffers a one-hour outage. What happens, and how would you re-design? Compare with TTL 24 hours.</p></div>
-<details><summary>Answer</summary><p>Within about a minute, every resolver cache holding your records expires and can't refresh — your domain effectively stops resolving for nearly everyone, and your healthy servers serve nobody. At TTL 24 hours, most active users' resolvers would have coasted through the hour on cache; only cold lookups would fail. But the fix isn't "crank TTL to a day" — that makes every migration and failover glacial. The senior design: two independent authoritative DNS providers serving identical records (the post-Dyn standard), a moderate TTL (5–15 minutes), and external monitoring that resolves your domain from outside your own network so you learn about failures before Twitter does.</p></details>
+<details><summary>Hint</summary><p>What is left in the world's resolver caches 60 seconds after the outage starts?</p></details>
+<details><summary>Answer</summary><p>Within about a minute, every resolver cache holding your records expires and can't refresh — your domain effectively stops resolving for nearly everyone, and your healthy servers serve nobody. At TTL 24 hours, most active users' resolvers would have coasted through the hour on cache; only cold lookups would fail. But the fix isn't "crank TTL to a day" — that makes every migration and failover glacial. The senior design: two independent authoritative DNS providers serving identical records (the post-Dyn standard), each answering via anycast from many sites, a moderate TTL (5–15 minutes), and external monitoring that resolves your domain from outside your own network so you learn about failures before Twitter does.</p></details>
 </div>
 
 <div class="exercise">
-<div class="ex-q"><p>Your chat product holds 5 million concurrent WebSocket connections. Estimate the fleet, then describe the 60 seconds after a 30-second network blip disconnects everyone — and what you'd build to survive it.</p></div>
+<div class="ex-q"><p>Your chat product holds 5 million concurrent WebSocket connections. Estimate the fleet (use the chapter's planning numbers: ~50 KB per idle connection, ~100K connections per server), then describe the 60 seconds after a 30-second network blip disconnects everyone — and what you'd build to survive it.</p></div>
+<details><summary>Hint</summary><p>Multiply first. Then ask what all 5 million clients do in the same second after the blip ends.</p></details>
 <details><summary>Answer</summary><p>At ~50 KB per connection (kernel buffers + app state), 5M × 50 KB ≈ 250 GB of connection memory fleet-wide; at a comfortable 100K connections per server, ~50 servers (WhatsApp ran 20× denser, after years of tuning). The blip is the real exam: 5 million clients reconnect at once, and each reconnect is a fresh TCP + TLS handshake plus authentication — far costlier than the idle connection was — so the stampede can down servers that held steady state easily. Survival kit: client-side reconnect backoff with jitter (spread retries randomly over tens of seconds instead of one synchronized wave), cheap session-resumption tokens so reconnect auth is light, connection-count-aware load balancing, and capacity planned for the storm, not the steady state. Steady state is easy; the transitions are the design.</p></details>
+</div>
+
+<div class="exercise">
+<div class="ex-q"><p>Your Sydney user's feed is fully personalized — a CDN can cache none of it. The team concludes "so the edge can't help us." Check that with numbers: edge PoP 15 ms from the user, a warm pooled connection from the edge to Virginia, origin compute 50 ms. Compare against exercise 1's ~900 ms.</p></div>
+<details><summary>Hint</summary><p>Which of the four setup trips can happen at the edge? And what does the edge already hold open to Virginia?</p></details>
+<details><summary>Answer</summary><p>The handshakes move to the edge: DNS, TCP and TLS at ~15 ms each ≈ 45 ms. The request then crosses the ocean once, on a connection the edge keeps warm — no handshake, window already grown: ~230 ms, plus 50 ms of origin compute. Total ≈ 325 ms against ~900 ms — roughly a 3× win at a 0% cache hit rate, because setup trips dominated the bill and setup is exactly what the edge absorbs. Caching is a second, separate win (the CDN chapter, later in Part 1). Now run the kernel somewhere it has never been: a geostationary-satellite user has ~600 ms RTT to everywhere, so the kernel predicts the web feels broken there regardless of bandwidth — and that low-orbit constellations were a latency project before they were a bandwidth one. It also predicts where the edge stops helping: the 2 GB download, where the window is open and bandwidth rules.</p></details>
+</div>
+
+<div class="box lens"><div class="box-tag">Done when — out loud</div>
+<p>The interview's output mode is speech under pushback, so the exit test is spoken. You are done with this chapter when you can, without looking:</p>
+<ul>
+<li>Price a cold HTTPS request from Sydney from memory — the trips, the milliseconds, and the two levers that cut them. (If not: Step three, and the kernel box.)</li>
+<li>Given any feature — driver map, doc editor, job page, score strip — commit to a transport in 30 seconds and name its operational cost in the same breath. "Polling is honest and correct here" counts. (If not: the four real-time patterns.)</li>
+<li>Retell Dyn 2016 and Facebook 2021 in four sentences each, ending on the design rule, not the drama. (If not: Step one.)</li>
+<li>Explain to a junior why HTTP/2 can lose to HTTP/1.1 on a flaky mobile link, naming where the queue lives. (If not: three fixes for the same traffic jam.)</li>
+</ul>
 </div>
 
 <div class="takeaways"><div class="box-tag">Takeaways</div>
 <ul>
-<li>A first-time request pays for DNS, a TCP handshake, and a TLS handshake before your code runs — several round trips whose cost is set by distance, not by your servers.</li>
-<li>DNS is a chain of caches governed by TTLs: long TTLs buy resilience but slow every change, short ones buy agility but drain the safety cushion — lower TTLs before migrations, and run two DNS providers if your name going dark is unacceptable.</li>
+<li>A first-time request pays for DNS, a TCP handshake, and a TLS handshake before your code runs — four round trips ≈ 800 ms at a 200 ms RTT, priced by distance, not by your servers — and slow start keeps even the first ~100 KB trip-priced after the handshakes.</li>
+<li>DNS is a chain of caches governed by TTLs: long TTLs buy resilience but slow every change, short ones buy agility but drain the safety cushion — lower TTLs before migrations, and run two DNS providers (answering via anycast) if your name going dark is unacceptable.</li>
 <li>TCP buys ordered, reliable delivery with a handshake and retransmission; UDP skips every promise — the right call when fresh beats perfect: live video, games, and DNS itself.</li>
-<li>TLS adds encryption plus identity (certificates signed by authorities your browser trusts) for one round trip in TLS 1.3 — and that handshake cost is why we terminate TLS at the edge and reuse warm connections everywhere.</li>
-<li>HTTP/1.1 reuses connections but serves one request at a time; HTTP/2 multiplexes streams over one TCP connection but inherits TCP's head-of-line blocking; HTTP/3 (QUIC, over UDP) makes streams independent and merges transport and TLS setup into one trip.</li>
-<li>Choose real-time transports by direction and latency, saying the cost out loud: polling for occasional checks, SSE for one-way push, WebSockets only for genuinely bidirectional traffic — because stateful connections make deploys, load balancing and reconnect storms your problem.</li>
-<li>In persistent-connection systems, concurrent connections — not requests per second — are the scaling axis, and the reconnect stampede after a blip is the load you must actually plan for.</li>
-<li>REST's universality wins at the public edge; gRPC's typed contracts, compact protobuf payloads and multiplexed connections win for high-volume internal calls — and neither is worth adopting before its problem shows up.</li>
+<li>TLS adds encryption plus identity (certificates signed by authorities your browser trusts) for one round trip in TLS 1.3 — terminate it at the edge and reuse warm connections everywhere; 0-RTT deletes the last trip by accepting only requests that are safe to replay.</li>
+<li>HTTP/1.1 reuses connections but serves one request at a time; HTTP/2 multiplexes streams over one TCP connection but inherits TCP's head-of-line blocking; HTTP/3 (QUIC, over UDP — because middleboxes froze TCP in place) makes streams independent and merges transport and TLS setup into one trip.</li>
+<li>Choose real-time transports by direction and latency, saying the cost out loud: polling for occasional checks, SSE for one-way push, WebSockets only for genuinely bidirectional traffic — and behind the sockets, a message finds its user through a session registry or pub/sub tier.</li>
+<li>In persistent-connection systems, concurrent connections — not requests per second — are the scaling axis; every held connection is a deferred handshake, and a blip presents the whole invoice at once.</li>
+<li>REST's universality wins at the public edge; gRPC's compact protobuf payloads, multiplexed connections and schema-evolution discipline (numbered fields, additive changes only) win for high-volume internal calls — and neither is worth adopting before its problem shows up.</li>
 </ul>
 </div>

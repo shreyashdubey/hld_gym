@@ -2,6 +2,7 @@
 
 Status: **draft, unvalidated.** 25 candidates, one per concept chapter.
 Date: 2026-08-16. Source for the reel scripts in `../../hld-sprint/reel/`.
+p1c01 reconciled with the chapter 2026-08-23.
 
 ---
 
@@ -38,14 +39,19 @@ kernel is the index, the derivation is the knowledge.
 ### p1c01 · How a request travels
 **Latency is round trips, not bandwidth. Count the round trips before the first byte.**
 
-- Cold connection: DNS 1 + TCP 1 + TLS 2 + request 1 = 5 RTT. At 150ms
-  cross-continent that is 750ms before a single byte of content.
-- Keep-alive, connection pools, HTTP/2 multiplexing and TLS session resumption
-  all exist to delete round trips, and nothing else.
-- A CDN wins by terminating TLS near you, not by being a faster computer.
+- Cold connection: DNS 1 + TCP 1 + TLS 1.3 1 + request 1 = 4 RTT. At 200ms
+  Sydney↔Virginia that is ~800ms before a single byte of content. (TLS 1.2
+  charged one more; that trip is what 1.3 deleted.)
+- Keep-alive, connection pools, HTTP/2 multiplexing, TLS session resumption and
+  QUIC's merged handshake all exist to delete round trips; CDNs and edge TLS
+  termination exist to shrink them. Nothing else exists.
+- Slow start keeps even the first ~100 KB trip-priced after the handshakes: a
+  fresh connection starts ~10 packets and doubles per RTT, so a warm connection
+  wins twice.
 
-Breaks: bulk transfer (video, backups) is bandwidth-bound. Counting RTT there
-tells you nothing.
+Breaks: bulk transfer (video, backups, model weights) is bandwidth-bound once
+the window is open. Counting RTT there tells you nothing — moving a 2 GB file
+closer barely helps; a fatter or more parallel path does.
 
 ### p1c02 · API design
 **Every endpoint is a contract about who retries. Ask: if the client sends this twice, what is true after?**

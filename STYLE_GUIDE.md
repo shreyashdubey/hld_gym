@@ -69,6 +69,7 @@ Feynman block (engine injects the textarea; `data-key` must be unique, `<id>-f1`
   </details>
 </div>
 ```
+A chapter may carry additional feynman-machinery blocks beyond `<id>-f1`: `<id>-f2` for a defend-under-pushback rep, and `<id>-rN` for blind-reconstruction blocks placed after sequence diagrams ("scroll the diagram away, rebuild it from memory", with a compact text model answer in `fey-model`). Keys must still start with the chapter id; the engine's textarea injection and autosave are automatic.
 
 Exercise:
 ```html
@@ -77,6 +78,18 @@ Exercise:
   <details><summary>Answer</summary><p>…worked answer…</p></details>
 </div>
 ```
+The engine injects a commit-first textarea above every exercise's answer automatically — authors write nothing; optionally add a `<details><summary>Hint</summary>…</details>` block between the question and the answer for graduated help.
+
+Checkpoint (engine renders one existing quiz item inline; place at a section's end):
+```html
+<div class="checkpoint" data-item="p1c06-q03" data-note="optional line shown after answering"></div>
+```
+
+Network readout (engine renders a measure-your-own-connection block; at most one per chapter):
+```html
+<div class="netcheck"></div>
+```
+A checkpoint's `data-item` must name an item in the chapter's own quiz JSON. Checkpoints interpolate retrieval through the chapter instead of stacking all of it at the end.
 
 Takeaways:
 ```html
@@ -154,6 +167,7 @@ Rules:
 - L3 style matches senior grading: right answer = the committed, justified choice; wrong answers = option-listing, buzzwords, over-engineering, happy-path-only thinking — and each `why` says WHY that reads junior.
 - 4 options per mcq (3 ok if natural). `tag` = short concept slug for review-queue display.
 - IDs sequential `q01…qNN`, globally unique via chapter prefix.
+- `"carry": true` marks an item as cumulative-retrieval material; later chapters' quizzes open with up to two carry items sampled from earlier chapters. Flag 4–5 per chapter — the items whose loss would hurt most a month later.
 
 ## 6. Accuracy
 

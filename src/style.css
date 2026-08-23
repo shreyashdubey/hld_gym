@@ -590,6 +590,19 @@ figure.diagram figcaption {
   padding: 7px 13px; cursor: pointer; font-size: .72rem; letter-spacing: .06em;
 }
 .dg-close:hover { border-color: var(--accent); color: var(--accent-ink); }
+/* Portrait phone: the stage turns 90° so a wide diagram gets the long axis.
+   The close button and the overlay itself stay upright; the caption yields —
+   rotated text under a rotated diagram helps nobody. */
+@media (max-width: 880px) {
+  .dg-overlay.dg-rot { overflow: hidden; }
+  .dg-overlay.dg-rot .dg-stage {
+    position: absolute; top: 50%; left: 50%;
+    width: calc(100vh - 100px);
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+  .dg-overlay.dg-rot .dg-stage svg { max-height: 78vw; }
+  .dg-overlay.dg-rot .dg-cap { display: none; }
+}
 /* Printing must never capture a diagram mid-reveal, and a stepped diagram has
    to print whole rather than frozen on step 1. !important beats the inline
    opacity the script sets. */
@@ -615,11 +628,12 @@ text.dg-good, tspan.dg-good { fill: var(--good); stroke: none; font-family: var(
   color: var(--accent-ink); font-weight: 600; margin-bottom: 6px;
 }
 .fey-prompt { font-weight: 600; margin: .4em 0; font-size: .95rem; }
-.feynman textarea, .card-answer {
+.feynman textarea, .card-answer, .ex-commit {
   width: 100%; min-height: 110px; resize: vertical;
   font-family: var(--font-read); font-size: .92rem; line-height: 1.6; color: var(--ink);
   background: var(--paper); border: 1px solid var(--line-strong); padding: 10px 12px;
 }
+.ex-commit { min-height: 84px; margin: 4px 0 10px; }
 .feynman .fey-hint { font-size: .74rem; color: var(--ink-2); margin: 6px 0 10px; font-family: var(--font-mono); }
 .exercise { border: 1px solid var(--line); background: var(--panel); padding: 12px 18px; margin: 1.3em 0; }
 .exercise .ex-q p:first-child { margin-top: .2em; }
@@ -665,6 +679,59 @@ details[open] > summary { margin-bottom: 8px; }
   background: var(--panel); font-size: .94rem;
 }
 .q-summary.pass { border-color: var(--good); border-top-width: 2px; }
+
+/* confidence tap — ghost buttons on purpose: the accent already belongs to the
+   answer options, and two competing oranges in one item would shout twice */
+.q-conf {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin: 12px 0 4px; font-family: var(--font-mono); font-size: .74rem;
+  color: var(--ink-2); letter-spacing: .04em;
+}
+.q-conf:focus { outline: none; }
+.q-conf-btn {
+  border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink);
+  padding: 6px 12px; cursor: pointer;
+  font-family: var(--font-mono); font-size: .72rem; letter-spacing: .06em;
+}
+.q-conf-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
+.q-conf-skip {
+  border: 0; background: none; color: var(--ink-3); cursor: pointer;
+  font-family: var(--font-mono); font-size: .7rem; padding: 6px 4px;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.q-conf-skip:hover { color: var(--ink); }
+
+/* second look — a divider, not a new score */
+.q-second-head {
+  border-top: 1px solid var(--line); padding-top: 14px; margin-top: 18px;
+  font-family: var(--font-mono); font-size: .68rem; letter-spacing: .12em;
+  text-transform: lowercase; color: var(--ink-3);
+}
+
+/* interpolated checkpoint — a hairline-boxed quiz item mid-prose */
+.checkpoint { border: 1px solid var(--line); background: var(--panel); margin: 2em 0; }
+.cp-head {
+  padding: 8px 18px 7px; border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono); font-size: .64rem; letter-spacing: .16em;
+  text-transform: lowercase; color: var(--ink-3);
+}
+.checkpoint .q-item { border: 0; margin: 0; }
+.cp-note { margin: 0; padding: 0 18px 12px; color: var(--ink-2); font-size: .9rem; }
+
+/* the page's own bill — measurements, so everything is mono */
+.netcheck { border: 1px solid var(--line); background: var(--panel); padding: 14px 18px; margin: 1.9em 0; }
+.nc-head {
+  font-family: var(--font-mono); font-size: .64rem; letter-spacing: .16em;
+  text-transform: lowercase; color: var(--ink-3); margin-bottom: 10px;
+}
+.nc-out { margin-top: 12px; }
+.nc-row {
+  display: flex; justify-content: space-between; gap: 12px; padding: 4px 0;
+  border-bottom: 1px dotted var(--line);
+  font-family: var(--font-mono); font-size: .78rem;
+}
+.nc-row b { font-weight: 600; }
+.nc-note { margin: 10px 0 0; color: var(--ink-2); font-size: .88rem; }
 
 /* ---------- the deck, the collection, the timeline ----------
    A card is a .q-item at card scale: hairline frame, panel fill, square

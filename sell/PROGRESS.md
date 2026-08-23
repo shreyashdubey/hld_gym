@@ -2532,6 +2532,79 @@ outranks everything else deserved a file, not a memory.
 and the Open list before writing; the file says to re-verify before acting
 later.
 
+## 2026-08-23 — the chapter-1 pilot: every tier of the book improvement plan, on p1c01
+
+**What.** The full improvement plan from the idea session (49 ideas, six lenses,
+critic-arbitrated to 24) implemented on `p1c01` as the pilot for all 51
+chapters. Four tiers in one pass:
+
+- **Correctness fixes**, because the chapter trained five answers that lose the
+  follow-up: the retry rule now carries 429 and idempotency (a 500 on a
+  transfer may have committed; blind retry pays twice); gRPC's "compile-time
+  contract" claim replaced with wire-level schema evolution across rolling
+  deploys; slow start added (the bill priced first byte only); 0-RTT's replay
+  price connected to the chapter's own T/TCP opening; anycast named, with DoH
+  hedge. `docs/kernels.md` reconciled (it priced TLS at 2 RTT against the
+  chapter's 1).
+- **Mechanics** (engine, works with the gym off): commit-first textareas on
+  every exercise (never a gate); five interpolated checkpoints, one authored
+  quiz item each, mid-prose; a confidence tap on every quiz answer with a
+  calibration line in the summary ("sure 6, right 4 — confident misses: …");
+  missed items requeued once as a "second look"; fail summaries name the exact
+  sections to reread; `carry: true` items flow into later chapters' quizzes
+  (p1c01 flags five); a Navigation-Timing "measure this page's own bill" block;
+  three sequence diagrams became steppers with running-bill narration and an
+  edge counterfactual as the closing step; fullscreen diagrams rotate on
+  portrait phones.
+- **Senior-signal content**: the missing third leg (how a message finds the
+  socket — session registry / pub-sub, WhatsApp's Erlang registry named as
+  exactly that); probe ladders in the whiteboard box (each probe now carries
+  its "then they push" chain); a second feynman rep defending the SSE choice
+  under pushback, spoken first; a kernel box (`.box crux`) stating
+  first-byte = trips × RTT with its derivations and its boundary; the
+  ordering-promise-is-a-queue law named once; the reconnect stampede tied to
+  the kernel as a deferred-handshake invoice.
+- **Retention scaffolding**: two blind-reconstruction reps after the sequence
+  diagrams (feynman machinery, `-rN` keys); graduated hints in exercises; the
+  50 KB / 100K planning constants taught in prose instead of hidden in an
+  answer; a new edge-pricing exercise (the edge helps at 0% cache hit;
+  satellite transfer prediction); a "done when — out loud" exit contract; the
+  RTT numbers now in the takeaways.
+
+**How it was built.** Three agents in parallel on disjoint files (quiz JSON,
+engine, docs) against a marker contract, chapter prose written by hand; then a
+three-reviewer adversarial workflow (engine correctness, content claim-graph,
+cross-chapter regression in a real browser) with per-finding refutation.
+
+**The review confirmed seven defects, zero refuted, all fixed:** exercise
+commit keys were positional and would reattach saved answers on any reorder
+(now keyed on a hash of the question text); quiz tags reached the calibration
+summary's innerHTML unescaped; a checkpoint naming a missing quiz id
+self-removed silently (build.py now fails loudly, negative-tested); q10's
+scenario numbers contradicted the arithmetic its own why teaches (warm click
+can't be 150 ms at the RTT the cold visit implies — now 250 ms); "~1,700 root
+server machines" was stale and the wrong unit (instances, ~2,000 as of
+2026-08); "SCTP never deployed" overstated (it lives in telecom cores and
+WebRTC — it failed *natively on the public internet*); the netcheck all-zeros
+copy blamed a warm connection for what only a browser cache can do.
+
+**Verified.** `build.py --check` green ×3 (51 chapters), the 6 pre-existing
+source-year test failures and nothing else, and two independent browser passes:
+steppers 1/5–1/4–1/2 with narration, checkpoint → confidence → reveal → note,
+second-look block, calibration line, netcheck (locally all-zeros, teaching the
+cache lesson), reread pointers, zero page errors. Regression pass on p1c02,
+p1c06, review, boss, cards: clean. One false alarm worth keeping: a stale
+`http.server` from a concurrent agent was still bound on the port and served a
+pre-stepper build — "the steppers are gone" was a stale-server symptom, not a
+build one. Check what's actually listening before believing a measurement.
+
+**Not done.** Chapter is ~7,500 prose words against the guide's 4,500 target
+(it was over before the pilot; nothing was cut without a decision). The quiz
+JSON diff is noisy — a reformat, content-identical. Rollout to the other 50
+chapters, and the pilot success metric (checkpoint vs end-quiz first-try
+accuracy, calibration delta — all in localStorage already), are open. Nothing
+is committed.
+
 ## 2026-08-23 — the diagnostic round: a free interview that ends in a failure map
 
 **What:** a third voice-service mode, `diagnostic`. A signed-in visitor sits a

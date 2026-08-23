@@ -62,6 +62,18 @@ const chQuiz = id => QUIZ[id] || [];
 const chCards = id => CARDS[id] || [];
 const mastered = id => (S.levels[id] || {})[3] >= 80;
 
+/* tag -> the h2 section to reread; per-qid overrides for shared tags */
+const QSEC = { p1c01: {
+  'dns-chain':'Step one: turning a name into an address', 'ttl':'Step one: turning a name into an address', 'ttl-ops':'Step one: turning a name into an address',
+  'tcp-handshake':'Step two: getting a line you can trust', 'udp':'Step two: getting a line you can trust', 'udp-media':'Step two: getting a line you can trust',
+  'tls':'Step three: the whisper', 'latency-anatomy':'Step three: the whisper', 'slow-start':'Step three: the whisper',
+  'http-status':'The conversation itself: HTTP',
+  'keep-alive':'HTTP/1.1, /2, /3', 'http2':'HTTP/1.1, /2, /3', 'http3':'HTTP/1.1, /2, /3', 'hol-blocking':'HTTP/1.1, /2, /3',
+  'sse':'the four real-time patterns', 'websocket':'the four real-time patterns', 'polling-fit':'the four real-time patterns', 'ws-ops':'the four real-time patterns', 'ws-cost':'the four real-time patterns',
+  'grpc':'Inside the walls: REST vs gRPC', 'kernel-boundary':'The kernel box',
+}};
+const QSEC_BY_ID = { 'p1c01-q19':'the four real-time patterns', 'p1c01-q20':'the four real-time patterns', 'p1c01-q21':'Step one: turning a name into an address', 'p1c01-q22':'Step one: turning a name into an address', 'p1c01-q23':'the whole journey — reread from the top', 'p1c01-q24':'Step three: the whisper', 'p1c01-q25':'Inside the walls: REST vs gRPC' };
+
 /* ---------- xp, rank, streak ---------- */
 function rank() {
   let r = RANKS[0][0], next = null;
@@ -266,7 +278,7 @@ function renderQuizItem(q, onAnswer, num) {
   q = { ...q, options: [...q.options].sort(() => Math.random() - 0.5) }; // authors write correct-first; never show it that way
   const wrap = document.createElement('div');
   wrap.className = 'q-item';
-  wrap.innerHTML = `<div class="q-num">${num || ''}${q.tag ? ' · ' + q.tag : ''} · level ${q.level}</div>
+  wrap.innerHTML = `<div class="q-num">${[num, q.tag, 'level ' + q.level].filter(Boolean).join(' · ')}</div>
     <div class="q-text"></div>`;
   wrap.querySelector('.q-text').textContent = q.q;
   const multi = q.type === 'multi';
@@ -305,10 +317,32 @@ function renderQuizItem(q, onAnswer, num) {
     return d;
   }
 
+  /* The confidence tap sits between commit and reveal on purpose: after the
+     reveal everyone was sure. conf is null on skip; callers may ignore it. */
   function finish(picks) {
     const correct = picks.size === correctSet.size && [...picks].every(i => correctSet.has(i));
     buttons.forEach(b => b.disabled = true);
     if (submit) submit.remove();
+    const row = document.createElement('div');
+    row.className = 'q-conf'; row.tabIndex = -1;
+    const lbl = document.createElement('span'); lbl.textContent = 'how sure?';
+    row.appendChild(lbl);
+    const resolve = conf => { row.remove(); reveal(picks); onAnswer(correct, conf); };
+    [['sure', 'sure'], ['think so', 'think'], ['guessing', 'guess']].forEach(([t, v]) => {
+      const b = document.createElement('button');
+      b.className = 'q-conf-btn'; b.type = 'button'; b.textContent = t;
+      b.addEventListener('click', () => resolve(v));
+      row.appendChild(b);
+    });
+    const skip = document.createElement('button');
+    skip.className = 'q-conf-skip'; skip.type = 'button'; skip.textContent = 'skip';
+    skip.addEventListener('click', () => resolve(null));
+    row.appendChild(skip);
+    wrap.appendChild(row);
+    row.focus();
+  }
+
+  function reveal(picks) {
     q.options.forEach((o, i) => {
       const b = buttons[i];
       if (picks.has(i)) {
@@ -319,7 +353,6 @@ function renderQuizItem(q, onAnswer, num) {
         b.insertAdjacentElement('afterend', whyPanel(o, true, false));
       }
     });
-    onAnswer(correct);
   }
   return wrap;
 }
@@ -680,6 +713,9 @@ function dgOpen(source) {
     cap.textContent = caption.textContent;
     overlay.appendChild(cap);
   }
+  // a wide diagram on a portrait phone earns the long axis; CSS confines this
+  // to narrow viewports, so a tall desktop window is unaffected
+  if (window.innerHeight > window.innerWidth) overlay.classList.add('dg-rot');
   document.body.appendChild(overlay);
   document.body.style.overflow = 'hidden';
 
@@ -799,6 +835,77 @@ function renderChapter(id) {
     f.insertBefore(ta, model); f.insertBefore(hint, model);
   });
 
+  /* Commit-before-reveal on exercises. An invitation, never a gate: the answer
+     <details> stays openable, so a re-reader is not punished for knowing it. */
+  VIEW.querySelectorAll('.exercise').forEach((ex, n) => {
+    /* Keyed on the question's own words, not its position: inserting or
+       reordering exercises must not reattach saved answers to the wrong
+       prompts. Editing a question orphans its saved answer, which is the
+       acceptable failure of the two. */
+    const qtext = ex.querySelector('.ex-q')?.textContent.trim() || String(n);
+    let hsh = 5381;
+    for (let i = 0; i < qtext.length; i++) hsh = (hsh * 33 ^ qtext.charCodeAt(i)) >>> 0;
+    const key = id + '-ex-' + hsh.toString(36);
+    const ta = document.createElement('textarea');
+    ta.className = 'ex-commit';
+    ta.placeholder = 'Commit an answer first. A wrong guess still beats reading the answer cold.';
+    ta.setAttribute('aria-label', (ex.querySelector('.ex-q')?.textContent.trim() || 'Commit an answer').slice(0, 120));
+    ta.value = S.feynman[key] || '';
+    ta.addEventListener('input', () => { S.feynman[key] = ta.value; save(); });
+    const det = ex.querySelector('details');
+    det ? ex.insertBefore(ta, det) : ex.appendChild(ta);
+  });
+
+  /* Interpolated checkpoints: one authored quiz item mid-prose, graded into the
+     queue but worth no XP — retrieval where the forgetting starts, not a game. */
+  VIEW.querySelectorAll('.checkpoint').forEach(cp => {
+    const q = chQuiz(id).find(x => x.id === cp.dataset.item);
+    if (!q) { cp.remove(); return; }
+    const head = document.createElement('div');
+    head.className = 'cp-head';
+    head.textContent = 'checkpoint · before you scroll on';
+    cp.appendChild(head);
+    const note = cp.dataset.note;
+    cp.appendChild(renderQuizItem(q, ok => {
+      gradeItem(q.id, ok);
+      if (note) {
+        const p = document.createElement('p');
+        p.className = 'cp-note';
+        p.textContent = note;
+        cp.appendChild(p);
+      }
+    }));
+  });
+
+  /* "Your own bill": the chapter's latency anatomy, measured on the page the
+     reader is holding. Numbers only ever come from the Navigation Timing entry. */
+  VIEW.querySelectorAll('.netcheck').forEach(nc => {
+    const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0];
+    if (!nav) { nc.remove(); return; }
+    nc.innerHTML = `<div class="nc-head">measure this page's own bill</div>
+      <button class="btn ghost" type="button">measure</button>
+      <div class="nc-out" aria-live="polite"></div>`;
+    nc.querySelector('button').addEventListener('click', () => {
+      const tls = nav.secureConnectionStart > 0 ? nav.connectEnd - nav.secureConnectionStart : 0;
+      const rows = [
+        ['dns', nav.domainLookupEnd - nav.domainLookupStart],
+        ['tcp', nav.connectEnd - nav.connectStart - tls],
+        ['tls', tls],
+        ['wait for first byte', nav.responseStart - nav.requestStart],
+        ['total to first byte', nav.responseStart - nav.startTime],
+      ];
+      const out = nc.querySelector('.nc-out');
+      out.innerHTML = rows.map(([k, v]) =>
+        `<div class="nc-row"><span>${k}</span><b>${Math.round(v)} ms</b></div>`).join('');
+      if (rows[4][1] < 3) {
+        const p = document.createElement('p');
+        p.className = 'nc-note';
+        p.textContent = 'All zeros. This copy came straight from the browser\'s cache — no network at all. Even a warm connection pays one round trip for the request; only a cache pays none. Hard-reload with caching disabled, or open this page from another device, and the bill appears.';
+        out.appendChild(p);
+      }
+    });
+  });
+
   // quiz levels
   const items = chQuiz(id);
   const tabs = VIEW.querySelector('.q-level-tabs');
@@ -808,15 +915,31 @@ function renderChapter(id) {
   function openLevel(lv) {
     tabs.querySelectorAll('.q-level-tab').forEach(t => t.classList.toggle('active', +t.dataset.lv === lv));
     zone.innerHTML = '';
-    const qs = items.filter(q => q.level === lv);
+    // copy before shuffling — the quiz must not mirror the chapter's section order
+    const qs = items.filter(q => q.level === lv).sort(() => Math.random() - 0.5);
     if (!qs.length) { zone.innerHTML = '<p>No questions at this level yet.</p>'; return; }
+    /* Carry-forward: up to two carry-marked items from earlier chapters open
+       level 1. Ungraded against this level — they only ask "still yours?". */
+    if (lv === 1) {
+      const at = CHAPTERS.findIndex(c => c.id === id);
+      const pool = CHAPTERS.slice(0, at).filter(c => isReady(c.id))
+        .flatMap(c => chQuiz(c.id).filter(q => q.carry).map(q => ({ ...q, chTitle: c.title })));
+      pool.sort(() => Math.random() - 0.5).slice(0, 2).forEach(q => {
+        const head = document.createElement('div');
+        head.className = 'review-item-tag';
+        head.textContent = `from ${q.chTitle} · still yours?`;
+        zone.appendChild(head);
+        zone.appendChild(renderQuizItem(q, ok => gradeItem(q.id, ok)));
+      });
+    }
     let answered = 0, correct = 0;
-    const firstTry = {};
+    const firstTry = {}, conf = {};
     qs.forEach((q, i) => {
-      zone.appendChild(renderQuizItem(q, ok => {
+      zone.appendChild(renderQuizItem(q, (ok, cf) => {
         answered++; if (ok) correct++;
         if (firstTry[q.id] === undefined) {
           firstTry[q.id] = ok;
+          conf[q.id] = cf || null;
           if (ok) addXP(lv === 1 ? 10 : lv === 2 ? 15 : 20);
         }
         gradeItem(q.id, ok);
@@ -825,25 +948,46 @@ function renderChapter(id) {
     });
     function levelDone() {
       const pct = Math.round(100 * correct / qs.length);
+      const missed = qs.filter(q => !firstTry[q.id]);
+      const secs = [...new Set(missed.map(q => QSEC_BY_ID[q.id] || (QSEC[id] || {})[q.tag]).filter(Boolean))];
+      const reread = secs.length ? `Reread: ${secs.join(' · ')}.` : null;
+      let cal = '';
+      if (qs.some(q => conf[q.id])) {
+        const sure = qs.filter(q => conf[q.id] === 'sure');
+        const misses = sure.filter(q => !firstTry[q.id]);
+        // tags are authored strings landing in innerHTML — escape them
+        const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        cal = ` You were sure ${sure.length} time${sure.length === 1 ? '' : 's'} and right ${sure.length - misses.length}.` +
+          (misses.length ? ` Confident misses: ${misses.map(q => esc(q.tag || q.id)).join(', ')} — those are the ones your memory will defend hardest.` : '');
+      }
       const sum = document.createElement('div');
       sum.className = 'q-summary' + (pct >= 80 ? ' pass' : '');
       if (!gym) {
         // no stamp, no best-ever, nothing recorded — just the score for this run
         sum.innerHTML = `<b>${pct}%</b> (${correct}/${qs.length}). ` +
-          (pct >= 80 ? 'Strong.' : 'Below 80 — worth rereading the sections you missed.');
-        zone.appendChild(sum);
-        sum.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        return;
+          (pct >= 80 ? 'Strong.' : (reread ? 'Below 80. ' + reread : 'Below 80 — worth rereading the sections you missed.')) + cal;
+      } else {
+        const best = (S.levels[id] = S.levels[id] || {});
+        const prev = best[lv] || 0;
+        best[lv] = Math.max(prev, pct); save();
+        const pass = lv === 3 && pct >= 80;
+        sum.innerHTML = `<b>${pct}%</b> (${correct}/${qs.length}) — best ${best[lv]}%. ` +
+          (pass && prev < 80 ? '<span class="stamp big">Mastered</span> Chapter stamped. It’s yours now — reviews will keep it that way.'
+            : pct >= 80 ? 'Strong.'
+            : (reread ? 'Below 80. ' + reread + ' The queue will bring these back.' : 'Below 80 — reread the sections you missed, the queue will bring these back.')) + cal;
+        if (pass && prev < 80) { addXP(50, 'chapter mastered'); renderChrome(); }
       }
-      const best = (S.levels[id] = S.levels[id] || {});
-      const prev = best[lv] || 0;
-      best[lv] = Math.max(prev, pct); save();
-      const pass = lv === 3 && pct >= 80;
-      sum.innerHTML = `<b>${pct}%</b> (${correct}/${qs.length}) — best ${best[lv]}%. ` +
-        (pass && prev < 80 ? '<span class="stamp big">Mastered</span> Chapter stamped. It’s yours now — reviews will keep it that way.'
-          : pct >= 80 ? 'Strong.' : 'Below 80 — reread the sections you missed, the queue will bring these back.');
       zone.appendChild(sum);
-      if (pass && prev < 80) { addXP(50, 'chapter mastered'); renderChrome(); }
+      /* Second look: the first-try misses again, shuffled, once. Graded into
+         the queue but never into the level score — the score already happened. */
+      if (missed.length) {
+        const again = document.createElement('div');
+        again.className = 'q-second';
+        again.innerHTML = '<div class="q-second-head">second look · the ones you missed, once more from memory</div>';
+        missed.slice().sort(() => Math.random() - 0.5).forEach(q =>
+          again.appendChild(renderQuizItem(q, ok => gradeItem(q.id, ok))));
+        zone.appendChild(again);
+      }
       sum.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }

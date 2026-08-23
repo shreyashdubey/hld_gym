@@ -35,7 +35,7 @@ ALLOWED_TAGS = set("p h2 h3 ul ol li strong em code pre table thead tbody tr th 
                    "svg g rect circle ellipse line path polyline polygon text tspan defs marker title "
                    "details summary div span dfn br blockquote img".split())
 ALLOWED_DIV = {"box", "box-tag", "analogy", "story", "lens", "crux", "feynman", "fey-prompt",
-               "fey-model", "exercise", "ex-q", "takeaways", "diagram",
+               "fey-model", "exercise", "ex-q", "takeaways", "diagram", "checkpoint", "netcheck",
                "origin", "origin-seam", "origin-body", "card", "card-face", "card-back"}
 FONTS = [
     ("Archivo", "normal", "300 700", "Archivo-normal-300_700.woff2"),
@@ -560,6 +560,12 @@ def main():
                 quiz_all[cid] = validate_quiz(cid, json.loads(qf.read_text()))
             except json.JSONDecodeError as e:
                 err(f"{cid}: quiz json invalid: {e}"); continue
+            # A checkpoint naming a missing quiz id silently self-removes at
+            # runtime (app.js), so the typo has to die here instead.
+            qids = {q.get("id") for q in quiz_all[cid]}
+            for item in re.findall(r'<div\b[^>]*class="checkpoint"[^>]*\bdata-item="([^"]+)"', html):
+                if item not in qids:
+                    err(f"{cid}: checkpoint data-item '{item}' matches no quiz id")
             templates.append(f'<template data-ch="{cid}">\n{html}\n</template>')
             ready += 1
 
