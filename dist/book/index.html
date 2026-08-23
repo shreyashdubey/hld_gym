@@ -19483,6 +19483,7 @@ function blank() {
     feynman: {},    // key -> text
     boss: {},       // part -> {best, passed}
     heat: {},       // 'YYYY-MM-DD' -> count
+    pos: {},        // chapterId -> scrollY where reading stopped
     lastCh: null,
   };
 }
@@ -19731,7 +19732,7 @@ function renderRail(id, readMin) {
   const bodyEl = VIEW.querySelector('.ch-body');
   const bar = $('#read-progress i'), tleft = $('#time-left');
   const rtitle = rail.querySelector('.rail-title'), rquiz = rail.querySelector('#rail-quiz');
-  let queued = false;
+  let queued = false, posT = 0;
   railSpy = () => {
     if (queued) return;
     queued = true;
@@ -19748,6 +19749,9 @@ function renderRail(id, readMin) {
       bar.style.transform = `scaleX(${p})`;
       tleft.textContent = p >= 1 ? '' : `~${Math.max(1, Math.ceil(readMin * (1 - p)))} min left`;
       if (p >= .6) rquiz.classList.remove('held'); // one-way: earned, never re-folded
+      // the bookmark: saved on a debounce so the scroll loop never hits storage
+      S.pos[id] = Math.round(scrollY);
+      clearTimeout(posT); posT = setTimeout(save, 800);
     });
   };
   addEventListener('scroll', railSpy, { passive: true });
@@ -20512,7 +20516,12 @@ function renderChapter(id) {
   VIEW.querySelector('.ch-nav').innerHTML =
     (prev ? `<a class="btn ghost" href="#ch/${prev.id}">← ${prev.title}</a>` : '<span></span>') +
     (next ? `<a class="btn" href="#ch/${next.id}">${next.title} →</a>` : '');
-  window.scrollTo(0, 0);
+  /* A returning reader lands where they stopped, like a book keeps its
+     bookmark — but only if they were meaningfully deep, so a quick revisit
+     still opens at the title. */
+  const back = S.pos[id] || 0;
+  window.scrollTo(0, back > innerHeight ? back : 0);
+  if (back > innerHeight) toast('picked up where you left off');
   renderRail(id, readMin);
 }
 
