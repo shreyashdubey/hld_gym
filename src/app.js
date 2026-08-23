@@ -1191,6 +1191,16 @@ function route() {
   }
   $('#sidebar').classList.remove('open'); $('#scrim').hidden = true;
   clearRail(); // renderChapter puts it back; every other view runs full width
+  /* Reading focus mode: on a chapter the sidebar leaves the frame and the ☰
+     crumb in the topbar becomes the door to the book map. The class lands on
+     body (topbar lives there) and on the shell (grid and sidebar live there). */
+  const reading = h.startsWith('#ch/');
+  document.body.classList.toggle('reading', reading);
+  document.querySelector('.shell').classList.toggle('reading', reading);
+  if (reading) {
+    const c = chById(h.slice(4));
+    $('#crumb').textContent = c ? `${c.part}.${c.idx} · ${c.partTitle.toLowerCase()}` : 'contents';
+  }
   if (h.startsWith('#ch/')) renderChapter(h.slice(4));
   else if (!GYM() && (h === '#review' || h.startsWith('#boss/'))) { location.replace('#home'); return; }
   else if (h === '#review') renderReview();
@@ -1250,6 +1260,11 @@ $('#nav-toggle').addEventListener('click', () => {
   $('#scrim').hidden = !sb.classList.contains('open');
 });
 $('#scrim').addEventListener('click', () => { $('#sidebar').classList.remove('open'); $('#scrim').hidden = true; });
+addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#sidebar').classList.contains('open')) {
+    $('#sidebar').classList.remove('open'); $('#scrim').hidden = true; $('#nav-toggle').focus();
+  }
+});
 
 /* The skip link moves focus itself instead of letting the browser follow
    href="#view". The router owns the hash, and "#view" matches no route, so

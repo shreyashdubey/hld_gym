@@ -318,6 +318,20 @@ h1.ch-title, .content h2, .content h3, details > summary, .fey-prompt,
   min-height: calc(100vh - 55px);
 }
 .shell.no-rail { grid-template-columns: 264px minmax(0, 1fr); }
+/* Reading focus mode: on a chapter the book map leaves the frame. Reading is
+   linear; a 51-chapter list is random access, and holding both on screen at
+   full strength taxes the one being used. The sidebar becomes the same
+   off-canvas overlay mobile has always had, summoned from the ☰ crumb in the
+   topbar. The frame narrows so the prose sits composed, not adrift. */
+.shell.reading { grid-template-columns: minmax(0, 1fr) 248px; max-width: 1240px; margin-inline: auto; }
+.shell.reading.no-rail { grid-template-columns: minmax(0, 1fr); }
+.shell.reading .sidebar {
+  position: fixed; left: 0; top: 55px; bottom: 0; height: auto; z-index: 50;
+  transform: translateX(-105%); transition: transform .22s ease;
+  background: var(--paper); width: min(84vw, 320px);
+  border-right: 1px solid var(--line);
+}
+.shell.reading .sidebar.open { transform: none; }
 /* past this the three columns stop being a composition and start being one
    column marooned in leftover space, so cap the whole frame instead */
 @media (min-width: 1500px) {
@@ -948,6 +962,7 @@ details[open] > summary { margin-bottom: 8px; }
    and the column matters more than the outline. */
 @media (max-width: 1240px) {
   .shell, .shell.no-rail { grid-template-columns: 264px minmax(0, 1fr); }
+  .shell.reading, .shell.reading.no-rail { grid-template-columns: minmax(0, 1fr); }
   .rail { display: none; }
 }
 @media (max-width: 880px) {
@@ -975,9 +990,12 @@ details[open] > summary { margin-bottom: 8px; }
   .view { padding: 24px 16px 80px; }
   body { font-size: 1rem; }
 }
+/* Desktop outside a chapter: the sidebar is a fixed column, so the toggle and
+   scrim have no job. In reading mode both come back — the crumb is the only
+   door to the book map. */
 @media (min-width: 881px) {
-  #nav-toggle { display: none; }
-  .scrim { display: none !important; }
+  body:not(.reading) #nav-toggle { display: none; }
+  .shell:not(.reading) .scrim { display: none !important; }
 }
 
 </style>
@@ -995,7 +1013,7 @@ details[open] > summary { margin-bottom: 8px; }
 
 <header class="topbar">
   <div class="topbar-inner">
-    <button id="nav-toggle" class="icon-btn" aria-label="Open chapters">☰</button>
+    <button id="nav-toggle" class="icon-btn named" aria-label="Open chapters"><span class="ib-g">☰</span><span class="ib-n" id="crumb"></span></button>
     <a class="brand" href="/"><span class="brand-mark">HLD</span> Gym</a>
     <span class="topbar-spacer"></span>
     <span id="streak-pill" class="pill" title="Current streak"></span>
@@ -20608,6 +20626,16 @@ function route() {
   }
   $('#sidebar').classList.remove('open'); $('#scrim').hidden = true;
   clearRail(); // renderChapter puts it back; every other view runs full width
+  /* Reading focus mode: on a chapter the sidebar leaves the frame and the ☰
+     crumb in the topbar becomes the door to the book map. The class lands on
+     body (topbar lives there) and on the shell (grid and sidebar live there). */
+  const reading = h.startsWith('#ch/');
+  document.body.classList.toggle('reading', reading);
+  document.querySelector('.shell').classList.toggle('reading', reading);
+  if (reading) {
+    const c = chById(h.slice(4));
+    $('#crumb').textContent = c ? `${c.part}.${c.idx} · ${c.partTitle.toLowerCase()}` : 'contents';
+  }
   if (h.startsWith('#ch/')) renderChapter(h.slice(4));
   else if (!GYM() && (h === '#review' || h.startsWith('#boss/'))) { location.replace('#home'); return; }
   else if (h === '#review') renderReview();
@@ -20667,6 +20695,11 @@ $('#nav-toggle').addEventListener('click', () => {
   $('#scrim').hidden = !sb.classList.contains('open');
 });
 $('#scrim').addEventListener('click', () => { $('#sidebar').classList.remove('open'); $('#scrim').hidden = true; });
+addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#sidebar').classList.contains('open')) {
+    $('#sidebar').classList.remove('open'); $('#scrim').hidden = true; $('#nav-toggle').focus();
+  }
+});
 
 /* The skip link moves focus itself instead of letting the browser follow
    href="#view". The router owns the hash, and "#view" matches no route, so
