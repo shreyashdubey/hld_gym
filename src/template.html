@@ -25,7 +25,14 @@
 <script>
 (function(){
   var t = null;
-  try { t = JSON.parse(localStorage.getItem('hldgym_v1')||'{}').theme || null; } catch(e){}
+  /* hldsprint_theme is the key the sell page reads and writes; both sites
+     prefer it, both write it, so the last choice anywhere wins everywhere.
+     The S-blob theme stays as the legacy fallback for readers who chose
+     before the shared key existed. */
+  try {
+    t = localStorage.getItem('hldsprint_theme');
+    if (!t) t = JSON.parse(localStorage.getItem('hldgym_v1')||'{}').theme || null;
+  } catch(e){}
   if (['light','dark','manim','phosphor'].indexOf(t) < 0) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   document.documentElement.dataset.theme = t;
 })();

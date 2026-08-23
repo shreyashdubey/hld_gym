@@ -1264,6 +1264,8 @@ $('#theme-toggle').addEventListener('click', () => {
   const next = THEMES[(i + 1) % THEMES.length];
   applyTheme(next);
   S.theme = next; save();
+  // the shared key the sell page prefers too — see the init script in <head>
+  try { localStorage.setItem('hldsprint_theme', next); } catch (e) {}
 });
 /* ---------- text size ----------
    Three steps, cycling. The multiplier lands on the root element, so prose,
