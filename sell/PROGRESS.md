@@ -2637,3 +2637,83 @@ sanitizes shapes and pins chapter links to `/book/`; the page gained
 whose empty and lost variants carry no CTA. Local only — hosting, spend
 guards, the §1/§9 copy re-read and the rsync exclude reversal are one
 deliberate package recorded in the spec as "the hosting gate".
+
+## 2026-08-23 — ROADMAP.md rewritten from three research fleets
+
+**What:** `ROADMAP.md` replaced wholesale. The morning version came from one
+conversation; this one comes from three multi-agent research passes over
+primary sources (HN Algolia comment archive, Reddit, Blind, live pricing
+pages, case law, papers; ~1,000 web fetches across the day) plus an
+adversarial judge panel, run because the builder asked "painkiller or
+vitamin?" and then "does free AI kill this?" and deserved sourced answers.
+
+**The verdict recorded:** painkiller thesis, vitamin execution. The layers
+free AI killed (explanation, voice persona, raw LLM grading) are the layers
+we already give away; the layers buyers verifiably pay for in 2025-26
+(honest grading against verified ground truth, the multi-session spine,
+calibration to a real bar) are exactly the diagnostic round and the rubric
+corpus. Binding risk is conversion and trust, not substitution: zero
+recorded cases of an audience-less solo dev converting cold traffic in this
+category, and Show HN is a graveyard for it. Two banned framings, from the
+audience itself: "accountability" and "memorization".
+
+**Part 5 added, the engine:** what generalizes (lock-rebuild loop, voice
+probe, rubric judge with bias stack, calibration meter, judge-validation
+harness) vs what is re-authored per subject (the verified content pack),
+with effect sizes, boundary conditions (no feedback + low success = g 0.03:
+a rep without feedback measurably does nothing), authoring economics
+($1,500-2,500 per verified item; LLM drafts save 71.5% only under 100%
+expert review), the exam-board IP wall (NBME v. Optima; recall ingestion is
+how prep companies die), and ranked next verticals (GenAI design rounds,
+staff loops, OSCE as the far test). Solo-capacity truth kept: no existence
+proof of one person running a vertical whose credential they lack.
+
+## 2026-08-23 — demo deck and talk track for today's presentation
+
+**What:** `deck/index.html`, a self-contained four-slide HTML deck in the
+product's own token set (Archivo/Literata/Plex Mono, zero radius, hairlines,
+one accent, paper and dark themes on `t`), plus `deck/TALK.md`: per-slide
+script, the future-plans narrative, and a Q&A bank sourced from the research
+(why labs won't kill it, wrapper objection, traction honesty, price, buyer
+budgets). Arrow keys or click to advance; Ctrl+P for a PDF.
+
+**Why HTML and not a pptx:** python-pptx is not installed, the browser is
+already the product's medium, and the deck reuses the exact design tokens,
+so the deck looks like the product, which is itself the argument. Slides
+verified in the browser at both themes; the one console error is the
+favicon 404 from `python3 -m http.server`.
+
+**The deck's spine, deliberately:** problem (Roediger & Karpicke, feeling
+vs knowing), product (the six-step loop, live demo cue), the ChatGPT
+question answered head-on (layer map: explanation free, judgment paid),
+plan and the engine. The demo instruction is to answer imperfectly on
+purpose: the failure map catching the presenter is the pitch.
+
+## 2026-08-23 — the page answers the ChatGPT objection in its own section
+
+**What:** a new section between the Roediger & Karpicke evidence and the
+reels: eyebrow "the obvious question", h2 "Why not just ChatGPT?". Hero lead
+now names the honest grade ("what you missed, named, with your own words as
+the evidence") instead of ending at the interviewer. The buried FAQ bullet
+that used to carry the whole objection is cut to a pointer, per the
+one-disclosure rule. "What exists today" updated: model grading is built and
+running in the local diagnostic round, not hosted, so the page says exactly
+that instead of "planned, not built", which had gone stale.
+
+**Why:** the research fleet found "I already pay for Claude, why pay you"
+is the reflex first objection for this exact audience, that products
+pitched as AI interviewers read as wrappers and die (about 30 Show HN
+corpses), and that the sellable layer is graded judgment against verified
+ground truth. The page now sells that layer where every visitor can see it,
+and the copy-rules comment records the reasoning with a pointer to
+ROADMAP.md.
+
+**Verified:** lint clean, build ends `○ (Static)`, `npm test` passes,
+`grep -c '—' dist/index.html` prints 0, section renders in-browser at
+localhost with the book (5.0M) and reels intact after `publish:book`.
+
+**Not done, deliberately:** the diagnostic round as the literal front door.
+It sits behind the hosting gate recorded in the diagnostic entry (service
+hosting, spend guards, the §1/§9 copy re-read, the rsync exclude
+reversal), and it spends real money per session, so shipping it is a
+decision for the person paying the bill, not a copy edit.

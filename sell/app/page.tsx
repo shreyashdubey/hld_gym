@@ -20,9 +20,14 @@ import { BOOK_URL, PRICE, RESERVE_URL } from "@/lib/links";
       rep. A fact repeated four times reads as nervousness, and a page asking a
       stranger for money cannot afford to look nervous.
    3. Section order follows the argument: the demo, how it works, why the lock
-      works, then the reels as the supporting act, then the book, then the
-      offer. The evidence for the lock sits next to the lock.
-   4. Budget: about 1,900 rendered words. A copy pass wanted 1,300 and a buyer
+      works, then the ChatGPT question answered head-on, then the reels as the
+      supporting act, then the book, then the offer. The evidence for the lock
+      sits next to the lock, and the objection every visitor arrives with gets
+      its own section rather than a buried FAQ bullet: research on this exact
+      audience (2026-08-23, see ../ROADMAP.md) found "why would I pay when I
+      have Claude" is the reflex first objection, and that the sellable layer
+      is graded judgment, never the AI interviewer, which reads as a wrapper.
+   4. Budget: about 2,000 rendered words. A copy pass wanted 1,300 and a buyer
       pass wanted four more answers (topics, chat window, timeline, trust); the
       answers won because each was a stated bounce point, and the cuts landed
       everywhere else. Add a paragraph here only by taking one out. */
@@ -97,12 +102,14 @@ export default function Home() {
               <p className="eyebrow">30-day system design sprint · presale</p>
               <h1>You can read system design for months and still freeze at the whiteboard.</h1>
               <p className="lead">
-                Reading gets you recognition. Interviews want recall. So a diagram from the free
-                HLD Gym book teaches itself, then it is <strong>taken away</strong>. You rebuild it
-                from memory, explain it the way you would out loud, and an interviewer picks holes
-                in what you said. Six or seven of those a day for thirty days is{" "}
-                <strong>197 reps</strong>, one for every diagram in all 51 chapters. About an hour
-                a day, set at the senior bar: Meta E5, Google L5 and equivalents.
+                Reading gets you recognition. Interviews want production under pressure. So a
+                diagram from the free HLD Gym book teaches itself, then it is{" "}
+                <strong>taken away</strong>. You rebuild it from memory, explain it the way you
+                would out loud, an interviewer picks holes in what you said, and you get an honest
+                grade: what you missed, named, with your own words as the evidence. Six or seven of
+                those a day for thirty days is <strong>197 reps</strong>, one for every diagram in
+                all 51 chapters. About an hour a day, set at the senior bar: Meta E5, Google L5 and
+                equivalents.
               </p>
             </div>
 
@@ -242,6 +249,29 @@ export default function Home() {
             </div>
             <StudyChart />
           </div>
+        </section>
+
+        <section>
+          <p className="eyebrow">the obvious question</p>
+          <h2>Why not just ChatGPT?</h2>
+          <p className="key">
+            For explanation, you should. Explanation is free now, which is why the whole book is
+            free. What a chat cannot sell you is a grade you can trust.
+          </p>
+          <p>
+            A chat is tuned to be agreeable. Ask it to quiz you and it praises a wrong answer
+            delivered confidently, which is worse than no practice at all: it manufactures the
+            exact feeling of readiness the lock exists to destroy. People find this out in public,
+            every hiring season: flawless AI-assisted practice, then a failed loop.
+          </p>
+          <p>
+            The sprint sells the other layer. The diagram comes off the screen before you answer.
+            The grade comes from the chapter the diagram belongs to, not from whatever the model
+            improvises that day, and what you missed is quoted back from your own words. The
+            schedule remembers which of 197 diagrams you failed twelve days ago; a chat window
+            forgets the syllabus by Tuesday. That layer is the product. It is the one layer a free
+            model does not offer, because honesty is not what it is tuned for.
+          </p>
         </section>
 
         <section id="reels">
@@ -519,18 +549,16 @@ export default function Home() {
                   <strong>What exists today?</strong> The book, all 51 chapters, with 36 histories. The rep
                   on this page,
                   hand-built: its follow-ups were written in advance and its score is keyword
-                  matching. In the sprint the follow-ups are generated against your answer; the
-                  score still matches your words against the chapter&rsquo;s points, and grading
-                  them with a model is planned, not built. Four reels of the 450. The sprint
-                  itself ships 1 September.
+                  matching. Model grading is built and running in a diagnostic interview that ends
+                  in a failure map quoting your own transcript; it is not hosted on this page yet,
+                  so everything you can click here today is the keyword version. Four reels of the
+                  450. The sprint itself ships 1 September.
                 </li>
                 <li>
-                  <strong>Why not quiz myself with a chat window?</strong> You can, for one rep,
-                  and you should try it tonight. What a chat window will not do for thirty days:
-                  take the diagram off the screen before you answer, keep track of which of 197
-                  diagrams you failed, and bring the failed one back on day nine unasked. That is
-                  the part being sold. The explanation is free, in the book, because explanation is
-                  free everywhere now.
+                  <strong>Why not quiz myself with a chat window?</strong> You should, tonight,
+                  for one rep. The difference is answered in its own section above: a chat will
+                  not take the diagram away first, will not grade you against a fixed chapter, and
+                  will not remember what you failed.
                 </li>
                 <li>
                   <strong>My interview is in the middle of September.</strong> The form asks when
