@@ -273,8 +273,13 @@
   });
   const fs = document.getElementById("fs");
   function toggleFs() {
-    if (document.fullscreenElement) document.exitFullscreen();
-    else document.documentElement.requestFullscreen();
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    /* Chrome denies the JS fullscreen API ("not granted") in
+       automation-controlled sessions; F11 is browser-level and always works. */
+    document.documentElement.requestFullscreen().catch(() => {
+      fs.textContent = "blocked here · press F11";
+      setTimeout(() => { if (!document.fullscreenElement) fs.textContent = "⛶ fullscreen"; }, 4000);
+    });
   }
   fs.addEventListener("click", toggleFs);
   document.addEventListener("fullscreenchange", () => {
