@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HLD Gym: the demo deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Literata:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --font-read: "Literata", Charter, Georgia, serif;
+    --paper: #FFFFFF; --panel: #F4F4F4; --ink: #0A0A0A;
+    --line: #D6D6D6; --line-strong: #8A8A8A;
+    --accent: #FF5C00; --accent-ink: #B83C00; --accent-soft: #FFEDE3;
+    --good: #167A47; --bad: #C62A1E; --on-accent: #0A0A0A;
+  }
+  [data-theme="dark"] {
+    --paper: #0A0A0A; --panel: #161616; --ink: #F2F2F2;
+    --line: #2E2E2E; --line-strong: #666666;
+    --accent: #FF6A1A; --accent-ink: #FF8A45; --accent-soft: #2A1508;
+    --good: #4BB673; --bad: #F0564A; --on-accent: #0A0A0A;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--font-ui); overflow: hidden;
+  }
+  .slide {
+    display: none; position: absolute; inset: 0;
+    padding: 6vmin 8vmin; flex-direction: column;
+  }
+  .slide.on { display: flex; }
+  .kicker {
+    font-family: var(--font-mono); font-size: 1.7vmin; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent-ink);
+    border-bottom: 1px solid var(--line); padding-bottom: 1.4vmin; margin-bottom: 4vmin;
+    display: flex; justify-content: space-between;
+  }
+  .kicker .n { color: var(--line-strong); }
+  h1 { font-size: 7.2vmin; font-weight: 800; line-height: 1.04; letter-spacing: -.015em; max-width: 26ch; }
+  .lead { font-family: var(--font-read); font-size: 2.9vmin; line-height: 1.5; max-width: 58ch; margin-top: 3vmin; }
+  .lead em { font-style: italic; }
+
+  /* slide 1 chart (ported from the sell page's StudyChart; Experiment 2 numbers) */
+  .s1grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 7vmin; align-items: center; flex: 1; min-height: 0; }
+  .chart { max-width: 46vmin; width: 100%; justify-self: end; }
+  .chart svg { width: 100%; height: auto; display: block; }
+  .chart figcaption { font-family: var(--font-mono); font-size: 1.6vmin; color: var(--line-strong); margin-top: 1.2vmin; }
+  .chAxis { stroke: var(--line-strong); stroke-width: 1; }
+  .chRule { stroke: var(--line); stroke-dasharray: 4 5; }
+  .chAxisTxt { font-family: var(--font-mono); font-size: 11px; fill: var(--line-strong); }
+  .chLine { stroke-width: 3; fill: none; }
+  .chDraw { stroke-dasharray: 100; animation: chDraw 900ms cubic-bezier(.2,.7,.2,1) both; }
+  .chRead { stroke: var(--line-strong); }
+  .chRecall { stroke: var(--accent); }
+  .chDraw.chRecall { animation-delay: 300ms; }
+  @keyframes chDraw { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+  .chReadDot { fill: var(--line-strong); }
+  .chRecallDot { fill: var(--accent); }
+  .chVal { font-family: var(--font-ui); font-weight: 700; font-size: 15px; fill: var(--ink); }
+  .chDim { fill: var(--line-strong); }
+  .chHot { fill: var(--accent-ink); }
+  .chSeries { font-family: var(--font-mono); font-size: 11px; fill: var(--ink); }
+  .num { color: var(--accent); font-weight: 700; font-family: var(--font-ui); font-style: normal; }
+  .foot {
+    margin-top: auto; border-top: 1px solid var(--line); padding-top: 1.8vmin;
+    font-family: var(--font-mono); font-size: 1.9vmin; color: var(--line-strong);
+    display: flex; justify-content: space-between; gap: 3vmin;
+  }
+  .foot b { color: var(--ink); font-weight: 500; }
+
+  /* slide 2 loop */
+  .loop { display: flex; gap: 0; margin-top: 5vmin; border: 1px solid var(--line-strong); }
+  .step { flex: 1; padding: 2.4vmin 1.8vmin 2.8vmin; border-right: 1px solid var(--line); }
+  .step:last-child { border-right: 0; }
+  .step .id { font-family: var(--font-mono); font-size: 1.7vmin; color: var(--accent); margin-bottom: 1vmin; }
+  .step .name { font-weight: 700; font-size: 2.5vmin; margin-bottom: .8vmin; }
+  .step .what { font-family: var(--font-read); font-size: 1.85vmin; line-height: 1.45; color: var(--line-strong); }
+  .step.lock { background: var(--panel); }
+  .step.grade { background: var(--accent-soft); }
+  .step.grade .name { color: var(--accent-ink); }
+  .built {
+    margin-top: 3.5vmin; font-family: var(--font-mono); font-size: 2vmin;
+    line-height: 1.5; color: var(--accent-ink); max-width: 72ch;
+    border-left: 3px solid var(--accent); padding-left: 1.8vmin;
+  }
+
+  /* slide 3 split */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-top: 4.5vmin; border: 1px solid var(--line-strong); flex: 0 1 auto; }
+  .col { padding: 2.8vmin 3vmin; }
+  .col + .col { border-left: 1px solid var(--line-strong); background: var(--accent-soft); }
+  .col h2 { font-size: 2.3vmin; font-family: var(--font-mono); font-weight: 500; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 2vmin; }
+  .col:first-child h2 { color: var(--line-strong); }
+  .col + .col h2 { color: var(--accent-ink); }
+  .col ul { list-style: none; }
+  .col li { font-family: var(--font-read); font-size: 2.15vmin; line-height: 1.45; padding: 1vmin 0; border-top: 1px solid var(--line); }
+  .col li:first-of-type { border-top: 0; }
+  .col p { font-family: var(--font-read); font-size: 2.05vmin; line-height: 1.5; margin-bottom: 2.2vmin; }
+  .col h2 + p { margin-top: 0; }
+  .col .gap { font-family: var(--font-mono); font-size: 1.85vmin; color: var(--accent-ink); margin: 1.6vmin 0 0; }
+  .quote { margin-top: 3.5vmin; font-family: var(--font-read); font-style: italic; font-size: 2.6vmin; line-height: 1.5; max-width: 62ch; }
+  .quote .who { display: block; font-family: var(--font-mono); font-style: normal; font-size: 1.7vmin; color: var(--line-strong); margin-top: 1vmin; }
+
+  /* slide 4 */
+  .plan { display: grid; grid-template-columns: 1fr 1fr 1fr; margin-top: 4.5vmin; border: 1px solid var(--line-strong); }
+  .ph { padding: 2.6vmin 2.8vmin 3vmin; border-right: 1px solid var(--line); }
+  .ph:last-child { border-right: 0; background: var(--panel); }
+  .ph .when { font-family: var(--font-mono); font-size: 1.7vmin; color: var(--accent); margin-bottom: 1.2vmin; letter-spacing: .08em; }
+  .ph .head { font-weight: 700; font-size: 2.5vmin; margin-bottom: 1vmin; }
+  .ph p { font-family: var(--font-read); font-size: 1.95vmin; line-height: 1.5; color: var(--ink); }
+  .thesis { margin-top: 4vmin; font-size: 3.4vmin; font-weight: 800; letter-spacing: -.01em; }
+  .thesis span { color: var(--accent); }
+
+  .dots { position: fixed; bottom: 2.4vmin; right: 3vmin; display: flex; gap: 1vmin; }
+  .dots i { width: 1vmin; height: 1vmin; background: var(--line); }
+  .dots i.on { background: var(--accent); }
+</style>
+</head>
+<body>
+
+<section class="slide on">
+  <div class="kicker"><span>HLD GYM · SHIPYARD S3</span><span class="n">01 / 05</span></div>
+  <h1>Reading feels like knowing.<br>The interview disagrees.</h1>
+  <div class="s1grid">
+    <div>
+      <p class="lead">Two groups, same passage, same total time. One re-read four times, one recalled from memory. Five minutes later the re-readers led, <span class="num">83&nbsp;to&nbsp;71</span>. A week later it reversed: <span class="num">61&nbsp;to&nbsp;40</span>. The re-readers had been certain they would win. <em>Easy felt like knowing.</em></p>
+      <p class="lead">System design is the round that gates senior offers. And nothing a candidate practices with today will tell them they are not ready.</p>
+    </div>
+    <figure class="chart">
+      <svg viewBox="0 0 360 300" role="img" aria-label="Recall after five minutes and after one week. Re-reading falls from 83 percent to 40 percent. Recall practice falls from 71 percent to 61 percent, overtaking it.">
+        <line class="chAxis" x1="64" y1="34" x2="64" y2="196"/>
+        <line class="chAxis" x1="64" y1="196" x2="320" y2="196"/>
+        <line class="chRule" x1="64" y1="115" x2="320" y2="115"/>
+        <text class="chAxisTxt" x="56" y="38" text-anchor="end">100%</text>
+        <text class="chAxisTxt" x="56" y="119" text-anchor="end">50%</text>
+        <text class="chAxisTxt" x="56" y="200" text-anchor="end">0</text>
+        <text class="chAxisTxt" x="86" y="216" text-anchor="middle">5 min later</text>
+        <text class="chAxisTxt" x="300" y="216" text-anchor="middle">1 week later</text>
+        <line class="chLine chDraw chRead" pathLength="100" x1="86" y1="61.5" x2="300" y2="131.2"/>
+        <line class="chLine chDraw chRecall" pathLength="100" x1="86" y1="81" x2="300" y2="97.2"/>
+        <circle class="chReadDot" cx="86" cy="61.5" r="4"/>
+        <circle class="chReadDot" cx="300" cy="131.2" r="4"/>
+        <circle class="chRecallDot" cx="86" cy="81" r="4"/>
+        <circle class="chRecallDot" cx="300" cy="97.2" r="4"/>
+        <text class="chVal" x="86" y="49.5" text-anchor="middle">83</text>
+        <text class="chVal" x="86" y="101" text-anchor="middle">71</text>
+        <text class="chVal chDim" x="300" y="151.2" text-anchor="middle">40</text>
+        <text class="chVal chHot" x="300" y="85.2" text-anchor="middle">61</text>
+        <line class="chLine chRead" x1="64" y1="248" x2="92" y2="248"/>
+        <text class="chSeries" x="100" y="252">read it 4 times</text>
+        <line class="chLine chRecall" x1="64" y1="274" x2="92" y2="274"/>
+        <text class="chSeries" x="100" y="278">recalled it 3 times</text>
+      </svg>
+      <figcaption>Roediger &amp; Karpicke 2006, experiment 2: % of the passage still recalled.</figcaption>
+    </figure>
+  </div>
+  <div class="foot"><span>Roediger &amp; Karpicke 2006, <b>Psychological Science</b> 17(3)</span><span><b>hld-gym.vercel.app</b></span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span>THE PRODUCT</span><span class="n">02 / 05</span></div>
+  <h1>A gym for system design.<br>Reps, not reading.</h1>
+  <div class="loop">
+    <div class="step"><div class="id">01</div><div class="name">Watch</div><div class="what">A verified diagram teaches itself, step by step.</div></div>
+    <div class="step lock"><div class="id">02</div><div class="name">Lock</div><div class="what">It disappears. This is the whole trick.</div></div>
+    <div class="step"><div class="id">03</div><div class="name">Rebuild</div><div class="what">From memory. Nothing to feel fluent about.</div></div>
+    <div class="step"><div class="id">04</div><div class="name">Defend</div><div class="what">A probing interviewer pushes on the weak edge.</div></div>
+    <div class="step grade"><div class="id">05</div><div class="name">Graded</div><div class="what">Against hand-verified rubrics. A failure map, quoting your own words. This step is the product.</div></div>
+    <div class="step"><div class="id">06</div><div class="name">Return</div><div class="what">Spaced, scheduled, compressed toward your onsite date.</div></div>
+  </div>
+  <div class="foot"><span>free: <b>51-chapter book · 197 verified diagrams</b>, no signup</span><span>paid: <b>$19 · 30-day sprint · 1 Sep</b></span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span>THE BUYER · THE MARKET</span><span class="n">03 / 05</span></div>
+  <h1>A named buyer, in a market<br>that already pays.</h1>
+  <div class="split">
+    <div class="col">
+      <h2>Who buys, and what they buy</h2>
+      <p><strong>A senior engineer with a system-design onsite dated weeks away.</strong> Meta E5 / Google L5 bar. Fears this round most, cannot tell if they are ready, and weighs our $19 against a $179 human mock. No dated interview, no buyer: we do not sell to "someday".</p>
+      <p><strong>The value:</strong> an honest, verified grade of readiness. Designs rebuilt and defended under pressure, graded against the book's rubrics, a failure map in their own words, weeks before the real one is written for them.</p>
+      <h2>Where we find them</h2>
+      <p>The free 51-chapter book is the funnel, posted with the author's name where they already are: r/ExperiencedDevs, r/leetcode, Blind, LinkedIn. No ads. No cold launches.</p>
+    </div>
+    <div class="col">
+      <h2>Proof the market pays, today</h2>
+      <ul>
+        <li><strong>interviewing.io</strong>: $179 to $339 for one human mock. Sells out into waitlists.</li>
+        <li><strong>Hello Interview</strong>: ~$47/mo, bootstrapped, 100,000+ engineers served.</li>
+        <li><strong>NeetCode</strong>: one person, ~$10M a year.</li>
+        <li><strong>Alex Xu / ByteByteGo</strong>: ~1M books sold, 1M-reader newsletter.</li>
+      </ul>
+      <p class="gap">Every winner: free content first, paid judgment on top. Nobody sells the graded rebuild-from-memory loop. That open slot is us.</p>
+    </div>
+  </div>
+  <div class="foot"><span>pattern: <b>content is free everywhere</b></span><span>money concentrates on <b>credible assessment</b></span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span>THE OBVIOUS QUESTION</span><span class="n">04 / 05</span></div>
+  <h1>Doesn't ChatGPT kill this?</h1>
+  <div class="split">
+    <div class="col">
+      <h2>Free forever. We give it away.</h2>
+      <ul>
+        <li>Explanations and study plans. Chegg sold these: stock down 99%.</li>
+        <li>Voice chat that plays interviewer.</li>
+        <li>A friendly AI that says you did great. It says that to everyone.</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h2>What buyers pay for. The product.</h2>
+      <ul>
+        <li>Grading against hand-verified ground truth, not an improvised answer.</li>
+        <li>A failure map in your own words, before the onsite writes one for you.</li>
+        <li>A 30-day spine that never forgets the syllabus.</li>
+        <li>Your calibration curve: predicted score vs real, shrinking.</li>
+      </ul>
+    </div>
+  </div>
+  <p class="built">Not a roadmap: the paid layer exists. A model-graded diagnostic interview that ends in a failure map, quoting the candidate's own transcript, is built and running. Hosting it as the public front door is the last step.</p>
+  <p class="quote">"AI study modes optimize for knowledge transfer. The harder problem is knowledge use, being able to actually apply something under pressure."<span class="who">Hacker News, April 2026, on why OpenAI's Study Mode died</span></p>
+  <div class="foot"><span>selling answers: <b>dead</b></span><span>selling judgment: <b>interviewing.io, $179 a session</b></span><span>us: <b>judgment at $19</b></span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span>THE PLAN</span><span class="n">05 / 05</span></div>
+  <h1>Three paying strangers.<br>Then a machine that transfers.</h1>
+  <div class="plan">
+    <div class="ph"><div class="when">NOW</div><div class="head">Presell is live</div><p>Book free at the door, sprint behind it. A stranger paying before the product exists is the only metric. Three sales by 9 Sep wins Shipyard S3.</p></div>
+    <div class="ph"><div class="when">NEXT 17 DAYS</div><div class="head">Judgment up front</div><p>The graded diagnostic becomes the front door: six minutes, a real grade, your failure map, one buy button. Then the free book goes where the buyers actually are.</p></div>
+    <div class="ph"><div class="when">THEN</div><div class="head">The engine</div><p>Verified ground truth, adversarial grading, calibration, welded to a dated high-stakes exam. Nothing in that sentence says "system design." Next: ML design rounds, security certs, cloud orals.</p></div>
+  </div>
+  <p class="thesis">The layer AI can't fake is the layer that <span>tells you the truth.</span></p>
+  <div class="foot"><span><b>hld-gym.vercel.app</b></span><span>shreyashlrn@gmail.com</span></div>
+</section>
+
+<div class="dots"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+
+<script>
+  const slides = [...document.querySelectorAll(".slide")];
+  const dots = [...document.querySelectorAll(".dots i")];
+  let cur = 0;
+  function go(n) {
+    cur = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, i) => s.classList.toggle("on", i === cur));
+    dots.forEach((d, i) => d.classList.toggle("on", i === cur));
+  }
+  addEventListener("keydown", e => {
+    if (["ArrowRight", " ", "PageDown"].includes(e.key)) go(cur + 1);
+    if (["ArrowLeft", "PageUp"].includes(e.key)) go(cur - 1);
+    if (e.key === "t") {
+      const h = document.documentElement;
+      h.dataset.theme = h.dataset.theme === "paper" ? "dark" : "paper";
+    }
+  });
+  addEventListener("click", e => go(cur + (e.clientX > innerWidth / 2 ? 1 : -1)));
+</script>
+</body>
+</html>
