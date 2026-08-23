@@ -8,9 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "node --experimental-strip-types --test lib/*.test.ts",
-    "publish:book": "next build && rsync -a --delete --exclude 'book/' --exclude 'reels/' --exclude 'playground/' out/ ../dist/",
+    "publish:book": "next build && npm run guard:voice && rsync -a --delete --exclude 'book/' --exclude 'reels/' --exclude 'playground/' out/ ../dist/",
     "preview": "npm run publish:book && python3 -m http.server 4173 --directory ../dist",
-    "predev": "mkdir -p public && ln -sfn ../../dist/book public/book"
+    "predev": "mkdir -p public && ln -sfn ../../dist/book public/book",
+    "guard:voice": "! grep -rq localhost:7860 out || { echo \"ERROR: NEXT_PUBLIC_VOICE_URL was unset at build time \u2014 this export ships http://localhost:7860 to every visitor. Set it, rebuild.\"; exit 1; }"
   },
   "dependencies": {
     "@dagrejs/dagre": "3.1.1",

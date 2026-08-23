@@ -5,7 +5,17 @@ import { SmallWebRTCTransport } from "@pipecat-ai/small-webrtc-transport";
 
 /* Not NEXT_PUBLIC_-prefixed by accident: this is a URL, and only a URL. The
    OpenAI key lives on the service and is never shipped to a browser. */
-export const VOICE_URL = process.env.NEXT_PUBLIC_VOICE_URL ?? "http://localhost:7860";
+/* Localhost is a dev fallback and only a dev fallback. A production export
+   built without NEXT_PUBLIC_VOICE_URL used to bake "http://localhost:7860"
+   into the bundle, so every visitor's browser probed their own machine and
+   hung ~15s before the page could honestly say the service was down. Next
+   inlines NODE_ENV, so the dev arm is dead code in a production build; the
+   empty base makes the request relative, and a static export with no /api
+   route 404s it instantly instead. `npm run guard:voice` fails the publish
+   before such a build can reach dist/ at all. */
+const VOICE_URL =
+  process.env.NEXT_PUBLIC_VOICE_URL ??
+  (process.env.NODE_ENV === "development" ? "http://localhost:7860" : "");
 
 export type VoiceSession = {
   send: (type: string, data?: unknown) => void;
@@ -30,7 +40,6 @@ export type VoiceSession = {
     that reported it the same way it reports a real error would be telling a
     visitor a working feature was down. */
 export async function connectVoice(opts: {
-  url?: string;
   mode?: "dictation" | "playground" | "diagnostic";
   /* Our own session token (see lib/auth.ts), sent as
      "Authorization: Bearer <token>" -- never in the URL: a token in a query
@@ -41,7 +50,6 @@ export async function connectVoice(opts: {
   onMessage: (message: unknown) => void;
   onDisconnect: (reason: "ended" | "error") => void;
 }): Promise<VoiceSession> {
-  const base = opts.url ?? VOICE_URL;
   const mode = opts.mode ?? "dictation";
   // False until a VoiceSession has actually been handed back, and false
   // again from the moment the caller disconnects it itself — so a stale
@@ -60,7 +68,7 @@ export async function connectVoice(opts: {
     // header needs.
     transport: new SmallWebRTCTransport({
       webrtcRequestParams: {
-        endpoint: `${base}/api/offer?mode=${mode}`,
+        endpoint: `${VOICE_URL}/api/offer?mode=${mode}`,
         ...(opts.token ? { headers: new Headers({ Authorization: `Bearer ${opts.token}` }) } : {}),
       },
     }),

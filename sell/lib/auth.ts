@@ -9,7 +9,17 @@
    resolving small-webrtc-transport's own `lodash/cloneDeep` import, which
    only a bundler tolerates). Same default, same env var, restated in one
    line rather than shared. */
-const VOICE_URL = process.env.NEXT_PUBLIC_VOICE_URL ?? "http://localhost:7860";
+/* Localhost is a dev fallback and only a dev fallback. A production export
+   built without NEXT_PUBLIC_VOICE_URL used to bake "http://localhost:7860"
+   into the bundle, so every visitor's browser probed their own machine and
+   hung ~15s before the page could honestly say the service was down. Next
+   inlines NODE_ENV, so the dev arm is dead code in a production build; the
+   empty base makes the request relative, and a static export with no /api
+   route 404s it instantly instead. `npm run guard:voice` fails the publish
+   before such a build can reach dist/ at all. */
+const VOICE_URL =
+  process.env.NEXT_PUBLIC_VOICE_URL ??
+  (process.env.NODE_ENV === "development" ? "http://localhost:7860" : "");
 
 /* Playground's own session token -- never Google's. Google issues an ID
    token that expires in about an hour; the voice service
