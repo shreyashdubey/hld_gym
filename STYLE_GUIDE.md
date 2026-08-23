@@ -91,6 +91,8 @@ Network readout (engine renders a measure-your-own-connection block; at most one
 ```
 A checkpoint's `data-item` must name an item in the chapter's own quiz JSON. Checkpoints interpolate retrieval through the chapter instead of stacking all of it at the end.
 
+**Pacing rule (the segmenting principle, Mayer):** a chapter carries at least one retrieval element — checkpoint, feynman rep, or exercise — every two `<h2>` sections, and any section that introduces a new mechanism ends with a checkpoint on that mechanism. A 30-minute read with all retrieval stacked at the end is a wall; retrieval every few minutes is the pacing the layout's section seams promise.
+
 Takeaways:
 ```html
 <div class="takeaways"><div class="box-tag">Takeaways</div><ul><li>…</li></ul></div>
