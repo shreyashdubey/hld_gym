@@ -220,9 +220,11 @@ function clearRail() {
   if (railSpy) { removeEventListener('scroll', railSpy); railSpy = null; }
   $('#rail').innerHTML = '';
   $('.shell').classList.add('no-rail');
+  $('#read-progress i').style.transform = 'scaleX(0)';
+  $('#time-left').textContent = '';
 }
 
-function renderRail(id) {
+function renderRail(id, readMin) {
   clearRail();
   const rail = $('#rail');
   const heads = [...VIEW.querySelectorAll('.ch-body h2')];
@@ -258,6 +260,8 @@ function renderRail(id) {
 
   const links = [...rail.querySelectorAll('.rail-link')];
   if (!links.length) return;
+  const bodyEl = VIEW.querySelector('.ch-body');
+  const bar = $('#read-progress i'), tleft = $('#time-left');
   let queued = false;
   railSpy = () => {
     if (queued) return;
@@ -267,6 +271,12 @@ function renderRail(id) {
       let idx = 0;
       heads.forEach((h, i) => { if (h.getBoundingClientRect().top <= 130) idx = i; });
       links.forEach((l, i) => l.classList.toggle('here', i === idx));
+      /* progress = how much of the body has passed the bottom of the viewport:
+         0 while the body is below the fold, 1 the moment its end scrolls in */
+      const r = bodyEl.getBoundingClientRect();
+      const p = Math.min(1, Math.max(0, (innerHeight - r.top) / r.height));
+      bar.style.transform = `scaleX(${p})`;
+      tleft.textContent = p >= 1 ? '' : `~${Math.max(1, Math.ceil(readMin * (1 - p)))} min left`;
     });
   };
   addEventListener('scroll', railSpy, { passive: true });
@@ -804,10 +814,11 @@ function renderChapter(id) {
   const gym = GYM();
 
   const words = tpl.content.textContent.split(/\s+/).length;
+  const readMin = Math.max(1, Math.round(words / 220));
   VIEW.innerHTML = `<div class="content">
     <p class="eyebrow">Part ${c.part} — ${c.partTitle}</p>
     <h1 class="ch-title">${c.title} ${gym && mastered(id) ? '<span class="stamp">Mastered</span>' : ''}</h1>
-    <div class="ch-meta">${c.part}.${c.idx} · ~${Math.max(1, Math.round(words / 220))} min read · ${chQuiz(id).length} quiz questions</div>
+    <div class="ch-meta">${c.part}.${c.idx} · ~${readMin} min read · ${chQuiz(id).length} quiz questions</div>
     <div class="ch-body"></div>
     <div class="quiz-wrap"><h2>Quiz</h2><p style="font-size:.9rem;color:var(--ink-2)">${gym ? 'Three levels. Pass Level 3 with 80% to earn the stamp. Answers go into your review queue.' : 'Three levels, hardest last. Every option explains itself once you pick — including the ones that are wrong.'}</p>
     <div class="q-level-tabs"></div><div class="q-zone"></div></div>
@@ -1031,7 +1042,7 @@ function renderChapter(id) {
     (prev ? `<a class="btn ghost" href="#ch/${prev.id}">← ${prev.title}</a>` : '<span></span>') +
     (next ? `<a class="btn" href="#ch/${next.id}">${next.title} →</a>` : '');
   window.scrollTo(0, 0);
-  renderRail(id);
+  renderRail(id, readMin);
 }
 
 function renderReview() {
