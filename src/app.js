@@ -238,7 +238,12 @@ function renderRail(id, readMin) {
     heads.forEach((h, i) => { html += `<button class="rail-link" data-i="${i}">${h.textContent}</button>`; });
     html += `</nav><div class="rail-sep"></div>`;
   }
-  html += `<div class="rail-title">Quiz</div>`;
+  /* The quiz stays folded to one quiet line until 60% of the body is read (or
+     the reader has scores here already) — mid-read it is a temptation, not a
+     tool. The folded line still jumps to the quiz for whoever wants it now. */
+  const held = GYM() && Object.keys(levels).length ? '' : ' held';
+  html += `<div id="rail-quiz" class="${held.trim()}"><button class="rq-held">quiz · 3 levels · at the end</button>
+    <div class="rail-title">Quiz</div>`;
   [1, 2, 3].forEach(lv => {
     const b = levels[lv];
     const cls = b === undefined ? 'none' : (b >= 80 ? 'pass' : '');
@@ -246,6 +251,7 @@ function renderRail(id, readMin) {
     const score = GYM() ? `<b class="${cls}">${b === undefined ? '—' : b + '%'}</b>` : '';
     html += `<button class="rq" data-lv="${lv}">${names[lv]}${score}</button>`;
   });
+  html += `</div>`;
   rail.innerHTML = html;
   $('.shell').classList.remove('no-rail');
 
@@ -257,11 +263,14 @@ function renderRail(id, readMin) {
     const tab = VIEW.querySelector(`.q-level-tab[data-lv="${b.dataset.lv}"]`);
     if (tab) tab.click();
   }));
+  rail.querySelector('.rq-held').addEventListener('click', () =>
+    VIEW.querySelector('.quiz-wrap').scrollIntoView(how));
 
   const links = [...rail.querySelectorAll('.rail-link')];
   if (!links.length) return;
   const bodyEl = VIEW.querySelector('.ch-body');
   const bar = $('#read-progress i'), tleft = $('#time-left');
+  const rtitle = rail.querySelector('.rail-title'), rquiz = rail.querySelector('#rail-quiz');
   let queued = false;
   railSpy = () => {
     if (queued) return;
@@ -270,13 +279,15 @@ function renderRail(id, readMin) {
       queued = false;
       let idx = 0;
       heads.forEach((h, i) => { if (h.getBoundingClientRect().top <= 130) idx = i; });
-      links.forEach((l, i) => l.classList.toggle('here', i === idx));
+      links.forEach((l, i) => { l.classList.toggle('here', i === idx); l.classList.toggle('past', i < idx); });
+      rtitle.textContent = `On this page · ${idx + 1}/${heads.length}`;
       /* progress = how much of the body has passed the bottom of the viewport:
          0 while the body is below the fold, 1 the moment its end scrolls in */
       const r = bodyEl.getBoundingClientRect();
       const p = Math.min(1, Math.max(0, (innerHeight - r.top) / r.height));
       bar.style.transform = `scaleX(${p})`;
       tleft.textContent = p >= 1 ? '' : `~${Math.max(1, Math.ceil(readMin * (1 - p)))} min left`;
+      if (p >= .6) rquiz.classList.remove('held'); // one-way: earned, never re-folded
     });
   };
   addEventListener('scroll', railSpy, { passive: true });
