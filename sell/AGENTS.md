@@ -26,8 +26,9 @@ file in the same commit as the code.
 Live at **https://hld-gym.vercel.app/** since 2026-08-17.
 
 A presell page for a **30-day system design sprint** — the whole 51-chapter book,
-197 reps and 450 reels — $19, starting 1 September
-2026. It carries one playable rep: a diagram teaches itself, **locks**, you
+197 reps and 450 reels — $19. There is no start date in the copy: reservation
+holders go first, and a refund is available until their day one. It carries one
+playable rep: a diagram teaches itself, **locks**, you
 rebuild it from memory, get scored, then an interviewer takes the answer apart.
 
 The page exists to measure one thing: **will a stranger pay before the product

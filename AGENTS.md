@@ -29,6 +29,9 @@ writes to its own subtree and never clears the others:
   the origins view and the reel encodes**, all produced by entirely different
   pipelines.
 - `reel/make.sh` writes only `dist/reels/`.
+- `deck/demo/index.html` is copied by hand to `dist/demo/index.html` (the demo-day
+  deck, served at `/demo/`); `publish:book` carries `--exclude 'demo/'` so a
+  publish does not wipe it.
 - `publish:book` also carries a fourth exclude, `--exclude 'playground/'`, for
   a different reason than the three above: nothing would be *wiped* by dropping
   it, `out/playground/` would simply start landing in `dist/playground/` and

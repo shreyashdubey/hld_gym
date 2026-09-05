@@ -280,6 +280,77 @@ Learning-styles matching doesn't replicate (Pashler 2008). The product's
 variety is justified by the *output* mode of the exam, you'll speak and
 draw and defend, because that's what transfers, not by input preference.
 
+**"How is this different from flo101? Isn't a multi-agent skill partner a superset of this?"**
+Complementary, and I'd want to plug into it. flo101 builds the path across
+any skill: the agents that walk you through learning anything. I build the
+verified answer key and the honest grade for one skill at a time: 197 hand-
+checked diagrams, a grader that has to quote your own transcript for every
+cut, and a schedule welded to your onsite date. A path needs a checkpoint
+that cannot be flattered, and that checkpoint is the part I build. If flo101
+routed a learner with a dated system-design interview into a graded rep,
+that's their path and my answer key. They fit.
+
+**"Which of those screens can I use today?"**
+The rep and the free book: live for anyone right now, no signup. The graded
+round and the failure map: built, running on my laptop, behind a hosting
+gate (WebRTC needs UDP ingress, plus a daily round cap and a concurrent cap
+before strangers can spend my OpenAI minutes). The predict step, the plus-
+one and the return schedule: the sprint as it ships to reservation holders
+first.
+
+**"Whose data is the plus one?"**
+Mine, on this stage, three minutes ago. Day one has one dot because there is
+one data point. I did not draw a curve I don't have.
+
+**"Where did the ChatGPT reply come from?"**
+A real ChatGPT session this morning, pasted verbatim, on the same 21 words
+you watched me type. If it happens to mention TTL on your run, notice it
+still gives no score, no evidence, and forgets tomorrow. The market prices
+that difference at $179 a session.
+
+**"Isn't the interviewer just a prompt?"**
+Yes, and I say so. The interviewer is delivery; about thirty AI mock
+interviewers launched on Show HN in two years and died. What's for sale is
+what a prompt can't be: a hand-verified rubric, a grading pipeline that must
+quote your transcript or the moment is dropped in code, thirty days of
+state, and your calibration record.
+
+**"Hello Interview already does AI-graded practice."**
+They do, and that validates the shape. Their own buyers' complaint is a
+grader that is a stubborn black box. Mine has to show its evidence: the
+sentence it cut you on, with the rubric line. And, verified on their pages,
+they have no recall-from-memory step and no spaced return.
+
+**"How do you know the grader agrees with a human?"**
+Today: every quote is substring-checked in code, so it cannot invent
+evidence, and the card says 'graded by a model, so it can be wrong'. The
+agreement statistic publishes at 100 human-graded transcripts; ELSA's 93.88%
+agreement with human raters is the bar I'm holding myself to.
+
+**"'Pulled to day 17 by the onsite': how does that work?"**
+Spaced return would push a nailed diagram weeks out. The scheduler caps
+every interval at the onsite date, so the last return lands before the day,
+not after. Weak diagrams return in days, solid ones once more before the
+date. Compression, not cramming.
+
+**"Why call the score before the grade?"**
+Because the re-readers in 2006 predicted they'd win. The gap between the
+call and the grade is the thesis, measured. The one guided reflection
+question after it is what the research says turns a number into a fix; no
+feedback plus low success is where retrieval practice stops working.
+
+**"Is it personalized to how I learn?"**
+Personal by what you don't know, not by how you like to learn. Learning-style
+matching doesn't replicate (Pashler 2008); what does replicate is practicing in
+the mode the exam tests and returning to exactly what you missed. Your failure
+map, your calibration record, your weak/solid map and your onsite date are
+yours. The answer key is verified once, for everyone.
+
+**"Isn't this a learning companion / AI tutor?"**
+No. Tutors explain, and explanation is free now. This is a gym: the answer
+disappears, you have to think, and an honest grade tells you whether you did.
+The product is the grade you can audit, not the company.
+
 ## Three rules for the room
 
 1. Never claim what isn't live. The page discloses hand-written follow-ups

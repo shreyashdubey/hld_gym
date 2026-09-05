@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HLD Gym: the failure map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Literata:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --font-read: "Literata", Charter, Georgia, serif;
+    --paper: #FFFFFF; --panel: #F4F4F4; --ink: #0A0A0A;
+    --line: #D6D6D6; --line-strong: #8A8A8A;
+    --accent: #FF5C00; --accent-ink: #B83C00; --accent-soft: #FFEDE3;
+    --good: #167A47; --bad: #C62A1E; --on-accent: #0A0A0A;
+    --panel-2: #eaeaea; --ink-2: #4a4a4a; --ink-3: #666666;
+    --bad-soft: #fbe9e7; --good-soft: #e6f2ea;
+  }
+  [data-theme="dark"] {
+    --paper: #0A0A0A; --panel: #161616; --ink: #F2F2F2;
+    --line: #2E2E2E; --line-strong: #666666;
+    --accent: #FF6A1A; --accent-ink: #FF8A45; --accent-soft: #2A1508;
+    --good: #4BB673; --bad: #F0564A; --on-accent: #0A0A0A;
+    --panel-2: #1f1f1f; --ink-2: #b0aca8; --ink-3: #949494;
+    --bad-soft: #2a1614; --good-soft: #16281e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--font-ui); overflow: hidden; padding: 5vmin 6vmin;
+  }
+  button { font: inherit; color: inherit; border-radius: 0; }
+  .mono { font-family: var(--font-mono); }
+  .dim { color: var(--ink-3); }
+
+  /* ---------- the rep shell (sell/app/globals.css .rep/.repTag/.repBody, scaled with vmin) ---------- */
+  .rep { border: 1px solid var(--line-strong); background: var(--panel); height: 100%; display: flex; flex-direction: column; }
+  .repTag {
+    font-family: var(--font-mono); font-size: 1.7vmin; letter-spacing: .13em; text-transform: lowercase;
+    color: var(--on-accent); background: var(--accent); padding: 1vmin 2.2vmin;
+    border-bottom: 1px solid var(--accent); display: flex; align-items: center; gap: 1.4vmin; font-weight: 700;
+  }
+  .repTag .phase { margin-left: auto; font-weight: 400; opacity: .75; }
+  .repBody { flex: 1; min-height: 0; padding: 2.6vmin 2.6vmin 3.6vmin; }   /* bottom > the overlay's 8vmin inset minus the body's 5vmin, so the $19 button never peeks out under it */
+  .scr { display: none; height: 100%; flex-direction: column; }
+  .scr.on { display: flex; }
+  .meta { font-size: 1.8vmin; letter-spacing: .04em; }
+  .hint { font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); letter-spacing: .04em; line-height: 1.5; }
+
+  /* ---------- screen 1: predict ---------- */
+  .predict { align-items: center; justify-content: center; text-align: center; gap: 3.2vmin; }
+  .predict h1 { font-size: 4vmin; font-weight: 700; line-height: 1.15; letter-spacing: -.01em; max-width: 30ch; }
+  .squares { display: flex; gap: 1.6vmin; }
+  .sq {
+    width: 9vmin; height: 9vmin; border: 1px solid var(--line-strong); background: transparent;
+    font-family: var(--font-mono); font-size: 3.2vmin; cursor: pointer;
+  }
+  .sq.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+
+  /* ---------- screen 2: grading ---------- */
+  .grading { justify-content: center; gap: 2.4vmin; }
+  .grading .line { font-size: 2vmin; letter-spacing: .04em; color: var(--ink-2); }
+  .track { height: 1px; background: var(--line-strong); position: relative; }
+  .track i { position: absolute; left: 0; bottom: 0; height: .7vmin; width: 0; background: var(--accent); animation: fill 2000ms linear both; }
+  @keyframes fill { from { width: 0; } to { width: 100%; } }
+
+  /* ---------- screen 3: the map (sell/app/globals.css .failureMap, one row of cards) ---------- */
+  .map h2 { font-size: 4.2vmin; font-weight: 700; letter-spacing: -.01em; line-height: 1.1; margin: .8vmin 0 2.4vmin; }
+  .moments { list-style: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.6vmin; margin: auto 0; }
+  .card {
+    border: 1px solid var(--line); background: var(--panel); padding: 2vmin 2vmin 2.2vmin;
+    display: flex; flex-direction: column; gap: 1.3vmin;
+    animation: rise 320ms cubic-bezier(.2,.7,.2,1) both; animation-delay: calc(var(--i) * 90ms);
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(1.2vmin); } to { opacity: 1; transform: none; } }
+  .qrow { display: flex; gap: 1.4vmin; align-items: flex-start; }
+  .card blockquote {
+    flex: 1; font-family: var(--font-read); font-style: italic; font-size: 2.5vmin; line-height: 1.45;
+    color: var(--ink-2); border-left: 1px solid var(--line-strong); padding-left: 1.6vmin;
+  }
+  .verb { font-family: var(--font-mono); font-size: 1.5vmin; letter-spacing: .06em; color: var(--good); white-space: nowrap; padding-top: .5vmin; }
+  .card .pr { font-size: 2.1vmin; line-height: 1.4; color: var(--ink-2); }
+  .card .gap { font-size: 2.3vmin; font-weight: 700; line-height: 1.35; }
+  .card a { color: var(--accent-ink); font-family: var(--font-mono); font-size: 1.7vmin; margin-top: auto; padding-top: .6vmin; }
+  .map .hint { margin: 2.6vmin 0 2vmin; }
+  .btn {
+    font-family: var(--font-ui); font-weight: 700; font-size: 2.2vmin; background: var(--accent); color: var(--on-accent);
+    border: 1px solid var(--accent); padding: 1.5vmin 2.8vmin; cursor: pointer; letter-spacing: .01em; line-height: 1.3;
+    align-self: flex-start;
+  }
+  .btn:hover { filter: brightness(1.07); }
+
+  /* ---------- screen 3c: compare overlay ---------- */
+  .overlay {
+    /* top clears the strip (its bottom edge sits at ~9.5vmin); 8vmin sliced through the strip text */
+    position: fixed; inset: 10vmin 8vmin 8vmin; background: var(--paper); border: 1px solid var(--line-strong);
+    padding: 3vmin 3.4vmin; display: flex; flex-direction: column; gap: 1.8vmin; z-index: 5;
+  }
+  .overlay[hidden] { display: none; }
+  .eyebrow { font-size: 1.7vmin; letter-spacing: .13em; }
+  .typed { font-family: var(--font-read); font-size: 2.6vmin; line-height: 1.45; max-width: 64ch; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; flex: 1; min-height: 0; border-top: 1px solid var(--line); margin-top: .4vmin; }
+  .cols > div { display: flex; flex-direction: column; gap: 1.4vmin; padding-top: 2vmin; }
+  .cols > div:first-child { padding-right: 3vmin; border-right: 1px solid var(--line); }
+  .cols > div:last-child { padding-left: 3vmin; }
+  .colH { font-size: 1.7vmin; letter-spacing: .13em; color: var(--ink-2); }
+  .reply { background: var(--panel-2); padding: 2vmin 2.2vmin; font-family: var(--font-read); font-size: 2.2vmin; line-height: 1.5; }
+  .colF { font-size: 1.8vmin; letter-spacing: .04em; margin-top: auto; }   /* the overlay's point lives here; keep it at the body floor */
+  .recall { font-weight: 700; font-size: 3.2vmin; letter-spacing: -.01em; }
+  .recall .acc { color: var(--accent); }
+  .score { border: 1px solid var(--line-strong); }
+  .score ul { list-style: none; }
+  .score li {
+    display: grid; grid-template-columns: 3.4vmin 1fr; gap: 1.2vmin; padding: 1.2vmin 1.8vmin;
+    border-bottom: 1px solid var(--line); font-size: 2.1vmin; align-items: baseline;
+  }
+  .score li:last-child { border-bottom: 0; }
+  .score .mk { font-family: var(--font-mono); font-size: 1.9vmin; font-weight: 600; }
+  .score li.miss .mk { color: var(--bad); }
+  .score li.miss { background: var(--bad-soft); }
+
+  /* ---------- screen 4: thirty days ---------- */
+  .thirty { flex-direction: row; gap: 4vmin; align-items: center; }
+  .thirty .left { flex: 0 0 40%; display: flex; flex-direction: column; gap: 1.6vmin; }
+  .plus { font-size: 16vmin; font-weight: 800; color: var(--accent); line-height: .95; letter-spacing: -.03em; }
+  .called { font-size: 2vmin; letter-spacing: .04em; color: var(--ink-2); }
+  .ask { font-size: 2.4vmin; font-weight: 700; line-height: 1.3; margin-top: 1.2vmin; }
+  .choices { display: flex; flex-direction: column; gap: 1vmin; }
+  .choice {
+    font-family: var(--font-mono); font-size: 1.9vmin; text-align: left; padding: 1.3vmin 1.6vmin;
+    border: 1px solid var(--line-strong); background: transparent; cursor: pointer;
+  }
+  .choice.on { background: var(--accent-soft); }
+  .noted { font-family: var(--font-read); font-size: 2.2vmin; line-height: 1.5; min-height: 10vmin; }
+  .thirty .right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1.2vmin; }
+  .thirty svg { width: 100%; max-width: 44vw; height: auto; display: block; }
+  .cap { font-size: 1.8vmin; letter-spacing: .04em; }
+  .last { font-size: 1.8vmin; letter-spacing: .04em; margin-top: 1.2vmin; padding-top: 1.6vmin; border-top: 1px solid var(--line); }
+  /* deck slide 1 chart classes */
+  .chAxis { stroke: var(--line-strong); stroke-width: 1; }
+  .chRule { stroke: var(--line); stroke-dasharray: 4 5; }
+  .chAxisTxt { font-family: var(--font-mono); font-size: 11px; fill: var(--line-strong); }
+  .chRecallDot { fill: var(--accent); }
+  .chVal { font-family: var(--font-ui); font-weight: 700; font-size: 15px; fill: var(--ink); }
+  .rtTick { stroke: var(--ink); stroke-width: 2; }
+  .rtLbl { fill: var(--ink-2); }
+  .rtGhost { stroke: var(--line-strong); stroke-width: 2; }
+  .rtGhostLbl { text-decoration: line-through; }
+
+  /* ---------- chrome ---------- */
+  .dots { position: fixed; bottom: 2.2vmin; right: 3vmin; display: flex; gap: 1vmin; }
+  .dots i { width: 1vmin; height: 1vmin; background: var(--line); }
+  .dots i.on { background: var(--accent); }
+  /* same values as interviewer-round so the chrome does not jump at the hand-off; fits under the 5vmin body padding */
+  .fsBtn {
+    position: fixed; bottom: 1.2vmin; left: 3vmin;
+    font-family: var(--font-mono); font-size: 1.5vmin; letter-spacing: .08em;
+    background: none; border: 1px solid var(--line-strong); color: var(--ink);
+    padding: .5vmin 1.2vmin; cursor: pointer;
+  }
+  .fsBtn:hover { border-color: var(--accent); color: var(--accent-ink); }
+</style>
+</head>
+<body>
+
+<div class="rep">
+  <div class="repTag"><span>p1c06 · cache-aside read path</span><span class="phase" id="phase">predict</span></div>
+  <div class="repBody">
+
+    <section class="scr predict on">
+      <p class="mono dim meta">round over · 6:00 · 3 probes</p>
+      <h1>Before the grade: how many of the six did you hit?</h1>
+      <div class="squares">
+        <button class="sq" data-n="0">0</button><button class="sq" data-n="1">1</button><button class="sq" data-n="2">2</button><button class="sq" data-n="3">3</button><button class="sq" data-n="4">4</button><button class="sq" data-n="5">5</button><button class="sq" data-n="6">6</button>
+      </div>
+      <p class="hint">you cannot change this after the reveal</p>
+    </section>
+
+    <section class="scr grading">
+      <p class="mono line">grading your round · checking every quote against the transcript</p>
+      <div class="track"><i></i></div>
+    </section>
+
+    <section class="scr map">
+      <p class="mono dim meta">round · 6:00 · 3 moments · 3 of 3 quotes verified</p>
+      <h2>Where you would have been cut</h2>
+      <ol class="moments">
+        <li class="card" style="--i:0">
+          <div class="qrow"><blockquote>The rows go back to the cache, and the cache hands them to the app.</blockquote><span class="verb">✓ verbatim</span></div>
+          <p class="pr">What did the database send back, and to whom?</p>
+          <p class="gap">That is read-through. In cache-aside the database never talks to the cache; the app makes both hops.</p>
+          <a href="https://hld-gym.vercel.app/book/#ch/p1c06" target="_blank" rel="noopener">the free chapter that covers it · p1c06</a>
+        </li>
+        <li class="card" style="--i:1">
+          <div class="qrow"><blockquote>Until... I'd invalidate it on the next update.</blockquote><span class="verb">✓ verbatim</span></div>
+          <p class="pr">For how long?</p>
+          <p class="gap">No TTL on the write. The stale value stays until something else touches the key, and nothing will.</p>
+          <a href="https://hld-gym.vercel.app/book/#ch/p1c06" target="_blank" rel="noopener">the free chapter that covers it · p1c06</a>
+        </li>
+        <li class="card" style="--i:2">
+          <div class="qrow"><blockquote>It's sized for peak. It should hold.</blockquote><span class="verb">✓ verbatim</span></div>
+          <p class="pr">What does the database see when the cache is gone?</p>
+          <p class="gap">Peak was 1% of reads. Cache gone at 10× is 1000× that. Success sized your database for failure.</p>
+          <a href="https://hld-gym.vercel.app/book/#ch/p1c04" target="_blank" rel="noopener">the free chapter that covers it · p1c04</a>
+        </li>
+      </ol>
+      <p class="hint">Graded by a model against the chapter, so it can be wrong. The quotes are from your transcript.</p>
+      <button class="btn" id="buy">close these gaps in 30 days · $19</button>
+    </section>
+
+    <section class="scr thirty">
+      <div class="left">
+        <div class="plus" id="plus">+1</div>
+        <p class="mono called" id="called">you called it 5 of 6 · you scored 4 of 6 · overconfident · day 1</p>
+        <p class="ask">Which of the two did you believe you had said?</p>
+        <div class="choices">
+          <button class="choice" data-c="1">1 · rows return to the app, not the cache</button>
+          <button class="choice" data-c="2">2 · a TTL on the write</button>
+        </div>
+        <p class="noted" id="noted"></p>
+      </div>
+      <div class="right">
+        <svg viewBox="0 0 720 300" role="img" aria-label="Calibration: predicted minus real score by day. One dot at day 1, plus one. The onsite is day 25.">
+          <text class="chAxisTxt" x="70" y="18">predicted − real</text>
+          <line class="chAxis" x1="70" y1="30" x2="70" y2="230"/>
+          <line class="chAxis" x1="70" y1="230" x2="690" y2="230"/>
+          <text class="chAxisTxt" x="60" y="34" text-anchor="end">+2</text>
+          <text class="chAxisTxt" x="60" y="84" text-anchor="end">+1</text>
+          <text class="chAxisTxt" x="60" y="134" text-anchor="end">0</text>
+          <text class="chAxisTxt" x="60" y="184" text-anchor="end">−1</text>
+          <text class="chAxisTxt" x="60" y="234" text-anchor="end">−2</text>
+          <line class="chRule" x1="70" y1="130" x2="690" y2="130"/>
+          <text class="chAxisTxt" x="690" y="124" text-anchor="end">calibrated</text>
+          <text class="chAxisTxt" x="70" y="252" text-anchor="middle">1</text>
+          <text class="chAxisTxt" x="234.1" y="252" text-anchor="middle">10</text>
+          <text class="chAxisTxt" x="416.5" y="252" text-anchor="middle">20</text>
+          <text class="chAxisTxt" x="598.8" y="252" text-anchor="middle">30</text>
+          <text class="chAxisTxt" x="380" y="276" text-anchor="middle">day</text>
+          <line class="chAxis" x1="507.6" y1="30" x2="507.6" y2="230"/>
+          <text class="chAxisTxt" x="514" y="44">onsite · 29 sep</text>
+          <circle class="chRecallDot" id="dot" cx="70" cy="80" r="7"/>
+          <text class="chVal" id="dotLbl" x="86" y="74">+1</text>
+        </svg>
+        <p class="mono dim cap">the number you walk in with. it should reach 0 before day 25.</p>
+        <svg viewBox="0 0 720 96" role="img" aria-label="p1c06 returns on days 3, 8 and 17. A return on day 33 was pulled to day 17 by the onsite.">
+          <text class="chAxisTxt" x="70" y="14">p1c06 returns</text>
+          <line class="chAxis" x1="70" y1="44" x2="690" y2="44"/>
+          <line class="chRule" x1="507.6" y1="28" x2="507.6" y2="60"/>
+          <line class="rtTick" x1="106.5" y1="36" x2="106.5" y2="52"/>
+          <line class="rtTick" x1="197.6" y1="36" x2="197.6" y2="52"/>
+          <line class="rtTick" x1="361.8" y1="36" x2="361.8" y2="52"/>
+          <text class="chAxisTxt rtLbl" x="106.5" y="72" text-anchor="middle">mon 7</text>
+          <text class="chAxisTxt rtLbl" x="197.6" y="72" text-anchor="middle">sat 12</text>
+          <text class="chAxisTxt rtLbl" x="361.8" y="72" text-anchor="middle">mon 21</text>
+          <line class="rtGhost" x1="653.5" y1="36" x2="653.5" y2="52"/>
+          <text class="chAxisTxt rtGhostLbl" x="653.5" y="72" text-anchor="middle">day 33</text>
+        </svg>
+        <p class="mono dim cap">would have been day 33 · pulled to day 17 by the onsite</p>
+        <p class="mono last">197 diagrams · 1 weak · 0 solid · 196 unseen · next rep tomorrow · p1c04 back-of-envelope estimation</p>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div class="overlay" id="ov" hidden>
+  <p class="mono dim eyebrow">the same answer, twice · this morning</p>
+  <p class="typed">The app checks the cache first. Miss, so the app queries the database and writes the value back into the cache.</p>
+  <div class="cols">
+    <div>
+      <p class="mono colH">chatgpt · free tier</p>
+      <div class="reply" id="reply"></div>
+      <p class="mono dim colF">score: none · evidence: none · remembers tomorrow: no</p>
+    </div>
+    <div>
+      <p class="mono colH">hld gym · rubric grade</p>
+      <p class="recall">recall · <span class="acc">4 of 6</span></p>
+      <div class="score"><ul>
+        <li class="miss"><span class="mk">✕</span><span>rows return to the app, not the cache</span></li>
+        <li class="miss"><span class="mk">✕</span><span>a TTL on the write</span></li>
+      </ul></div>
+      <p class="mono dim colF">score: 4 of 6 · evidence: quotes you · returns: mon 7 sep</p>
+    </div>
+  </div>
+</div>
+
+<div class="dots"><i class="on"></i><i></i><i></i><i></i></div>
+<button class="fsBtn" id="fs">⛶ fullscreen</button>
+
+<script>
+  // paste the real reply here before the slot
+  const CHATGPT_REPLY = "Great explanation! You've captured the core idea of cache-aside caching really well. The application checks the cache first, and on a miss it reads from the database and populates the cache for subsequent reads. This is exactly how the pattern works in practice. One small addition you might consider: setting a TTL on cached entries so stale data eventually expires. Overall, solid understanding. Nice work!";
+
+  const PHASES = ["predict", "grading", "graded", "day 1 of 30 · onsite tue 29 sep"];
+  const NOTED = "Noted. Believed said, not said: that is the gap this sprint measures. This diagram returns Monday, and the TTL probe comes with it.";
+  const screens = [...document.querySelectorAll(".scr")];
+  const dots = [...document.querySelectorAll(".dots i")];
+  const $ = id => document.getElementById(id);
+  const ov = $("ov");
+  $("reply").textContent = CHATGPT_REPLY;
+  if (new URLSearchParams(location.search).get("theme") === "dark") document.documentElement.dataset.theme = "dark";
+
+  let cur = 0, called = null, timer = 0;
+  function go(n) {
+    clearTimeout(timer);
+    cur = Math.max(0, Math.min(screens.length - 1, n));
+    screens.forEach((s, i) => s.classList.toggle("on", i === cur));
+    dots.forEach((d, i) => d.classList.toggle("on", i === cur));
+    $("phase").textContent = PHASES[cur];
+    ov.hidden = true;
+    if (cur === 0) clearPrediction();
+    if (cur === 1) timer = setTimeout(() => go(2), 2000);
+    if (cur === 3) renderDay1();
+  }
+  function clearPrediction() {
+    called = null;
+    document.querySelectorAll(".sq").forEach(b => b.classList.remove("on"));
+  }
+  function predict(n) {
+    if (called !== null) return;
+    called = n;
+    document.querySelector(`.sq[data-n="${n}"]`).classList.add("on");
+    timer = setTimeout(() => go(1), 500);
+  }
+  function renderDay1() {
+    // the record follows the square actually pressed on screen 1; the talk track presses 5
+    const c = called ?? 5, d = c - 4, s = d > 0 ? "+" + d : d < 0 ? "−" + -d : "0";
+    const verdict = d > 0 ? "overconfident" : d < 0 ? "underconfident" : "calibrated";
+    $("plus").textContent = s;
+    $("called").textContent = `you called it ${c} of 6 · you scored 4 of 6 · ${verdict} · day 1`;
+    const cy = 130 - Math.max(-2, Math.min(2, d)) * 50;
+    $("dot").setAttribute("cy", cy);
+    $("dotLbl").setAttribute("y", cy - 6);
+    $("dotLbl").textContent = s;
+  }
+  function reflect(n) {
+    document.querySelectorAll(".choice").forEach(b => b.classList.toggle("on", +b.dataset.c === n));
+    $("noted").textContent = NOTED;
+  }
+  function reset() {
+    document.querySelectorAll(".choice").forEach(b => b.classList.remove("on"));
+    $("noted").textContent = "";
+    go(0);
+  }
+
+  addEventListener("keydown", e => {
+    const k = e.key;
+    if (k === "t") { const h = document.documentElement; h.dataset.theme = h.dataset.theme === "paper" ? "dark" : "paper"; return; }
+    if (k === "f") { toggleFs(); return; }
+    if (k === "r") { reset(); return; }
+    if (!ov.hidden) { if (k === "c" || k === "Escape") ov.hidden = true; return; }
+    if (k === "ArrowLeft") { go(cur - 1); return; }
+    const next = k === " " || k === "ArrowRight";
+    if (next) e.preventDefault();
+    if (cur === 0) { if (/^[0-6]$/.test(k)) predict(+k); else if (next) predict(5); }
+    else if (cur === 1) { if (next) go(2); }
+    else if (cur === 2) { if (next) go(3); else if (k === "c") ov.hidden = false; }
+    else if (cur === 3) { if (k === "1" || k === "2") reflect(+k); }
+  });
+  addEventListener("click", e => {
+    if (e.target.closest(".fsBtn, a") || !ov.hidden) return;
+    const sq = e.target.closest(".sq"); if (sq) return predict(+sq.dataset.n);
+    const ch = e.target.closest(".choice"); if (ch) return reflect(+ch.dataset.c);
+    if (cur === 0) predict(5);
+    else if (cur === 1) go(2);
+    else if (cur === 2 && (e.target.closest("#buy") || e.clientX > innerWidth / 2)) go(3);
+  });
+
+  const fs = $("fs");
+  function toggleFs() {
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    /* Chrome denies the JS fullscreen API ("not granted") in
+       automation-controlled sessions; F11 is browser-level and always works. */
+    document.documentElement.requestFullscreen().catch(() => {
+      fs.textContent = "blocked here · press F11";
+      setTimeout(() => { if (!document.fullscreenElement) fs.textContent = "⛶ fullscreen"; }, 4000);
+    });
+  }
+  fs.addEventListener("click", toggleFs);
+  document.addEventListener("fullscreenchange", () => {
+    fs.textContent = document.fullscreenElement ? "⛶ exit" : "⛶ fullscreen";
+  });
+</script>
+</body>
+</html>

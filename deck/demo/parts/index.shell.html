@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A book compiled for one person: the demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Literata:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<script>
+  /* Autoplay contract. A persona slide is <section class="slide" data-auto="a">
+     and, at load, calls deckAuto.register("a", { start(section), stop(section) }).
+     The shell calls stop() on the slide being left, then start() on the new one
+     250ms later. Defined here, before any slide, so registration always lands. */
+  window.deckAuto = { handlers: {}, register(id, h) { window.deckAuto.handlers[id] = h; } };
+</script>
+<style>
+  :root {
+    --font-ui: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --font-read: "Literata", Charter, Georgia, serif;
+    --paper: #FFFFFF; --panel: #F4F4F4; --panel-2: #eaeaea;
+    --ink: #0A0A0A; --ink-2: #4a4a4a; --ink-3: #666666;
+    --line: #D6D6D6; --line-strong: #8A8A8A;
+    --accent: #FF5C00; --accent-ink: #B83C00; --accent-soft: #FFEDE3;
+    --good: #167A47; --bad: #C62A1E; --good-soft: #e6f2ea; --bad-soft: #fbe9e7; --on-accent: #0A0A0A;
+  }
+  [data-theme="dark"] {
+    --paper: #0A0A0A; --panel: #161616; --panel-2: #1f1f1f;
+    --ink: #F2F2F2; --ink-2: #b0aca8; --ink-3: #949494;
+    --line: #2E2E2E; --line-strong: #666666;
+    --accent: #FF6A1A; --accent-ink: #FF8A45; --accent-soft: #2A1508;
+    --good: #4BB673; --bad: #F0564A; --good-soft: #16281e; --bad-soft: #2a1614; --on-accent: #0A0A0A;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--font-ui); overflow: hidden;
+  }
+  .slide {
+    display: none; position: absolute; inset: 0;
+    padding: 6vmin 8vmin; flex-direction: column;
+  }
+  .slide.on { display: flex; }
+  .kicker {
+    font-family: var(--font-mono); font-size: 1.8vmin; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--ink-3);
+    border-bottom: 1px solid var(--line); padding-bottom: 1.4vmin; margin-bottom: 4vmin;
+    display: flex; justify-content: space-between;
+  }
+  .kicker .n { color: var(--line-strong); }
+  h1 { font-size: 7.2vmin; font-weight: 800; line-height: 1.04; letter-spacing: -.015em; }
+  .lead { font-family: var(--font-read); font-size: 2.9vmin; line-height: 1.5; max-width: 58ch; margin-top: 3vmin; }
+  .lead em { font-style: italic; }
+  .lead.mark { border-left: 3px solid var(--accent); padding-left: 2.4vmin; }
+  .foot {
+    margin-top: auto; border-top: 1px solid var(--line); padding-top: 1.8vmin;
+    font-family: var(--font-mono); font-size: 1.9vmin; color: var(--line-strong);
+    display: flex; justify-content: space-between; gap: 3vmin;
+  }
+  .foot b { color: var(--ink); font-weight: 500; }
+  .foot.tight { flex-direction: column; gap: .4vmin; }
+  .built {
+    margin-top: 3.5vmin; font-family: var(--font-mono); font-size: 2vmin;
+    line-height: 1.5; color: var(--accent-ink); max-width: 72ch;
+    border-left: 3px solid var(--accent); padding-left: 1.8vmin;
+  }
+  .built.wide { max-width: none; }
+  .quote { margin-top: 3.5vmin; font-family: var(--font-read); font-style: italic; font-size: 2.6vmin; line-height: 1.5; max-width: 62ch; }
+
+  /* slide 2 grid */
+  .plan { display: grid; grid-template-columns: 1fr 1fr 1fr; margin-top: 4.5vmin; border: 1px solid var(--line-strong); }
+  .ph { padding: 2.6vmin 2.8vmin 3vmin; border-right: 1px solid var(--line); }
+  .ph:last-child { border-right: 0; background: var(--panel); }
+  .ph .when { font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); margin-bottom: 1.2vmin; letter-spacing: .08em; }
+  .ph .head { font-weight: 700; font-size: 2.5vmin; margin-bottom: 1vmin; }
+  .ph p { font-family: var(--font-read); font-size: 1.95vmin; line-height: 1.5; color: var(--ink); }
+
+  /* slide 3 split */
+  .split { display: grid; grid-template-columns: 1.1fr .9fr; gap: 0; margin-top: 3vmin; border: 1px solid var(--line-strong); flex: 0 1 auto; }
+  .col { padding: 2.2vmin 2.6vmin; }
+  .col + .col { border-left: 1px solid var(--line-strong); background: var(--panel); }
+  .col h2 { font-size: 2vmin; font-family: var(--font-mono); font-weight: 500; letter-spacing: .1em; color: var(--ink-3); margin-bottom: 1.2vmin; }
+  .col ul { list-style: none; }
+  .col li { font-family: var(--font-read); font-size: 2.05vmin; line-height: 1.4; padding: .85vmin 0; border-top: 1px solid var(--line); }
+  .col li:first-of-type { border-top: 0; }
+  .col li b { display: block; font-family: var(--font-ui); font-weight: 700; font-size: 2.1vmin; line-height: 1.3; }
+  .col li .how { display: block; font-family: var(--font-mono); font-size: 1.8vmin; line-height: 1.4; color: var(--ink-3); margin-top: .3vmin; }
+
+  /* slide 4 miniatures */
+  .modes { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 3.5vmin; border: 1px solid var(--line-strong); }
+  .mode { padding: 1.8vmin 2vmin 2vmin; border-right: 1px solid var(--line); }
+  .mode:last-child { border-right: 0; }
+  .mid { font-family: var(--font-mono); font-size: 1.8vmin; letter-spacing: .1em; color: var(--ink-3); margin-bottom: 1.2vmin; }
+  .mini { height: 32vmin; background: var(--panel); border: 1px solid var(--line); padding: 1.6vmin; overflow: hidden; display: flex; flex-direction: column; }
+  .cap { font-family: var(--font-mono); font-size: 1.8vmin; line-height: 1.45; color: var(--ink-3); margin-top: 1.4vmin; }
+  .mono { font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); }
+  /* focus: a chapter page */
+  .page .ch { font-weight: 700; font-size: 2.2vmin; line-height: 1.15; }
+  .page p { font-family: var(--font-read); font-size: 1.8vmin; line-height: 1.45; color: var(--ink-2); margin-top: 1vmin; }
+  .seq { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8vmin .6vmin; margin-top: 1.6vmin; }
+  .seq .box { border: 1px solid var(--line-strong); background: var(--paper); font-family: var(--font-mono); font-size: 1.8vmin; text-align: center; padding: .5vmin .2vmin; }
+  .seq .arr { font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); text-align: center; }
+  .seq .arr i { display: block; height: 1.1vmin; position: relative; margin-top: .2vmin; }
+  .seq .arr i::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--line-strong); }
+  .seq .arr i::after { content: ""; position: absolute; right: 0; top: 0; border: .55vmin solid transparent; border-left: .9vmin solid var(--line-strong); }
+  .seq .a1 { grid-column: 1 / 3; }
+  .seq .a2 { grid-column: 2 / 4; }
+  /* reels: a 9:16 dark card, dark in both themes */
+  .reelwrap { align-items: center; justify-content: center; }
+  .reel { width: 15.2vmin; height: 27vmin; background: #0A0A0A; color: #F2F2F2; border: 1px solid var(--line-strong); padding: 1.3vmin 1.2vmin; display: flex; flex-direction: column; }
+  .reel .rk, .reel .rm { font-family: var(--font-mono); font-size: 1.8vmin; line-height: 1.3; color: #949494; }
+  .reel .rl { font-weight: 700; font-size: 2.2vmin; line-height: 1.15; margin-top: auto; }
+  .reel .rm { margin-top: 1vmin; }
+  /* challenges: a checkpoint card */
+  .quiz .qq { font-weight: 700; font-size: 1.9vmin; line-height: 1.25; margin: .8vmin 0 1.2vmin; }
+  .quiz .opt { font-family: var(--font-read); font-size: 1.9vmin; line-height: 1.3; padding: .5vmin 0; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 1vmin; }
+  .quiz .opt::before { content: ""; flex: none; width: 1.4vmin; height: 1.4vmin; border: 1px solid var(--line-strong); }
+  .quiz .opt.on::before { background: var(--accent); border-color: var(--accent); }
+  /* lock & ask: the rep */
+  .rep .lock { border: 1px dashed var(--line-strong); padding: 2.6vmin 1vmin; text-align: center; font-weight: 700; font-size: 2.2vmin; }
+  .rep .ta { flex: 1; margin-top: 1.4vmin; border: 1px solid var(--line-strong); background: var(--paper); padding: 1vmin; font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); }
+
+  /* slide 8 pipeline */
+  .pipe { display: grid; grid-template-columns: repeat(7, 1fr); grid-template-rows: auto auto; grid-auto-flow: column; column-gap: 2.6vmin; row-gap: 1.2vmin; margin-top: 4vmin; }
+  .pbox { position: relative; border: 1px solid var(--line-strong); padding: 1.8vmin 1.5vmin; font-weight: 700; font-size: 2.1vmin; line-height: 1.2; display: flex; align-items: flex-end; }
+  .ptag + .pbox::before { content: "→"; position: absolute; left: -2.5vmin; top: 50%; transform: translateY(-50%); font-family: var(--font-mono); font-weight: 400; font-size: 2vmin; color: var(--line-strong); }
+  .pbox.hot { color: var(--accent-ink); border-color: var(--accent); }
+  .ptag { font-family: var(--font-mono); font-size: 1.8vmin; line-height: 1.4; color: var(--ink-3); }
+
+  /* slide 9 */
+  .idea { margin-top: 3.2vmin; font-weight: 800; font-size: 3.1vmin; letter-spacing: -.01em; }
+  .idea + .plan { margin-top: 1.6vmin; }
+  .built.quiet { color: var(--ink-3); border-left-color: var(--line-strong); }
+  .thesis2 { margin-top: 3.2vmin; font-size: 3.4vmin; font-weight: 800; letter-spacing: -.01em; max-width: 34ch; line-height: 1.15; }
+  .s1 .lead { margin-top: 2vmin; font-size: 2.7vmin; }
+  .s1 .idea { margin-top: 2.6vmin; }
+  .s1 .plan .ph { padding: 1.7vmin 2.4vmin 2vmin; }
+  .s1 .ph p { font-size: 1.9vmin; }
+  .s1 .built { margin-top: 2vmin; }
+  .url { margin-top: 4vmin; font-family: var(--font-mono); font-size: 2.6vmin; letter-spacing: .04em; color: var(--accent); }
+
+  .dots { position: fixed; bottom: 2.4vmin; right: 3vmin; display: flex; gap: 1vmin; }
+  .dots i { width: 1vmin; height: 1vmin; background: var(--line); }
+  .dots i.on { background: var(--accent); }
+  .fsBtn {
+    position: fixed; bottom: 2vmin; left: 3vmin;
+    font-family: var(--font-mono); font-size: 1.8vmin; letter-spacing: .08em;
+    background: none; border: 1px solid var(--line-strong); color: var(--ink);
+    padding: .8vmin 1.6vmin; cursor: pointer;
+  }
+  .fsBtn:hover { border-color: var(--accent); color: var(--accent-ink); }
+</style>
+</head>
+<body>
+
+<section class="slide s1">
+  <div class="kicker"><span>SHIPYARD S3 · DEMO DAY · 5 SEP 2026</span><span class="n">01 / 09</span></div>
+  <h1>Machines got good at thinking.<br>So we stopped.</h1>
+  <p class="lead">No code by hand. Nothing built from scratch. No struggle. If the answer is always on screen, what happens to understanding?</p>
+  <p class="lead mark"><em>We are the last generation that built things by hand before a model could. The next one may never have to.</em></p>
+  <p class="idea">A book compiled for one person, from how that person learns.</p>
+  <div class="plan">
+    <div class="ph"><div class="when">01</div><div class="head">Extract the person</div><p>What they know, how they think, how they learn fast, how the knowledge has to come out. By hand, in conversation.</p></div>
+    <div class="ph"><div class="when">02</div><div class="head">Compile the book</div><p>Chapters ordered for that head. Every mechanism drawn. Every chapter ends in a challenge. Reels for the kernels.</p></div>
+    <div class="ph"><div class="when">03</div><div class="head">The book fights back</div><p>It forces focus: one screen, one idea. It locks: the diagram disappears. It asks: rebuild it from memory, then defend it.</p></div>
+  </div>
+  <p class="built wide quiet">system design was the first person: 51 chapters · 197 verified diagrams · 4 reels · quizzes · lock-and-ask reps<br>live, free, no signup</p>
+  <div class="foot"><span>Shreyash · <b>hld-gym.vercel.app/book</b></span><span>a book compiled for one person</span></div>
+</section>
+
+
+<section class="slide">
+  <div class="kicker"><span>THE METHOD · BY HAND, TODAY</span><span class="n">03 / 09</span></div>
+  <h1>How I extract a person.</h1>
+  <div class="split">
+    <div class="col">
+      <h2>what I find out, and how</h2>
+      <ul>
+        <li><b>What they already know</b><span class="how">prior-knowledge map · diagnostic pretest with confidence ratings</span></li>
+        <li><b>How they think</b><span class="how">think-aloud protocol on one real problem · cognitive task analysis</span></li>
+        <li><b>How they learn fast</b><span class="how">learning-history interview: what stuck, what did not, why</span></li>
+        <li><b>How the knowledge has to come out</b><span class="how">transfer-appropriate practice: whiteboard, bench and code, or papers and math</span></li>
+        <li><b>What makes it stick for them</b><span class="how">judgments of learning, then a delayed recall check: calibration</span></li>
+      </ul>
+    </div>
+    <div class="col">
+      <h2>what the book does with it</h2>
+      <ul>
+        <li>retrieval practice: every chapter ends by asking, not telling</li>
+        <li>spacing and interleaving: chapters return, mixed</li>
+        <li>worked examples that fade into problems</li>
+        <li>dual coding: every mechanism drawn and said</li>
+        <li>elaborative interrogation: the chapter keeps asking why</li>
+        <li>concrete before abstract: a story, then the mechanism, then the math</li>
+        <li>desirable difficulty: the lock</li>
+      </ul>
+    </div>
+  </div>
+  <p class="built wide">Manual: the interviews, the profile, the chapter order, the verification. Automated: the compile, the lock, the grader, the reels. Every conversation adds a rule the method did not have.</p>
+  <div class="foot tight"><span>Roediger &amp; Karpicke 2006 · Dunlosky et al. 2013 · Bjork, desirable difficulties</span><span>no learning-styles matching: it does not replicate (Pashler 2008)</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span>WHAT IS BUILT · PERSON A'S BOOK</span><span class="n">04 / 09</span></div>
+  <h1>The book fights back.<br>Four ways.</h1>
+  <div class="modes">
+    <div class="mode">
+      <div class="mid">focus</div>
+      <div class="mini page">
+        <div class="ch">Idempotency, Exactly-Once, and Ledgers</div>
+        <p>A retry is the normal case, not the bug. The question is what the second arrival does.</p>
+        <div class="seq">
+          <span class="box">App</span><span class="box">Payments</span><span class="box">Ledger</span>
+          <span class="arr a1">charge · key k<i></i></span>
+          <span class="arr a2">insert row · k<i></i></span>
+        </div>
+      </div>
+      <div class="cap">one screen, one idea. no tabs, no sidebar, no feed.</div>
+    </div>
+    <div class="mode">
+      <div class="mid">reels</div>
+      <div class="mini reelwrap">
+        <div class="reel"><div class="rk">reel 01</div><div class="rl">A lock is a statement about the past.</div><div class="rm">kernel · p2c03 fencing · 30s</div></div>
+      </div>
+      <div class="cap">the kernel of a chapter as a 30-second reel, in the product's own hand.</div>
+    </div>
+    <div class="mode">
+      <div class="mid">challenges</div>
+      <div class="mini quiz">
+        <div class="mono">checkpoint · p2c02 · 3 of 10</div>
+        <div class="qq">A retry arrives after the first request succeeded but before the ledger row committed. What does the client see?</div>
+        <div class="opt">success twice, charged twice</div>
+        <div class="opt on">the same result, once</div>
+        <div class="opt">409: still in progress</div>
+        <div class="opt">a timeout</div>
+      </div>
+      <div class="cap">every chapter ends in a checkpoint. the kernel names where it breaks.</div>
+    </div>
+    <div class="mode">
+      <div class="mid">lock &amp; ask</div>
+      <div class="mini rep">
+        <div class="lock">That's it. It's gone.</div>
+        <div class="ta">rebuild it from memory</div>
+      </div>
+      <div class="cap">the diagram disappears. you rebuild it. an interviewer probes what you left out.</div>
+    </div>
+  </div>
+  <div class="foot"><span>live: <b>hld-gym.vercel.app/book</b> · free · no signup</span><span>next slide: what person A experiences</span></div>
+</section>
+
+<!-- PERSONA:A -->
+<!-- PERSONA:B -->
+<!-- PERSONA:C -->
+
+<section class="slide">
+  <div class="kicker"><span>HOW IT IS BUILT · WHERE THIS GOES</span><span class="n">08 / 09</span></div>
+  <h1>One repo, four pipelines,<br>and a lot of conversations.</h1>
+  <div class="pipe">
+    <div class="pbox">interviews → learning profile</div><div class="ptag">manual · markdown</div>
+    <div class="pbox">chapters</div><div class="ptag">hand-written, LLM-drafted, 100% reviewed</div>
+    <div class="pbox">build.py</div><div class="ptag">automated · one file, three themes, quiz, cards</div>
+    <div class="pbox">reels</div><div class="ptag">automated · Playwright + ffmpeg</div>
+    <div class="pbox">the rep engine</div><div class="ptag">built · lock, rubric, probes · client-side</div>
+    <div class="pbox">voice interviewer + grader</div><div class="ptag">built · Pipecat · every quote checked against the transcript · local</div>
+    <div class="pbox hot">the next person</div><div class="ptag">manual again · the method grows</div>
+  </div>
+  <p class="quote">Some of this is automated. Most of the learning still arrives when I sit with a person and ask how the last thing they truly learned got in.</p>
+  <p class="thesis2">Built for the next ten years, when the answer is always on screen and understanding isn't.</p>
+  <div class="foot"><span>Shreyash · <b>hld-gym.vercel.app/book</b> · free · no signup</span><span>thank you</span></div>
+</section>
+
+
+<div class="dots"></div>
+<button class="fsBtn" id="fs">⛶ fullscreen</button>
+
+<script>
+  const slides = [...document.querySelectorAll(".slide")];
+  const dotsEl = document.querySelector(".dots");
+  dotsEl.innerHTML = "<i></i>".repeat(slides.length);
+  const dots = [...dotsEl.children];
+  let cur = -1, pending = 0;
+
+  /* autoplay: stop() the slide being left, start() the new one after 250ms */
+  const auto = i => { const id = slides[i]?.dataset.auto; return id ? deckAuto.handlers[id] : null; };
+  const call = (h, fn, i) => { try { h?.[fn]?.(slides[i]); } catch (e) { console.error(`deckAuto.${fn}`, e); } };
+  function stopAuto(i) { clearTimeout(pending); call(auto(i), "stop", i); }
+  function startAuto(i) { const h = auto(i); if (h) pending = setTimeout(() => call(h, "start", i), 250); }
+
+  function go(n) {
+    n = Math.max(0, Math.min(slides.length - 1, n));
+    if (n === cur) return;
+    if (cur >= 0) stopAuto(cur);
+    cur = n;
+    slides.forEach((s, i) => s.classList.toggle("on", i === cur));
+    dots.forEach((d, i) => d.classList.toggle("on", i === cur));
+    startAuto(cur);
+  }
+  addEventListener("keydown", e => {
+    if (e.target.matches("input, textarea")) return;
+    if (["ArrowRight", " ", "PageDown"].includes(e.key)) go(cur + 1);
+    if (["ArrowLeft", "PageUp"].includes(e.key)) go(cur - 1);
+    if (e.key === "t") {
+      const h = document.documentElement;
+      h.dataset.theme = h.dataset.theme === "paper" ? "dark" : "paper";
+    }
+    if (e.key === "f") toggleFs();
+    if (e.key === "r") { stopAuto(cur); startAuto(cur); }
+    if (/^[1-9]$/.test(e.key)) go(+e.key - 1);
+    if (e.key === "End") go(slides.length - 1);
+    if (e.key === "Home") go(0);
+  });
+  addEventListener("click", e => {
+    if (e.target.closest("button, a, input, textarea")) return;
+    go(cur + (e.clientX > innerWidth / 2 ? 1 : -1));
+  });
+  const fs = document.getElementById("fs");
+  function toggleFs() {
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    /* Chrome denies the JS fullscreen API ("not granted") in
+       automation-controlled sessions; F11 is browser-level and always works. */
+    document.documentElement.requestFullscreen().catch(() => {
+      fs.textContent = "blocked here · press F11";
+      setTimeout(() => { if (!document.fullscreenElement) fs.textContent = "⛶ fullscreen"; }, 4000);
+    });
+  }
+  fs.addEventListener("click", toggleFs);
+  document.addEventListener("fullscreenchange", () => {
+    fs.textContent = document.fullscreenElement ? "⛶ exit" : "⛶ fullscreen";
+  });
+
+  const q = new URLSearchParams(location.search);
+  if (q.get("theme") === "dark") document.documentElement.dataset.theme = "dark";
+  go((+q.get("slide") || 1) - 1);
+</script>
+</body>
+</html>

@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper" data-step="0">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HLD Gym: interviewer round · p1c06</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Literata:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-ui: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --font-read: "Literata", Charter, Georgia, serif;
+    --paper: #FFFFFF; --panel: #F4F4F4; --ink: #0A0A0A;
+    --line: #D6D6D6; --line-strong: #8A8A8A;
+    --accent: #FF5C00; --accent-ink: #B83C00; --accent-soft: #FFEDE3;
+    --good: #167A47; --bad: #C62A1E; --on-accent: #0A0A0A;
+    --panel-2: #eaeaea; --ink-2: #4a4a4a; --ink-3: #666666;
+    --bad-soft: #fbe9e7; --good-soft: #e6f2ea;
+  }
+  [data-theme="dark"] {
+    --paper: #0A0A0A; --panel: #161616; --ink: #F2F2F2;
+    --line: #2E2E2E; --line-strong: #666666;
+    --accent: #FF6A1A; --accent-ink: #FF8A45; --accent-soft: #2A1508;
+    --good: #4BB673; --bad: #F0564A; --on-accent: #0A0A0A;
+    --panel-2: #1f1f1f; --ink-2: #b0aca8; --ink-3: #949494;
+    --bad-soft: #2a1614; --good-soft: #16281e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--font-ui); overflow: hidden; padding: 5vmin 6vmin;
+  }
+
+  /* ---------- rep shell (sell/app/globals.css .rep .repTag .repBody) ---------- */
+  .rep { border: 1px solid var(--line-strong); background: var(--panel); height: 100%; display: flex; flex-direction: column; }
+  .repTag {
+    font-family: var(--font-mono); font-size: 1.7vmin; letter-spacing: .13em;
+    text-transform: lowercase; color: var(--on-accent); background: var(--accent);
+    padding: 1vmin 2.2vmin; border-bottom: 1px solid var(--accent);
+    display: flex; align-items: center; gap: 1.6vmin; font-weight: 700; flex: none;
+  }
+  .repTag .timer { margin-left: auto; }
+  .repTag .phase { font-weight: 400; opacity: .75; }
+  .repBody { flex: 1; min-height: 0; display: grid; grid-template-columns: 58fr 42fr; padding: 2.4vmin 2.6vmin 2.6vmin; }
+
+  /* ---------- board ---------- */
+  .board { display: flex; flex-direction: column; justify-content: center; padding-right: 2.6vmin; min-height: 0; }
+  .inject {
+    font-family: var(--font-mono); font-size: 1.7vmin; letter-spacing: .06em; line-height: 1.5;
+    color: var(--bad); border: 1px solid var(--bad); background: var(--bad-soft);
+    padding: 1vmin 1.6vmin; margin-bottom: 2.2vmin;
+    opacity: 0; transform: translateY(-1.5vmin); transition: opacity 500ms, transform 500ms cubic-bezier(.2,.7,.2,1);
+  }
+  [data-step="3"] .inject, [data-step="4"] .inject { opacity: 1; transform: none; }
+  .board svg { width: 100%; height: auto; display: block; }
+  .cap {
+    font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); letter-spacing: .04em;
+    margin-top: 1.6vmin; padding-top: 1.2vmin; border-top: 1px solid var(--line);
+  }
+
+  /* diagram (globals.css 734-742) */
+  .dgNode { fill: var(--panel-2); stroke: var(--ink-2); stroke-width: 1.3; transition: stroke 400ms, fill 400ms; }
+  .dgNodeAlt { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+  .dgEdge { stroke: var(--ink-3); stroke-width: 1.4; fill: none; }
+  .dgArrowhead { fill: var(--ink-3); }
+  /* product sizes are 13/11 viewBox units; at ~50vw that is 10px on a 720p projector, so 16/14 */
+  .dgTxt { fill: var(--ink); font-family: var(--font-mono); font-size: 16px; }
+  .dgTxtS { fill: var(--ink-3); font-family: var(--font-mono); font-size: 14px; }
+  .ar { marker-end: url(#ah); }
+  /* the Cache highlight is the untouched rebuild's one accent; it yields to the rows arrow at step 1 */
+  [data-step="0"] .cache { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+  [data-step="3"] .cache, [data-step="4"] .cache { stroke: var(--bad); }
+  .strike { stroke: var(--bad); stroke-width: 1.6; opacity: 0; transition: opacity 400ms 300ms; }
+  [data-step="3"] .strike, [data-step="4"] .strike { opacity: 1; }
+  /* rows arrow, added under probing: draws DB→App via a clip rect growing leftward */
+  .rowsLine { stroke: var(--accent); stroke-dasharray: 6 4; marker-end: url(#ahA); opacity: 0; }
+  .ahA { fill: var(--accent); }
+  .rowsTxt { fill: var(--accent-ink); opacity: 0; }
+  [data-step="1"] .rowsLine { opacity: 1; }
+  [data-step="1"] .rowsClip { animation: reveal 800ms 1800ms cubic-bezier(.2,.7,.2,1) both; }
+  [data-step="1"] .rowsTxt { animation: fade 400ms 2500ms both; }
+  [data-step="2"] .rowsLine, [data-step="3"] .rowsLine, [data-step="4"] .rowsLine,
+  [data-step="2"] .rowsTxt, [data-step="3"] .rowsTxt, [data-step="4"] .rowsTxt { opacity: 1; }
+  [data-step="3"] .rowsLine, [data-step="4"] .rowsLine { stroke: var(--ink-3); marker-end: url(#ah); }
+  [data-step="3"] .rowsTxt, [data-step="4"] .rowsTxt { fill: var(--ink-3); }
+  @keyframes reveal { from { x: 640px; width: 0px; } to { x: 90px; width: 550px; } }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+  /* ---------- transcript ---------- */
+  .tx { border-left: 1px solid var(--line); padding-left: 2.6vmin; display: flex; flex-direction: column; min-height: 0; }
+  .empty { display: none; font-family: var(--font-mono); font-size: 1.7vmin; color: var(--ink-3); letter-spacing: .04em; line-height: 1.6; max-width: 48ch; }
+  [data-step="0"] .empty { display: block; }
+  .lines { flex: 1; min-height: 0; }
+  .turn { margin-top: 1.2vmin; animation: rise 500ms cubic-bezier(.2,.7,.2,1) both; animation-delay: calc(var(--i) * 600ms); }
+  .turn:first-child { margin-top: 0; }
+  .turn.iv:not(:first-child) { border-top: 1px solid var(--line); padding-top: 1.6vmin; margin-top: 1.6vmin; }
+  .who { font-family: var(--font-mono); font-size: 1.5vmin; letter-spacing: .13em; text-transform: lowercase; margin-bottom: .5vmin; }
+  .iv .who { color: var(--accent-ink); }
+  .me .who { color: var(--ink-3); }
+  .iv p { font-weight: 500; font-size: 2.6vmin; line-height: 1.35; }
+  .me p { font-family: var(--font-read); font-style: italic; font-size: 2.6vmin; line-height: 1.4; }
+  .turn.big { margin-top: 2.6vmin; }
+  .turn.big p { font-size: 4vmin; line-height: 1.2; }
+  @keyframes rise { from { opacity: 0; transform: translateY(1vmin); } to { opacity: 1; transform: none; } }
+  .input { flex: none; margin-top: 2vmin; height: 9vmin; border: 1px solid var(--line-strong); background: var(--paper); }
+  [data-step="0"] .input, [data-step="4"] .input { display: none; }
+  .finish { flex: none; margin-top: 2vmin; display: none; animation: rise 500ms 600ms cubic-bezier(.2,.7,.2,1) both; }
+  [data-step="4"] .finish { display: block; }
+  .btn {
+    font-family: var(--font-ui); font-weight: 700; font-size: 2.2vmin;
+    background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent);
+    padding: 1.6vmin 3vmin; cursor: pointer; letter-spacing: .01em; border-radius: 0;
+    text-decoration: none; display: inline-block; line-height: 1.3;
+  }
+  .btn:hover { filter: brightness(1.07); }
+  .hint { font-family: var(--font-mono); font-size: 1.5vmin; color: var(--ink-3); letter-spacing: .04em; line-height: 1.6; margin-top: 1.4vmin; max-width: 52ch; }
+
+  /* ---------- chrome (deck/index.html) ---------- */
+  .dots { position: fixed; bottom: 2.2vmin; right: 3vmin; display: flex; gap: 1vmin; }
+  .dots i { width: 1vmin; height: 1vmin; background: var(--line); }
+  .dots i.on { background: var(--accent); }
+  .fsBtn {
+    position: fixed; bottom: 1.2vmin; left: 3vmin;
+    font-family: var(--font-mono); font-size: 1.5vmin; letter-spacing: .08em;
+    background: none; border: 1px solid var(--line-strong); color: var(--ink);
+    padding: .5vmin 1.2vmin; cursor: pointer;
+  }
+  .fsBtn:hover { border-color: var(--accent); color: var(--accent-ink); }
+</style>
+</head>
+<body>
+
+<section class="rep">
+  <div class="repTag"><span>p1c06 · cache-aside read path</span><span class="timer" id="timer">0:00</span><span class="phase">round · 6:00 cap</span></div>
+  <div class="repBody">
+    <div class="board">
+      <div class="inject">failure injected · cache cluster lost · traffic 10× · hit rate was 99%</div>
+      <svg class="dgWide" viewBox="0 0 720 250" role="img" aria-label="Your rebuild of the cache-aside read path: GET, miss, query, SET; rows and ttl missing">
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="dgArrowhead"/></marker>
+          <marker id="ahA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahA"/></marker>
+          <clipPath id="rowsClip"><rect class="rowsClip" x="90" y="170" width="550" height="40"/></clipPath>
+        </defs>
+        <rect class="dgNode" x="40" y="20" width="130" height="44"/>
+        <text class="dgTxt" x="72" y="47">App</text>
+        <rect class="dgNode cache" x="300" y="20" width="130" height="44"/>
+        <text class="dgTxt" x="330" y="47">Cache</text>
+        <line class="strike" x1="300" y1="64" x2="430" y2="20"/>
+        <rect class="dgNode" x="560" y="20" width="130" height="44"/>
+        <text class="dgTxt" x="600" y="47">DB</text>
+        <line class="dgEdge" x1="105" y1="64" x2="105" y2="235"/>
+        <line class="dgEdge" x1="365" y1="64" x2="365" y2="235"/>
+        <line class="dgEdge" x1="625" y1="64" x2="625" y2="235"/>
+        <line class="dgEdge ar" x1="105" y1="95" x2="365" y2="95"/>
+        <text class="dgTxtS" x="150" y="88">1. GET product:88871</text>
+        <line class="dgEdge ar" x1="365" y1="125" x2="105" y2="125"/>
+        <text class="dgTxtS" x="180" y="118">2. miss</text>
+        <line class="dgEdge ar" x1="105" y1="160" x2="625" y2="160"/>
+        <text class="dgTxtS" x="277" y="153">3. run the expensive queries</text>
+        <g clip-path="url(#rowsClip)"><line class="dgEdge rowsLine" x1="625" y1="190" x2="105" y2="190"/></g>
+        <text class="dgTxtS rowsTxt" x="612" y="183" text-anchor="end">rows · added under probing</text>
+        <line class="dgEdge ar" x1="105" y1="222" x2="365" y2="222"/>
+        <text class="dgTxtS" x="160" y="215">4. SET product:88871</text>
+      </svg>
+      <div class="cap">your rebuild · 4 of 6 · missing: rows → app · ttl</div>
+    </div>
+    <div class="tx">
+      <div class="empty">interviewer only · no hints · the answer key is not in the room</div>
+      <div class="lines" id="lines"></div>
+      <div class="input"></div>
+      <div class="finish">
+        <a class="btn" id="go" href="./failure-map.html">finish · get my report</a>
+        <p class="hint">grading takes about twenty seconds. every quote is checked against your transcript before it reaches you.</p>
+      </div>
+    </div>
+  </div>
+</section>
+<div class="dots"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+<button class="fsBtn" id="fs">⛶ fullscreen</button>
+
+<script>
+  const STEPS = [
+    { t: "0:00", lines: [] },
+    { t: "1:04", lines: [
+      ["iv", "You said the app writes the value into the cache. Before that: what did the database send back, and to whom?"],
+      ["me", "The rows go back to the cache, and the cache hands them to the app."],
+      ["iv", "So the cache talks to the database."],
+      ["me", "No. The app does. Rows come back to the app, and the app writes the cache."]] },
+    { t: "2:37", lines: [
+      ["iv", "Between your miss and your write, another server updates that product and deletes the key. What is in your cache after your write?"],
+      ["me", "The old value. Stale."],
+      ["iv", "For how long?"],
+      ["me", "Until... I'd invalidate it on the next update."],
+      ["iv", "You never set a TTL. Nothing updates it. For how long?"],
+      ["me big", "Forever."]] },
+    { t: "4:12", lines: [
+      ["iv", "Busiest hour of the year, ten times normal. Your cache is gone. Hit rate was 99 percent. What does the database see?"],
+      ["me", "Ten times the load. It's sized for peak. It should hold."],
+      ["iv", "It served one percent of reads. Now it serves all of them, at ten x. A thousand times what it was sized for. Does it hold?"],
+      ["me", "...No."]] },
+    { t: "6:00", lines: [["iv", "That's time."]] },
+  ];
+  const h = document.documentElement;
+  const NEXT = "./failure-map.html" + location.search;
+  const lines = document.getElementById("lines");
+  const timer = document.getElementById("timer");
+  const dots = [...document.querySelectorAll(".dots i")];
+  document.getElementById("go").href = NEXT;
+  const q = new URLSearchParams(location.search).get("theme");
+  if (q === "dark" || q === "paper") h.dataset.theme = q;
+
+  let cur = 0;
+  function go(n) {
+    if (n >= STEPS.length) { location.href = NEXT; return; }
+    cur = Math.max(0, n);
+    h.dataset.step = cur;
+    timer.textContent = STEPS[cur].t;
+    lines.replaceChildren(...STEPS[cur].lines.map(([c, s], i) => {
+      const d = document.createElement("div");
+      d.className = "turn " + c; d.style.setProperty("--i", i);
+      const who = document.createElement("div"); who.className = "who";
+      who.textContent = c.startsWith("iv") ? "interviewer" : "you";
+      const p = document.createElement("p"); p.textContent = s;
+      d.append(who, p); return d;
+    }));
+    dots.forEach((d, i) => d.classList.toggle("on", i === cur));
+  }
+  addEventListener("keydown", e => {
+    if (["ArrowRight", " ", "PageDown"].includes(e.key)) { e.preventDefault(); go(cur + 1); }
+    if (["ArrowLeft", "PageUp"].includes(e.key)) go(cur - 1);
+    if (e.key === "r") go(0);
+    if (e.key === "t") h.dataset.theme = h.dataset.theme === "paper" ? "dark" : "paper";
+    if (e.key === "f") toggleFs();
+  });
+  addEventListener("click", e => {
+    if (e.target.closest(".fsBtn, a")) return;
+    go(cur + 1);
+  });
+  const fs = document.getElementById("fs");
+  function toggleFs() {
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    /* Chrome denies the JS fullscreen API ("not granted") in
+       automation-controlled sessions; F11 is browser-level and always works. */
+    document.documentElement.requestFullscreen().catch(() => {
+      fs.textContent = "blocked here · press F11";
+      setTimeout(() => { if (!document.fullscreenElement) fs.textContent = "⛶ fullscreen"; }, 4000);
+    });
+  }
+  fs.addEventListener("click", toggleFs);
+  document.addEventListener("fullscreenchange", () => {
+    fs.textContent = document.fullscreenElement ? "⛶ exit" : "⛶ fullscreen";
+  });
+</script>
+</body>
+</html>

@@ -2717,3 +2717,113 @@ It sits behind the hosting gate recorded in the diagnostic entry (service
 hosting, spend guards, the §1/§9 copy re-read, the rsync exclude
 reversal), and it spends real money per session, so shipping it is a
 decision for the person paying the bill, not a copy edit.
+
+## 2026-09-01 — the fixed ship date comes out of the copy
+
+**What:** every "1 September" promise is gone. Eight strings in `app/page.tsx`
+(the hero stat chip, the hero hint, the reels fact line, the price header, the
+offer button hint, step 03, and two FAQ answers), the `layout.tsx` meta
+description that feeds the tab and the share card, `availabilityStarts` in
+`lib/schema.ts`, and the form copy documented in `README.md`. The offer is now
+"presale · reservation holders go first", and the refund promise is "any time
+before day one" instead of "if it does not ship on 1 September".
+
+**Why:** today is 1 September. The sprint is not built, so the page was
+promising a refund on its own terms, in eight places, to every visitor — three
+days before a launch that will drive traffic at it. A date that has passed is
+worse than no date: it reads as a product that already failed, and the
+structured data made a machine repeat it into a search result where nobody can
+see the context. This also settles the open item "Refund after 1 September is
+undecided": the answer is refundable until your day one, for any reason.
+
+**Verified:** lint clean, build ends `○ (Static)`, `npm test` passes,
+`grep -c '—' out/index.html` prints 0, and `grep "1 September" out/index.html`
+finds nothing.
+
+**Not done:** the live Google Form still labels five Q5 options "ships 1 Sep";
+`README.md` documents the new label but the form itself is edited by hand in
+the Forms UI. Fix it before the launch post goes out.
+
+## 2026-09-03 — demo day and launch day, packaged
+
+**What:** the 1 September fix from the previous entry is now built and
+published into `../dist/` (lint clean, 47 tests pass, `○ (Static)`,
+`grep -c '1 September' dist/index.html` prints 0). Not yet pushed. On top:
+
+- `deck/index.html`: slide 2's foot no longer says "1 Sep"; slide 5's "next
+  17 days" is "by 9 Sep"; a sixth slide is the Shipyard GTM snapshot (who
+  first, how, the ask) in the existing `.plan` grid, so no new CSS; number
+  keys `1`–`6`, Home and End jump straight to a slide.
+- `deck/4MIN.md`: the demo rewritten into the Shipyard checklist's shape,
+  15s hook, 45s story, 2:30 demo on the sell page's rep, 45s GTM, 20s CTA,
+  with the exact click path, the exact imperfect answer to type, the
+  fallback rules and the 24-hour list.
+- `deck/LAUNCH.md`: the X and LinkedIn launch posts in the guide's five-part
+  structure, partner tags included, every unknown number left as `[ ]`.
+- `reel/launch-demo.mjs` and `deck/launch-demo.mp4`: Playwright drives the
+  rep on the published `dist/` (watch, lock, type, submit, probes, reveal)
+  and ffmpeg turns the webm into a 48-second 1280×720 mp4. The typed answer
+  scores 4/6 and omits the TTL on purpose, so probe 2 lands on a real gap.
+
+**Why:** the demo slot's structure is fixed by the organisers and the old
+`TALK.md` was a five-minute, slide-led talk; the launch guide requires a
+video and the repo had none. The recording lives in `reel/` because that
+package already owns Playwright and the app's dependency tree stays clean.
+
+**Verified:** six frames of the mp4 checked by eye: diagram drawing, the
+lock card, the answer mid-typing, the 4-of-6 score with both misses in red,
+the follow-ups with the chapter answer revealed, the diagram back beside
+"What you wrote". Deck renders six slides, `grep -c '1 Sep' deck/index.html`
+prints 0.
+
+**Not done:** `git push` (deploys the date fix), and the Google Form's Q5
+labels, still "ships 1 Sep", edited by hand in the Forms UI.
+
+## 2026-09-05 — demo day: two scripted mocks, the vision graft, a new 4-minute track
+
+**What:** `deck/mocks/interviewer-round.html` and `deck/mocks/failure-map.html`,
+two self-contained HTML mocks of the sprint as it ships, in the product's own
+token set, keyboard-driven (Space next, ArrowLeft back, r reset, t theme, f
+fullscreen, c compare overlay, digits on the predict and reflection screens).
+The round mock picks up from the live rep's real 4-of-6 result: an interviewer
+probes the two misses (rows → app, TTL), ends on "Forever.", injects a cache
+loss at 10× traffic, and hands off with one Space to the map mock, which asks
+for a predicted score first, runs a scripted grading bar, shows three moments
+each quoting the round's candidate lines character for character with a
+"✓ verbatim" tag, overlays the same typed answer next to a ChatGPT reply
+(`CHATGPT_REPLY` const at the top of the file, meant to be replaced with a real
+one before the slot), and closes on a day-1 calibration screen: a 16vmin "+1",
+a two-choice reflection, a one-dot predicted−real chart and a return track
+pulled in by the onsite date. `deck/index.html` slide 5 is now "Nothing in that
+machine says system design" (four lines, the $179 / $19 statement, one accent).
+`deck/4MIN.md` is the new track; `deck/TALK.md` gains eleven Q&A entries
+(flo101, personalization, "which screens are live", the plus-one's provenance).
+
+**Why:** the presenter wanted the demo to read as a category, with unbuilt
+features shown as scripted mocks. Four narratives were written from different
+angles (instrument, pressure, engine, thirty days) and scored by three judges
+(the room, the stage, the business); "pressure" won two lenses and "engine"
+won the business lens, so the final is pressure's spine with engine's framing
+on slide 5. The presenter's own vision brief (machines think, so we stopped;
+last generation that built by hand; the framework is the product, system
+design is the first output) is grafted into the hook, the story beat, slide 5
+and the CTA. Two of its claims were deliberately left out: "personalized to
+learning style" (ROADMAP.md and the standing rule: style matching does not
+replicate; the product is personal by what you don't know) and "learning
+companion" (flo101's own words, and the dead AI-tutor category). One honesty
+line stays in the track, said once before the first mock, because Q&A collapses
+without it.
+
+**How verified:** each mock was built, then adversarially reviewed by a second
+agent with edit rights (five defects fixed on the round: a `<br>` breaking an
+exact string, diagram labels under the legibility floor, two label collisions,
+a false mid-draw screenshot; three on the map: the overlay clipping the strip,
+two captions under the floor), then an integration run walked the whole
+presenter path headless at 1280×720 in paper and dark: 36 assertions, zero
+console errors, the relative handoff resolves, the theme carries, every map
+quote is a substring of the round's candidate lines. Nothing scrolls at 720p
+or 1080p. Reference frames for the reviewers came from `deck/launch-demo.mp4`.
+
+**Not done:** `git push` (the live page still says "1 September" in seven
+places), the real ChatGPT reply pasted into `CHATGPT_REPLY`, and the Google
+Form's Q5 labels. All three are the presenter's, before the slot.

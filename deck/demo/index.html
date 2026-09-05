@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A book compiled for one person: the demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;500&family=Literata:ital,wght@0,400;1,400&display=swap" rel="stylesheet">
+<script>
+  /* Autoplay contract. A persona slide is <section class="slide" data-auto="a">
+     and, at load, calls deckAuto.register("a", { start(section), stop(section) }).
+     The shell calls stop() on the slide being left, then start() on the new one
+     250ms later. Defined here, before any slide, so registration always lands. */
+  window.deckAuto = { handlers: {}, register(id, h) { window.deckAuto.handlers[id] = h; } };
+</script>
+<style>
+  :root {
+    --font-ui: "Archivo", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --font-read: "Literata", Charter, Georgia, serif;
+    --paper: #FFFFFF; --panel: #F4F4F4; --panel-2: #eaeaea;
+    --ink: #0A0A0A; --ink-2: #4a4a4a; --ink-3: #666666;
+    --line: #D6D6D6; --line-strong: #8A8A8A;
+    --accent: #FF5C00; --accent-ink: #B83C00; --accent-soft: #FFEDE3;
+    --good: #167A47; --bad: #C62A1E; --good-soft: #e6f2ea; --bad-soft: #fbe9e7; --on-accent: #0A0A0A;
+  }
+  [data-theme="dark"] {
+    --paper: #0A0A0A; --panel: #161616; --panel-2: #1f1f1f;
+    --ink: #F2F2F2; --ink-2: #b0aca8; --ink-3: #949494;
+    --line: #2E2E2E; --line-strong: #666666;
+    --accent: #FF6A1A; --accent-ink: #FF8A45; --accent-soft: #2A1508;
+    --good: #4BB673; --bad: #F0564A; --good-soft: #16281e; --bad-soft: #2a1614; --on-accent: #0A0A0A;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--font-ui); overflow: hidden;
+  }
+  .slide {
+    display: none; position: absolute; inset: 0;
+    padding: 6vmin 8vmin; flex-direction: column;
+  }
+  .slide.on { display: flex; }
+  .kicker {
+    font-family: var(--font-mono); font-size: 1.8vmin; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--ink-3);
+    border-bottom: 1px solid var(--line); padding-bottom: 1.4vmin; margin-bottom: 4vmin;
+    display: flex; justify-content: space-between;
+  }
+  .kicker .n { color: var(--line-strong); }
+  h1 { font-size: 7.2vmin; font-weight: 800; line-height: 1.04; letter-spacing: -.015em; }
+  .lead { font-family: var(--font-read); font-size: 2.9vmin; line-height: 1.5; max-width: 58ch; margin-top: 3vmin; }
+  .lead em { font-style: italic; }
+  .lead.mark { border-left: 3px solid var(--accent); padding-left: 2.4vmin; }
+  .foot {
+    margin-top: auto; border-top: 1px solid var(--line); padding-top: 1.8vmin;
+    font-family: var(--font-mono); font-size: 1.9vmin; color: var(--line-strong);
+    display: flex; justify-content: space-between; gap: 3vmin;
+  }
+  .foot b { color: var(--ink); font-weight: 500; }
+  .foot.tight { flex-direction: column; gap: .4vmin; }
+  .built {
+    margin-top: 3.5vmin; font-family: var(--font-mono); font-size: 2vmin;
+    line-height: 1.5; color: var(--accent-ink); max-width: 72ch;
+    border-left: 3px solid var(--accent); padding-left: 1.8vmin;
+  }
+  .built.wide { max-width: none; }
+  .quote { margin-top: 3.5vmin; font-family: var(--font-read); font-style: italic; font-size: 2.6vmin; line-height: 1.5; max-width: 62ch; }
+
+  /* slide 2 grid */
+  .plan { display: grid; grid-template-columns: 1fr 1fr 1fr; margin-top: 4.5vmin; border: 1px solid var(--line-strong); }
+  .ph { padding: 2.6vmin 2.8vmin 3vmin; border-right: 1px solid var(--line); }
+  .ph:last-child { border-right: 0; background: var(--panel); }
+  .ph .when { font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); margin-bottom: 1.2vmin; letter-spacing: .08em; }
+  .ph .head { font-weight: 700; font-size: 2.5vmin; margin-bottom: 1vmin; }
+  .ph p { font-family: var(--font-read); font-size: 1.95vmin; line-height: 1.5; color: var(--ink); }
+
+  /* slide 3 split */
+  .split { display: grid; grid-template-columns: 1.1fr .9fr; gap: 0; margin-top: 3vmin; border: 1px solid var(--line-strong); flex: 0 1 auto; }
+  .col { padding: 2.2vmin 2.6vmin; }
+  .col + .col { border-left: 1px solid var(--line-strong); background: var(--panel); }
+  .col h2 { font-size: 2vmin; font-family: var(--font-mono); font-weight: 500; letter-spacing: .1em; color: var(--ink-3); margin-bottom: 1.2vmin; }
+  .col ul { list-style: none; }
+  .col li { font-family: var(--font-read); font-size: 2.05vmin; line-height: 1.4; padding: .85vmin 0; border-top: 1px solid var(--line); }
+  .col li:first-of-type { border-top: 0; }
+  .col li b { display: block; font-family: var(--font-ui); font-weight: 700; font-size: 2.1vmin; line-height: 1.3; }
+  .col li .how { display: block; font-family: var(--font-mono); font-size: 1.8vmin; line-height: 1.4; color: var(--ink-3); margin-top: .3vmin; }
+
+  /* slide 4 miniatures */
+  .modes { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 3.5vmin; border: 1px solid var(--line-strong); }
+  .mode { padding: 1.8vmin 2vmin 2vmin; border-right: 1px solid var(--line); }
+  .mode:last-child { border-right: 0; }
+  .mid { font-family: var(--font-mono); font-size: 1.8vmin; letter-spacing: .1em; color: var(--ink-3); margin-bottom: 1.2vmin; }
+  .mini { height: 32vmin; background: var(--panel); border: 1px solid var(--line); padding: 1.6vmin; overflow: hidden; display: flex; flex-direction: column; }
+  .cap { font-family: var(--font-mono); font-size: 1.8vmin; line-height: 1.45; color: var(--ink-3); margin-top: 1.4vmin; }
+  .mono { font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); }
+  /* focus: a chapter page */
+  .page .ch { font-weight: 700; font-size: 2.2vmin; line-height: 1.15; }
+  .page p { font-family: var(--font-read); font-size: 1.8vmin; line-height: 1.45; color: var(--ink-2); margin-top: 1vmin; }
+  .seq { display: grid; grid-template-columns: repeat(3, 1fr); gap: .8vmin .6vmin; margin-top: 1.6vmin; }
+  .seq .box { border: 1px solid var(--line-strong); background: var(--paper); font-family: var(--font-mono); font-size: 1.8vmin; text-align: center; padding: .5vmin .2vmin; }
+  .seq .arr { font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); text-align: center; }
+  .seq .arr i { display: block; height: 1.1vmin; position: relative; margin-top: .2vmin; }
+  .seq .arr i::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px solid var(--line-strong); }
+  .seq .arr i::after { content: ""; position: absolute; right: 0; top: 0; border: .55vmin solid transparent; border-left: .9vmin solid var(--line-strong); }
+  .seq .a1 { grid-column: 1 / 3; }
+  .seq .a2 { grid-column: 2 / 4; }
+  /* reels: a 9:16 dark card, dark in both themes */
+  .reelwrap { align-items: center; justify-content: center; }
+  .reel { width: 15.2vmin; height: 27vmin; background: #0A0A0A; color: #F2F2F2; border: 1px solid var(--line-strong); padding: 1.3vmin 1.2vmin; display: flex; flex-direction: column; }
+  .reel .rk, .reel .rm { font-family: var(--font-mono); font-size: 1.8vmin; line-height: 1.3; color: #949494; }
+  .reel .rl { font-weight: 700; font-size: 2.2vmin; line-height: 1.15; margin-top: auto; }
+  .reel .rm { margin-top: 1vmin; }
+  /* challenges: a checkpoint card */
+  .quiz .qq { font-weight: 700; font-size: 1.9vmin; line-height: 1.25; margin: .8vmin 0 1.2vmin; }
+  .quiz .opt { font-family: var(--font-read); font-size: 1.9vmin; line-height: 1.3; padding: .5vmin 0; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 1vmin; }
+  .quiz .opt::before { content: ""; flex: none; width: 1.4vmin; height: 1.4vmin; border: 1px solid var(--line-strong); }
+  .quiz .opt.on::before { background: var(--accent); border-color: var(--accent); }
+  /* lock & ask: the rep */
+  .rep .lock { border: 1px dashed var(--line-strong); padding: 2.6vmin 1vmin; text-align: center; font-weight: 700; font-size: 2.2vmin; }
+  .rep .ta { flex: 1; margin-top: 1.4vmin; border: 1px solid var(--line-strong); background: var(--paper); padding: 1vmin; font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); }
+
+  /* slide 8 pipeline */
+  .pipe { display: grid; grid-template-columns: repeat(7, 1fr); grid-template-rows: auto auto; grid-auto-flow: column; column-gap: 2.6vmin; row-gap: 1.2vmin; margin-top: 4vmin; }
+  .pbox { position: relative; border: 1px solid var(--line-strong); padding: 1.8vmin 1.5vmin; font-weight: 700; font-size: 2.1vmin; line-height: 1.2; display: flex; align-items: flex-end; }
+  .ptag + .pbox::before { content: "→"; position: absolute; left: -2.5vmin; top: 50%; transform: translateY(-50%); font-family: var(--font-mono); font-weight: 400; font-size: 2vmin; color: var(--line-strong); }
+  .pbox.hot { color: var(--accent-ink); border-color: var(--accent); }
+  .ptag { font-family: var(--font-mono); font-size: 1.8vmin; line-height: 1.4; color: var(--ink-3); }
+
+  /* slide 9 */
+  .idea { margin-top: 3.2vmin; font-weight: 800; font-size: 3.1vmin; letter-spacing: -.01em; }
+  .idea + .plan { margin-top: 1.6vmin; }
+  .built.quiet { color: var(--ink-3); border-left-color: var(--line-strong); }
+  .thesis2 { margin-top: 3.2vmin; font-size: 3.4vmin; font-weight: 800; letter-spacing: -.01em; max-width: 34ch; line-height: 1.15; }
+  .s1 .lead { margin-top: 2vmin; font-size: 2.7vmin; }
+  .s1 .idea { margin-top: 2.6vmin; }
+  .s1 .plan .ph { padding: 1.7vmin 2.4vmin 2vmin; }
+  .s1 .ph p { font-size: 1.9vmin; }
+  .s1 .built { margin-top: 2vmin; }
+  .url { margin-top: 4vmin; font-family: var(--font-mono); font-size: 2.6vmin; letter-spacing: .04em; color: var(--accent); }
+
+  .dots { position: fixed; bottom: 2.4vmin; right: 3vmin; display: flex; gap: 1vmin; }
+  .dots i { width: 1vmin; height: 1vmin; background: var(--line); }
+  .dots i.on { background: var(--accent); }
+  .fsBtn {
+    position: fixed; bottom: 2vmin; left: 3vmin;
+    font-family: var(--font-mono); font-size: 1.8vmin; letter-spacing: .08em;
+    background: none; border: 1px solid var(--line-strong); color: var(--ink);
+    padding: .8vmin 1.6vmin; cursor: pointer;
+  }
+  .fsBtn:hover { border-color: var(--accent); color: var(--accent-ink); }
+</style>
+</head>
+<body>
+
+<section class="slide s1">
+  <div class="kicker"><span>SHIPYARD S3 · DEMO DAY · 5 SEP 2026</span><span class="n">01 / 10</span></div>
+  <h1>Machines got good at thinking.<br>So we stopped.</h1>
+  <p class="lead">No code by hand. Nothing built from scratch. No struggle. If the answer is always on screen, what happens to understanding?</p>
+  <p class="lead mark"><em>We are the last generation that built things by hand before a model could. The next one may never have to.</em></p>
+  <p class="idea">A book compiled for one person, from how that person learns.</p>
+  <div class="plan">
+    <div class="ph"><div class="when">01</div><div class="head">Extract the person</div><p>What they know, how they think, how they learn fast, how the knowledge has to come out. By hand, in conversation.</p></div>
+    <div class="ph"><div class="when">02</div><div class="head">Compile the book</div><p>Chapters ordered for that head. Every mechanism drawn. Every chapter ends in a challenge. Reels for the kernels.</p></div>
+    <div class="ph"><div class="when">03</div><div class="head">The book fights back</div><p>It forces focus: one screen, one idea. It locks: the diagram disappears. It asks: rebuild it from memory, then defend it.</p></div>
+  </div>
+  <p class="built wide quiet">system design was the first person: 51 chapters · 197 verified diagrams · 4 reels · quizzes · lock-and-ask reps<br>live, free, no signup</p>
+  <div class="foot"><span>Shreyash · <b>hld-gym.vercel.app/book</b></span><span>a book compiled for one person</span></div>
+</section>
+
+
+<section class="slide">
+  <div class="kicker"><span>THE METHOD · BY HAND, TODAY</span><span class="n">02 / 10</span></div>
+  <h1>How I extract a person.</h1>
+  <div class="split">
+    <div class="col">
+      <h2>what I find out, and how</h2>
+      <ul>
+        <li><b>What they already know</b><span class="how">prior-knowledge map · diagnostic pretest with confidence ratings</span></li>
+        <li><b>How they think</b><span class="how">think-aloud protocol on one real problem · cognitive task analysis</span></li>
+        <li><b>How they learn fast</b><span class="how">learning-history interview: what stuck, what did not, why</span></li>
+        <li><b>How the knowledge has to come out</b><span class="how">transfer-appropriate practice: whiteboard, bench and code, or papers and math</span></li>
+        <li><b>What makes it stick for them</b><span class="how">judgments of learning, then a delayed recall check: calibration</span></li>
+      </ul>
+    </div>
+    <div class="col">
+      <h2>what the book does with it</h2>
+      <ul>
+        <li>retrieval practice: every chapter ends by asking, not telling</li>
+        <li>spacing and interleaving: chapters return, mixed</li>
+        <li>worked examples that fade into problems</li>
+        <li>dual coding: every mechanism drawn and said</li>
+        <li>elaborative interrogation: the chapter keeps asking why</li>
+        <li>concrete before abstract: a story, then the mechanism, then the math</li>
+        <li>desirable difficulty: the lock</li>
+      </ul>
+    </div>
+  </div>
+  <p class="built wide">Manual: the interviews, the profile, the chapter order, the verification. Automated: the compile, the lock, the grader, the reels. Every conversation adds a rule the method did not have.</p>
+  <div class="foot tight"><span>Roediger &amp; Karpicke 2006 · Dunlosky et al. 2013 · Bjork, desirable difficulties</span><span>no learning-styles matching: it does not replicate (Pashler 2008)</span></div>
+</section>
+
+<section class="slide">
+  <div class="kicker"><span>WHAT IS BUILT · PERSON A'S BOOK</span><span class="n">03 / 10</span></div>
+  <h1>The book fights back.<br>Four ways.</h1>
+  <div class="modes">
+    <div class="mode">
+      <div class="mid">focus</div>
+      <div class="mini page">
+        <div class="ch">Idempotency, Exactly-Once, and Ledgers</div>
+        <p>A retry is the normal case, not the bug. The question is what the second arrival does.</p>
+        <div class="seq">
+          <span class="box">App</span><span class="box">Payments</span><span class="box">Ledger</span>
+          <span class="arr a1">charge · key k<i></i></span>
+          <span class="arr a2">insert row · k<i></i></span>
+        </div>
+      </div>
+      <div class="cap">one screen, one idea. no tabs, no sidebar, no feed.</div>
+    </div>
+    <div class="mode">
+      <div class="mid">reels</div>
+      <div class="mini reelwrap">
+        <div class="reel"><div class="rk">reel 01</div><div class="rl">A lock is a statement about the past.</div><div class="rm">kernel · p2c03 fencing · 30s</div></div>
+      </div>
+      <div class="cap">the kernel of a chapter as a 30-second reel, in the product's own hand.</div>
+    </div>
+    <div class="mode">
+      <div class="mid">challenges</div>
+      <div class="mini quiz">
+        <div class="mono">checkpoint · p2c02 · 3 of 10</div>
+        <div class="qq">A retry arrives after the first request succeeded but before the ledger row committed. What does the client see?</div>
+        <div class="opt">success twice, charged twice</div>
+        <div class="opt on">the same result, once</div>
+        <div class="opt">409: still in progress</div>
+        <div class="opt">a timeout</div>
+      </div>
+      <div class="cap">every chapter ends in a checkpoint. the kernel names where it breaks.</div>
+    </div>
+    <div class="mode">
+      <div class="mid">lock &amp; ask</div>
+      <div class="mini rep">
+        <div class="lock">That's it. It's gone.</div>
+        <div class="ta">rebuild it from memory</div>
+      </div>
+      <div class="cap">the diagram disappears. you rebuild it. an interviewer probes what you left out.</div>
+    </div>
+  </div>
+  <div class="foot"><span>live: <b>hld-gym.vercel.app/book</b> · free · no signup</span><span>next slide: what person A experiences</span></div>
+</section>
+
+<section class="slide" data-persona="a">
+  <div class="kicker pa-kicker"><span>PERSON A · SHREYASH · BACKEND ENGINEER → SENIOR SYSTEM-DESIGN BAR</span><span class="n">04 / 10</span></div>
+  <h1 class="pa-h1">Wants to know who got hurt before he wants the mechanism. Forgets both unless he has to redraw them.</h1>
+  <div class="pa-split">
+    <div class="pa-col">
+      <h2 class="pa-h2">extracted · by hand, in conversation</h2>
+      <dl class="pa-dl">
+        <div class="pa-row"><dt class="pa-k">intake</dt><dd class="pa-v">Origins first: who hit the problem, what they were stuck on, how they got to the answer. A mechanism with no story is a fact; with a story it is a decision he can re-make. Then diagrams before prose: the whole shape first, then the edges.</dd></div>
+        <div class="pa-row"><dt class="pa-k">retention</dt><dd class="pa-v">Sticks when he has to redraw it from nothing. Dies when he reads it twice and feels fluent.</dd></div>
+        <div class="pa-row"><dt class="pa-k">recall</dt><dd class="pa-v">Out loud, at a whiteboard, while someone asks why. Silent recall is not the shape of the exam.</dd></div>
+        <div class="pa-row"><dt class="pa-k">retrieval mode</dt><dd class="pa-v">Closed-book rebuild of the diagram, then an interviewer probing the edge he left out.</dd></div>
+        <div class="pa-row"><dt class="pa-k">thinking</dt><dd class="pa-v">Top-down. "What is the invariant?" first, mechanism second, code last.</dd></div>
+        <div class="pa-row"><dt class="pa-k">attention</dt><dd class="pa-v">Long prose kills it. One screen, one idea, one drawing.</dd></div>
+        <div class="pa-row"><dt class="pa-k">prior knowledge</dt><dd class="pa-v">Strong on APIs and databases. Weak on where things break at scale and at 3 a.m.</dd></div>
+        <div class="pa-row"><dt class="pa-k">calibration</dt><dd class="pa-v">Overconfident after reading. Called five of six on stage, scored four.</dd></div>
+      </dl>
+    </div>
+    <div class="pa-col pa-gen">
+      <h2 class="pa-h2">generated · the book for that head</h2>
+      <p class="pa-struct"><b class="pa-title">HLD Gym</b> — 51 chapters, ordered problem-before-solution; each chapter one kernel, one drawing, one place it breaks; every chapter also exists story-first, as its origin.</p>
+      <dl class="pa-dl">
+        <div class="pa-row"><dt class="pa-k">origins</dt><dd class="pa-v">The same 51 chapters told from the person who hit the wall: Dalmellington, 2015, one £8,000 pouch scanned once and recorded four times; the retry was honest. Who got hurt, what nobody had remembered, then the mechanism.</dd></div>
+        <div class="pa-row"><dt class="pa-k">chapters</dt><dd class="pa-v">Part 1 is the read path, Part 2 is what breaks when two things happen at once, Part 3 is systems that survive it. Each chapter opens with the pain, then the mechanism.</dd></div>
+        <div class="pa-row"><dt class="pa-k">interactive diagrams</dt><dd class="pa-v">197 diagrams that draw themselves step by step with narration; edges animate in order so cause precedes effect.</dd></div>
+        <div class="pa-row"><dt class="pa-k">simulations</dt><dd class="pa-v">Failure injection in the probes: the cache dies at 10×, the lease expires mid-write, the retry lands during the transaction.</dd></div>
+        <div class="pa-row"><dt class="pa-k">micro-games</dt><dd class="pa-v">Cards: people, incidents, papers, years. Seema Misra, 2010: "the computer did it" as a defence in front of a jury; the Dalmellington bug; Bates v Post Office, 2019. Say who, when, and what they had to remember, before the card flips.</dd></div>
+        <div class="pa-row"><dt class="pa-k">challenges</dt><dd class="pa-v">A checkpoint at the end of every chapter; the kernel names where it breaks and the checkpoint asks there.</dd></div>
+        <div class="pa-row"><dt class="pa-k">reels</dt><dd class="pa-v">Four so far: "a lock is a statement about the past", "R + W > N", "queueing is refusing slowly", "the cache is a suggestion".</dd></div>
+        <div class="pa-row"><dt class="pa-k">lock &amp; ask</dt><dd class="pa-v">The diagram disappears. He rebuilds it. An interviewer takes the answer apart. Then the chapter shows what it says.</dd></div>
+      </dl>
+    </div>
+  </div>
+  <div class="foot pa-foot"><span>retrieval practice · transfer-appropriate practice (whiteboard + speaking) · dual coding · desirable difficulty · calibration (judgment of learning before reveal)</span><span>next: what Shreyash experiences</span></div>
+</section>
+
+<section class="slide" data-auto="a">
+  <div class="kicker pa-kicker"><span>SHREYASH · P2C02 · IDEMPOTENCY, EXACTLY-ONCE, AND LEDGERS · you tapped pay, the signal died, you were not charged twice</span><span class="n">05 / 10</span></div>
+  <div class="pa-stage">
+    <div class="pa-strip"><span>p2c02 · idempotency, exactly-once, and ledgers</span><span class="pa-phases"><i data-ph="question">question</i> · <i data-ph="origin">origin</i> · <i data-ph="watch">watch</i> · <i data-ph="lock">lock</i> · <i data-ph="rebuild">rebuild</i> · <i data-ph="grade">grade</i> · <i data-ph="probe">probe</i> · <i data-ph="reveal">reveal</i></span></div>
+    <div class="pa-body">
+
+      <div class="pa-ph pa-q" data-ph="question">
+        <p class="pa-q1">You tapped Pay. Your signal died. The app retried.</p>
+        <p class="pa-q2">Why weren't you charged twice?</p>
+      </div>
+
+      <div class="pa-ph pa-origin" data-ph="origin">
+        <div class="pa-card">
+          <div class="pa-eyebrow">origin · dalmellington, 2015 · horizon online, fujitsu / post office</div>
+          <div class="pa-card-h">The books balanced. The books were wrong.</div>
+          <p class="pa-card-p">A subpostmistress scanned one £8,000 pouch once. Horizon recorded it four times. The retry was honest: a script thought it had not finished and repeated its last step, and nothing remembered that the first write had happened. 112 occurrences, 88 branches, five years. People were prosecuted over ledgers that agreed with themselves.</p>
+        </div>
+        <div class="pa-narr">who got hurt, and what nobody had remembered. now the mechanism.</div>
+      </div>
+
+      <div class="pa-ph pa-watch" data-ph="watch">
+        <div class="pa-diagram">
+          <svg class="pa-svg" viewBox="0 0 900 340" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Sequence diagram: App, Payments API, Ledger DB. Six messages: pay with key, insert in one transaction, committed, 200 OK lost, retry with the same key, replay the stored response.">
+            <g class="pa-node"><rect x="50" y="8" width="160" height="44"/><text x="130" y="36">App</text></g>
+            <g class="pa-node"><rect x="370" y="8" width="160" height="44"/><text x="450" y="36">Payments API</text></g>
+            <g class="pa-node"><rect x="690" y="8" width="160" height="44"/><text x="770" y="36">Ledger DB</text></g>
+            <line class="pa-life" x1="130" y1="52" x2="130" y2="330"/>
+            <line class="pa-life" x1="450" y1="52" x2="450" y2="330"/>
+            <line class="pa-life" x1="770" y1="52" x2="770" y2="330"/>
+            <g class="pa-arrow" data-step="1"><text x="290" y="88">1. POST /pay · key 7f3a · ₹499</text><line pathLength="100" x1="130" y1="96" x2="450" y2="96"/><polygon points="450,96 438,90 438,102"/></g>
+            <g class="pa-arrow" data-step="2"><text x="610" y="128">2. INSERT (key 7f3a, −499) · one transaction</text><line pathLength="100" x1="450" y1="136" x2="770" y2="136"/><polygon points="770,136 758,130 758,142"/></g>
+            <g class="pa-arrow" data-step="3"><text x="610" y="168">3. committed</text><line pathLength="100" x1="770" y1="176" x2="450" y2="176"/><polygon points="450,176 462,170 462,182"/></g>
+            <g class="pa-arrow" data-step="4"><text x="290" y="208">4. 200 OK · lost</text><line pathLength="100" x1="450" y1="216" x2="130" y2="216"/><polygon points="130,216 142,210 142,222"/><text class="pa-x" x="290" y="227">✕</text></g>
+            <g class="pa-arrow" data-step="5"><text x="290" y="248">5. retry · POST /pay · key 7f3a</text><line pathLength="100" x1="130" y1="256" x2="450" y2="256"/><polygon points="450,256 438,250 438,262"/></g>
+            <g class="pa-arrow" data-step="6"><text x="290" y="288">6. replay stored response · no new row</text><line pathLength="100" x1="450" y1="296" x2="130" y2="296"/><polygon points="130,296 142,290 142,302"/></g>
+          </svg>
+        </div>
+        <div class="pa-narr">
+          <span data-step="1">The key travels with the request. The client minted it, once.</span>
+          <span data-step="2">The key is stored with the result, in the same transaction as the effect.</span>
+          <span data-step="3">The money moved exactly once. Now the response has to make it back.</span>
+          <span data-step="4">The signal died here. The client never saw the OK.</span>
+          <span data-step="5">The client retries with the same key. That is the whole trick.</span>
+          <span data-step="6">Same key: replay the response, not the work.</span>
+        </div>
+      </div>
+
+      <div class="pa-ph pa-lock" data-ph="lock">
+        <div class="pa-locked">
+          <div class="pa-big">That's it. It's gone.</div>
+          <div class="pa-sub">rebuild it from memory. don't scroll back; there is nothing to scroll back to.</div>
+        </div>
+      </div>
+
+      <div class="pa-ph pa-rebuild" data-ph="rebuild grade probe">
+        <div class="pa-ta" data-text="The app sends the payment with a key. The server stores the key with the result in the same transaction. When the retry arrives with the same key, it returns the stored result instead of charging again."><span class="pa-typed"></span><span class="pa-caret"></span></div>
+        <div class="pa-score">
+          <div class="pa-score-h">recall · 4 of 6</div>
+          <div class="pa-srow pa-hit"><span class="pa-mk">✓</span><span>the key travels with the request</span></div>
+          <div class="pa-srow pa-hit"><span class="pa-mk">✓</span><span>key stored with the result</span></div>
+          <div class="pa-srow pa-hit"><span class="pa-mk">✓</span><span>same transaction as the effect</span></div>
+          <div class="pa-srow pa-miss"><span class="pa-mk">✕</span><span>the retention window is how late a retry may safely arrive</span></div>
+          <div class="pa-srow pa-hit"><span class="pa-mk">✓</span><span>replay the response, not the work</span></div>
+          <div class="pa-srow pa-miss"><span class="pa-mk">✕</span><span>the ledger is append-only: inserts replay, updates do not</span></div>
+          <div class="pa-verdict">Most of the shape, missing the parts interviewers actually probe.</div>
+        </div>
+        <div class="pa-summary"><span class="pa-score-h">recall · 4 of 6</span><span>Most of the shape, missing the parts interviewers actually probe.</span></div>
+        <div class="pa-transcript">
+          <div class="pa-turn pa-iv"><div class="pa-who">interviewer</div><p>The retry arrives while the first request is still inside the transaction. Not before, not after. During. What does the client see?</p></div>
+          <div class="pa-turn pa-you"><div class="pa-who">you</div><p>…a second charge?</p></div>
+          <div class="pa-turn pa-iv"><div class="pa-who">interviewer</div><p>Only if the key is not unique in the database. A unique index on the key: the second insert blocks, then fails, then replays. Where does the guarantee break?</p></div>
+          <div class="pa-turn pa-you"><div class="pa-who">you</div><p>When the effect is outside my database.</p></div>
+          <div class="pa-turn pa-iv"><div class="pa-who">interviewer</div><p>Money and email. Stripe accepts your key. Your SMS provider may not.</p></div>
+        </div>
+      </div>
+
+      <div class="pa-ph pa-reveal" data-ph="reveal">
+        <div class="pa-diagram pa-drawn"></div>
+        <div class="pa-reveal-txt">
+          <div class="pa-breaks"><span>where it breaks:</span> effects outside your database.</div>
+          <div class="pa-kernel">kernel · exactly-once delivery does not exist. exactly-once effect does: make the receiver remember what it already did.</div>
+        </div>
+      </div>
+
+      <div class="pa-hint">r · replay</div>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* ---- profile ---- */
+  .pa-kicker { margin-bottom: 2.4vmin; font-size: 1.8vmin; letter-spacing: .1em; }
+  .pa-h1 { font-size: 3.1vmin; line-height: 1.12; max-width: none; letter-spacing: -.01em; }
+  .pa-split { display: grid; grid-template-columns: .9fr 1.1fr; margin-top: 2.2vmin; border: 1px solid var(--line-strong); flex: 0 1 auto; min-height: 0; }
+  .pa-col { padding: 1.3vmin 2.2vmin .8vmin; }
+  .pa-col + .pa-col { border-left: 1px solid var(--line-strong); background: var(--accent-soft); }
+  .pa-h2 { font-size: 1.9vmin; font-family: var(--font-mono); font-weight: 500; letter-spacing: .1em; text-transform: uppercase; margin-bottom: .8vmin; color: var(--ink-3); }
+  .pa-gen .pa-h2 { color: var(--accent-ink); }
+  .pa-dl { margin: 0; }
+  .pa-row { padding: .5vmin 0; border-top: 1px solid var(--line); font-family: var(--font-read); font-size: 1.9vmin; line-height: 1.3; }
+  .pa-row:first-child { border-top: 0; }
+  .pa-k { display: inline; font-family: var(--font-mono); font-size: 1.85vmin; color: var(--ink-3); letter-spacing: .02em; margin-right: 1.2ch; }
+  .pa-v { display: inline; margin: 0; }
+  .pa-struct { font-family: var(--font-read); font-size: 1.9vmin; line-height: 1.28; margin: 0 0 .6vmin; }
+  .pa-title { font-family: var(--font-ui); font-weight: 700; font-size: 2.8vmin; letter-spacing: -.01em; }
+  .pa-foot { padding-top: 1.1vmin; margin-top: 1.2vmin; font-size: 1.8vmin; line-height: 1.4; }
+  .pa-foot span:last-child { white-space: nowrap; }
+
+  /* ---- stage ---- */
+  .pa-stage { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-strong); background: var(--panel); }
+  .pa-strip { display: flex; justify-content: space-between; gap: 2vmin; font-family: var(--font-mono); font-size: 1.85vmin; letter-spacing: .06em; text-transform: lowercase; color: var(--on-accent); background: var(--accent); padding: .9vmin 1.8vmin; font-weight: 700; }
+  .pa-phases { font-weight: 400; opacity: .55; white-space: nowrap; }
+  .pa-phases i { font-style: normal; }
+  .pa-phases i.pa-cur { font-weight: 700; text-decoration: underline; text-underline-offset: .3em; }
+  .pa-body { flex: 1 1 auto; min-height: 0; position: relative; padding: 2.2vmin 2.4vmin 2.4vmin; display: flex; flex-direction: column; }
+  .pa-ph { display: none; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+  .pa-ph.pa-on { display: flex; }
+  .pa-narr { font-family: var(--font-mono); font-size: 2.1vmin; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 1.2vmin; margin-top: 1.2vmin; line-height: 1.45; min-height: 4.5vmin; }
+  .pa-hint { display: none; position: absolute; right: 1.6vmin; bottom: 1.2vmin; font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); letter-spacing: .06em; }
+  .pa-hint.pa-on { display: block; }
+
+  /* question */
+  .pa-q { justify-content: center; align-items: center; text-align: center; }
+  .pa-q1, .pa-q2 { font-family: var(--font-ui); font-weight: 800; font-size: 5vmin; line-height: 1.12; letter-spacing: -.015em; margin: 0; }
+  .pa-q2 { color: var(--ink-2); margin-top: 1.4vmin; }
+
+  /* origin */
+  .pa-origin { justify-content: center; }
+  .pa-card { border: 1px solid var(--line-strong); background: var(--panel-2); padding: 3vmin 3.4vmin; max-width: 132vmin; align-self: center; }
+  .pa-eyebrow { font-family: var(--font-mono); font-size: 1.85vmin; letter-spacing: .08em; color: var(--ink-3); margin-bottom: 1.4vmin; }
+  .pa-card-h { font-family: var(--font-ui); font-weight: 700; font-size: 3.2vmin; line-height: 1.15; letter-spacing: -.01em; margin-bottom: 1.6vmin; }
+  .pa-card-p { font-family: var(--font-read); font-size: 2.2vmin; line-height: 1.5; margin: 0; }
+  .pa-origin .pa-narr { border-top: 0; text-align: center; margin-top: 2.4vmin; flex: 0 0 auto; }
+
+  /* watch */
+  .pa-diagram { flex: 1 1 auto; min-height: 0; display: flex; justify-content: center; }
+  .pa-svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .pa-node rect { fill: var(--panel-2); stroke: var(--line-strong); vector-effect: non-scaling-stroke; }
+  .pa-node text { font-family: var(--font-mono); font-size: 17px; fill: var(--ink); text-anchor: middle; }
+  .pa-life { stroke: var(--line-strong); vector-effect: non-scaling-stroke; }
+  .pa-arrow { --pa-c: var(--line-strong); }
+  .pa-arrow.pa-cur { --pa-c: var(--accent); }
+  .pa-arrow line { stroke: var(--pa-c); stroke-width: 2; stroke-dasharray: 100; stroke-dashoffset: 100; transition: stroke-dashoffset 1.6s linear; }
+  .pa-arrow polygon { fill: var(--pa-c); opacity: 0; transition: opacity .2s 1.5s; }
+  .pa-arrow text { font-family: var(--font-mono); font-size: 14px; fill: var(--ink-2); text-anchor: middle; opacity: 0; transition: opacity .3s; paint-order: stroke; stroke: var(--panel); stroke-width: 6px; stroke-linejoin: round; }
+  .pa-arrow.pa-on line { stroke-dashoffset: 0; }
+  .pa-arrow.pa-on polygon, .pa-arrow.pa-on text { opacity: 1; }
+  .pa-arrow .pa-x, .pa-arrow.pa-on .pa-x { fill: var(--bad); font-size: 30px; font-weight: 700; opacity: 0; transition: opacity .2s; }
+  .pa-arrow .pa-x.pa-on { opacity: 1; }
+  .pa-watch .pa-narr span { display: none; }
+  .pa-watch .pa-narr span.pa-on { display: inline; }
+
+  /* lock */
+  .pa-lock { justify-content: center; }
+  .pa-locked { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.6vmin; border: 1px dashed var(--line-strong); background: var(--panel-2); text-align: center; padding: 3vmin; }
+  .pa-big { font-family: var(--font-ui); font-weight: 700; font-size: 6vmin; letter-spacing: -.015em; line-height: 1.1; }
+  .pa-sub { font-family: var(--font-mono); font-size: 2vmin; color: var(--ink-3); letter-spacing: .06em; line-height: 1.6; max-width: 60ch; }
+
+  /* rebuild · grade · probe */
+  .pa-ta { background: var(--paper); border: 1px solid var(--line-strong); font-family: var(--font-read); font-size: 2.5vmin; line-height: 1.55; padding: 1.8vmin 2vmin; min-height: 14vmin; }
+  .pa-caret { display: inline-block; width: 1px; height: 1em; vertical-align: -.15em; background: var(--ink); margin-left: 2px; animation: pa-blink 1s steps(1) infinite; }
+  @keyframes pa-blink { 50% { opacity: 0; } }
+  .pa-ta.pa-done .pa-caret { display: none; }
+  .pa-ta.pa-done { border-color: var(--line); background: var(--panel-2); }
+  .pa-score { display: none; border: 1px solid var(--line-strong); margin-top: 1.8vmin; background: var(--paper); opacity: 0; transform: translateY(2vmin); transition: opacity .4s, transform .4s; }
+  .pa-score.pa-on { display: block; }
+  .pa-score.pa-in { opacity: 1; transform: none; }
+  .pa-score-h { font-family: var(--font-mono); font-size: 1.85vmin; letter-spacing: .13em; text-transform: lowercase; color: var(--ink-2); }
+  .pa-score .pa-score-h { padding: .8vmin 1.6vmin; background: var(--panel-2); border-bottom: 1px solid var(--line-strong); }
+  .pa-srow { display: grid; grid-template-columns: 3vmin 1fr; gap: 1vmin; padding: .75vmin 1.6vmin; border-bottom: 1px solid var(--line); font-family: var(--font-read); font-size: 2.25vmin; line-height: 1.35; align-items: baseline; opacity: 0; transition: opacity .25s; }
+  .pa-srow.pa-on { opacity: 1; }
+  .pa-mk { font-family: var(--font-mono); font-weight: 600; font-size: 1.9vmin; }
+  .pa-hit .pa-mk { color: var(--good); }
+  .pa-miss .pa-mk { color: var(--bad); }
+  .pa-miss.pa-on { background: var(--bad-soft); }
+  .pa-verdict { padding: 1.1vmin 1.6vmin; border-top: 1px solid var(--line-strong); font-family: var(--font-read); font-size: 2.25vmin; background: var(--panel-2); opacity: 0; transition: opacity .3s; }
+  .pa-verdict.pa-on { opacity: 1; }
+  .pa-summary { display: none; border: 1px solid var(--line-strong); background: var(--panel-2); padding: .9vmin 1.6vmin; font-family: var(--font-read); font-size: 2.05vmin; align-items: baseline; gap: 2vmin; margin-bottom: 1.8vmin; }
+  .pa-summary .pa-score-h { white-space: nowrap; }
+  .pa-transcript { display: none; flex-direction: column; gap: 1.5vmin; }
+  .pa-turn { opacity: 0; transition: opacity .3s; }
+  .pa-turn.pa-on { opacity: 1; }
+  .pa-who { font-family: var(--font-mono); font-size: 1.85vmin; letter-spacing: .13em; text-transform: lowercase; margin-bottom: .4vmin; }
+  .pa-iv .pa-who { color: var(--accent-ink); }
+  .pa-you .pa-who { color: var(--ink-3); }
+  .pa-turn p { font-family: var(--font-read); font-size: 2.5vmin; line-height: 1.45; margin: 0; max-width: 62ch; }
+  .pa-you p { font-style: italic; color: var(--ink-2); }
+  .pa-rebuild.pa-probe .pa-ta, .pa-rebuild.pa-probe .pa-score { display: none; }
+  .pa-rebuild.pa-probe .pa-summary { display: flex; }
+  .pa-rebuild.pa-probe .pa-transcript { display: flex; }
+
+  /* reveal */
+  .pa-reveal { flex-direction: row; align-items: center; gap: 4vmin; }
+  .pa-reveal .pa-diagram { flex: 0 0 96vmin; height: 100%; }
+  .pa-drawn .pa-arrow line, .pa-drawn .pa-arrow polygon, .pa-drawn .pa-arrow text, .pa-drawn .pa-arrow .pa-x { transition: none; stroke-dashoffset: 0; opacity: 1; }
+  .pa-drawn .pa-arrow text { font-size: 19px; }
+  .pa-drawn .pa-node text { font-size: 22px; }
+  .pa-reveal-txt { flex: 1 1 auto; min-width: 0; }
+  .pa-breaks { font-family: var(--font-ui); font-weight: 700; font-size: 3.8vmin; line-height: 1.15; letter-spacing: -.01em; }
+  .pa-breaks span { color: var(--accent-ink); }
+  .pa-kernel { font-family: var(--font-mono); font-size: 2.05vmin; line-height: 1.5; color: var(--ink-2); margin-top: 2vmin; border-top: 1px solid var(--line); padding-top: 1.6vmin; }
+</style>
+
+<script>
+(() => {
+  const NAME = "Shreyash";
+  let run = 0, timers = [], root = null;
+  const $ = (s, el = root) => el.querySelector(s);
+  const $$ = (s, el = root) => [...el.querySelectorAll(s)];
+  const at = (sec, fn) => timers.push(setTimeout(() => { if (root) fn(); }, sec * 1000));
+
+  function phase(name) {
+    $$(".pa-ph").forEach(p => p.classList.toggle("pa-on", p.dataset.ph.split(" ").includes(name)));
+    $$(".pa-phases i").forEach(i => i.classList.toggle("pa-cur", i.dataset.ph === name));
+  }
+  function reset() {
+    timers.forEach(clearTimeout); timers = [];
+    if (!root) return;
+    $$(".pa-on, .pa-cur, .pa-in, .pa-done, .pa-probe").forEach(e => e.classList.remove("pa-on", "pa-cur", "pa-in", "pa-done", "pa-probe"));
+    $(".pa-typed").textContent = "";
+    $(".pa-reveal .pa-diagram").innerHTML = "";
+  }
+  function type(el, text, cps, myRun) {
+    let i = 0;
+    const tick = () => {
+      if (myRun !== run) return;
+      el.textContent = text.slice(0, ++i);
+      if (i < text.length) timers.push(setTimeout(tick, 1000 / cps));
+      else el.parentElement.classList.add("pa-done");
+    };
+    tick();
+  }
+
+  window.deckAuto.register("a", {
+    start(section) {
+      root = section; reset(); const myRun = ++run;
+      // 0 · question
+      phase("question");
+      // 4 · origin
+      at(4, () => phase("origin"));
+      // 12 · watch, one arrow every 3 s (draws in 1.6 s)
+      at(12, () => phase("watch"));
+      for (let s = 1; s <= 6; s++) at(12 + 3 * (s - 1), () => {
+        $$(".pa-watch .pa-arrow").forEach(a => a.classList.toggle("pa-cur", a.dataset.step == s));
+        $(`.pa-watch .pa-arrow[data-step="${s}"]`).classList.add("pa-on");
+        $$(".pa-watch .pa-narr span").forEach(n => n.classList.toggle("pa-on", n.dataset.step == s));
+      });
+      at(22.6, () => $(".pa-watch .pa-x").classList.add("pa-on"));
+      // 30 · lock
+      at(30, () => phase("lock"));
+      // 32 · rebuild, ~28 chars/s
+      at(32, () => { phase("rebuild"); type($(".pa-typed"), $(".pa-ta").dataset.text, 28, myRun); });
+      // 40 · grade
+      at(40, () => { phase("grade"); const sc = $(".pa-score"); sc.classList.add("pa-on"); requestAnimationFrame(() => requestAnimationFrame(() => sc.classList.add("pa-in"))); });
+      $$(".pa-srow").forEach((r, i) => at(40.4 + 0.4 * i, () => r.classList.add("pa-on")));
+      at(43.2, () => $(".pa-verdict").classList.add("pa-on"));
+      // 46 · probe
+      at(46, () => { phase("probe"); $(".pa-rebuild").classList.add("pa-probe"); });
+      $$(".pa-turn").forEach((t, i) => at(46.3 + 0.7 * i, () => t.classList.add("pa-on")));
+      // 58 · reveal, hold
+      at(58, () => {
+        phase("reveal");
+        const svg = $(".pa-watch .pa-svg").cloneNode(true);
+        $$(".pa-cur", svg).forEach(e => e.classList.remove("pa-cur"));
+        $(".pa-reveal .pa-diagram").appendChild(svg);
+        $(".pa-hint").classList.add("pa-on");
+      });
+    },
+    stop() { reset(); run++; }
+  });
+})();
+</script>
+
+<section class="slide" data-persona="b">
+  <div class="kicker pb-k"><span>PERSON B · ROHIT DESHMUKH · MANUAL QA TESTER → EMBEDDED ENGINEER, SPACE HARDWARE</span><span class="n">06 / 10</span></div>
+  <h1 class="pb-h1">Learns from the failure that caused the invention. Believes it only when his own test passes.</h1>
+  <div class="pb-split">
+    <div class="pb-col">
+      <h2 class="pb-h2">extracted · by hand, in conversation</h2>
+      <div class="pb-rows">
+        <div class="pb-row"><span class="pb-key">intake</span><span class="pb-val">History first. Needs to know which mission failed and why before he will read how the mechanism works. Stories in, abstractions bounce off.</span></div>
+        <div class="pb-row"><span class="pb-key">retention</span><span class="pb-val">Sticks when he breaks it himself. A mechanism he has not tried to break is not learned yet.</span></div>
+        <div class="pb-row"><span class="pb-key">recall</span><span class="pb-val">From a failing test. He remembers bugs and reproduction steps, not lectures.</span></div>
+        <div class="pb-row"><span class="pb-key">retrieval mode</span><span class="pb-val">Write the test first, then the code, on a simulated board that can actually fail.</span></div>
+        <div class="pb-row"><span class="pb-key">thinking</span><span class="pb-val">Bottom-up. Symptom to cause, given / when / then. Five years of QA reflex, now pointed at silicon.</span></div>
+        <div class="pb-row"><span class="pb-key">attention</span><span class="pb-val">Long for narrative and anything he can poke. Short for math with no device attached.</span></div>
+        <div class="pb-row"><span class="pb-key">prior knowledge</span><span class="pb-val">Test design, edge cases, reproduction. None in C, registers, or electronics. Never soldered.</span></div>
+        <div class="pb-row"><span class="pb-key">calibration</span><span class="pb-val">Underconfident. Will not claim to understand until the test goes green; then he over-trusts the green.</span></div>
+      </div>
+    </div>
+    <div class="pb-col pb-gen">
+      <h2 class="pb-h2">generated · the book for that head</h2>
+      <div class="pb-title">From Test Case to Flight Computer</div>
+      <p class="pb-struct">every chapter opens with a mission that failed, then the mechanism, then a live simulation, then he writes the test, then the code.</p>
+      <div class="pb-rows">
+        <div class="pb-row"><span class="pb-key">chapters</span><span class="pb-val">Part 1: the computer that flew to the Moon and rebooted on the way down. Part 2: memory, interrupts, timers, and what radiation does to each. Part 3: the flight software stack, test-first.</span></div>
+        <div class="pb-row"><span class="pb-key">interactive diagrams</span><span class="pb-val">Register maps and timing diagrams he can step through cycle by cycle; a memory word whose bits he can flip.</span></div>
+        <div class="pb-row"><span class="pb-key">simulations</span><span class="pb-val">A simulated MCU: watchdog timer, ECC memory, interrupt latency, brown-out. Every chapter's mechanism runs, and can be made to fail.</span></div>
+        <div class="pb-row"><span class="pb-key">micro-games</span><span class="pb-val">"Which mission, which bug": Apollo 11's 1202 alarm, Ariane 5 flight 501's integer overflow, Mars Pathfinder's priority inversion. Match the symptom to the cause before the card flips.</span></div>
+        <div class="pb-row"><span class="pb-key">challenges</span><span class="pb-val">Given / when / then. He must write the test that would have caught the historical failure before he sees the fix.</span></div>
+        <div class="pb-row"><span class="pb-key">reels</span><span class="pb-val">"A watchdog is a promise to die on time." "Memory that can lie must carry the proof of its own truth." "Radiation does not crash you; it edits you."</span></div>
+        <div class="pb-row"><span class="pb-key">lock &amp; ask</span><span class="pb-val">The register map disappears. He writes the init sequence and the test for it from memory; the simulator runs his test.</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>learning-history interview · cognitive task analysis · concrete-before-abstract · worked examples that fade · retrieval by test-writing · failure injection</span><span>next: what Rohit experiences</span></div>
+</section>
+
+<section class="slide" data-auto="b">
+  <div class="kicker pb-k"><span>ROHIT · CHAPTER 9 · SINGLE-EVENT UPSETS · a cosmic ray flips one bit 400 km up. why doesn't the mission end?</span><span class="n">07 / 10</span></div>
+  <div class="pb-stage">
+    <div class="pb-strip">
+      <span>seu · chapter 9</span>
+      <span class="pb-phases"><i>question</i> · <i>history</i> · <i>mechanism</i> · <i>simulation</i> · <i>lock</i> · <i>test</i> · <i>code</i> · <i>probe</i></span>
+    </div>
+    <div class="pb-body">
+
+      <div class="pb-ph pb-q">
+        <div class="pb-l1">A cosmic ray flips one bit in a satellite's memory, 400 km up.</div>
+        <div class="pb-l2">Why doesn't the mission end?</div>
+      </div>
+
+      <div class="pb-ph pb-hist">
+        <div class="pb-card"><div class="pb-year">1969</div><div class="pb-hl">Apollo 11, 1202 alarm</div><div class="pb-sub">The guidance computer overloaded, restarted itself mid-descent, and kept flying. Restart was a feature.</div></div>
+        <div class="pb-card"><div class="pb-year">2003</div><div class="pb-hl">Schaerbeek, Belgium</div><div class="pb-sub">One flipped bit in an electronic voting machine gave a candidate 4,096 extra votes. A single bit, position 13.</div></div>
+        <div class="pb-card"><div class="pb-year">2022</div><div class="pb-hl">Voyager 1</div><div class="pb-sub">Garbled telemetry, 23 billion km away, traced to a corrupted memory chip. Patched by moving the code around it.</div></div>
+      </div>
+
+      <div class="pb-ph pb-mech">
+        <svg class="pb-word" viewBox="0 0 616 104" aria-label="a 12-bit memory word: 8 data bits and 4 check bits">
+          <g class="pb-bit" data-i="0"><rect x="0"   y="44" width="46" height="52"/><text class="pb-lb" x="23"  y="36" text-anchor="middle">d0</text><text class="pb-v" x="23"  y="79" text-anchor="middle">0</text></g>
+          <g class="pb-bit" data-i="1"><rect x="52"  y="44" width="46" height="52"/><text class="pb-lb" x="75"  y="36" text-anchor="middle">d1</text><text class="pb-v" x="75"  y="79" text-anchor="middle">1</text></g>
+          <g class="pb-bit" data-i="2"><rect x="104" y="44" width="46" height="52"/><text class="pb-lb" x="127" y="36" text-anchor="middle">d2</text><text class="pb-v" x="127" y="79" text-anchor="middle">1</text></g>
+          <g class="pb-bit" data-i="3"><rect x="156" y="44" width="46" height="52"/><text class="pb-lb" x="179" y="36" text-anchor="middle">d3</text><text class="pb-v" x="179" y="79" text-anchor="middle">0</text></g>
+          <g class="pb-bit" data-i="4"><rect x="208" y="44" width="46" height="52"/><text class="pb-lb" x="231" y="36" text-anchor="middle">d4</text><text class="pb-v" x="231" y="79" text-anchor="middle">1</text></g>
+          <g class="pb-bit pb-b5" data-i="5"><rect x="260" y="44" width="46" height="52"/><text class="pb-lb" x="283" y="36" text-anchor="middle">d5</text><text class="pb-v" x="283" y="79" text-anchor="middle">0</text></g>
+          <g class="pb-bit" data-i="6"><rect x="312" y="44" width="46" height="52"/><text class="pb-lb" x="335" y="36" text-anchor="middle">d6</text><text class="pb-v" x="335" y="79" text-anchor="middle">1</text></g>
+          <g class="pb-bit" data-i="7"><rect x="364" y="44" width="46" height="52"/><text class="pb-lb" x="387" y="36" text-anchor="middle">d7</text><text class="pb-v" x="387" y="79" text-anchor="middle">0</text></g>
+          <g class="pb-chk"><rect x="426" y="44" width="46" height="52"/><text class="pb-lb" x="449" y="36" text-anchor="middle">check</text><text class="pb-v" x="449" y="79" text-anchor="middle">p1</text></g>
+          <g class="pb-chk"><rect x="478" y="44" width="46" height="52"/><text class="pb-v" x="501" y="79" text-anchor="middle">p2</text></g>
+          <g class="pb-chk"><rect x="530" y="44" width="46" height="52"/><text class="pb-v" x="553" y="79" text-anchor="middle">p4</text></g>
+          <g class="pb-chk"><rect x="582" y="44" width="34" height="52"/><text class="pb-v" x="599" y="79" text-anchor="middle">p8</text></g>
+          <circle class="pb-dot" cx="283" cy="8" r="7"/>
+        </svg>
+        <div class="pb-cap">hamming(12,8) · 8 bits of data carry 4 bits of proof</div>
+        <div class="pb-syn">syndrome = p8 p4 p2 p1 = 0 1 0 1 → bit 5</div>
+        <div class="pb-cnt">seu corrected · 1</div>
+
+        <div class="pb-board">
+          <div class="pb-brow"><span class="pb-bk">flight counter</span><span class="pb-bv pb-fc">0x2A</span></div>
+          <div class="pb-brow"><span class="pb-bk">program counter</span><span class="pb-bv pb-pc"><span class="pb-pcv">0x0800_1F3C</span><span class="pb-hit"><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="5"/></svg><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="5"/></svg> 2 bits flipped · uncorrectable</span></span></div>
+          <div class="pb-brow"><span class="pb-bk">watchdog</span><span class="pb-bv pb-wd"><span class="pb-wdv">1.6 s</span><svg class="pb-wdbar" viewBox="0 0 100 4" preserveAspectRatio="none"><rect x="0" y="0" width="100" height="4"/></svg></span></div>
+          <div class="pb-brow"><span class="pb-bk">ecc</span><span class="pb-bv">on</span></div>
+          <div class="pb-reset">RESET</div>
+          <div class="pb-rest">state restored from checkpoint · counter 0x2A · mission continues</div>
+        </div>
+
+        <div class="pb-narr">The extra bits let the reader compute which bit lied. One flip: caught and fixed. Two flips: caught, not fixed.</div>
+      </div>
+
+      <div class="pb-ph pb-lock">
+        <div class="pb-big">That's it. It's gone.</div>
+        <div class="pb-sm">write the test first.</div>
+      </div>
+
+      <div class="pb-ph pb-tc">
+        <div class="pb-code pb-test"><div class="pb-t">test</div><div class="pb-tx"></div></div>
+        <div class="pb-cw"><div class="pb-code pb-c"><div class="pb-t">code</div><div class="pb-tx"></div></div>
+          <div class="pb-score"><div class="pb-sh">tests · 4 of 5 green</div><div class="pb-sf"><b>✕</b>failing: watchdog resets the core within 1.6 s</div></div>
+        </div>
+      </div>
+
+      <div class="pb-ph pb-probe">
+        <div class="pb-sum">tests · 4 of 5 green · failing: watchdog resets the core within 1.6 s</div>
+        <div class="pb-line"><div class="pb-who">mentor</div><div class="pb-say">Your watchdog resets the core. What kicks the watchdog if the code that kicks it is the code that hung?</div></div>
+        <div class="pb-line pb-you"><div class="pb-who">you</div><div class="pb-say">…nothing. It has to be a timer the CPU cannot stop.</div></div>
+        <div class="pb-line"><div class="pb-who">mentor</div><div class="pb-say">Correct. It lives outside the core, on its own clock. That is why your fifth test failed: you kicked it from inside ecc_read.</div></div>
+        <div class="pb-final">
+          <div class="pb-fl">where it breaks: a watchdog kicked from the code it is watching.</div>
+          <div class="pb-kn">kernel · memory that can lie must carry the proof of its own truth. a watchdog is a promise to die on time.</div>
+        </div>
+      </div>
+
+    </div>
+    <div class="pb-hint">r · replay</div>
+  </div>
+</section>
+
+<style>
+  /* ---- PERSON B · profile ---- */
+  .pb-k { font-size: 1.85vmin; margin-bottom: 2vmin; }
+  .pb-h1 { font-size: 3.8vmin; max-width: 50ch; }
+  .pb-split { display: grid; grid-template-columns: 70fr 92fr; margin-top: 2vmin; border: 1px solid var(--line-strong); min-height: 0; }
+  .pb-col { padding: 1.4vmin 2.4vmin 1vmin; min-width: 0; }
+  .pb-gen { border-left: 1px solid var(--line-strong); background: var(--accent-soft); }
+  .pb-h2 { font-family: var(--font-mono); font-weight: 500; font-size: 1.9vmin; letter-spacing: .1em; color: var(--ink-3); margin-bottom: .8vmin; }
+  .pb-gen .pb-h2 { color: var(--accent-ink); }
+  .pb-title { font-weight: 700; font-size: 2.6vmin; line-height: 1.1; letter-spacing: -.01em; }
+  .pb-struct { font-family: var(--font-read); font-size: 1.95vmin; line-height: 1.4; color: var(--ink-2); margin: .5vmin 0 .6vmin; }
+  .pb-row { display: flex; gap: 1.6vmin; padding: .5vmin 0; border-top: 1px solid var(--line); }
+  .pb-rows .pb-row:first-child { border-top: 0; }
+  .pb-key { flex: 0 0 15vmin; font-family: var(--font-mono); font-size: 1.9vmin; color: var(--ink-3); line-height: 1.3; padding-top: .1vmin; }
+  .pb-val { font-family: var(--font-read); font-size: 1.95vmin; line-height: 1.3; }
+
+  /* ---- PERSON B · stage ---- */
+  .pb-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-strong); background: var(--panel); position: relative; }
+  .pb-strip { font-family: var(--font-mono); font-size: 1.9vmin; letter-spacing: .13em; text-transform: lowercase; color: var(--on-accent); background: var(--accent); padding: .9vmin 1.8vmin; display: flex; justify-content: space-between; gap: 2vmin; font-weight: 700; flex: none; }
+  .pb-phases { font-weight: 400; }
+  .pb-phases i { font-style: normal; opacity: .55; }
+  .pb-phases i.pb-cur { opacity: 1; font-weight: 700; }
+  .pb-body { flex: 1; min-height: 0; padding: 2.6vmin 3vmin; display: flex; flex-direction: column; }
+  .pb-ph { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .pb-ph.pb-on { display: flex; }
+  .pb-hint { display: none; position: absolute; right: 1.6vmin; bottom: 1vmin; font-family: var(--font-mono); font-size: 1.9vmin; color: var(--ink-3); letter-spacing: .08em; }
+  .pb-hint.pb-on { display: block; }
+
+  /* question */
+  .pb-q { justify-content: center; align-items: center; text-align: center; }
+  .pb-l1 { font-weight: 800; font-size: 5vmin; line-height: 1.08; letter-spacing: -.015em; max-width: 30ch; }
+  .pb-l2 { font-weight: 800; font-size: 5vmin; line-height: 1.08; letter-spacing: -.015em; color: var(--ink-2); margin-top: 1.6vmin; }
+
+  /* history */
+  .pb-hist.pb-on { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2vmin; align-content: center; }
+  .pb-card { border: 1px solid var(--line-strong); background: var(--panel-2); padding: 2.4vmin 2.4vmin 2.8vmin; opacity: 0; transform: translateY(2vmin); transition: opacity .5s, transform .5s; }
+  .pb-card.pb-on { opacity: 1; transform: none; }
+  .pb-year { font-family: var(--font-mono); font-size: 2vmin; color: var(--ink-3); letter-spacing: .08em; }
+  .pb-hl { font-weight: 700; font-size: 3.4vmin; line-height: 1.1; letter-spacing: -.01em; margin: 1vmin 0 1.2vmin; }
+  .pb-sub { font-family: var(--font-read); font-size: 2.3vmin; line-height: 1.45; }
+
+  /* mechanism: the word */
+  .pb-word { width: 130vmin; max-width: 100%; height: auto; display: block; align-self: center; flex: none; transition: width .5s; }
+  .pb-sim .pb-word { width: 84vmin; }
+  .pb-sim .pb-syn { display: none; }
+  .pb-word rect { stroke: var(--line-strong); stroke-width: 1; }
+  .pb-bit rect { fill: var(--panel-2); }
+  .pb-chk rect { fill: var(--panel); }
+  .pb-bit.pb-bad rect { fill: var(--bad-soft); stroke: var(--bad); }
+  .pb-bit.pb-good rect { fill: var(--good-soft); stroke: var(--good); }
+  .pb-word text { font-family: var(--font-mono); fill: var(--ink); }
+  .pb-word .pb-v { font-size: 25px; font-weight: 500; }
+  .pb-word .pb-lb { font-size: 14px; fill: var(--ink-3); }
+  .pb-dot { fill: var(--ink); opacity: 0; transition: transform .6s cubic-bezier(.4, 0, 1, 1), opacity .15s; }
+  .pb-dot.pb-on { opacity: 1; }
+  .pb-dot.pb-fall { transform: translateY(58px); }
+  .pb-cap { font-family: var(--font-mono); font-size: 2vmin; color: var(--ink-3); text-align: center; letter-spacing: .04em; margin-top: .6vmin; }
+  .pb-syn { font-family: var(--font-mono); font-size: 2.5vmin; text-align: center; margin-top: 1.2vmin; visibility: hidden; }
+  .pb-cnt { font-family: var(--font-mono); font-size: 2.2vmin; color: var(--good); text-align: center; margin-top: .8vmin; visibility: hidden; }
+  .pb-syn.pb-on, .pb-cnt.pb-on { visibility: visible; }
+  .pb-narr { font-family: var(--font-mono); font-size: 2.1vmin; line-height: 1.5; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 1.4vmin; margin-top: auto; visibility: hidden; }
+  .pb-narr.pb-on { visibility: visible; }
+  .pb-narr.pb-off { display: none; }
+
+  /* simulation: the board */
+  .pb-board { display: none; margin-top: 2.4vmin; border: 1px solid var(--line-strong); background: var(--paper); font-family: var(--font-mono); font-size: 2.2vmin; }
+  .pb-board.pb-on { display: block; }
+  .pb-brow { display: grid; grid-template-columns: 24vmin 1fr; gap: 2vmin; padding: .9vmin 2vmin; border-top: 1px solid var(--line); align-items: center; }
+  .pb-brow:first-child { border-top: 0; }
+  .pb-bk { color: var(--ink-3); }
+  .pb-pc .pb-hit { display: none; color: var(--bad); }
+  .pb-pc.pb-bad .pb-pcv { display: none; }
+  .pb-pc.pb-bad .pb-hit { display: inline; }
+  .pb-hit svg { width: 1.7vmin; height: 1.7vmin; vertical-align: -.15vmin; margin-right: .3vmin; }
+  .pb-hit svg circle { fill: var(--ink); }
+  .pb-wd { display: flex; align-items: center; gap: 2vmin; }
+  .pb-wdv { min-width: 6ch; }
+  .pb-wdbar { width: 32vmin; height: 1vmin; display: block; }
+  .pb-wdbar rect { fill: var(--ink); transition: width 1.6s linear; }
+  .pb-wdbar.pb-run rect { width: 0; }
+  .pb-reset { display: none; text-align: center; font-family: var(--font-ui); font-weight: 800; font-size: 5.4vmin; letter-spacing: -.01em; padding: 1vmin 0 .2vmin; border-top: 1px solid var(--line); }
+  .pb-reset.pb-on { display: block; }
+  .pb-rest { display: none; color: var(--good); text-align: center; padding: .4vmin 0 1.4vmin; }
+  .pb-rest.pb-on { display: block; }
+
+  /* lock */
+  .pb-lock { justify-content: center; align-items: center; text-align: center; gap: 1.6vmin; border: 1px dashed var(--line-strong); background: var(--panel-2); }
+  .pb-big { font-weight: 700; font-size: 5.2vmin; letter-spacing: -.01em; }
+  .pb-sm { font-family: var(--font-mono); font-size: 2.1vmin; color: var(--ink-3); letter-spacing: .06em; }
+
+  /* test + code */
+  .pb-tc.pb-on { display: grid; grid-template-columns: 1fr 1fr; gap: 2.4vmin; align-content: start; }
+  .pb-code { border: 1px solid var(--line-strong); background: var(--paper); padding: 1.6vmin 2.2vmin 1.8vmin; font-family: var(--font-mono); font-size: 2.3vmin; line-height: 1.55; }
+  .pb-t { color: var(--ink-3); letter-spacing: .13em; font-size: 1.9vmin; margin-bottom: 1vmin; }
+  .pb-tx { white-space: pre; min-height: 7em; }
+  .pb-cw { visibility: hidden; }
+  .pb-cw.pb-on { visibility: visible; }
+  .pb-score { display: none; margin-top: 1.6vmin; border: 1px solid var(--line-strong); font-family: var(--font-mono); font-size: 2vmin; letter-spacing: .04em; }
+  .pb-score.pb-on { display: block; }
+  .pb-sh { padding: .8vmin 1.6vmin; background: var(--panel-2); border-bottom: 1px solid var(--line-strong); color: var(--ink-2); }
+  .pb-sf { padding: .8vmin 1.6vmin; background: var(--bad-soft); }
+  .pb-sf b { color: var(--bad); font-weight: 600; margin-right: 1.2vmin; }
+
+  /* probe */
+  .pb-probe { gap: 1.4vmin; }
+  .pb-sum { font-family: var(--font-mono); font-size: 1.9vmin; color: var(--ink-3); border: 1px solid var(--line); background: var(--paper); padding: .8vmin 1.4vmin; letter-spacing: .04em; }
+  .pb-line { display: none; }
+  .pb-line.pb-on { display: block; }
+  .pb-who { font-family: var(--font-mono); font-size: 1.9vmin; letter-spacing: .13em; color: var(--accent-ink); margin-bottom: .3vmin; }
+  .pb-you .pb-who { color: var(--ink-3); }
+  .pb-say { font-family: var(--font-read); font-size: 2.6vmin; line-height: 1.45; max-width: 64ch; }
+  .pb-you .pb-say { font-style: italic; }
+  .pb-final { display: none; margin-top: auto; border-top: 1px solid var(--line-strong); padding-top: 1.8vmin; }
+  .pb-final.pb-on { display: block; }
+  .pb-fl { font-weight: 700; font-size: 3.4vmin; line-height: 1.1; letter-spacing: -.01em; }
+  .pb-kn { font-family: var(--font-mono); font-size: 2vmin; line-height: 1.5; color: var(--ink-3); margin-top: 1vmin; visibility: hidden; }
+  .pb-kn.pb-on { visibility: visible; }
+</style>
+
+<script>
+deckAuto.register('b', (() => {
+  const NAME = "Rohit Deshmukh";
+  const TEST = [
+    "given   counter = 0x2A, ecc enabled",
+    "when    bit 5 flips",
+    "then    read returns 0x2A, seu_count == 1",
+    "when    bits 2 and 5 flip",
+    "then    read raises UNCORRECTABLE",
+    "then    watchdog resets the core within 1.6 s",
+    "then    counter == 0x2A after restart",
+  ];
+  const CODE = [
+    "uint8_t ecc_read(addr_t a) {",
+    "  word_t w = raw_read(a);",
+    "  uint8_t s = syndrome(w);",
+    "  if (s) {",
+    "    if (!correct(&w, s)) fault_uncorrectable(a);",
+    "    seu_count++;",
+    "  }",
+    "  kick_watchdog();",
+    "  return w.data;",
+    "}",
+  ].join("\n");
+
+  let T = [], stage = null, tpl = null;
+  const at = (s, fn) => T.push(setTimeout(fn, s * 1000));
+  const $ = (sel) => stage.querySelector(sel);
+  const on = (sel, cls = 'pb-on') => $(sel).classList.add(cls);
+  const off = (sel, cls = 'pb-on') => $(sel).classList.remove(cls);
+  const phase = (name) => stage.querySelectorAll('.pb-phases i').forEach(i => i.classList.toggle('pb-cur', i.textContent === name));
+  const hex = (n) => '0x' + n.toString(16).toUpperCase().padStart(2, '0');
+  // Types `text` into `el` starting at t0 seconds, cps chars per second. Returns the end time.
+  const type = (el, text, cps, t0, pre = '') => {
+    for (let i = 1; i <= text.length; i++) at(t0 + i / cps, () => { el.textContent = pre + text.slice(0, i); });
+    return t0 + text.length / cps;
+  };
+
+  function stop() {
+    T.forEach(clearTimeout); T = [];
+    if (stage && tpl !== null) stage.innerHTML = tpl;
+  }
+
+  function start(section) {
+    stop();
+    stage = section.querySelector('.pb-stage');
+    if (tpl === null) tpl = stage.innerHTML;
+    stage.innerHTML = tpl;
+
+    // 0 · question
+    phase('question'); on('.pb-q');
+
+    // 4 · history
+    at(4, () => { phase('history'); off('.pb-q'); on('.pb-hist'); });
+    stage.querySelectorAll('.pb-card').forEach((c, i) => at(4.05 + i * 0.6, () => c.classList.add('pb-on')));
+
+    // 10 · mechanism
+    at(10, () => { phase('mechanism'); off('.pb-hist'); on('.pb-mech'); });
+    at(11.0, () => on('.pb-dot'));
+    at(11.1, () => on('.pb-dot', 'pb-fall'));
+    at(11.7, () => { off('.pb-dot'); on('.pb-b5', 'pb-bad'); $('.pb-b5 .pb-v').textContent = '1'; });
+    at(13.0, () => on('.pb-syn'));
+    at(15.0, () => { off('.pb-b5', 'pb-bad'); on('.pb-b5', 'pb-good'); $('.pb-b5 .pb-v').textContent = '0'; on('.pb-cnt'); });
+    at(16.0, () => on('.pb-narr'));
+
+    // 22 · simulation
+    at(22, () => { phase('simulation'); on('.pb-mech', 'pb-sim'); on('.pb-narr', 'pb-off'); on('.pb-board'); });
+    for (let k = 0; k < 10; k++) at(22 + k * 0.4, () => { $('.pb-fc').textContent = hex(0x2A + k); });
+    at(26.0, () => on('.pb-pc', 'pb-bad'));
+    at(26.4, () => on('.pb-wdbar', 'pb-run'));
+    for (let k = 1; k <= 16; k++) at(26.4 + k * 0.1, () => { $('.pb-wdv').textContent = ((16 - k) / 10).toFixed(1) + ' s'; });
+    at(28.0, () => on('.pb-reset'));
+    at(29.2, () => { on('.pb-rest'); off('.pb-pc', 'pb-bad'); off('.pb-wdbar', 'pb-run'); $('.pb-wdv').textContent = '1.6 s'; $('.pb-fc').textContent = '0x2A'; });
+    for (let k = 1; k < 10; k++) at(30 + k * 0.4, () => { $('.pb-fc').textContent = hex(0x2A + k); });
+
+    // 34 · lock
+    at(34, () => { phase('lock'); off('.pb-mech'); on('.pb-lock'); });
+
+    // 36 · test
+    at(36, () => { phase('test'); off('.pb-lock'); on('.pb-tc'); });
+    TEST.forEach((line, i) => type($('.pb-test .pb-tx'), line, 100, 36 + i * 0.5, TEST.slice(0, i).map(l => l + "\n").join("")));
+
+    // 44 · code
+    at(44, () => { phase('code'); on('.pb-cw'); });
+    const codeEnd = type($('.pb-c .pb-tx'), CODE, 40, 44);
+    at(codeEnd + 0.5, () => on('.pb-score'));
+
+    // 52 · probe
+    at(52, () => { phase('probe'); off('.pb-tc'); on('.pb-probe'); });
+    stage.querySelectorAll('.pb-line').forEach((l, i) => at(52 + i * 0.7, () => l.classList.add('pb-on')));
+    at(55.0, () => on('.pb-final'));
+    at(56.0, () => on('.pb-kn'));
+    at(57.0, () => on('.pb-hint'));
+  }
+
+  return { start, stop };
+})());
+</script>
+
+<section class="slide" data-persona="c">
+  <div class="kicker pc-kick"><span>PERSON C · ANANYA IYER · FRONT-END DEVELOPER → EXOSKELETON CONTROL, DEEP TECH</span><span class="n">08 / 10</span></div>
+  <h1 class="pc-h1">Thinks in state machines and sixteen-millisecond frames. Now the frame is one millisecond and the state is a knee.</h1>
+  <div class="pc-split">
+    <div class="pc-col">
+      <div class="pc-h2">extracted · by hand, in conversation</div>
+      <dl class="pc-dl">
+        <dt class="pc-k">intake</dt><dd class="pc-v">Visual and stateful. She reads a control loop as a state machine with a tick; an equation lands only after she has seen what it moves.</dd>
+        <dt class="pc-k">retention</dt><dd class="pc-v">Sticks when she derives it and then watches it move. Equations without a moving thing evaporate in a day.</dd>
+        <dt class="pc-k">recall</dt><dd class="pc-v">From the picture. She rebuilds the equation from the diagram, not the diagram from the equation.</dd>
+        <dt class="pc-k">retrieval mode</dt><dd class="pc-v">Derive on paper, then tune a simulated joint and watch it fail, then say why.</dd>
+        <dt class="pc-k">thinking</dt><dd class="pc-v">Top-down: "what state are we in?" before "what is the value?". Structure first, magnitude second.</dd>
+        <dt class="pc-k">attention</dt><dd class="pc-v">Long for anything animated or interactive. Short for dense text without a figure.</dd>
+        <dt class="pc-k">prior knowledge</dt><dd class="pc-v">State machines, event loops, animation timing, latency budgets. No mechanics, no control theory; calculus rusty but not gone.</dd>
+        <dt class="pc-k">calibration</dt><dd class="pc-v">Accurate on structure, overconfident on the math. Knows which state the leg is in; misjudges how much torque.</dd>
+      </dl>
+    </div>
+    <div class="pc-col pc-gen">
+      <div class="pc-h2">generated · the book for that head</div>
+      <div class="pc-title">From the DOM to the Joint</div>
+      <p class="pc-struct">biomechanics first, then sensors, then the loop as a state machine, then impedance control, then safety, then the papers. Serious by design: the field is.</p>
+      <dl class="pc-dl">
+        <dt class="pc-k">chapters</dt><dd class="pc-v">Part 1: the gait cycle as a state machine. Part 2: IMU, encoder, EMG: what the leg can sense in a millisecond. Part 3: impedance control (Hogan, 1985). Part 4: safety before strength. Part 5: reading BLEEX, HAL and the MIT ankle.</dd>
+        <dt class="pc-k">interactive diagrams</dt><dd class="pc-v">The gait cycle she can step through phase by phase with the IMU trace scrolling under it; every transition is a guard she can edit.</dd>
+        <dt class="pc-k">simulations</dt><dd class="pc-v">A one-degree-of-freedom knee with a tunable spring K and damper B; she can make it oscillate, then make it catch.</dd>
+        <dt class="pc-k">micro-games</dt><dd class="pc-v">"What state is the leg in?" from a two-second IMU trace, before the label appears. Streaks, no points.</dd>
+        <dt class="pc-k">challenges</dt><dd class="pc-v">Tune K and B until the knee settles inside 60 ms without overshoot, then explain in one sentence what B did.</dd>
+        <dt class="pc-k">reels</dt><dd class="pc-v">"Stiffness is a spring you can argue with." "The knee is a state machine with a spring in it." "Safety is what you do with a stale number."</dd>
+        <dt class="pc-k">lock &amp; ask</dt><dd class="pc-v">The derivation disappears. She writes the torque law from memory and says what each term does; the simulator runs her law.</dd>
+      </dl>
+    </div>
+  </div>
+  <div class="foot"><span>think-aloud protocol · concept mapping (state machine → control loop) · faded worked examples · dual coding · desirable difficulty · calibration</span><span>next: what Ananya experiences</span></div>
+</section>
+
+<section class="slide" data-auto="c">
+  <div class="kicker"><span>ANANYA · CHAPTER 11 · IMPEDANCE CONTROL · you step off a curb. your knee catches you before you decide to.</span><span class="n">09 / 10</span></div>
+  <div class="pc-stage" data-theme="dark">
+    <div class="pc-strip"><span>chapter 11 · impedance control · a spring you can argue with</span><span class="pc-phase">question</span></div>
+    <div class="pc-body">
+
+      <div class="pc-ph pc-q" data-ph="question">
+        <div class="pc-q1">You step off a curb. Your knee catches you before you decide to.</div>
+        <div class="pc-q2">How does a powered exoskeleton do that in ten milliseconds without throwing you?</div>
+      </div>
+
+      <div class="pc-ph pc-state" data-ph="state">
+        <div class="pc-two">
+          <svg class="pc-sm" viewBox="0 96 600 184" aria-label="gait cycle as a state machine">
+            <g class="pc-st" data-st="0"><rect x="0" y="110" width="108" height="64"/><text x="54" y="138" text-anchor="middle">heel</text><text x="54" y="158" text-anchor="middle">strike</text></g>
+            <g class="pc-st" data-st="1"><rect x="123" y="110" width="108" height="64"/><text x="177" y="148" text-anchor="middle">loading</text></g>
+            <g class="pc-st" data-st="2"><rect x="246" y="110" width="108" height="64"/><text x="300" y="148" text-anchor="middle">mid-stance</text></g>
+            <g class="pc-st" data-st="3"><rect x="369" y="110" width="108" height="64"/><text x="423" y="148" text-anchor="middle">toe-off</text></g>
+            <g class="pc-st" data-st="4"><rect x="492" y="110" width="108" height="64"/><text x="546" y="148" text-anchor="middle">swing</text></g>
+            <g class="pc-arr">
+              <path d="M108 142 H121"/><path d="M116 137 L122 142 L116 147"/>
+              <path d="M231 142 H244"/><path d="M239 137 L245 142 L239 147"/>
+              <path d="M354 142 H367"/><path d="M362 137 L368 142 L362 147"/>
+              <path d="M477 142 H490"/><path d="M485 137 L491 142 L485 147"/>
+              <path d="M546 174 V230 H54 V176"/><path d="M48 182 L54 175 L60 182"/>
+            </g>
+            <text class="pc-smcap" x="300" y="262" text-anchor="middle">gait cycle · one tick every 1 ms</text>
+          </svg>
+          <svg class="pc-ch" viewBox="0 0 640 300" aria-label="shank angular velocity over two seconds">
+            <text class="pc-axl" x="70" y="22">shank angular velocity · deg/s</text>
+            <line class="pc-ax" x1="70" y1="36" x2="70" y2="262"/>
+            <line class="pc-ax" x1="70" y1="262" x2="620" y2="262"/>
+            <line class="pc-guard" x1="70" y1="86" x2="620" y2="86"/>
+            <line class="pc-guard" x1="70" y1="211" x2="620" y2="211"/>
+            <line class="pc-zero" x1="70" y1="180" x2="620" y2="180"/>
+            <text class="pc-axt" x="62" y="90" text-anchor="end">+300</text>
+            <text class="pc-axt" x="62" y="184" text-anchor="end">0</text>
+            <text class="pc-axt" x="62" y="215" text-anchor="end">−100</text>
+            <text class="pc-axt" x="70" y="284" text-anchor="middle">0</text>
+            <text class="pc-axt" x="345" y="284" text-anchor="middle">1 s</text>
+            <text class="pc-axt" x="620" y="284" text-anchor="end">2 s</text>
+            <polyline class="pc-trace" pathLength="100" points=""/>
+            <circle class="pc-head" r="5" cx="70" cy="180"/>
+          </svg>
+        </div>
+        <div class="pc-narr">she knows this shape. it is a state machine with a 1 kHz tick, not a 60 Hz frame. every transition is a guard on the trace.</div>
+      </div>
+
+      <div class="pc-ph pc-derive" data-ph="derive">
+        <div class="pc-dl0 pc-eq">τ = K (θd − θ) − B <span class="pc-thd">θ<span class="pc-mark">̇</span></span></div>
+        <div class="pc-dl0 pc-gloss">K · how hard the joint argues back</div>
+        <div class="pc-dl0 pc-gloss">B · how fast it stops arguing</div>
+        <div class="pc-dl0 pc-gloss">at heel strike: θd holds, K rises. the joint becomes a spring you can lean on.</div>
+      </div>
+
+      <div class="pc-ph pc-sim" data-ph="simulate">
+        <div class="pc-simhead"><span class="pc-runlbl">K = 40 · B = 0.5</span><span class="pc-verdict"></span></div>
+        <div class="pc-two pc-simrow">
+          <svg class="pc-leg" viewBox="-60 0 420 330" aria-label="one-degree-of-freedom knee">
+            <line class="pc-bone" x1="150" y1="30" x2="150" y2="170"/>
+            <g class="pc-ghost" transform="rotate(30 150 170)"><line x1="150" y1="170" x2="150" y2="300"/></g>
+            <g class="pc-shank" transform="rotate(0 150 170)"><line class="pc-bone" x1="150" y1="170" x2="150" y2="300"/><line class="pc-bone" x1="150" y1="300" x2="190" y2="300"/></g>
+            <circle class="pc-joint" cx="150" cy="30" r="6"/>
+            <circle class="pc-joint pc-knee" cx="150" cy="170" r="7"/>
+            <text class="pc-axt" x="150" y="322" text-anchor="middle">thigh fixed · shank pivots at the knee</text>
+          </svg>
+          <svg class="pc-ch" viewBox="0 0 640 330" aria-label="knee angle over time">
+            <text class="pc-axl" x="70" y="22">θ · knee angle</text>
+            <line class="pc-ax" x1="70" y1="36" x2="70" y2="292"/>
+            <line class="pc-ax" x1="70" y1="292" x2="620" y2="292"/>
+            <line class="pc-guard" x1="70" y1="122" x2="620" y2="122"/>
+            <text class="pc-axt" x="62" y="126" text-anchor="end">θd</text>
+            <line class="pc-guard" x1="152.5" y1="36" x2="152.5" y2="292"/>
+            <text class="pc-axt" x="152.5" y="314" text-anchor="middle">60 ms</text>
+            <text class="pc-axt" x="70" y="314" text-anchor="middle">0</text>
+            <text class="pc-axt" x="345" y="314" text-anchor="middle">200 ms</text>
+            <text class="pc-axt" x="620" y="314" text-anchor="end">400 ms</text>
+            <polyline class="pc-curve" points=""/>
+            <circle class="pc-head" r="5" cx="70" cy="292"/>
+          </svg>
+        </div>
+        <div class="pc-narr">sense → decide → act: 1 ms. human reflex: 30–50 ms. the exo gets there first, so it must never be wrong.</div>
+      </div>
+
+      <div class="pc-ph pc-lock" data-ph="lock">
+        <div class="pc-lockbox">
+          <div class="pc-big">That's it. It's gone.</div>
+          <div class="pc-sub">write the torque law. say what B does.</div>
+        </div>
+      </div>
+
+      <div class="pc-ph pc-rb" data-ph="rebuild">
+        <div class="pc-ta"><span class="pc-typed"></span><span class="pc-caret"></span></div>
+        <div class="pc-score">
+          <div class="pc-scoreH">recall · 3 of 4</div>
+          <div class="pc-row pc-hit"><span class="pc-mk">✓</span><span>the torque law</span></div>
+          <div class="pc-row pc-hit"><span class="pc-mk">✓</span><span>K: stiffness</span></div>
+          <div class="pc-row pc-hit"><span class="pc-mk">✓</span><span>B: damping</span></div>
+          <div class="pc-row pc-miss"><span class="pc-mk">✕</span><span>θd comes from the gait state, not from the wearer's intent</span></div>
+        </div>
+      </div>
+
+      <div class="pc-ph pc-probe" data-ph="probe">
+        <div class="pc-sum">recall · 3 of 4 · ✕ θd comes from the gait state, not from the wearer's intent</div>
+        <div class="pc-line"><div class="pc-who pc-iv">interviewer</div><div class="pc-say">The IMU drops three samples at heel strike. Your controller now holds a 3 ms stale θ. What does it do?</div></div>
+        <div class="pc-line"><div class="pc-who">you</div><div class="pc-say pc-you">…it acts on the old angle, so the torque is wrong for 3 ms.</div></div>
+        <div class="pc-line"><div class="pc-who pc-iv">interviewer</div><div class="pc-say">Wrong direction is worse than no torque. Detect the stale sample; freeze τ or fall back to the last safe K. That is chapter 14, safety, and it comes before chapter 15, strength.</div></div>
+        <div class="pc-line pc-final">
+          <div class="pc-break">where it breaks: a controller that trusts a stale number.</div>
+          <div class="pc-kernel">kernel · the knee is a state machine with a spring in it. safety is deciding what to do with a stale number.</div>
+        </div>
+      </div>
+
+    </div>
+    <div class="pc-hint">r · replay</div>
+  </div>
+</section>
+
+<style>
+  /* ---- profile ---- */
+  .pc-kick { margin-bottom: 2.4vmin; }
+  .pc-h1 { font-size: 3.7vmin; max-width: none; }
+  .pc-split { display: grid; grid-template-columns: .9fr 1.1fr; margin-top: 1.8vmin; border: 1px solid var(--line-strong); flex: 1; min-height: 0; }
+  .pc-col { padding: 2vmin 2.4vmin; min-height: 0; }
+  .pc-col + .pc-col { border-left: 1px solid var(--line-strong); background: var(--accent-soft); }
+  .pc-h2 { font-family: var(--font-mono); font-size: 1.9vmin; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 1.2vmin; }
+  .pc-gen .pc-h2 { color: var(--accent-ink); }
+  .pc-title { font-weight: 700; font-size: 2.8vmin; letter-spacing: -.01em; line-height: 1.1; }
+  .pc-struct { font-family: var(--font-read); font-size: 1.8vmin; line-height: 1.3; color: var(--ink-2); margin: .5vmin 0 .7vmin; }
+  .pc-dl { display: grid; grid-template-columns: 13.5vmin 1fr; column-gap: 1.4vmin; }
+  .pc-gen .pc-dl { grid-template-columns: 15vmin 1fr; }
+  .pc-k, .pc-v { margin: 0; padding: .5vmin 0; border-top: 1px solid var(--line); }
+  .pc-dl .pc-k:first-child, .pc-dl .pc-k:first-child + .pc-v { border-top: 0; }
+  .pc-k { font-family: var(--font-mono); font-size: 1.85vmin; color: var(--ink-3); line-height: 1.3; padding-top: .65vmin; }
+  .pc-v { font-family: var(--font-read); font-size: 1.9vmin; line-height: 1.28; }
+
+  /* ---- experience ---- */
+  .pc-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); }
+  .pc-strip { font-family: var(--font-mono); font-size: 1.85vmin; letter-spacing: .13em; text-transform: lowercase; color: var(--on-accent); background: var(--accent); padding: .9vmin 2vmin; display: flex; justify-content: space-between; font-weight: 500; flex: none; }
+  .pc-phase { font-weight: 400; }
+  .pc-body { flex: 1; min-height: 0; padding: 2.6vmin 3vmin; display: flex; flex-direction: column; }
+  .pc-ph { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .pc-ph.pc-on { display: flex; }
+  .pc-hint { display: none; position: absolute; right: 1.6vmin; bottom: 1.2vmin; font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); letter-spacing: .08em; }
+  .pc-hint.pc-on { display: block; }
+  .pc-narr { flex: none; margin-top: auto; font-family: var(--font-mono); font-size: 2.1vmin; line-height: 1.5; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 1.2vmin; }
+  .pc-two { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3vmin; align-items: center; }
+  .pc-two svg { width: 100%; height: 100%; display: block; }
+
+  /* question */
+  .pc-q { justify-content: center; }
+  .pc-q1 { font-weight: 800; font-size: 6vmin; line-height: 1.08; letter-spacing: -.015em; max-width: 34ch; }
+  .pc-q2 { margin-top: 2.4vmin; font-weight: 500; font-size: 3.2vmin; line-height: 1.25; color: var(--ink-2); max-width: 48ch; }
+
+  /* state */
+  .pc-sm rect { fill: var(--panel-2); stroke: var(--line-strong); stroke-width: 1; }
+  .pc-sm text { font-family: var(--font-mono); font-size: 17px; fill: var(--ink); }
+  .pc-st.pc-hot rect { stroke: var(--accent); stroke-width: 3; fill: var(--accent-soft); }
+  .pc-st.pc-hot text { fill: var(--accent-ink); }
+  .pc-arr path { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
+  .pc-sm .pc-smcap { fill: var(--ink-3); font-size: 15px; }
+  .pc-ax { stroke: var(--line-strong); stroke-width: 1; }
+  .pc-guard { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 4 5; }
+  .pc-zero { stroke: var(--line); stroke-width: 1; }
+  .pc-axl { font-family: var(--font-mono); font-size: 15px; fill: var(--ink-2); }
+  .pc-axt { font-family: var(--font-mono); font-size: 16.5px; fill: var(--ink-3); }
+  .pc-trace, .pc-curve { fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linejoin: round; }
+  .pc-trace { stroke-dasharray: 100; stroke-dashoffset: 100; }
+  .pc-head { fill: var(--ink); }
+
+  /* derive */
+  .pc-derive { justify-content: center; gap: 2.2vmin; }
+  .pc-dl0 { visibility: hidden; }
+  .pc-dl0.pc-on { visibility: visible; }
+  .pc-eq { font-family: var(--font-read); font-style: italic; font-size: 6vmin; line-height: 1.1; margin-bottom: 1.4vmin; }
+  .pc-thd { position: relative; }
+  .pc-mark { display: none; }
+  .pc-thd::after { content: ""; position: absolute; left: 52%; top: .1em; width: .11em; height: .11em; background: currentColor; }
+  .pc-gloss { font-family: var(--font-mono); font-size: 2.5vmin; line-height: 1.4; color: var(--ink-2); }
+
+  /* simulate */
+  .pc-simhead { flex: none; display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1vmin; }
+  .pc-runlbl { font-family: var(--font-mono); font-size: 2.6vmin; letter-spacing: .06em; }
+  .pc-verdict { font-weight: 700; font-size: 3.4vmin; letter-spacing: -.01em; visibility: hidden; }
+  .pc-verdict.pc-bad { color: var(--bad); visibility: visible; }
+  .pc-verdict.pc-good { color: var(--good); visibility: visible; }
+  .pc-simrow { grid-template-columns: .38fr .62fr; }
+  .pc-bone { stroke: var(--ink); stroke-width: 5; stroke-linecap: square; }
+  .pc-ghost line { stroke: var(--line-strong); stroke-width: 2; stroke-dasharray: 5 6; }
+  .pc-joint { fill: var(--panel); stroke: var(--ink); stroke-width: 3; }
+  .pc-leg .pc-axt { font-size: 15.5px; }
+
+  /* lock */
+  .pc-lock { justify-content: center; }
+  .pc-lockbox { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2vmin; text-align: center; border: 1px dashed var(--line-strong); background: var(--panel-2); padding: 3vmin; }
+  .pc-big { font-weight: 700; font-size: 6vmin; letter-spacing: -.01em; }
+  .pc-sub { font-family: var(--font-mono); font-size: 2.2vmin; color: var(--ink-3); letter-spacing: .06em; }
+
+  /* rebuild + grade */
+  .pc-ta { flex: none; min-height: 14vmin; background: var(--paper); border: 1px solid var(--line-strong); padding: 2vmin 2.4vmin; font-family: var(--font-read); font-style: italic; font-size: 3.1vmin; line-height: 1.45; }
+  .pc-caret { display: inline-block; width: .5vmin; height: 2.6vmin; vertical-align: -.35vmin; background: var(--ink); margin-left: .3vmin; }
+  .pc-rb.pc-done .pc-caret { display: none; }
+  .pc-score { display: none; border: 1px solid var(--line-strong); margin-top: 2vmin; }
+  .pc-rb.pc-graded .pc-score { display: block; }
+  .pc-scoreH { font-family: var(--font-mono); font-size: 2.8vmin; letter-spacing: .1em; padding: 1vmin 2vmin; background: var(--panel-2); border-bottom: 1px solid var(--line-strong); color: var(--ink); }
+  .pc-row { display: grid; grid-template-columns: 4vmin 1fr; gap: 1vmin; padding: 1vmin 2vmin; border-bottom: 1px solid var(--line); font-family: var(--font-read); font-size: 2.4vmin; align-items: baseline; visibility: hidden; }
+  .pc-row.pc-on { visibility: visible; }
+  .pc-row:last-child { border-bottom: 0; }
+  .pc-mk { font-family: var(--font-mono); font-size: 2.2vmin; font-weight: 500; }
+  .pc-hit .pc-mk { color: var(--good); }
+  .pc-miss .pc-mk { color: var(--bad); }
+  .pc-miss.pc-on { background: var(--bad-soft); }
+
+  /* probe */
+  .pc-sum { flex: none; font-family: var(--font-mono); font-size: 1.9vmin; color: var(--ink-3); border-bottom: 1px solid var(--line); padding-bottom: 1vmin; margin-bottom: 1.6vmin; }
+  .pc-line { visibility: hidden; margin-bottom: 1.5vmin; }
+  .pc-line.pc-on { visibility: visible; }
+  .pc-who { font-family: var(--font-mono); font-size: 1.8vmin; letter-spacing: .13em; color: var(--ink-3); margin-bottom: .4vmin; }
+  .pc-who.pc-iv { color: var(--accent-ink); }
+  .pc-say { font-family: var(--font-read); font-size: 2.6vmin; line-height: 1.4; max-width: 64ch; }
+  .pc-you { font-style: italic; color: var(--ink-2); }
+  .pc-final { margin-top: auto; margin-bottom: 0; border-top: 1px solid var(--line-strong); padding-top: 1.8vmin; }
+  .pc-break { font-weight: 700; font-size: 3.6vmin; letter-spacing: -.01em; line-height: 1.1; }
+  .pc-kernel { margin-top: 1.2vmin; font-family: var(--font-mono); font-size: 2vmin; line-height: 1.5; color: var(--ink-2); }
+</style>
+
+<script>
+(() => {
+  const NAME = "Ananya Iyer"; // also written literally in the markup above
+  const PHASES = [[0, "question"], [4, "state"], [16, "derive"], [26, "simulate"], [40, "lock"], [42, "rebuild"], [48, "grade"], [52, "probe"]];
+  const END = 60;
+  const TYPED = "τ = K(θd − θ) − Bθ̇. K is the spring, B is the damper. Without B the spring overshoots and the knee rings.";
+
+  // shank angular velocity, deg/s, over one 2 s gait cycle (a plausible shape, not a dataset)
+  const bump = (t, c, w) => Math.exp(-(((t - c) / w) ** 2));
+  const vel = (t) => 70 * bump(t, 0.35, 0.25) + 350 * bump(t, 1.35, 0.18) - 160 * bump(t, 1.8, 0.1) - 20;
+  const TRACE = [];
+  for (let i = 0; i <= 200; i++) { const t = i / 100; TRACE.push([70 + t * 275, 180 - vel(t) * (94 / 300)]); }
+  // which state the guards put the leg in, by fraction of the cycle
+  const stateAt = (p) => p < 0.06 ? 0 : p < 0.3 ? 1 : p < 0.6 ? 2 : p < 0.78 ? 3 : p < 0.97 ? 4 : 0;
+
+  // knee step responses, θ normalised to the step, t in ms
+  const T = 75, A = 0.274 / T;
+  const ring = (t) => { const s = Math.min(1, t / (T / 2)); const k = 1 - 0.564 * (s * s * (3 - 2 * s)); return 1 - k * Math.exp(-A * t) * Math.cos(2 * Math.PI * t / T); };
+  const settle = (t) => 1 - (1 + t / 10) * Math.exp(-t / 10);
+
+  let raf = 0, t0 = 0, S = null, E = null;
+  const $ = (sel, root = S) => root.querySelector(sel);
+  const $$ = (sel, root = S) => [...root.querySelectorAll(sel)];
+
+  function grab() {
+    E = {
+      phase: $(".pc-phase"), phs: $$(".pc-ph"), hint: $(".pc-hint"),
+      trace: $(".pc-trace"), head: $(".pc-state .pc-head"), sts: $$(".pc-st"),
+      dls: $$(".pc-dl0"),
+      run: $(".pc-runlbl"), verdict: $(".pc-verdict"), shank: $(".pc-shank"), curve: $(".pc-curve"), head2: $(".pc-sim .pc-head"),
+      rb: $(".pc-rb"), typed: $(".pc-typed"), rows: $$(".pc-row"),
+      lines: $$(".pc-line"),
+    };
+    E.trace.setAttribute("points", TRACE.map((p) => p.map((v) => v.toFixed(1)).join(",")).join(" "));
+  }
+
+  function reset() {
+    $$(".pc-on", S).forEach((el) => el.classList.remove("pc-on"));
+    E.rb.classList.remove("pc-done", "pc-graded");
+    E.verdict.className = "pc-verdict"; E.verdict.textContent = "";
+    E.sts.forEach((s) => s.classList.remove("pc-hot"));
+    E.trace.style.strokeDashoffset = 100; E.head.setAttribute("cx", 70); E.head.setAttribute("cy", 180);
+    E.curve.setAttribute("points", ""); E.shank.setAttribute("transform", "rotate(0 150 170)");
+    E.typed.textContent = ""; E.phase.textContent = "question";
+  }
+
+  function simRun(fn, tw, drawFor, verdictAt, cls, text) {
+    const ms = Math.min(400, Math.max(0, tw / drawFor * 400));
+    const pts = [];
+    for (let m = 0; m <= ms; m += 2) { const th = fn(m); pts.push((70 + m * 1.375).toFixed(1) + "," + (292 - th * 170).toFixed(1)); }
+    E.curve.setAttribute("points", pts.join(" "));
+    const th = fn(ms);
+    E.head2.setAttribute("cx", (70 + ms * 1.375).toFixed(1)); E.head2.setAttribute("cy", (292 - th * 170).toFixed(1));
+    E.shank.setAttribute("transform", `rotate(${(th * 30).toFixed(2)} 150 170)`);
+    if (tw >= verdictAt) { E.verdict.className = "pc-verdict " + cls; E.verdict.textContent = text; }
+    else { E.verdict.className = "pc-verdict"; E.verdict.textContent = ""; }
+  }
+
+  function render(t) {
+    let i = 0; while (i + 1 < PHASES.length && t >= PHASES[i + 1][0]) i++;
+    const name = PHASES[i][1];
+    E.phase.textContent = name;
+    E.phs.forEach((p) => p.classList.toggle("pc-on", p.dataset.ph === name || (name === "grade" && p.dataset.ph === "rebuild")));
+    E.hint.classList.toggle("pc-on", t >= END);
+
+    if (name === "state") {
+      const p = Math.min(1, (t - 4) / 8);
+      E.trace.style.strokeDashoffset = (100 * (1 - p)).toFixed(2);
+      const pt = TRACE[Math.round(p * 200)];
+      E.head.setAttribute("cx", pt[0].toFixed(1)); E.head.setAttribute("cy", pt[1].toFixed(1));
+      const s = stateAt(p);
+      E.sts.forEach((el, k) => el.classList.toggle("pc-hot", k === s));
+    } else if (name === "derive") {
+      E.dls.forEach((el, k) => el.classList.toggle("pc-on", t >= 16 + 1.2 * k));
+    } else if (name === "simulate") {
+      if (t < 33.5) { E.run.textContent = "K = 40 · B = 0.5"; simRun(ring, t - 26, 4.5, 2.6, "pc-bad", "overshoot 38% · throws you"); }
+      else { E.run.textContent = "K = 40 · B = 4"; simRun(settle, t - 33.5, 4.5, 1.5, "pc-good", "settles in 58 ms · catches you"); }
+    } else if (name === "rebuild" || name === "grade") {
+      const n = Math.min(TYPED.length, Math.floor((t - 42) * 26));
+      E.typed.innerHTML = TYPED.slice(0, n).replace("θ̇", '<span class="pc-thd">θ<span class="pc-mark">̇</span></span>');
+      E.rb.classList.toggle("pc-done", n >= TYPED.length);
+      E.rb.classList.toggle("pc-graded", name === "grade");
+      E.rows.forEach((r, k) => r.classList.toggle("pc-on", t >= 48.3 + 0.4 * k));
+    } else if (name === "probe") {
+      const at = [52, 53.4, 54.8, 57];
+      E.lines.forEach((l, k) => l.classList.toggle("pc-on", t >= at[k]));
+    }
+  }
+
+  deckAuto.register("c", {
+    start(section, at = 0) {
+      this.stop();
+      S = section; grab(); reset();
+      t0 = performance.now() - at * 1000;
+      const tick = () => {
+        const t = (performance.now() - t0) / 1000;
+        render(t);
+        raf = t < END + 0.5 ? requestAnimationFrame(tick) : 0; // hold the final frame
+      };
+      tick();
+    },
+    stop() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      if (S && E) reset();
+    },
+  });
+})();
+</script>
+
+
+<section class="slide">
+  <div class="kicker"><span>HOW IT IS BUILT · WHERE THIS GOES</span><span class="n">10 / 10</span></div>
+  <h1>One repo, four pipelines,<br>and a lot of conversations.</h1>
+  <div class="pipe">
+    <div class="pbox">interviews → learning profile</div><div class="ptag">manual · markdown</div>
+    <div class="pbox">chapters</div><div class="ptag">hand-written, LLM-drafted, 100% reviewed</div>
+    <div class="pbox">build.py</div><div class="ptag">automated · one file, three themes, quiz, cards</div>
+    <div class="pbox">reels</div><div class="ptag">automated · Playwright + ffmpeg</div>
+    <div class="pbox">the rep engine</div><div class="ptag">built · lock, rubric, probes · client-side</div>
+    <div class="pbox">voice interviewer + grader</div><div class="ptag">built · Pipecat · every quote checked against the transcript · local</div>
+    <div class="pbox hot">the next person</div><div class="ptag">manual again · the method grows</div>
+  </div>
+  <p class="quote">Some of this is automated. Most of the learning still arrives when I sit with a person and ask how the last thing they truly learned got in.</p>
+  <p class="thesis2">Built for the next ten years, when the answer is always on screen and understanding isn't.</p>
+  <div class="foot"><span>Shreyash · <b>hld-gym.vercel.app/book</b> · free · no signup</span><span>thank you</span></div>
+</section>
+
+
+<div class="dots"></div>
+<button class="fsBtn" id="fs">⛶ fullscreen</button>
+
+<script>
+  const slides = [...document.querySelectorAll(".slide")];
+  const dotsEl = document.querySelector(".dots");
+  dotsEl.innerHTML = "<i></i>".repeat(slides.length);
+  const dots = [...dotsEl.children];
+  let cur = -1, pending = 0;
+
+  /* autoplay: stop() the slide being left, start() the new one after 250ms */
+  const auto = i => { const id = slides[i]?.dataset.auto; return id ? deckAuto.handlers[id] : null; };
+  const call = (h, fn, i) => { try { h?.[fn]?.(slides[i]); } catch (e) { console.error(`deckAuto.${fn}`, e); } };
+  function stopAuto(i) { clearTimeout(pending); call(auto(i), "stop", i); }
+  function startAuto(i) { const h = auto(i); if (h) pending = setTimeout(() => call(h, "start", i), 250); }
+
+  function go(n) {
+    n = Math.max(0, Math.min(slides.length - 1, n));
+    if (n === cur) return;
+    if (cur >= 0) stopAuto(cur);
+    cur = n;
+    slides.forEach((s, i) => s.classList.toggle("on", i === cur));
+    dots.forEach((d, i) => d.classList.toggle("on", i === cur));
+    startAuto(cur);
+  }
+  addEventListener("keydown", e => {
+    if (e.target.matches("input, textarea")) return;
+    if (["ArrowRight", " ", "PageDown"].includes(e.key)) go(cur + 1);
+    if (["ArrowLeft", "PageUp"].includes(e.key)) go(cur - 1);
+    if (e.key === "t") {
+      const h = document.documentElement;
+      h.dataset.theme = h.dataset.theme === "paper" ? "dark" : "paper";
+    }
+    if (e.key === "f") toggleFs();
+    if (e.key === "r") { stopAuto(cur); startAuto(cur); }
+    if (/^[1-9]$/.test(e.key)) go(+e.key - 1);
+    if (e.key === "End") go(slides.length - 1);
+    if (e.key === "Home") go(0);
+  });
+  addEventListener("click", e => {
+    if (e.target.closest("button, a, input, textarea")) return;
+    go(cur + (e.clientX > innerWidth / 2 ? 1 : -1));
+  });
+  const fs = document.getElementById("fs");
+  function toggleFs() {
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    /* Chrome denies the JS fullscreen API ("not granted") in
+       automation-controlled sessions; F11 is browser-level and always works. */
+    document.documentElement.requestFullscreen().catch(() => {
+      fs.textContent = "blocked here · press F11";
+      setTimeout(() => { if (!document.fullscreenElement) fs.textContent = "⛶ fullscreen"; }, 4000);
+    });
+  }
+  fs.addEventListener("click", toggleFs);
+  document.addEventListener("fullscreenchange", () => {
+    fs.textContent = document.fullscreenElement ? "⛶ exit" : "⛶ fullscreen";
+  });
+
+  const q = new URLSearchParams(location.search);
+  if (q.get("theme") === "dark") document.documentElement.dataset.theme = "dark";
+  go((+q.get("slide") || 1) - 1);
+</script>
+</body>
+</html>

@@ -1,0 +1,332 @@
+<section class="slide" data-persona="b">
+  <div class="kicker pb-k"><span>PERSON B · ROHIT DESHMUKH · MANUAL QA TESTER → EMBEDDED ENGINEER, SPACE HARDWARE</span></div>
+  <h1 class="pb-h1">Learns from the failure that caused the invention. Believes it only when his own test passes.</h1>
+  <div class="pb-split">
+    <div class="pb-col">
+      <h2 class="pb-h2">extracted · by hand, in conversation</h2>
+      <div class="pb-rows">
+        <div class="pb-row"><span class="pb-key">intake</span><span class="pb-val">History first. Needs to know which mission failed and why before he will read how the mechanism works. Stories in, abstractions bounce off.</span></div>
+        <div class="pb-row"><span class="pb-key">retention</span><span class="pb-val">Sticks when he breaks it himself. A mechanism he has not tried to break is not learned yet.</span></div>
+        <div class="pb-row"><span class="pb-key">recall</span><span class="pb-val">From a failing test. He remembers bugs and reproduction steps, not lectures.</span></div>
+        <div class="pb-row"><span class="pb-key">retrieval mode</span><span class="pb-val">Write the test first, then the code, on a simulated board that can actually fail.</span></div>
+        <div class="pb-row"><span class="pb-key">thinking</span><span class="pb-val">Bottom-up. Symptom to cause, given / when / then. Five years of QA reflex, now pointed at silicon.</span></div>
+        <div class="pb-row"><span class="pb-key">attention</span><span class="pb-val">Long for narrative and anything he can poke. Short for math with no device attached.</span></div>
+        <div class="pb-row"><span class="pb-key">prior knowledge</span><span class="pb-val">Test design, edge cases, reproduction. None in C, registers, or electronics. Never soldered.</span></div>
+        <div class="pb-row"><span class="pb-key">calibration</span><span class="pb-val">Underconfident. Will not claim to understand until the test goes green; then he over-trusts the green.</span></div>
+      </div>
+    </div>
+    <div class="pb-col pb-gen">
+      <h2 class="pb-h2">generated · the book for that head</h2>
+      <div class="pb-title">From Test Case to Flight Computer</div>
+      <p class="pb-struct">every chapter opens with a mission that failed, then the mechanism, then a live simulation, then he writes the test, then the code.</p>
+      <div class="pb-rows">
+        <div class="pb-row"><span class="pb-key">chapters</span><span class="pb-val">Part 1: the computer that flew to the Moon and rebooted on the way down. Part 2: memory, interrupts, timers, and what radiation does to each. Part 3: the flight software stack, test-first.</span></div>
+        <div class="pb-row"><span class="pb-key">interactive diagrams</span><span class="pb-val">Register maps and timing diagrams he can step through cycle by cycle; a memory word whose bits he can flip.</span></div>
+        <div class="pb-row"><span class="pb-key">simulations</span><span class="pb-val">A simulated MCU: watchdog timer, ECC memory, interrupt latency, brown-out. Every chapter's mechanism runs, and can be made to fail.</span></div>
+        <div class="pb-row"><span class="pb-key">micro-games</span><span class="pb-val">"Which mission, which bug": Apollo 11's 1202 alarm, Ariane 5 flight 501's integer overflow, Mars Pathfinder's priority inversion. Match the symptom to the cause before the card flips.</span></div>
+        <div class="pb-row"><span class="pb-key">challenges</span><span class="pb-val">Given / when / then. He must write the test that would have caught the historical failure before he sees the fix.</span></div>
+        <div class="pb-row"><span class="pb-key">reels</span><span class="pb-val">"A watchdog is a promise to die on time." "Memory that can lie must carry the proof of its own truth." "Radiation does not crash you; it edits you."</span></div>
+        <div class="pb-row"><span class="pb-key">lock &amp; ask</span><span class="pb-val">The register map disappears. He writes the init sequence and the test for it from memory; the simulator runs his test.</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>learning-history interview · cognitive task analysis · concrete-before-abstract · worked examples that fade · retrieval by test-writing · failure injection</span><span>next: what Rohit experiences</span></div>
+</section>
+
+<section class="slide" data-auto="b">
+  <div class="kicker pb-k"><span>ROHIT · CHAPTER 9 · SINGLE-EVENT UPSETS · a cosmic ray flips one bit 400 km up. why doesn't the mission end?</span></div>
+  <div class="pb-stage">
+    <div class="pb-strip">
+      <span>seu · chapter 9</span>
+      <span class="pb-phases"><i>question</i> · <i>history</i> · <i>mechanism</i> · <i>simulation</i> · <i>lock</i> · <i>test</i> · <i>code</i> · <i>probe</i></span>
+    </div>
+    <div class="pb-body">
+
+      <div class="pb-ph pb-q">
+        <div class="pb-l1">A cosmic ray flips one bit in a satellite's memory, 400 km up.</div>
+        <div class="pb-l2">Why doesn't the mission end?</div>
+      </div>
+
+      <div class="pb-ph pb-hist">
+        <div class="pb-card"><div class="pb-year">1969</div><div class="pb-hl">Apollo 11, 1202 alarm</div><div class="pb-sub">The guidance computer overloaded, restarted itself mid-descent, and kept flying. Restart was a feature.</div></div>
+        <div class="pb-card"><div class="pb-year">2003</div><div class="pb-hl">Schaerbeek, Belgium</div><div class="pb-sub">One flipped bit in an electronic voting machine gave a candidate 4,096 extra votes. A single bit, position 13.</div></div>
+        <div class="pb-card"><div class="pb-year">2022</div><div class="pb-hl">Voyager 1</div><div class="pb-sub">Garbled telemetry, 23 billion km away, traced to a corrupted memory chip. Patched by moving the code around it.</div></div>
+      </div>
+
+      <div class="pb-ph pb-mech">
+        <svg class="pb-word" viewBox="0 0 616 104" aria-label="a 12-bit memory word: 8 data bits and 4 check bits">
+          <g class="pb-bit" data-i="0"><rect x="0"   y="44" width="46" height="52"/><text class="pb-lb" x="23"  y="36" text-anchor="middle">d0</text><text class="pb-v" x="23"  y="79" text-anchor="middle">0</text></g>
+          <g class="pb-bit" data-i="1"><rect x="52"  y="44" width="46" height="52"/><text class="pb-lb" x="75"  y="36" text-anchor="middle">d1</text><text class="pb-v" x="75"  y="79" text-anchor="middle">1</text></g>
+          <g class="pb-bit" data-i="2"><rect x="104" y="44" width="46" height="52"/><text class="pb-lb" x="127" y="36" text-anchor="middle">d2</text><text class="pb-v" x="127" y="79" text-anchor="middle">1</text></g>
+          <g class="pb-bit" data-i="3"><rect x="156" y="44" width="46" height="52"/><text class="pb-lb" x="179" y="36" text-anchor="middle">d3</text><text class="pb-v" x="179" y="79" text-anchor="middle">0</text></g>
+          <g class="pb-bit" data-i="4"><rect x="208" y="44" width="46" height="52"/><text class="pb-lb" x="231" y="36" text-anchor="middle">d4</text><text class="pb-v" x="231" y="79" text-anchor="middle">1</text></g>
+          <g class="pb-bit pb-b5" data-i="5"><rect x="260" y="44" width="46" height="52"/><text class="pb-lb" x="283" y="36" text-anchor="middle">d5</text><text class="pb-v" x="283" y="79" text-anchor="middle">0</text></g>
+          <g class="pb-bit" data-i="6"><rect x="312" y="44" width="46" height="52"/><text class="pb-lb" x="335" y="36" text-anchor="middle">d6</text><text class="pb-v" x="335" y="79" text-anchor="middle">1</text></g>
+          <g class="pb-bit" data-i="7"><rect x="364" y="44" width="46" height="52"/><text class="pb-lb" x="387" y="36" text-anchor="middle">d7</text><text class="pb-v" x="387" y="79" text-anchor="middle">0</text></g>
+          <g class="pb-chk"><rect x="426" y="44" width="46" height="52"/><text class="pb-lb" x="449" y="36" text-anchor="middle">check</text><text class="pb-v" x="449" y="79" text-anchor="middle">p1</text></g>
+          <g class="pb-chk"><rect x="478" y="44" width="46" height="52"/><text class="pb-v" x="501" y="79" text-anchor="middle">p2</text></g>
+          <g class="pb-chk"><rect x="530" y="44" width="46" height="52"/><text class="pb-v" x="553" y="79" text-anchor="middle">p4</text></g>
+          <g class="pb-chk"><rect x="582" y="44" width="34" height="52"/><text class="pb-v" x="599" y="79" text-anchor="middle">p8</text></g>
+          <circle class="pb-dot" cx="283" cy="8" r="7"/>
+        </svg>
+        <div class="pb-cap">hamming(12,8) · 8 bits of data carry 4 bits of proof</div>
+        <div class="pb-syn">syndrome = p8 p4 p2 p1 = 0 1 0 1 → bit 5</div>
+        <div class="pb-cnt">seu corrected · 1</div>
+
+        <div class="pb-board">
+          <div class="pb-brow"><span class="pb-bk">flight counter</span><span class="pb-bv pb-fc">0x2A</span></div>
+          <div class="pb-brow"><span class="pb-bk">program counter</span><span class="pb-bv pb-pc"><span class="pb-pcv">0x0800_1F3C</span><span class="pb-hit"><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="5"/></svg><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="5"/></svg> 2 bits flipped · uncorrectable</span></span></div>
+          <div class="pb-brow"><span class="pb-bk">watchdog</span><span class="pb-bv pb-wd"><span class="pb-wdv">1.6 s</span><svg class="pb-wdbar" viewBox="0 0 100 4" preserveAspectRatio="none"><rect x="0" y="0" width="100" height="4"/></svg></span></div>
+          <div class="pb-brow"><span class="pb-bk">ecc</span><span class="pb-bv">on</span></div>
+          <div class="pb-reset">RESET</div>
+          <div class="pb-rest">state restored from checkpoint · counter 0x2A · mission continues</div>
+        </div>
+
+        <div class="pb-narr">The extra bits let the reader compute which bit lied. One flip: caught and fixed. Two flips: caught, not fixed.</div>
+      </div>
+
+      <div class="pb-ph pb-lock">
+        <div class="pb-big">That's it. It's gone.</div>
+        <div class="pb-sm">write the test first.</div>
+      </div>
+
+      <div class="pb-ph pb-tc">
+        <div class="pb-code pb-test"><div class="pb-t">test</div><div class="pb-tx"></div></div>
+        <div class="pb-cw"><div class="pb-code pb-c"><div class="pb-t">code</div><div class="pb-tx"></div></div>
+          <div class="pb-score"><div class="pb-sh">tests · 4 of 5 green</div><div class="pb-sf"><b>✕</b>failing: watchdog resets the core within 1.6 s</div></div>
+        </div>
+      </div>
+
+      <div class="pb-ph pb-probe">
+        <div class="pb-sum">tests · 4 of 5 green · failing: watchdog resets the core within 1.6 s</div>
+        <div class="pb-line"><div class="pb-who">mentor</div><div class="pb-say">Your watchdog resets the core. What kicks the watchdog if the code that kicks it is the code that hung?</div></div>
+        <div class="pb-line pb-you"><div class="pb-who">you</div><div class="pb-say">…nothing. It has to be a timer the CPU cannot stop.</div></div>
+        <div class="pb-line"><div class="pb-who">mentor</div><div class="pb-say">Correct. It lives outside the core, on its own clock. That is why your fifth test failed: you kicked it from inside ecc_read.</div></div>
+        <div class="pb-final">
+          <div class="pb-fl">where it breaks: a watchdog kicked from the code it is watching.</div>
+          <div class="pb-kn">kernel · memory that can lie must carry the proof of its own truth. a watchdog is a promise to die on time.</div>
+        </div>
+      </div>
+
+    </div>
+    <div class="pb-hint">r · replay</div>
+  </div>
+</section>
+
+<style>
+  /* ---- PERSON B · profile ---- */
+  .pb-k { font-size: 1.85vmin; margin-bottom: 2vmin; }
+  .pb-h1 { font-size: 3.8vmin; max-width: 50ch; }
+  .pb-split { display: grid; grid-template-columns: 70fr 92fr; margin-top: 2vmin; border: 1px solid var(--line-strong); min-height: 0; }
+  .pb-col { padding: 1.4vmin 2.4vmin 1vmin; min-width: 0; }
+  .pb-gen { border-left: 1px solid var(--line-strong); background: var(--accent-soft); }
+  .pb-h2 { font-family: var(--font-mono); font-weight: 500; font-size: 1.9vmin; letter-spacing: .1em; color: var(--ink-3); margin-bottom: .8vmin; }
+  .pb-gen .pb-h2 { color: var(--accent-ink); }
+  .pb-title { font-weight: 700; font-size: 2.6vmin; line-height: 1.1; letter-spacing: -.01em; }
+  .pb-struct { font-family: var(--font-read); font-size: 1.95vmin; line-height: 1.4; color: var(--ink-2); margin: .5vmin 0 .6vmin; }
+  .pb-row { display: flex; gap: 1.6vmin; padding: .5vmin 0; border-top: 1px solid var(--line); }
+  .pb-rows .pb-row:first-child { border-top: 0; }
+  .pb-key { flex: 0 0 15vmin; font-family: var(--font-mono); font-size: 1.9vmin; color: var(--ink-3); line-height: 1.3; padding-top: .1vmin; }
+  .pb-val { font-family: var(--font-read); font-size: 1.95vmin; line-height: 1.3; }
+
+  /* ---- PERSON B · stage ---- */
+  .pb-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-strong); background: var(--panel); position: relative; }
+  .pb-strip { font-family: var(--font-mono); font-size: 1.9vmin; letter-spacing: .13em; text-transform: lowercase; color: var(--on-accent); background: var(--accent); padding: .9vmin 1.8vmin; display: flex; justify-content: space-between; gap: 2vmin; font-weight: 700; flex: none; }
+  .pb-phases { font-weight: 400; }
+  .pb-phases i { font-style: normal; opacity: .55; }
+  .pb-phases i.pb-cur { opacity: 1; font-weight: 700; }
+  .pb-body { flex: 1; min-height: 0; padding: 2.6vmin 3vmin; display: flex; flex-direction: column; }
+  .pb-ph { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .pb-ph.pb-on { display: flex; }
+  .pb-hint { display: none; position: absolute; right: 1.6vmin; bottom: 1vmin; font-family: var(--font-mono); font-size: 1.9vmin; color: var(--ink-3); letter-spacing: .08em; }
+  .pb-hint.pb-on { display: block; }
+
+  /* question */
+  .pb-q { justify-content: center; align-items: center; text-align: center; }
+  .pb-l1 { font-weight: 800; font-size: 5vmin; line-height: 1.08; letter-spacing: -.015em; max-width: 30ch; }
+  .pb-l2 { font-weight: 800; font-size: 5vmin; line-height: 1.08; letter-spacing: -.015em; color: var(--ink-2); margin-top: 1.6vmin; }
+
+  /* history */
+  .pb-hist.pb-on { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2vmin; align-content: center; }
+  .pb-card { border: 1px solid var(--line-strong); background: var(--panel-2); padding: 2.4vmin 2.4vmin 2.8vmin; opacity: 0; transform: translateY(2vmin); transition: opacity .5s, transform .5s; }
+  .pb-card.pb-on { opacity: 1; transform: none; }
+  .pb-year { font-family: var(--font-mono); font-size: 2vmin; color: var(--ink-3); letter-spacing: .08em; }
+  .pb-hl { font-weight: 700; font-size: 3.4vmin; line-height: 1.1; letter-spacing: -.01em; margin: 1vmin 0 1.2vmin; }
+  .pb-sub { font-family: var(--font-read); font-size: 2.3vmin; line-height: 1.45; }
+
+  /* mechanism: the word */
+  .pb-word { width: 130vmin; max-width: 100%; height: auto; display: block; align-self: center; flex: none; transition: width .5s; }
+  .pb-sim .pb-word { width: 84vmin; }
+  .pb-sim .pb-syn { display: none; }
+  .pb-word rect { stroke: var(--line-strong); stroke-width: 1; }
+  .pb-bit rect { fill: var(--panel-2); }
+  .pb-chk rect { fill: var(--panel); }
+  .pb-bit.pb-bad rect { fill: var(--bad-soft); stroke: var(--bad); }
+  .pb-bit.pb-good rect { fill: var(--good-soft); stroke: var(--good); }
+  .pb-word text { font-family: var(--font-mono); fill: var(--ink); }
+  .pb-word .pb-v { font-size: 25px; font-weight: 500; }
+  .pb-word .pb-lb { font-size: 14px; fill: var(--ink-3); }
+  .pb-dot { fill: var(--ink); opacity: 0; transition: transform .6s cubic-bezier(.4, 0, 1, 1), opacity .15s; }
+  .pb-dot.pb-on { opacity: 1; }
+  .pb-dot.pb-fall { transform: translateY(58px); }
+  .pb-cap { font-family: var(--font-mono); font-size: 2vmin; color: var(--ink-3); text-align: center; letter-spacing: .04em; margin-top: .6vmin; }
+  .pb-syn { font-family: var(--font-mono); font-size: 2.5vmin; text-align: center; margin-top: 1.2vmin; visibility: hidden; }
+  .pb-cnt { font-family: var(--font-mono); font-size: 2.2vmin; color: var(--good); text-align: center; margin-top: .8vmin; visibility: hidden; }
+  .pb-syn.pb-on, .pb-cnt.pb-on { visibility: visible; }
+  .pb-narr { font-family: var(--font-mono); font-size: 2.1vmin; line-height: 1.5; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 1.4vmin; margin-top: auto; visibility: hidden; }
+  .pb-narr.pb-on { visibility: visible; }
+  .pb-narr.pb-off { display: none; }
+
+  /* simulation: the board */
+  .pb-board { display: none; margin-top: 2.4vmin; border: 1px solid var(--line-strong); background: var(--paper); font-family: var(--font-mono); font-size: 2.2vmin; }
+  .pb-board.pb-on { display: block; }
+  .pb-brow { display: grid; grid-template-columns: 24vmin 1fr; gap: 2vmin; padding: .9vmin 2vmin; border-top: 1px solid var(--line); align-items: center; }
+  .pb-brow:first-child { border-top: 0; }
+  .pb-bk { color: var(--ink-3); }
+  .pb-pc .pb-hit { display: none; color: var(--bad); }
+  .pb-pc.pb-bad .pb-pcv { display: none; }
+  .pb-pc.pb-bad .pb-hit { display: inline; }
+  .pb-hit svg { width: 1.7vmin; height: 1.7vmin; vertical-align: -.15vmin; margin-right: .3vmin; }
+  .pb-hit svg circle { fill: var(--ink); }
+  .pb-wd { display: flex; align-items: center; gap: 2vmin; }
+  .pb-wdv { min-width: 6ch; }
+  .pb-wdbar { width: 32vmin; height: 1vmin; display: block; }
+  .pb-wdbar rect { fill: var(--ink); transition: width 1.6s linear; }
+  .pb-wdbar.pb-run rect { width: 0; }
+  .pb-reset { display: none; text-align: center; font-family: var(--font-ui); font-weight: 800; font-size: 5.4vmin; letter-spacing: -.01em; padding: 1vmin 0 .2vmin; border-top: 1px solid var(--line); }
+  .pb-reset.pb-on { display: block; }
+  .pb-rest { display: none; color: var(--good); text-align: center; padding: .4vmin 0 1.4vmin; }
+  .pb-rest.pb-on { display: block; }
+
+  /* lock */
+  .pb-lock { justify-content: center; align-items: center; text-align: center; gap: 1.6vmin; border: 1px dashed var(--line-strong); background: var(--panel-2); }
+  .pb-big { font-weight: 700; font-size: 5.2vmin; letter-spacing: -.01em; }
+  .pb-sm { font-family: var(--font-mono); font-size: 2.1vmin; color: var(--ink-3); letter-spacing: .06em; }
+
+  /* test + code */
+  .pb-tc.pb-on { display: grid; grid-template-columns: 1fr 1fr; gap: 2.4vmin; align-content: start; }
+  .pb-code { border: 1px solid var(--line-strong); background: var(--paper); padding: 1.6vmin 2.2vmin 1.8vmin; font-family: var(--font-mono); font-size: 2.3vmin; line-height: 1.55; }
+  .pb-t { color: var(--ink-3); letter-spacing: .13em; font-size: 1.9vmin; margin-bottom: 1vmin; }
+  .pb-tx { white-space: pre; min-height: 7em; }
+  .pb-cw { visibility: hidden; }
+  .pb-cw.pb-on { visibility: visible; }
+  .pb-score { display: none; margin-top: 1.6vmin; border: 1px solid var(--line-strong); font-family: var(--font-mono); font-size: 2vmin; letter-spacing: .04em; }
+  .pb-score.pb-on { display: block; }
+  .pb-sh { padding: .8vmin 1.6vmin; background: var(--panel-2); border-bottom: 1px solid var(--line-strong); color: var(--ink-2); }
+  .pb-sf { padding: .8vmin 1.6vmin; background: var(--bad-soft); }
+  .pb-sf b { color: var(--bad); font-weight: 600; margin-right: 1.2vmin; }
+
+  /* probe */
+  .pb-probe { gap: 1.4vmin; }
+  .pb-sum { font-family: var(--font-mono); font-size: 1.9vmin; color: var(--ink-3); border: 1px solid var(--line); background: var(--paper); padding: .8vmin 1.4vmin; letter-spacing: .04em; }
+  .pb-line { display: none; }
+  .pb-line.pb-on { display: block; }
+  .pb-who { font-family: var(--font-mono); font-size: 1.9vmin; letter-spacing: .13em; color: var(--accent-ink); margin-bottom: .3vmin; }
+  .pb-you .pb-who { color: var(--ink-3); }
+  .pb-say { font-family: var(--font-read); font-size: 2.6vmin; line-height: 1.45; max-width: 64ch; }
+  .pb-you .pb-say { font-style: italic; }
+  .pb-final { display: none; margin-top: auto; border-top: 1px solid var(--line-strong); padding-top: 1.8vmin; }
+  .pb-final.pb-on { display: block; }
+  .pb-fl { font-weight: 700; font-size: 3.4vmin; line-height: 1.1; letter-spacing: -.01em; }
+  .pb-kn { font-family: var(--font-mono); font-size: 2vmin; line-height: 1.5; color: var(--ink-3); margin-top: 1vmin; visibility: hidden; }
+  .pb-kn.pb-on { visibility: visible; }
+</style>
+
+<script>
+deckAuto.register('b', (() => {
+  const NAME = "Rohit Deshmukh";
+  const TEST = [
+    "given   counter = 0x2A, ecc enabled",
+    "when    bit 5 flips",
+    "then    read returns 0x2A, seu_count == 1",
+    "when    bits 2 and 5 flip",
+    "then    read raises UNCORRECTABLE",
+    "then    watchdog resets the core within 1.6 s",
+    "then    counter == 0x2A after restart",
+  ];
+  const CODE = [
+    "uint8_t ecc_read(addr_t a) {",
+    "  word_t w = raw_read(a);",
+    "  uint8_t s = syndrome(w);",
+    "  if (s) {",
+    "    if (!correct(&w, s)) fault_uncorrectable(a);",
+    "    seu_count++;",
+    "  }",
+    "  kick_watchdog();",
+    "  return w.data;",
+    "}",
+  ].join("\n");
+
+  let T = [], stage = null, tpl = null;
+  const at = (s, fn) => T.push(setTimeout(fn, s * 1000));
+  const $ = (sel) => stage.querySelector(sel);
+  const on = (sel, cls = 'pb-on') => $(sel).classList.add(cls);
+  const off = (sel, cls = 'pb-on') => $(sel).classList.remove(cls);
+  const phase = (name) => stage.querySelectorAll('.pb-phases i').forEach(i => i.classList.toggle('pb-cur', i.textContent === name));
+  const hex = (n) => '0x' + n.toString(16).toUpperCase().padStart(2, '0');
+  // Types `text` into `el` starting at t0 seconds, cps chars per second. Returns the end time.
+  const type = (el, text, cps, t0, pre = '') => {
+    for (let i = 1; i <= text.length; i++) at(t0 + i / cps, () => { el.textContent = pre + text.slice(0, i); });
+    return t0 + text.length / cps;
+  };
+
+  function stop() {
+    T.forEach(clearTimeout); T = [];
+    if (stage && tpl !== null) stage.innerHTML = tpl;
+  }
+
+  function start(section) {
+    stop();
+    stage = section.querySelector('.pb-stage');
+    if (tpl === null) tpl = stage.innerHTML;
+    stage.innerHTML = tpl;
+
+    // 0 · question
+    phase('question'); on('.pb-q');
+
+    // 4 · history
+    at(4, () => { phase('history'); off('.pb-q'); on('.pb-hist'); });
+    stage.querySelectorAll('.pb-card').forEach((c, i) => at(4.05 + i * 0.6, () => c.classList.add('pb-on')));
+
+    // 10 · mechanism
+    at(10, () => { phase('mechanism'); off('.pb-hist'); on('.pb-mech'); });
+    at(11.0, () => on('.pb-dot'));
+    at(11.1, () => on('.pb-dot', 'pb-fall'));
+    at(11.7, () => { off('.pb-dot'); on('.pb-b5', 'pb-bad'); $('.pb-b5 .pb-v').textContent = '1'; });
+    at(13.0, () => on('.pb-syn'));
+    at(15.0, () => { off('.pb-b5', 'pb-bad'); on('.pb-b5', 'pb-good'); $('.pb-b5 .pb-v').textContent = '0'; on('.pb-cnt'); });
+    at(16.0, () => on('.pb-narr'));
+
+    // 22 · simulation
+    at(22, () => { phase('simulation'); on('.pb-mech', 'pb-sim'); on('.pb-narr', 'pb-off'); on('.pb-board'); });
+    for (let k = 0; k < 10; k++) at(22 + k * 0.4, () => { $('.pb-fc').textContent = hex(0x2A + k); });
+    at(26.0, () => on('.pb-pc', 'pb-bad'));
+    at(26.4, () => on('.pb-wdbar', 'pb-run'));
+    for (let k = 1; k <= 16; k++) at(26.4 + k * 0.1, () => { $('.pb-wdv').textContent = ((16 - k) / 10).toFixed(1) + ' s'; });
+    at(28.0, () => on('.pb-reset'));
+    at(29.2, () => { on('.pb-rest'); off('.pb-pc', 'pb-bad'); off('.pb-wdbar', 'pb-run'); $('.pb-wdv').textContent = '1.6 s'; $('.pb-fc').textContent = '0x2A'; });
+    for (let k = 1; k < 10; k++) at(30 + k * 0.4, () => { $('.pb-fc').textContent = hex(0x2A + k); });
+
+    // 34 · lock
+    at(34, () => { phase('lock'); off('.pb-mech'); on('.pb-lock'); });
+
+    // 36 · test
+    at(36, () => { phase('test'); off('.pb-lock'); on('.pb-tc'); });
+    TEST.forEach((line, i) => type($('.pb-test .pb-tx'), line, 100, 36 + i * 0.5, TEST.slice(0, i).map(l => l + "\n").join("")));
+
+    // 44 · code
+    at(44, () => { phase('code'); on('.pb-cw'); });
+    const codeEnd = type($('.pb-c .pb-tx'), CODE, 40, 44);
+    at(codeEnd + 0.5, () => on('.pb-score'));
+
+    // 52 · probe
+    at(52, () => { phase('probe'); off('.pb-tc'); on('.pb-probe'); });
+    stage.querySelectorAll('.pb-line').forEach((l, i) => at(52 + i * 0.7, () => l.classList.add('pb-on')));
+    at(55.0, () => on('.pb-final'));
+    at(56.0, () => on('.pb-kn'));
+    at(57.0, () => on('.pb-hint'));
+  }
+
+  return { start, stop };
+})());
+</script>

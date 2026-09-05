@@ -1,0 +1,370 @@
+<section class="slide" data-persona="c">
+  <div class="kicker pc-kick"><span>PERSON C · ANANYA IYER · FRONT-END DEVELOPER → EXOSKELETON CONTROL, DEEP TECH</span></div>
+  <h1 class="pc-h1">Thinks in state machines and sixteen-millisecond frames. Now the frame is one millisecond and the state is a knee.</h1>
+  <div class="pc-split">
+    <div class="pc-col">
+      <div class="pc-h2">extracted · by hand, in conversation</div>
+      <dl class="pc-dl">
+        <dt class="pc-k">intake</dt><dd class="pc-v">Visual and stateful. She reads a control loop as a state machine with a tick; an equation lands only after she has seen what it moves.</dd>
+        <dt class="pc-k">retention</dt><dd class="pc-v">Sticks when she derives it and then watches it move. Equations without a moving thing evaporate in a day.</dd>
+        <dt class="pc-k">recall</dt><dd class="pc-v">From the picture. She rebuilds the equation from the diagram, not the diagram from the equation.</dd>
+        <dt class="pc-k">retrieval mode</dt><dd class="pc-v">Derive on paper, then tune a simulated joint and watch it fail, then say why.</dd>
+        <dt class="pc-k">thinking</dt><dd class="pc-v">Top-down: "what state are we in?" before "what is the value?". Structure first, magnitude second.</dd>
+        <dt class="pc-k">attention</dt><dd class="pc-v">Long for anything animated or interactive. Short for dense text without a figure.</dd>
+        <dt class="pc-k">prior knowledge</dt><dd class="pc-v">State machines, event loops, animation timing, latency budgets. No mechanics, no control theory; calculus rusty but not gone.</dd>
+        <dt class="pc-k">calibration</dt><dd class="pc-v">Accurate on structure, overconfident on the math. Knows which state the leg is in; misjudges how much torque.</dd>
+      </dl>
+    </div>
+    <div class="pc-col pc-gen">
+      <div class="pc-h2">generated · the book for that head</div>
+      <div class="pc-title">From the DOM to the Joint</div>
+      <p class="pc-struct">biomechanics first, then sensors, then the loop as a state machine, then impedance control, then safety, then the papers. Serious by design: the field is.</p>
+      <dl class="pc-dl">
+        <dt class="pc-k">chapters</dt><dd class="pc-v">Part 1: the gait cycle as a state machine. Part 2: IMU, encoder, EMG: what the leg can sense in a millisecond. Part 3: impedance control (Hogan, 1985). Part 4: safety before strength. Part 5: reading BLEEX, HAL and the MIT ankle.</dd>
+        <dt class="pc-k">interactive diagrams</dt><dd class="pc-v">The gait cycle she can step through phase by phase with the IMU trace scrolling under it; every transition is a guard she can edit.</dd>
+        <dt class="pc-k">simulations</dt><dd class="pc-v">A one-degree-of-freedom knee with a tunable spring K and damper B; she can make it oscillate, then make it catch.</dd>
+        <dt class="pc-k">micro-games</dt><dd class="pc-v">"What state is the leg in?" from a two-second IMU trace, before the label appears. Streaks, no points.</dd>
+        <dt class="pc-k">challenges</dt><dd class="pc-v">Tune K and B until the knee settles inside 60 ms without overshoot, then explain in one sentence what B did.</dd>
+        <dt class="pc-k">reels</dt><dd class="pc-v">"Stiffness is a spring you can argue with." "The knee is a state machine with a spring in it." "Safety is what you do with a stale number."</dd>
+        <dt class="pc-k">lock &amp; ask</dt><dd class="pc-v">The derivation disappears. She writes the torque law from memory and says what each term does; the simulator runs her law.</dd>
+      </dl>
+    </div>
+  </div>
+  <div class="foot"><span>think-aloud protocol · concept mapping (state machine → control loop) · faded worked examples · dual coding · desirable difficulty · calibration</span><span>next: what Ananya experiences</span></div>
+</section>
+
+<section class="slide" data-auto="c">
+  <div class="kicker"><span>ANANYA · CHAPTER 11 · IMPEDANCE CONTROL · you step off a curb. your knee catches you before you decide to.</span></div>
+  <div class="pc-stage" data-theme="dark">
+    <div class="pc-strip"><span>chapter 11 · impedance control · a spring you can argue with</span><span class="pc-phase">question</span></div>
+    <div class="pc-body">
+
+      <div class="pc-ph pc-q" data-ph="question">
+        <div class="pc-q1">You step off a curb. Your knee catches you before you decide to.</div>
+        <div class="pc-q2">How does a powered exoskeleton do that in ten milliseconds without throwing you?</div>
+      </div>
+
+      <div class="pc-ph pc-state" data-ph="state">
+        <div class="pc-two">
+          <svg class="pc-sm" viewBox="0 96 600 184" aria-label="gait cycle as a state machine">
+            <g class="pc-st" data-st="0"><rect x="0" y="110" width="108" height="64"/><text x="54" y="138" text-anchor="middle">heel</text><text x="54" y="158" text-anchor="middle">strike</text></g>
+            <g class="pc-st" data-st="1"><rect x="123" y="110" width="108" height="64"/><text x="177" y="148" text-anchor="middle">loading</text></g>
+            <g class="pc-st" data-st="2"><rect x="246" y="110" width="108" height="64"/><text x="300" y="148" text-anchor="middle">mid-stance</text></g>
+            <g class="pc-st" data-st="3"><rect x="369" y="110" width="108" height="64"/><text x="423" y="148" text-anchor="middle">toe-off</text></g>
+            <g class="pc-st" data-st="4"><rect x="492" y="110" width="108" height="64"/><text x="546" y="148" text-anchor="middle">swing</text></g>
+            <g class="pc-arr">
+              <path d="M108 142 H121"/><path d="M116 137 L122 142 L116 147"/>
+              <path d="M231 142 H244"/><path d="M239 137 L245 142 L239 147"/>
+              <path d="M354 142 H367"/><path d="M362 137 L368 142 L362 147"/>
+              <path d="M477 142 H490"/><path d="M485 137 L491 142 L485 147"/>
+              <path d="M546 174 V230 H54 V176"/><path d="M48 182 L54 175 L60 182"/>
+            </g>
+            <text class="pc-smcap" x="300" y="262" text-anchor="middle">gait cycle · one tick every 1 ms</text>
+          </svg>
+          <svg class="pc-ch" viewBox="0 0 640 300" aria-label="shank angular velocity over two seconds">
+            <text class="pc-axl" x="70" y="22">shank angular velocity · deg/s</text>
+            <line class="pc-ax" x1="70" y1="36" x2="70" y2="262"/>
+            <line class="pc-ax" x1="70" y1="262" x2="620" y2="262"/>
+            <line class="pc-guard" x1="70" y1="86" x2="620" y2="86"/>
+            <line class="pc-guard" x1="70" y1="211" x2="620" y2="211"/>
+            <line class="pc-zero" x1="70" y1="180" x2="620" y2="180"/>
+            <text class="pc-axt" x="62" y="90" text-anchor="end">+300</text>
+            <text class="pc-axt" x="62" y="184" text-anchor="end">0</text>
+            <text class="pc-axt" x="62" y="215" text-anchor="end">−100</text>
+            <text class="pc-axt" x="70" y="284" text-anchor="middle">0</text>
+            <text class="pc-axt" x="345" y="284" text-anchor="middle">1 s</text>
+            <text class="pc-axt" x="620" y="284" text-anchor="end">2 s</text>
+            <polyline class="pc-trace" pathLength="100" points=""/>
+            <circle class="pc-head" r="5" cx="70" cy="180"/>
+          </svg>
+        </div>
+        <div class="pc-narr">she knows this shape. it is a state machine with a 1 kHz tick, not a 60 Hz frame. every transition is a guard on the trace.</div>
+      </div>
+
+      <div class="pc-ph pc-derive" data-ph="derive">
+        <div class="pc-dl0 pc-eq">τ = K (θd − θ) − B <span class="pc-thd">θ<span class="pc-mark">̇</span></span></div>
+        <div class="pc-dl0 pc-gloss">K · how hard the joint argues back</div>
+        <div class="pc-dl0 pc-gloss">B · how fast it stops arguing</div>
+        <div class="pc-dl0 pc-gloss">at heel strike: θd holds, K rises. the joint becomes a spring you can lean on.</div>
+      </div>
+
+      <div class="pc-ph pc-sim" data-ph="simulate">
+        <div class="pc-simhead"><span class="pc-runlbl">K = 40 · B = 0.5</span><span class="pc-verdict"></span></div>
+        <div class="pc-two pc-simrow">
+          <svg class="pc-leg" viewBox="-60 0 420 330" aria-label="one-degree-of-freedom knee">
+            <line class="pc-bone" x1="150" y1="30" x2="150" y2="170"/>
+            <g class="pc-ghost" transform="rotate(30 150 170)"><line x1="150" y1="170" x2="150" y2="300"/></g>
+            <g class="pc-shank" transform="rotate(0 150 170)"><line class="pc-bone" x1="150" y1="170" x2="150" y2="300"/><line class="pc-bone" x1="150" y1="300" x2="190" y2="300"/></g>
+            <circle class="pc-joint" cx="150" cy="30" r="6"/>
+            <circle class="pc-joint pc-knee" cx="150" cy="170" r="7"/>
+            <text class="pc-axt" x="150" y="322" text-anchor="middle">thigh fixed · shank pivots at the knee</text>
+          </svg>
+          <svg class="pc-ch" viewBox="0 0 640 330" aria-label="knee angle over time">
+            <text class="pc-axl" x="70" y="22">θ · knee angle</text>
+            <line class="pc-ax" x1="70" y1="36" x2="70" y2="292"/>
+            <line class="pc-ax" x1="70" y1="292" x2="620" y2="292"/>
+            <line class="pc-guard" x1="70" y1="122" x2="620" y2="122"/>
+            <text class="pc-axt" x="62" y="126" text-anchor="end">θd</text>
+            <line class="pc-guard" x1="152.5" y1="36" x2="152.5" y2="292"/>
+            <text class="pc-axt" x="152.5" y="314" text-anchor="middle">60 ms</text>
+            <text class="pc-axt" x="70" y="314" text-anchor="middle">0</text>
+            <text class="pc-axt" x="345" y="314" text-anchor="middle">200 ms</text>
+            <text class="pc-axt" x="620" y="314" text-anchor="end">400 ms</text>
+            <polyline class="pc-curve" points=""/>
+            <circle class="pc-head" r="5" cx="70" cy="292"/>
+          </svg>
+        </div>
+        <div class="pc-narr">sense → decide → act: 1 ms. human reflex: 30–50 ms. the exo gets there first, so it must never be wrong.</div>
+      </div>
+
+      <div class="pc-ph pc-lock" data-ph="lock">
+        <div class="pc-lockbox">
+          <div class="pc-big">That's it. It's gone.</div>
+          <div class="pc-sub">write the torque law. say what B does.</div>
+        </div>
+      </div>
+
+      <div class="pc-ph pc-rb" data-ph="rebuild">
+        <div class="pc-ta"><span class="pc-typed"></span><span class="pc-caret"></span></div>
+        <div class="pc-score">
+          <div class="pc-scoreH">recall · 3 of 4</div>
+          <div class="pc-row pc-hit"><span class="pc-mk">✓</span><span>the torque law</span></div>
+          <div class="pc-row pc-hit"><span class="pc-mk">✓</span><span>K: stiffness</span></div>
+          <div class="pc-row pc-hit"><span class="pc-mk">✓</span><span>B: damping</span></div>
+          <div class="pc-row pc-miss"><span class="pc-mk">✕</span><span>θd comes from the gait state, not from the wearer's intent</span></div>
+        </div>
+      </div>
+
+      <div class="pc-ph pc-probe" data-ph="probe">
+        <div class="pc-sum">recall · 3 of 4 · ✕ θd comes from the gait state, not from the wearer's intent</div>
+        <div class="pc-line"><div class="pc-who pc-iv">interviewer</div><div class="pc-say">The IMU drops three samples at heel strike. Your controller now holds a 3 ms stale θ. What does it do?</div></div>
+        <div class="pc-line"><div class="pc-who">you</div><div class="pc-say pc-you">…it acts on the old angle, so the torque is wrong for 3 ms.</div></div>
+        <div class="pc-line"><div class="pc-who pc-iv">interviewer</div><div class="pc-say">Wrong direction is worse than no torque. Detect the stale sample; freeze τ or fall back to the last safe K. That is chapter 14, safety, and it comes before chapter 15, strength.</div></div>
+        <div class="pc-line pc-final">
+          <div class="pc-break">where it breaks: a controller that trusts a stale number.</div>
+          <div class="pc-kernel">kernel · the knee is a state machine with a spring in it. safety is deciding what to do with a stale number.</div>
+        </div>
+      </div>
+
+    </div>
+    <div class="pc-hint">r · replay</div>
+  </div>
+</section>
+
+<style>
+  /* ---- profile ---- */
+  .pc-kick { margin-bottom: 2.4vmin; }
+  .pc-h1 { font-size: 3.7vmin; max-width: none; }
+  .pc-split { display: grid; grid-template-columns: .9fr 1.1fr; margin-top: 1.8vmin; border: 1px solid var(--line-strong); flex: 1; min-height: 0; }
+  .pc-col { padding: 2vmin 2.4vmin; min-height: 0; }
+  .pc-col + .pc-col { border-left: 1px solid var(--line-strong); background: var(--accent-soft); }
+  .pc-h2 { font-family: var(--font-mono); font-size: 1.9vmin; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 1.2vmin; }
+  .pc-gen .pc-h2 { color: var(--accent-ink); }
+  .pc-title { font-weight: 700; font-size: 2.8vmin; letter-spacing: -.01em; line-height: 1.1; }
+  .pc-struct { font-family: var(--font-read); font-size: 1.8vmin; line-height: 1.3; color: var(--ink-2); margin: .5vmin 0 .7vmin; }
+  .pc-dl { display: grid; grid-template-columns: 13.5vmin 1fr; column-gap: 1.4vmin; }
+  .pc-gen .pc-dl { grid-template-columns: 15vmin 1fr; }
+  .pc-k, .pc-v { margin: 0; padding: .5vmin 0; border-top: 1px solid var(--line); }
+  .pc-dl .pc-k:first-child, .pc-dl .pc-k:first-child + .pc-v { border-top: 0; }
+  .pc-k { font-family: var(--font-mono); font-size: 1.85vmin; color: var(--ink-3); line-height: 1.3; padding-top: .65vmin; }
+  .pc-v { font-family: var(--font-read); font-size: 1.9vmin; line-height: 1.28; }
+
+  /* ---- experience ---- */
+  .pc-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); }
+  .pc-strip { font-family: var(--font-mono); font-size: 1.85vmin; letter-spacing: .13em; text-transform: lowercase; color: var(--on-accent); background: var(--accent); padding: .9vmin 2vmin; display: flex; justify-content: space-between; font-weight: 500; flex: none; }
+  .pc-phase { font-weight: 400; }
+  .pc-body { flex: 1; min-height: 0; padding: 2.6vmin 3vmin; display: flex; flex-direction: column; }
+  .pc-ph { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .pc-ph.pc-on { display: flex; }
+  .pc-hint { display: none; position: absolute; right: 1.6vmin; bottom: 1.2vmin; font-family: var(--font-mono); font-size: 1.8vmin; color: var(--ink-3); letter-spacing: .08em; }
+  .pc-hint.pc-on { display: block; }
+  .pc-narr { flex: none; margin-top: auto; font-family: var(--font-mono); font-size: 2.1vmin; line-height: 1.5; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 1.2vmin; }
+  .pc-two { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3vmin; align-items: center; }
+  .pc-two svg { width: 100%; height: 100%; display: block; }
+
+  /* question */
+  .pc-q { justify-content: center; }
+  .pc-q1 { font-weight: 800; font-size: 6vmin; line-height: 1.08; letter-spacing: -.015em; max-width: 34ch; }
+  .pc-q2 { margin-top: 2.4vmin; font-weight: 500; font-size: 3.2vmin; line-height: 1.25; color: var(--ink-2); max-width: 48ch; }
+
+  /* state */
+  .pc-sm rect { fill: var(--panel-2); stroke: var(--line-strong); stroke-width: 1; }
+  .pc-sm text { font-family: var(--font-mono); font-size: 17px; fill: var(--ink); }
+  .pc-st.pc-hot rect { stroke: var(--accent); stroke-width: 3; fill: var(--accent-soft); }
+  .pc-st.pc-hot text { fill: var(--accent-ink); }
+  .pc-arr path { fill: none; stroke: var(--line-strong); stroke-width: 1.5; }
+  .pc-sm .pc-smcap { fill: var(--ink-3); font-size: 15px; }
+  .pc-ax { stroke: var(--line-strong); stroke-width: 1; }
+  .pc-guard { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 4 5; }
+  .pc-zero { stroke: var(--line); stroke-width: 1; }
+  .pc-axl { font-family: var(--font-mono); font-size: 15px; fill: var(--ink-2); }
+  .pc-axt { font-family: var(--font-mono); font-size: 16.5px; fill: var(--ink-3); }
+  .pc-trace, .pc-curve { fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linejoin: round; }
+  .pc-trace { stroke-dasharray: 100; stroke-dashoffset: 100; }
+  .pc-head { fill: var(--ink); }
+
+  /* derive */
+  .pc-derive { justify-content: center; gap: 2.2vmin; }
+  .pc-dl0 { visibility: hidden; }
+  .pc-dl0.pc-on { visibility: visible; }
+  .pc-eq { font-family: var(--font-read); font-style: italic; font-size: 6vmin; line-height: 1.1; margin-bottom: 1.4vmin; }
+  .pc-thd { position: relative; }
+  .pc-mark { display: none; }
+  .pc-thd::after { content: ""; position: absolute; left: 52%; top: .1em; width: .11em; height: .11em; background: currentColor; }
+  .pc-gloss { font-family: var(--font-mono); font-size: 2.5vmin; line-height: 1.4; color: var(--ink-2); }
+
+  /* simulate */
+  .pc-simhead { flex: none; display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1vmin; }
+  .pc-runlbl { font-family: var(--font-mono); font-size: 2.6vmin; letter-spacing: .06em; }
+  .pc-verdict { font-weight: 700; font-size: 3.4vmin; letter-spacing: -.01em; visibility: hidden; }
+  .pc-verdict.pc-bad { color: var(--bad); visibility: visible; }
+  .pc-verdict.pc-good { color: var(--good); visibility: visible; }
+  .pc-simrow { grid-template-columns: .38fr .62fr; }
+  .pc-bone { stroke: var(--ink); stroke-width: 5; stroke-linecap: square; }
+  .pc-ghost line { stroke: var(--line-strong); stroke-width: 2; stroke-dasharray: 5 6; }
+  .pc-joint { fill: var(--panel); stroke: var(--ink); stroke-width: 3; }
+  .pc-leg .pc-axt { font-size: 15.5px; }
+
+  /* lock */
+  .pc-lock { justify-content: center; }
+  .pc-lockbox { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2vmin; text-align: center; border: 1px dashed var(--line-strong); background: var(--panel-2); padding: 3vmin; }
+  .pc-big { font-weight: 700; font-size: 6vmin; letter-spacing: -.01em; }
+  .pc-sub { font-family: var(--font-mono); font-size: 2.2vmin; color: var(--ink-3); letter-spacing: .06em; }
+
+  /* rebuild + grade */
+  .pc-ta { flex: none; min-height: 14vmin; background: var(--paper); border: 1px solid var(--line-strong); padding: 2vmin 2.4vmin; font-family: var(--font-read); font-style: italic; font-size: 3.1vmin; line-height: 1.45; }
+  .pc-caret { display: inline-block; width: .5vmin; height: 2.6vmin; vertical-align: -.35vmin; background: var(--ink); margin-left: .3vmin; }
+  .pc-rb.pc-done .pc-caret { display: none; }
+  .pc-score { display: none; border: 1px solid var(--line-strong); margin-top: 2vmin; }
+  .pc-rb.pc-graded .pc-score { display: block; }
+  .pc-scoreH { font-family: var(--font-mono); font-size: 2.8vmin; letter-spacing: .1em; padding: 1vmin 2vmin; background: var(--panel-2); border-bottom: 1px solid var(--line-strong); color: var(--ink); }
+  .pc-row { display: grid; grid-template-columns: 4vmin 1fr; gap: 1vmin; padding: 1vmin 2vmin; border-bottom: 1px solid var(--line); font-family: var(--font-read); font-size: 2.4vmin; align-items: baseline; visibility: hidden; }
+  .pc-row.pc-on { visibility: visible; }
+  .pc-row:last-child { border-bottom: 0; }
+  .pc-mk { font-family: var(--font-mono); font-size: 2.2vmin; font-weight: 500; }
+  .pc-hit .pc-mk { color: var(--good); }
+  .pc-miss .pc-mk { color: var(--bad); }
+  .pc-miss.pc-on { background: var(--bad-soft); }
+
+  /* probe */
+  .pc-sum { flex: none; font-family: var(--font-mono); font-size: 1.9vmin; color: var(--ink-3); border-bottom: 1px solid var(--line); padding-bottom: 1vmin; margin-bottom: 1.6vmin; }
+  .pc-line { visibility: hidden; margin-bottom: 1.5vmin; }
+  .pc-line.pc-on { visibility: visible; }
+  .pc-who { font-family: var(--font-mono); font-size: 1.8vmin; letter-spacing: .13em; color: var(--ink-3); margin-bottom: .4vmin; }
+  .pc-who.pc-iv { color: var(--accent-ink); }
+  .pc-say { font-family: var(--font-read); font-size: 2.6vmin; line-height: 1.4; max-width: 64ch; }
+  .pc-you { font-style: italic; color: var(--ink-2); }
+  .pc-final { margin-top: auto; margin-bottom: 0; border-top: 1px solid var(--line-strong); padding-top: 1.8vmin; }
+  .pc-break { font-weight: 700; font-size: 3.6vmin; letter-spacing: -.01em; line-height: 1.1; }
+  .pc-kernel { margin-top: 1.2vmin; font-family: var(--font-mono); font-size: 2vmin; line-height: 1.5; color: var(--ink-2); }
+</style>
+
+<script>
+(() => {
+  const NAME = "Ananya Iyer"; // also written literally in the markup above
+  const PHASES = [[0, "question"], [4, "state"], [16, "derive"], [26, "simulate"], [40, "lock"], [42, "rebuild"], [48, "grade"], [52, "probe"]];
+  const END = 60;
+  const TYPED = "τ = K(θd − θ) − Bθ̇. K is the spring, B is the damper. Without B the spring overshoots and the knee rings.";
+
+  // shank angular velocity, deg/s, over one 2 s gait cycle (a plausible shape, not a dataset)
+  const bump = (t, c, w) => Math.exp(-(((t - c) / w) ** 2));
+  const vel = (t) => 70 * bump(t, 0.35, 0.25) + 350 * bump(t, 1.35, 0.18) - 160 * bump(t, 1.8, 0.1) - 20;
+  const TRACE = [];
+  for (let i = 0; i <= 200; i++) { const t = i / 100; TRACE.push([70 + t * 275, 180 - vel(t) * (94 / 300)]); }
+  // which state the guards put the leg in, by fraction of the cycle
+  const stateAt = (p) => p < 0.06 ? 0 : p < 0.3 ? 1 : p < 0.6 ? 2 : p < 0.78 ? 3 : p < 0.97 ? 4 : 0;
+
+  // knee step responses, θ normalised to the step, t in ms
+  const T = 75, A = 0.274 / T;
+  const ring = (t) => { const s = Math.min(1, t / (T / 2)); const k = 1 - 0.564 * (s * s * (3 - 2 * s)); return 1 - k * Math.exp(-A * t) * Math.cos(2 * Math.PI * t / T); };
+  const settle = (t) => 1 - (1 + t / 10) * Math.exp(-t / 10);
+
+  let raf = 0, t0 = 0, S = null, E = null;
+  const $ = (sel, root = S) => root.querySelector(sel);
+  const $$ = (sel, root = S) => [...root.querySelectorAll(sel)];
+
+  function grab() {
+    E = {
+      phase: $(".pc-phase"), phs: $$(".pc-ph"), hint: $(".pc-hint"),
+      trace: $(".pc-trace"), head: $(".pc-state .pc-head"), sts: $$(".pc-st"),
+      dls: $$(".pc-dl0"),
+      run: $(".pc-runlbl"), verdict: $(".pc-verdict"), shank: $(".pc-shank"), curve: $(".pc-curve"), head2: $(".pc-sim .pc-head"),
+      rb: $(".pc-rb"), typed: $(".pc-typed"), rows: $$(".pc-row"),
+      lines: $$(".pc-line"),
+    };
+    E.trace.setAttribute("points", TRACE.map((p) => p.map((v) => v.toFixed(1)).join(",")).join(" "));
+  }
+
+  function reset() {
+    $$(".pc-on", S).forEach((el) => el.classList.remove("pc-on"));
+    E.rb.classList.remove("pc-done", "pc-graded");
+    E.verdict.className = "pc-verdict"; E.verdict.textContent = "";
+    E.sts.forEach((s) => s.classList.remove("pc-hot"));
+    E.trace.style.strokeDashoffset = 100; E.head.setAttribute("cx", 70); E.head.setAttribute("cy", 180);
+    E.curve.setAttribute("points", ""); E.shank.setAttribute("transform", "rotate(0 150 170)");
+    E.typed.textContent = ""; E.phase.textContent = "question";
+  }
+
+  function simRun(fn, tw, drawFor, verdictAt, cls, text) {
+    const ms = Math.min(400, Math.max(0, tw / drawFor * 400));
+    const pts = [];
+    for (let m = 0; m <= ms; m += 2) { const th = fn(m); pts.push((70 + m * 1.375).toFixed(1) + "," + (292 - th * 170).toFixed(1)); }
+    E.curve.setAttribute("points", pts.join(" "));
+    const th = fn(ms);
+    E.head2.setAttribute("cx", (70 + ms * 1.375).toFixed(1)); E.head2.setAttribute("cy", (292 - th * 170).toFixed(1));
+    E.shank.setAttribute("transform", `rotate(${(th * 30).toFixed(2)} 150 170)`);
+    if (tw >= verdictAt) { E.verdict.className = "pc-verdict " + cls; E.verdict.textContent = text; }
+    else { E.verdict.className = "pc-verdict"; E.verdict.textContent = ""; }
+  }
+
+  function render(t) {
+    let i = 0; while (i + 1 < PHASES.length && t >= PHASES[i + 1][0]) i++;
+    const name = PHASES[i][1];
+    E.phase.textContent = name;
+    E.phs.forEach((p) => p.classList.toggle("pc-on", p.dataset.ph === name || (name === "grade" && p.dataset.ph === "rebuild")));
+    E.hint.classList.toggle("pc-on", t >= END);
+
+    if (name === "state") {
+      const p = Math.min(1, (t - 4) / 8);
+      E.trace.style.strokeDashoffset = (100 * (1 - p)).toFixed(2);
+      const pt = TRACE[Math.round(p * 200)];
+      E.head.setAttribute("cx", pt[0].toFixed(1)); E.head.setAttribute("cy", pt[1].toFixed(1));
+      const s = stateAt(p);
+      E.sts.forEach((el, k) => el.classList.toggle("pc-hot", k === s));
+    } else if (name === "derive") {
+      E.dls.forEach((el, k) => el.classList.toggle("pc-on", t >= 16 + 1.2 * k));
+    } else if (name === "simulate") {
+      if (t < 33.5) { E.run.textContent = "K = 40 · B = 0.5"; simRun(ring, t - 26, 4.5, 2.6, "pc-bad", "overshoot 38% · throws you"); }
+      else { E.run.textContent = "K = 40 · B = 4"; simRun(settle, t - 33.5, 4.5, 1.5, "pc-good", "settles in 58 ms · catches you"); }
+    } else if (name === "rebuild" || name === "grade") {
+      const n = Math.min(TYPED.length, Math.floor((t - 42) * 26));
+      E.typed.innerHTML = TYPED.slice(0, n).replace("θ̇", '<span class="pc-thd">θ<span class="pc-mark">̇</span></span>');
+      E.rb.classList.toggle("pc-done", n >= TYPED.length);
+      E.rb.classList.toggle("pc-graded", name === "grade");
+      E.rows.forEach((r, k) => r.classList.toggle("pc-on", t >= 48.3 + 0.4 * k));
+    } else if (name === "probe") {
+      const at = [52, 53.4, 54.8, 57];
+      E.lines.forEach((l, k) => l.classList.toggle("pc-on", t >= at[k]));
+    }
+  }
+
+  deckAuto.register("c", {
+    start(section, at = 0) {
+      this.stop();
+      S = section; grab(); reset();
+      t0 = performance.now() - at * 1000;
+      const tick = () => {
+        const t = (performance.now() - t0) / 1000;
+        render(t);
+        raf = t < END + 0.5 ? requestAnimationFrame(tick) : 0; // hold the final frame
+      };
+      tick();
+    },
+    stop() {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      if (S && E) reset();
+    },
+  });
+})();
+</script>
