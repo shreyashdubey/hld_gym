@@ -33,7 +33,7 @@ const plexMono = IBM_Plex_Mono({
    rather than presuming the reader has read it. */
 const TITLE = "System design sprint: 197 diagrams from memory in 30 days · HLD Gym";
 const DESC =
-  "Every diagram in the free HLD Gym book, rebuilt from memory while an interviewer pushes back. 197 reps and 450 reels in 30 days from 1 September. $19, refund if late.";
+  "Every diagram in the free HLD Gym book, rebuilt from memory while an interviewer pushes back. 197 reps and 450 reels in 30 days. $19 presale, refundable until day one.";
 
 /* The share card is a static PNG rendered by ../reel/og.mjs into public/og.png:
    this is a static export with no server, so there is no route to generate it

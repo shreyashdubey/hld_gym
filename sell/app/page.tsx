@@ -126,8 +126,8 @@ export default function Home() {
                   <span>one per diagram</span>
                 </div>
                 <div>
-                  <b>1 Sep</b>
-                  <span>start date</span>
+                  <b>51</b>
+                  <span>chapters covered</span>
                 </div>
                 <div>
                   <b>~1 hour</b>
@@ -147,7 +147,7 @@ export default function Home() {
               </div>
               <p className="hint">
                 A short form, then the payment link by email. You are charged nothing until you
-                click it, and refunded in full if the sprint does not ship on 1 September.
+                click it, and refunded in full any time before day one.
               </p>
               <p className="alt">
                 Not ready to buy? <a href={BOOK_URL}>Read all 51 chapters free</a>, no signup, or{" "}
@@ -300,8 +300,8 @@ export default function Home() {
             </div>
           </div>
           <p className="fact">
-            <strong>Four are built and playing below.</strong> The daily fifteen start on
-            1 September.
+            <strong>Four are built and playing below.</strong> The daily fifteen start on day
+            one.
           </p>
           {/* The prose renders under the playlist, beside the reel: the proof
               first, the explanation in the column the 9:16 rail leaves empty. */}
@@ -432,7 +432,7 @@ export default function Home() {
             Everything you are buying is listed below, and so is everything you are not.
           </p>
           <div className="pricebox">
-            <div className="priceH">presale · starts 1 september 2026</div>
+            <div className="priceH">presale · reservation holders go first</div>
             <div className="priceB">
               <div className="amount">
                 <span className="cur">$</span>19
@@ -471,7 +471,7 @@ export default function Home() {
                   Reserve a seat for {PRICE}
                 </a>
                 <span className="hint">
-                  opens a short form · full refund if it does not ship on 1 September
+                  opens a short form · full refund any time before day one
                 </span>
               </div>
             </div>
@@ -504,7 +504,7 @@ export default function Home() {
             </div>
             <div>
               <h4>
-                <span className="n">03</span> You pay, and day one lands 1 September
+                <span className="n">03</span> You pay, and you are in the first cohort
               </h4>
               <p>
                 Topic 1, its reps and its fifteen reels, then a new topic every day for thirty
@@ -552,7 +552,8 @@ export default function Home() {
                   matching. Model grading is built and running in a diagnostic interview that ends
                   in a failure map quoting your own transcript; it is not hosted on this page yet,
                   so everything you can click here today is the keyword version. Four reels of the
-                  450. The sprint itself ships 1 September.
+                  450. The sprint itself is not built yet, and reservation holders go first
+                  when it is.
                 </li>
                 <li>
                   <strong>Why not quiz myself with a chat window?</strong> You should, tonight,
@@ -570,8 +571,8 @@ export default function Home() {
                   the thirty days are the pace, not a deadline.
                 </li>
                 <li>
-                  <strong>What if it does not ship on 1 September?</strong> Every dollar back,
-                  without emailing me to ask.
+                  <strong>What if it never ships?</strong> Every dollar back, without emailing
+                  me to ask. The same is true any time before your day one, for any reason.
                 </li>
                 <li>
                   <strong>Why trust the sprint?</strong> Judge it by the book, which is by the same

@@ -98,8 +98,9 @@ so every question is one tap except the email.
 
 **Description:** Five questions, sixty seconds. Your email is where the payment
 link goes, and nothing else is ever sent there. I reply within 24 hours, and you
-are charged nothing until you click the link. The sprint is not live until
-1 September 2026, and if it slips you get a full refund.
+are charged nothing until you click the link. The sprint is not built yet;
+reservation holders go first when it is, and a full refund is yours any time
+before your day one.
 
 **Q1. Email** — do **not** write this question. Turn on
 *Settings → Responses → Collect email addresses → **Responder input***. Forms
@@ -132,11 +133,11 @@ rule applies to the form too:
 
 | option | label |
 |---|---|
-| The lock: the diagram vanishes and I rebuild it from memory | ships 1 Sep |
-| An interviewer that pushes back on my answer | ships 1 Sep |
-| 15 reels a day, revision I can do on my phone | ships 1 Sep |
-| A schedule I never manage: what I fail comes back sooner | ships 1 Sep |
-| All 51 chapters covered in 30 days, not a sampler | ships 1 Sep |
+| The lock: the diagram vanishes and I rebuild it from memory | not built yet |
+| An interviewer that pushes back on my answer | not built yet |
+| 15 reels a day, revision I can do on my phone | not built yet |
+| A schedule I never manage: what I fail comes back sooner | not built yet |
+| All 51 chapters covered in 30 days, not a sampler | not built yet |
 | **Playground**: a coach I talk to live while I draw, that makes me think aloud and unsticks me | planned, not built |
 | Grading by an LLM against what I actually wrote, not keywords | planned, not built |
 | Reels with audio | planned, not built |

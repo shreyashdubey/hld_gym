@@ -13,9 +13,10 @@ import { REELS, REEL_DATE, REEL_DURATION } from "@/lib/reels";
  * most commonly faked in the format and the easiest to get a manual penalty for.
  *
  * The offer says `PreOrder`, not `InStock`, because it is a presale and the
- * product ships on 1 September. That is the same thing the page says twice in
+ * product does not exist yet. That is the same thing the page says twice in
  * words, and the machine-readable version must not quietly say something
- * stronger.
+ * stronger. There is no `availabilityStarts` for the same reason: a date here
+ * is a promise a crawler will repeat long after it has passed.
  */
 export const SCHEMA = {
   "@context": "https://schema.org",
@@ -85,7 +86,6 @@ export const SCHEMA = {
         priceCurrency: "USD",
         /* Presale. The product does not exist yet and the page says so. */
         availability: "https://schema.org/PreOrder",
-        availabilityStarts: "2026-09-01",
         url: `${SITE}/`,
         seller: { "@id": `${SITE}/#org` },
       },
