@@ -2827,3 +2827,29 @@ or 1080p. Reference frames for the reviewers came from `deck/launch-demo.mp4`.
 **Not done:** `git push` (the live page still says "1 September" in seven
 places), the real ChatGPT reply pasted into `CHATGPT_REPLY`, and the Google
 Form's Q5 labels. All three are the presenter's, before the slot.
+
+## 2026-09-05 — the demo deck, stripped to building blocks and hosted at /demo/
+
+**What:** `deck/demo/index.html`, one self-contained ten-slide deck, copied by
+hand to `dist/demo/index.html` and served at https://hld-gym.vercel.app/demo/.
+Hook, the extraction method as five chips, what is built as four miniatures,
+then three people (Shreyash, Rohit, Ananya), each as a name, three chips for
+how they learn, an arrow, three chips for the book that was generated, and an
+experience slide that plays a hard chapter on its own (idempotency after a lost
+payment response; a single-event upset in flight memory; impedance control at
+heel strike). Nothing is sold. `deck/DEMO.md` is the talk track.
+
+**Why the second pass:** the first version put the extracted learning profile
+and the generated content on each persona slide as sixteen prose rows. The
+presenter rejected it on sight: nobody in the room would understand what was
+built or why. Every slide was rebuilt with a word budget and big type; the
+experience slides were kept, since they show instead of tell.
+
+**How:** `deck/demo/parts/` holds the shell and the three persona fragments;
+an assembler splices them at the `<!-- PERSONA:X -->` markers and renumbers
+the counters. Verified in-browser at 1280×720: no slide scrolls, the three
+autoplays restart cleanly on `r` and on leaving and returning, theme and
+`?slide=` params work, zero console errors. `publish:book` excludes `demo/`.
+
+**Not done:** real names for persons B and C (placeholders Rohit Deshmukh and
+Ananya Iyer); a 1080p pass of the simplified slides.
