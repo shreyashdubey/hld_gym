@@ -18,6 +18,21 @@
     </div>
   </div>
   <p class="pb-so">So his book runs on a board he can crash, and Apollo goes first.</p>
+  <svg class="pb-pict" viewBox="0 0 300 200" aria-hidden="true">
+    <path d="M0 200 Q150 148 300 200"/>
+    <rect x="52" y="30" width="22" height="22"/>
+    <rect x="10" y="36" width="34" height="10"/><rect x="82" y="36" width="34" height="10"/>
+    <path d="M44 41h8M74 41h8M27 36v10M99 36v10"/>
+    <path class="pb-trk" d="M272 6L208 70"/>
+    <text x="226" y="44" text-anchor="end">seu</text>
+    <rect x="160" y="70" width="16" height="16"/><rect x="180" y="70" width="16" height="16"/><rect class="pb-pa" x="200" y="70" width="16" height="16"/><rect x="220" y="70" width="16" height="16"/>
+    <rect x="160" y="90" width="16" height="16"/><rect x="180" y="90" width="16" height="16"/><rect x="200" y="90" width="16" height="16"/><rect x="220" y="90" width="16" height="16"/>
+    <rect x="160" y="110" width="16" height="16"/><rect x="180" y="110" width="16" height="16"/><rect x="200" y="110" width="16" height="16"/><rect x="220" y="110" width="16" height="16"/>
+    <circle cx="60" cy="140" r="28"/>
+    <path d="M60 118A22 22 0 1 1 38 140"/>
+    <path d="M60 112v-9"/>
+    <text x="96" y="146">watchdog</text>
+  </svg>
   <div class="foot"><span>learning-history interview · failure injection · test-first retrieval</span><span>next: what Rohit experiences</span></div>
 </section>
 
@@ -26,7 +41,8 @@
   <div class="pb-stage">
     <div class="pb-strip">
       <span>seu · chapter 9</span>
-      <span class="pb-phases"><i>question</i> · <i>history</i> · <i>mechanism</i> · <i>simulation</i> · <i>lock</i> · <i>test</i> · <i>code</i> · <i>probe</i></span>
+      <span class="pb-phases"><button type="button">question</button> · <button type="button">history</button> · <button type="button">mechanism</button> · <button type="button">simulation</button> · <button type="button">lock</button> · <button type="button">test</button> · <button type="button">code</button> · <button type="button">probe</button></span>
+      <button type="button" class="pb-next">next ›</button>
     </div>
     <div class="pb-body">
 
@@ -114,13 +130,20 @@
   .pb-chip { border: 1px solid var(--line-strong); font-weight: 700; font-size: 2.6vmin; line-height: 1.2; padding: 1.8vmin 2.2vmin; }
   .pb-to { grid-area: to; font-family: var(--font-mono); font-size: 7vmin; line-height: 1; color: var(--accent); }
   .pb-so { font-family: var(--font-read); font-size: 2.6vmin; line-height: 1.45; margin-top: 5vmin; }
+  .pb-pict { position: absolute; right: 8vmin; bottom: 12vmin; width: 30vmin; height: auto; pointer-events: none; }
+  .pb-pict * { fill: none; stroke: var(--line-strong); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .pb-pict .pb-trk { stroke-dasharray: 4 4; }
+  .pb-pict .pb-pa { fill: var(--accent); stroke: var(--accent); }
+  .pb-pict text { font-family: var(--font-mono); font-size: 20px; fill: var(--ink-3); stroke: none; }
 
   /* ---- PERSON B · stage ---- */
   .pb-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-strong); background: var(--panel); position: relative; }
   .pb-strip { font-family: var(--font-mono); font-size: 1.9vmin; letter-spacing: .13em; text-transform: lowercase; color: var(--on-accent); background: var(--accent); padding: .9vmin 1.8vmin; display: flex; justify-content: space-between; gap: 2vmin; font-weight: 700; flex: none; }
-  .pb-phases { font-weight: 400; }
-  .pb-phases i { font-style: normal; opacity: .55; }
-  .pb-phases i.pb-cur { opacity: 1; font-weight: 700; }
+  .pb-phases { font-weight: 400; margin-left: auto; }
+  .pb-strip button { font: inherit; letter-spacing: inherit; text-transform: inherit; color: inherit; background: none; border: 0; border-radius: 0; padding: 0; cursor: pointer; }
+  .pb-phases button { opacity: .55; }
+  .pb-phases button.pb-cur { opacity: 1; font-weight: 700; }
+  .pb-strip .pb-next { font-weight: 400; padding: 0 1vmin; border: 1px solid color-mix(in srgb, var(--on-accent) 40%, transparent); }
   .pb-body { flex: 1; min-height: 0; padding: 2.6vmin 3vmin; display: flex; flex-direction: column; }
   .pb-ph { display: none; flex: 1; min-height: 0; flex-direction: column; }
   .pb-ph.pb-on { display: flex; }
@@ -243,12 +266,14 @@ deckAuto.register('b', (() => {
     "}",
   ].join("\n");
 
-  let T = [], stage = null, tpl = null;
-  const at = (s, fn) => T.push(setTimeout(fn, s * 1000));
+  const PHASES = ['question', 'history', 'mechanism', 'simulation', 'lock', 'test', 'code', 'probe'];
+  const STARTS = [0, 4, 10, 22, 34, 36, 44, 52];
+  let T = [], Q = [], stage = null, sec = null, tpl = null, cur = 0;
+  const at = (s, fn) => Q.push([s, fn]);
   const $ = (sel) => stage.querySelector(sel);
   const on = (sel, cls = 'pb-on') => $(sel).classList.add(cls);
   const off = (sel, cls = 'pb-on') => $(sel).classList.remove(cls);
-  const phase = (name) => stage.querySelectorAll('.pb-phases i').forEach(i => i.classList.toggle('pb-cur', i.textContent === name));
+  const phase = (name) => { cur = PHASES.indexOf(name); stage.querySelectorAll('.pb-phases button').forEach((b, i) => b.classList.toggle('pb-cur', i === cur)); };
   const hex = (n) => '0x' + n.toString(16).toUpperCase().padStart(2, '0');
   // Types `text` into `el` starting at t0 seconds, cps chars per second. Returns the end time.
   const type = (el, text, cps, t0, pre = '') => {
@@ -261,14 +286,21 @@ deckAuto.register('b', (() => {
     if (stage && tpl !== null) stage.innerHTML = tpl;
   }
 
-  function start(section) {
+  const jump = (i) => { if (sec && i >= 0 && i < PHASES.length) start(sec, i); };
+  const next = () => jump(cur + 1);
+
+  // start(section, i): run the timeline from the start of phase i (0 = from the top).
+  function start(section, i = 0) {
     stop();
+    sec = section; Q = [];
     stage = section.querySelector('.pb-stage');
     if (tpl === null) tpl = stage.innerHTML;
     stage.innerHTML = tpl;
+    stage.querySelectorAll('.pb-phases button').forEach((b, k) => b.onclick = () => jump(k));
+    $('.pb-next').onclick = next;
 
     // 0 · question
-    phase('question'); on('.pb-q');
+    at(0, () => { phase('question'); on('.pb-q'); });
 
     // 4 · history
     at(4, () => { phase('history'); off('.pb-q'); on('.pb-hist'); });
@@ -311,8 +343,12 @@ deckAuto.register('b', (() => {
     at(55.0, () => on('.pb-final'));
     at(56.0, () => on('.pb-kn'));
     at(57.0, () => on('.pb-hint'));
+
+    // Everything at or before the offset runs now, in order (rebuilds the state); the rest on timers.
+    const ms = STARTS[i] * 1000;
+    Q.sort((a, b) => a[0] - b[0]).forEach(([s, fn]) => s * 1000 <= ms ? fn() : T.push(setTimeout(fn, s * 1000 - ms)));
   }
 
-  return { start, stop };
+  return { start, stop, next, jump };
 })());
 </script>

@@ -18,13 +18,26 @@
     </div>
   </div>
   <p class="pc-so">So her book is a state machine with a spring in it, and the math arrives after the motion.</p>
+  <svg class="pc-pict" viewBox="0 0 300 220" aria-hidden="true">
+    <line x1="110" y1="22" x2="150" y2="110"/>
+    <line x1="150" y1="110" x2="140" y2="190"/>
+    <line x1="128" y1="190" x2="186" y2="190"/>
+    <circle cx="110" cy="22" r="4"/>
+    <path d="M132 70 H166 L174 80 L158 92 L174 104 L158 116 L174 128 L158 140 L166 150 H145"/>
+    <path d="M128 62 H95 V96 M84 96 H106 M84 84 V132 H106 V84 M95 132 V150 H145"/>
+    <path d="M20 208 C40 198 60 216 85 208 S130 194 160 208 S212 222 240 204 S268 198 280 208"/>
+    <path d="M36 200 V216 M98 200 V216 M176 200 V216 M223 200 V216 M272 200 V216"/>
+    <circle class="pc-pk" cx="150" cy="110" r="5"/>
+    <text x="184" y="116">K</text>
+    <text x="72" y="116" text-anchor="end">B</text>
+  </svg>
   <div class="foot"><span>think-aloud · concept mapping · faded worked examples</span><span>next: what Ananya experiences</span></div>
 </section>
 
 <section class="slide" data-auto="c">
   <div class="kicker"><span>ANANYA · you step off a curb. your knee catches you before you decide to.</span></div>
   <div class="pc-stage" data-theme="dark">
-    <div class="pc-strip"><span>chapter 11 · impedance control · a spring you can argue with</span><span class="pc-phase">question</span></div>
+    <div class="pc-strip"><span>chapter 11 · impedance control · a spring you can argue with</span><span class="pc-phases"><button type="button" data-ph="question">question</button> · <button type="button" data-ph="state">state</button> · <button type="button" data-ph="derive">derive</button> · <button type="button" data-ph="simulate">simulate</button> · <button type="button" data-ph="lock">lock</button> · <button type="button" data-ph="rebuild">rebuild</button> · <button type="button" data-ph="grade">grade</button> · <button type="button" data-ph="probe">probe</button><button type="button" class="pc-next">next ›</button></span></div>
     <div class="pc-body">
 
       <div class="pc-ph pc-q" data-ph="question">
@@ -152,11 +165,18 @@
   .pc-chip { border: 1px solid var(--line-strong); font-weight: 700; font-size: 2.6vmin; line-height: 1.2; padding: 1.8vmin 2.2vmin; }
   .pc-to { grid-area: to; font-family: var(--font-mono); font-size: 7vmin; line-height: 1; color: var(--accent); }
   .pc-so { font-family: var(--font-read); font-size: 2.6vmin; line-height: 1.45; margin-top: 5vmin; }
+  .pc-pict { position: absolute; right: 8vmin; bottom: 12vmin; width: 30vmin; height: auto; }
+  .pc-pict line, .pc-pict path, .pc-pict circle { fill: none; stroke: var(--line-strong); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+  .pc-pict .pc-pk { fill: var(--accent); stroke: none; }
+  .pc-pict text { font-family: var(--font-mono); font-size: 20px; fill: var(--ink-3); }
 
   /* ---- experience ---- */
   .pc-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink); }
-  .pc-strip { font-family: var(--font-mono); font-size: 1.85vmin; letter-spacing: .13em; text-transform: lowercase; color: var(--on-accent); background: var(--accent); padding: .9vmin 2vmin; display: flex; justify-content: space-between; font-weight: 500; flex: none; }
-  .pc-phase { font-weight: 400; }
+  .pc-strip { font-family: var(--font-mono); font-size: 1.85vmin; letter-spacing: .06em; text-transform: lowercase; color: var(--on-accent); background: var(--accent); padding: .9vmin 2vmin; display: flex; justify-content: space-between; align-items: center; font-weight: 500; flex: none; }
+  .pc-phases { font-weight: 400; white-space: nowrap; font-size: 1.65vmin; letter-spacing: .02em; margin-left: 2vmin; }
+  .pc-phases button { background: none; border: 0; border-radius: 0; padding: 0; font: inherit; letter-spacing: inherit; text-transform: inherit; color: var(--on-accent); opacity: .55; cursor: pointer; }
+  .pc-phases button.pc-cur { opacity: 1; font-weight: 700; }
+  .pc-phases .pc-next { opacity: 1; margin-left: 1.6vmin; padding: .15vmin 1vmin; border: 1px solid color-mix(in srgb, var(--on-accent) 40%, transparent); }
   .pc-body { flex: 1; min-height: 0; padding: 2.6vmin 3vmin; display: flex; flex-direction: column; }
   .pc-ph { display: none; flex: 1; min-height: 0; flex-direction: column; }
   .pc-ph.pc-on { display: flex; }
@@ -263,13 +283,14 @@
   const ring = (t) => { const s = Math.min(1, t / (T / 2)); const k = 1 - 0.564 * (s * s * (3 - 2 * s)); return 1 - k * Math.exp(-A * t) * Math.cos(2 * Math.PI * t / T); };
   const settle = (t) => 1 - (1 + t / 10) * Math.exp(-t / 10);
 
-  let raf = 0, t0 = 0, S = null, E = null;
+  let raf = 0, t0 = 0, S = null, E = null, cur = 0;
+  const SEC = document.querySelector('.slide[data-auto="c"]');
   const $ = (sel, root = S) => root.querySelector(sel);
   const $$ = (sel, root = S) => [...root.querySelectorAll(sel)];
 
   function grab() {
     E = {
-      phase: $(".pc-phase"), phs: $$(".pc-ph"), hint: $(".pc-hint"),
+      pbs: $$(".pc-phases [data-ph]"), phs: $$(".pc-ph"), hint: $(".pc-hint"),
       trace: $(".pc-trace"), head: $(".pc-state .pc-head"), sts: $$(".pc-st"),
       dls: $$(".pc-dl0"),
       run: $(".pc-runlbl"), verdict: $(".pc-verdict"), shank: $(".pc-shank"), curve: $(".pc-curve"), head2: $(".pc-sim .pc-head"),
@@ -286,7 +307,7 @@
     E.sts.forEach((s) => s.classList.remove("pc-hot"));
     E.trace.style.strokeDashoffset = 100; E.head.setAttribute("cx", 70); E.head.setAttribute("cy", 180);
     E.curve.setAttribute("points", ""); E.shank.setAttribute("transform", "rotate(0 150 170)");
-    E.typed.textContent = ""; E.phase.textContent = "question";
+    E.typed.textContent = ""; E.pbs.forEach((b, k) => b.classList.toggle("pc-cur", k === 0));
   }
 
   function simRun(fn, tw, drawFor, verdictAt, cls, text) {
@@ -304,7 +325,8 @@
   function render(t) {
     let i = 0; while (i + 1 < PHASES.length && t >= PHASES[i + 1][0]) i++;
     const name = PHASES[i][1];
-    E.phase.textContent = name;
+    cur = i;
+    E.pbs.forEach((b) => b.classList.toggle("pc-cur", b.dataset.ph === name));
     E.phs.forEach((p) => p.classList.toggle("pc-on", p.dataset.ph === name || (name === "grade" && p.dataset.ph === "rebuild")));
     E.hint.classList.toggle("pc-on", t >= END);
 
@@ -332,7 +354,7 @@
     }
   }
 
-  deckAuto.register("c", {
+  const H = {
     start(section, at = 0) {
       this.stop();
       S = section; grab(); reset();
@@ -349,6 +371,14 @@
       raf = 0;
       if (S && E) reset();
     },
+    jump(i) { if (i >= 0 && i < PHASES.length) this.start(S || SEC, PHASES[i][0]); },
+    next() { if (cur + 1 < PHASES.length) this.jump(cur + 1); },
+  };
+  deckAuto.register("c", H);
+  $(".pc-strip", SEC).addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    b.blur(); // so a following space/arrow goes to the shell, not a re-click
+    b.dataset.ph ? H.jump(PHASES.findIndex((p) => p[1] === b.dataset.ph)) : H.next();
   });
 })();
 </script>

@@ -2,7 +2,7 @@
 
 One file: `deck/demo/index.html`, hosted at **https://hld-gym.vercel.app/demo/**. Ten slides. Any PC, F11 (or `f`) for fullscreen, no login. Slides 5, 7, 9 play themselves when you land on them.
 
-Keys: `→` / Space next · `←` back · `1`–`9` jump · End = slide 10 · `r` replay · `t` paper/dark · `f` fullscreen.
+Keys: `→` / Space next slide · `←` back · `1`–`9` jump · End = slide 10 · `r` replay · `n` or `.` skip to the next phase of a playing experience (or click a phase name in the orange strip, or the `next ›` button) · `t` paper/dark · `f` fullscreen.
 
 Names Rohit and Ananya are placeholders until you give me the real ones.
 
